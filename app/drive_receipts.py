@@ -1,5 +1,4 @@
 from __future__ import annotations
-import mimetypes
 import re
 from .google_clients import drive_service, download_drive_file
 from .receipt_pipeline import ReceiptPipeline
@@ -22,6 +21,10 @@ def should_archive_result(result: dict) -> bool:
     )
 
 
+def is_supported_receipt_mime(mime_type: str) -> bool:
+    return mime_type.startswith("image/") or mime_type == "application/pdf"
+
+
 def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str=""):
     folder_id=normalize_folder_id(folder_id)
     processed_folder_id=normalize_folder_id(processed_folder_id) if processed_folder_id else ""
@@ -33,7 +36,7 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
     ).execute().get("files",[])
     results=[]
     for f in files:
-        if not f["mimeType"].startswith("image/"): continue
+        if not is_supported_receipt_mime(f["mimeType"]): continue
         data=download_drive_file(f["id"])
         res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""))
         results.append((f["name"],res))

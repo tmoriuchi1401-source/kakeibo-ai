@@ -64,29 +64,20 @@ python -m app.cli amazon "/path/to/Order History.csv"
 
 ## 7. iPhone運用
 
-最初にiPhoneへGoogle Driveアプリを入れてログインする。次に「ファイル」アプリの
-「ブラウズ」画面で右上のメニューから「編集」を開き、Google Driveを有効にする。
-表示されない場合は、Google Driveアプリを一度開いてログイン状態を確認する。
+iPhoneへGoogle Driveアプリを入れてログインする。Driveアプリの右下にある追加ボタンから
+「スキャン」（カメラアイコン）を選び、レシートを撮影する。撮影後の保存先として
+`receipt_inbox` を指定する。Driveアプリが作成するPDFはそのまま取込対象になる。
 
-ショートカットアプリで「家計簿レシート」というショートカットを作り、次の2アクションを
-順番に追加する（名称はiOSのバージョンによって多少異なる）。
-
-1. `写真を撮る`（背面カメラ）
-2. `ファイルを保存`（保存先を尋ねる: オフ、保存先: Google Driveの `receipt_inbox`）
-
-ファイル名の変更は必須ではない。ホーム画面やウィジェットに追加すれば、撮影後は
-保存操作なしで受信箱へ送れる。GitHub Actionsが3時間ごとにDriveを確認し、正常取込、
-要確認、既取込の画像を `receipt_processed` へ移す。解析に失敗して記録もできなかった
-画像は `receipt_inbox` に残るため、原因を確認して再処理できる。
+ファイル名の変更は必須ではない。GitHub Actionsが3時間ごとにDriveを確認し、正常取込、
+要確認、既取込の画像またはPDFを `receipt_processed` へ移す。解析に失敗して記録も
+できなかったファイルは `receipt_inbox` に残るため、原因を確認して再処理できる。
 
 初回テストでは1枚撮影し、Driveアプリで `receipt_inbox` への保存を確認してから、
-GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、画像が
+GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、ファイルが
 `receipt_processed` に移り、Sheetsの「レシート」「取込データ」と、正常時は
 「支出一覧」に反映されることを確認する。
 
-参考: [Apple: 「ファイル」で他社製クラウドを使う](https://support.apple.com/ja-jp/102238)、
-[Apple: ショートカットの共有アクション](https://support.apple.com/ja-jp/guide/shortcuts/apdaf74d75a5/ios)、
-[Google: iPhoneからDriveへアップロード](https://support.google.com/drive/answer/2424368?co=GENIE.Platform%3DiOS&hl=ja)
+参考: [Google: iPhoneで書類をスキャンする](https://support.google.com/drive/answer/3145835?co=GENIE.Platform%3DiOS&hl=ja)
 
 ## 8. GitHub Actions
 Secretsに以下を登録:

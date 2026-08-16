@@ -1,6 +1,10 @@
 import pytest
 
-from app.drive_receipts import normalize_folder_id, should_archive_result
+from app.drive_receipts import (
+    is_supported_receipt_mime,
+    normalize_folder_id,
+    should_archive_result,
+)
 
 
 def test_normalize_drive_folder_id():
@@ -37,3 +41,16 @@ def test_archive_recorded_receipt_results(result):
 )
 def test_leave_unrecorded_receipt_results_in_inbox(result):
     assert not should_archive_result(result)
+
+
+@pytest.mark.parametrize(
+    "mime_type",
+    ["image/jpeg", "image/heic", "image/png", "application/pdf"],
+)
+def test_supported_receipt_mime_types(mime_type):
+    assert is_supported_receipt_mime(mime_type)
+
+
+@pytest.mark.parametrize("mime_type", ["text/plain", "application/zip"])
+def test_unsupported_receipt_mime_types(mime_type):
+    assert not is_supported_receipt_mime(mime_type)

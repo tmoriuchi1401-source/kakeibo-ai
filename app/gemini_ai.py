@@ -15,7 +15,7 @@ class GeminiAI:
 
     def analyze_receipt(self, image_bytes: bytes, mime_type: str,
                         categories: list[tuple[str, str]]) -> ReceiptResult:
-        prompt = f"""あなたは日本の家計簿レシート解析器です。画像から購入情報を抽出してください。
+        prompt = f"""あなたは日本の家計簿レシート解析器です。画像またはPDFから購入情報を抽出してください。
 カテゴリは必ず次の一覧からのみ選び、新カテゴリを作らないでください。
 {self.category_text(categories)}
 
@@ -31,11 +31,12 @@ class GeminiAI:
   カテゴリは教育/習い事、種類はnoteに記録。
 """
         encoded = base64.b64encode(image_bytes).decode("ascii")
+        media_type = "document" if mime_type == "application/pdf" else "image"
         interaction = self.client.interactions.create(
             model=self.model,
             input=[
                 {"type": "text", "text": prompt},
-                {"type": "image", "mime_type": mime_type, "data": encoded},
+                {"type": media_type, "mime_type": mime_type, "data": encoded},
             ],
             response_format={
                 "type": "text",
