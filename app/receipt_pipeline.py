@@ -25,9 +25,10 @@ class ReceiptPipeline:
         raw_hash=canonical_hash(result.model_dump())
         self.db.append("取込データ",[[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]])
         if not ok: return {"status":"needs_review","receipt":result.model_dump(),"issues":notes}
+        self.db.ensure_expense_status_column()
         rows=[]
         for idx,item in enumerate(result.items,1):
             spend_id=f"{receipt_id}-{idx:02d}"
-            rows.append([spend_id,result.date,result.merchant,item.name,item.amount,item.major_category,item.minor_category,result.payment_method,"receipt",receipt_id,import_id,item.note])
+            rows.append([spend_id,result.date,result.merchant,item.name,item.amount,item.major_category,item.minor_category,result.payment_method,"receipt",receipt_id,import_id,item.note,"active"])
         self.db.append("支出明細",rows)
         return {"status":"imported","items":len(rows),"total":result.total}

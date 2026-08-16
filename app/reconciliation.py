@@ -122,6 +122,38 @@ def reconcile_transactions(transactions: list[ImportTransaction]) -> list[Reconc
                 tx, "needs_review_duplicate", "", ids,
                 "一致候補が複数、または同じレシートを複数取引が参照",
             ))
+
+    amazon_orders = [
+        tx for tx in transactions
+        if tx.source == "Amazon" and tx.status == "canonical_amazon"
+        and tx.amount > 0 and tx.date
+    ]
+    amazon_candidates: dict[str, list[ImportTransaction]] = {}
+    for receipt in receipts:
+        # Amazon is canonical only when the receipt itself also identifies Amazon.
+        amazon_candidates[receipt.import_id] = [
+            order for order in amazon_orders
+            if order.amount == receipt.amount
+            and _days(order.date, receipt.date) <= 7
+            and merchants_match(order.merchant, receipt.merchant)
+        ]
+    amazon_reverse: dict[str, list[str]] = {}
+    for receipt_id, candidates in amazon_candidates.items():
+        for candidate in candidates:
+            amazon_reverse.setdefault(candidate.import_id, []).append(receipt_id)
+    for receipt in receipts:
+        candidates = amazon_candidates[receipt.import_id]
+        ids = tuple(candidate.import_id for candidate in candidates)
+        if len(candidates) == 1 and len(amazon_reverse[candidates[0].import_id]) == 1:
+            decisions.append(ReconcileDecision(
+                receipt, "matched_amazon", candidates[0].import_id, ids,
+                "Amazon注文合計・日付・店舗が一意に一致",
+            ))
+        elif candidates:
+            decisions.append(ReconcileDecision(
+                receipt, "needs_review_duplicate", "", ids,
+                "Amazon注文の一致候補が複数、または一注文を複数レシートが参照",
+            ))
     return decisions
 
 
@@ -135,6 +167,7 @@ class ReconciliationPipeline:
         return self._summary(transactions, decisions)
 
     def apply(self) -> dict:
+        self.db.ensure_expense_status_column()
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
         decisions = reconcile_transactions(transactions)
         updates = []
@@ -148,8 +181,21 @@ class ReconciliationPipeline:
             row[11] = "; ".join(x for x in (decision.transaction.note, annotation) if x)
             updates.append((decision.transaction.row_num, row))
         self.db.update_rows("取込データ", updates)
+        excluded_expenses=[]
+        for decision in decisions:
+            if decision.status != "matched_amazon":
+                continue
+            for row_num,raw in self.db.expense_rows_for_import(decision.transaction.import_id):
+                expense=list(raw)+[""]*max(0,13-len(raw))
+                expense=expense[:13]
+                expense[12]="duplicate_excluded"
+                excluded_expenses.append((row_num,expense))
+        if excluded_expenses:
+            self.db.ensure_expense_status_column()
+            self.db.update_rows("支出明細",excluded_expenses)
         result = self._summary(transactions, decisions)
         result["updated"] = len(updates)
+        result["expenses_excluded"] = len(excluded_expenses)
         return result
 
     @staticmethod
@@ -157,6 +203,7 @@ class ReconciliationPipeline:
         return {
             "transactions": len(transactions),
             "matched_receipt": sum(x.status == "matched_receipt" for x in decisions),
+            "matched_amazon": sum(x.status == "matched_amazon" for x in decisions),
             "needs_review": sum(x.status == "needs_review_duplicate" for x in decisions),
             "unchanged": len(transactions) - len(decisions),
         }

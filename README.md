@@ -9,6 +9,7 @@
 - Amazonは `Order ID + ASIN` を商品行キーに使用し、quantity=0の取消/調整行を除外
 - Amazon商品マスタ（ASIN）を再利用し、未知商品だけGemini分類
 - 同じAmazonキーで内容が変わった場合だけ更新
+- baseline後のAmazon差分商品を固定支出IDで「支出明細」へ商品単位計上
 - au PAY利用通知メールを伝票番号で重複なく「取込データ」へ登録
 - レシートとau PAY／カード利用を金額・日付・店舗で安全側に照合
 - GitHub Actionsで1時間ごと＋手動実行
@@ -177,6 +178,15 @@ python -m app.cli amazon-baseline "Order History.csv"
 ```bash
 python -m app.cli amazon "Order History.csv"
 ```
+
+baselineの行は過去データの基準点として保持し、支出明細へ一括計上しない。
+baseline後に検出した新規・変更商品だけを、Amazonキーから作る固定支出IDで
+「支出明細」へ追加・更新する。同時に注文単位の合計を「取込データ」へ
+`canonical_amazon` として記録し、レシートとの重複判定に使用する。
+
+Amazon注文合計とAmazonレシートが金額・日付・店舗で一意に一致した場合は、
+商品単位のAmazon明細を正本とし、レシート由来支出の `計上状態` を
+`duplicate_excluded` にする。元のレシート・支出行は監査用に削除しない。
 
 
 ## v3.4: Sheets書き込みクォータ対策

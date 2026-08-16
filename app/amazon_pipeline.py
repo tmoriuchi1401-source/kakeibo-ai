@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import pandas as pd
 from .gemini_ai import GeminiAI
 from .sheets import SheetsDB
@@ -46,9 +47,14 @@ class AmazonPipeline:
             "Payment Method Type":str(r["Payment Method Type"]),
         }
 
+    @staticmethod
+    def _expense_id(key:str)->str:
+        return "A-"+hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+
     def import_csv(self,path:str,batch_size:int=20,baseline:bool=False):
         df=load_amazon_rows(path)
         idx=self.db.amazon_index()
+        baseline_keys=self.db.amazon_baseline_keys()
         master=self.db.product_master()
         cats=self.db.categories()
         allowed=set(cats)
@@ -125,23 +131,69 @@ class AmazonPipeline:
 
         new_rows=[]
         update_rows=[]
+        expense_new=[]
+        expense_updates=[]
+        expense_idx=self.db.expense_index()
+        materialized=[]
         for r,key,h,kind in pending:
             asin=str(r["ASIN"])
             maj,minr,_=master.get(asin,("その他","未分類",""))
+            baseline_update=kind=="updated" and key in baseline_keys
             out=[key,str(r["Order ID"]),asin,date_ymd(r["Order Date"]),str(r["Product Name"]),
                  float(r["Original Quantity"]),money(r["Total Amount"]),str(r["Payment Method Type"]),
-                 maj,minr,"",h,now_jst_string()]
+                 maj,minr,"baseline" if baseline_update else "incremental",h,now_jst_string()]
             if kind=="new":
                 new_rows.append(out)
             else:
                 row_num,_=idx[key]
                 update_rows.append((row_num,out))
 
+            if baseline_update:
+                continue
+            expense_id=self._expense_id(key)
+            import_id=f"amazon:{str(r['Order ID'])}"
+            expense=[expense_id,date_ymd(r["Order Date"]),"Amazon.co.jp",str(r["Product Name"]),
+                     money(r["Total Amount"]),maj,minr,str(r["Payment Method Type"]),"Amazon","",import_id,
+                     f"Amazonキー={key}","active"]
+            if expense_id in expense_idx:
+                expense_updates.append((expense_idx[expense_id],expense))
+            else:
+                expense_new.append(expense)
+            materialized.append((r,key))
+
         self.db.append("Amazon注文",new_rows)
         self.db.update_rows("Amazon注文",update_rows)
+        if materialized:
+            self.db.ensure_expense_status_column()
+        self.db.append("支出明細",expense_new)
+        self.db.update_rows("支出明細",expense_updates)
+
+        # Store one canonical import row per order for receipt reconciliation.
+        import_idx=self.db.import_index()
+        order_ids={str(r["Order ID"]) for r,_ in materialized}
+        import_new=[]; import_updates=[]
+        for order_id in sorted(order_ids):
+            group=df[df["Order ID"].astype(str)==order_id]
+            total=sum(money(v) for v in group["Total Amount"])
+            first=group.iloc[0]
+            import_id=f"amazon:{order_id}"
+            raw={"order_id":order_id,"date":date_ymd(first["Order Date"]),"amount":total,
+                 "keys":sorted(f"{order_id}|{str(x)}" for x in group["ASIN"])}
+            row=[import_id,now_jst_string(),"Amazon",order_id,raw["date"],"Amazon.co.jp",total,
+                 str(first["Payment Method Type"]),"canonical_amazon","",canonical_hash(raw),
+                 f"商品明細={len(group)}件; Amazon商品単位を支出計上"]
+            if import_id in import_idx:
+                row_num,old_hash=import_idx[import_id]
+                if old_hash != row[10]: import_updates.append((row_num,row))
+            else:
+                import_new.append(row)
+        self.db.append("取込データ",import_new)
+        self.db.update_rows("取込データ",import_updates)
 
         return {
             "mode":"incremental","source_rows":len(df),"pending":len(pending),
             "new":len(new_rows),"updated":len(update_rows),"unchanged":unchanged,
-            "new_products":len(classified),"gemini_calls":gemini_calls
+            "new_products":len(classified),"gemini_calls":gemini_calls,
+            "expense_new":len(expense_new),"expense_updated":len(expense_updates),
+            "order_import_new":len(import_new),"order_import_updated":len(import_updates),
         }

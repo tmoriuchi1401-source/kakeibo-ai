@@ -54,3 +54,22 @@ def test_card_charge_and_amazon_states_are_excluded():
         row("card:2", "au PAYカード", "2026-08-16", "au PAY 残高オートチャージ", 522, "transfer_aupay_charge"),
     ])
     assert result == []
+
+
+def test_amazon_order_is_canonical_over_receipt():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "Amazon.co.jp", 1200, "解析済"),
+        row("amazon:o1", "Amazon", "2026-08-14", "Amazon.co.jp", 1200, "canonical_amazon"),
+    ])
+    assert len(result) == 1
+    assert result[0].transaction.import_id == "receipt:r1"
+    assert result[0].status == "matched_amazon"
+    assert result[0].target_id == "amazon:o1"
+
+
+def test_non_amazon_receipt_does_not_match_amazon_by_amount_only():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 1200, "解析済"),
+        row("amazon:o1", "Amazon", "2026-08-14", "Amazon.co.jp", 1200, "canonical_amazon"),
+    ])
+    assert result == []
