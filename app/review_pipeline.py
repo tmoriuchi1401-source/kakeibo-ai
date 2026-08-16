@@ -61,7 +61,8 @@ class ReviewPipeline:
         for item in items:
             tx=item.transaction
             manual=existing.get(tx.import_id,[""]*6)[:6]
-            rows.append([tx.import_id,item.priority,tx.date,tx.source,tx.merchant,tx.amount,
+            display_date=tx.date.replace("-","/") if tx.date else ""
+            rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                          tx.status,item.recommendation,tx.note]+manual)
         self.db.append("要確認",rows)
         self.db.configure_review_validation()

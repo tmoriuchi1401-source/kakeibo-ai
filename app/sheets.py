@@ -65,6 +65,10 @@ class SheetsDB:
                     "endRowIndex":1000,"startColumnIndex":start_col,"endColumnIndex":end_col},
                     "rule":{"condition":condition,"strict":True,"showCustomUi":True}}}
         requests=[
+            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,
+             "endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},
+             "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
+             "fields":"userEnteredFormat.numberFormat"}},
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
                  ["支出として計上","重複として除外","レシートと統合","保留"]]}),
             rule(11,12,{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"=カテゴリ!$A$2:$A"}]}),
