@@ -10,6 +10,7 @@ HEADERS={
 "取込データ":["取込ID","取込日時","データ元","元データID","日付","店舗","金額","支払方法","処理状態","統合先支出ID","元データハッシュ","備考"],
 "Amazon注文":["Amazonキー","Order ID","ASIN","注文日","商品名","数量","商品金額","支払方法","大カテゴリ","小カテゴリ","備考","データハッシュ","最終取込日時"],
 "商品マスタ":["商品ID","商品名","大カテゴリ","小カテゴリ","備考","最終更新日時"],
+"要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考"],
 }
 
 class SheetsDB:
@@ -35,6 +36,25 @@ class SheetsDB:
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+    def clear(self,rng:str):
+        self.svc.spreadsheets().values().clear(
+            spreadsheetId=self.sid,range=rng,body={}
+        ).execute()
+    def ensure_sheet(self,title:str,header:list[str]):
+        titles=set(self.sheet_titles())
+        if title not in titles:
+            self.svc.spreadsheets().batchUpdate(
+                spreadsheetId=self.sid,
+                body={"requests":[{"addSheet":{"properties":{
+                    "title":title,"gridProperties":{"frozenRowCount":1}
+                }}}]},
+            ).execute()
+        existing=self.get(f"{title}!1:1")
+        if not existing or existing[0][:len(header)] != header:
+            self.svc.spreadsheets().values().update(
+                spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
+                body={"values":[header]},
+            ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
