@@ -13,6 +13,7 @@ from .aupay_mail_pipeline import (
     parse_eml,
     parse_aupay_card_eml,
 )
+from .reconciliation import ReconciliationPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -40,6 +41,8 @@ def main():
     ga=sub.add_parser("gmail-authorize")
     ga.add_argument("client_json")
     ga.add_argument("token_output")
+    sub.add_parser("reconcile-preview")
+    sub.add_parser("reconcile")
     sub.add_parser("drive-receipts")
     sub.add_parser("doctor")
     args=p.parse_args()
@@ -84,6 +87,10 @@ def main():
     elif args.cmd=="gmail-authorize":
         authorize_gmail(args.client_json,args.token_output)
         print(f"Gmail読み取り用トークンを保存しました: {args.token_output}")
+    elif args.cmd=="reconcile-preview":
+        s,db,_=make(False); print(ReconciliationPipeline(db).preview())
+    elif args.cmd=="reconcile":
+        s,db,_=make(False); print(ReconciliationPipeline(db).apply())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
