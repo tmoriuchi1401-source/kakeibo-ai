@@ -187,6 +187,25 @@ GitHub Actionsで反映される。すぐ反映したい場合はActionsを手�
 python -m app.cli review-apply
 ```
 
+## スマホ用「支出一覧」シート
+
+「支出明細」は監査用として除外行も保持する。「支出一覧」は `計上状態=active` の
+支出だけを新しい日付順に表示する最終画面で、`duplicate_excluded` は表示しない。
+Google Sheetsアプリでは通常このシートを見れば、二重計上を除いた最終支出を確認できる。
+日付表示は `yyyy/mm/dd` に統一し、3時間ごとのActionsで自動更新する。
+
+書き込まずに最終件数・合計を確認する:
+
+```bash
+python -m app.cli expenses-preview
+```
+
+手動で「支出一覧」を更新する:
+
+```bash
+python -m app.cli expenses-refresh
+```
+
 ## 次の実装
 1. Amazon商品明細を最終支出明細へ反映する処理を追加
 2. 店舗名マスタと照合ルールを拡充

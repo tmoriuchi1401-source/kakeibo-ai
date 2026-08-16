@@ -47,3 +47,6 @@ jobs:
       - name: Refresh mobile review sheet
         if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli review-refresh
+      - name: Refresh active expense view
+        if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli expenses-refresh

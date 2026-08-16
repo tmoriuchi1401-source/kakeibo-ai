@@ -12,6 +12,7 @@ HEADERS={
 "商品マスタ":["商品ID","商品名","大カテゴリ","小カテゴリ","備考","最終更新日時"],
 "要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考",
        "ユーザー判断","統合先取込ID","大カテゴリ","小カテゴリ","ユーザー備考","反映結果"],
+"支出一覧":["日付","店舗","商品名","金額","大カテゴリ","小カテゴリ","支払方法","データ元","備考","支出ID"],
 }
 
 class SheetsDB:
@@ -76,6 +77,17 @@ class SheetsDB:
         ]
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":requests}
+        ).execute()
+    def format_date_column(self,sheet_title:str,column_index:int=0):
+        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
+                      if s["properties"]["title"]==sheet_title)
+        self.svc.spreadsheets().batchUpdate(
+            spreadsheetId=self.sid,body={"requests":[{"repeatCell":{"range":{
+                "sheetId":sheet_id,"startRowIndex":1,"endRowIndex":10000,
+                "startColumnIndex":column_index,"endColumnIndex":column_index+1},
+                "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
+                "fields":"userEnteredFormat.numberFormat"}}]}
         ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
