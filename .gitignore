@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+service-account.json
+token.json
+*.pyc
+
+# 家計簿の実データ・メール・画像・ローカルバックアップ
+*.csv
+*.eml
+*.zip
+receipt_test.jpg
+
+# OAuth authorized-user/client credentials
+gmail-token.json
+client_secret_*.json
