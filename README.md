@@ -12,7 +12,8 @@
 - baseline後のAmazon差分商品を固定支出IDで「支出明細」へ商品単位計上
 - au PAY利用通知メールを伝票番号で重複なく「取込データ」へ登録
 - レシートとau PAY／カード利用を金額・日付・店舗で安全側に照合
-- GitHub Actionsで1時間ごと＋手動実行
+- GitHub Actionsで3時間ごと＋手動実行
+- 処理済み、要確認、既取込のレシート画像を `receipt_processed` へ退避
 
 ## シート名
 支出明細 / レシート / カテゴリ / 店舗 / 取込データ / Amazon注文 / 商品マスタ
@@ -62,9 +63,30 @@ python -m app.cli amazon "/path/to/Order History.csv"
 - 688注文ID、複数商品注文127件、最大6商品/注文
 
 ## 7. iPhone運用
-iPhoneショートカットで「写真を撮る → Google Driveのreceipt_inboxへ保存」を作る。
-GitHub Actionsは1時間ごとにDriveを確認するため、PCは不要。
-必要ならGitHub Mobile/ブラウザから workflow_dispatch で即時実行もできる。
+
+最初にiPhoneへGoogle Driveアプリを入れてログインする。次に「ファイル」アプリの
+「ブラウズ」画面で右上のメニューから「編集」を開き、Google Driveを有効にする。
+表示されない場合は、Google Driveアプリを一度開いてログイン状態を確認する。
+
+ショートカットアプリで「家計簿レシート」というショートカットを作り、次の2アクションを
+順番に追加する（名称はiOSのバージョンによって多少異なる）。
+
+1. `写真を撮る`（背面カメラ）
+2. `ファイルを保存`（保存先を尋ねる: オフ、保存先: Google Driveの `receipt_inbox`）
+
+ファイル名の変更は必須ではない。ホーム画面やウィジェットに追加すれば、撮影後は
+保存操作なしで受信箱へ送れる。GitHub Actionsが3時間ごとにDriveを確認し、正常取込、
+要確認、既取込の画像を `receipt_processed` へ移す。解析に失敗して記録もできなかった
+画像は `receipt_inbox` に残るため、原因を確認して再処理できる。
+
+初回テストでは1枚撮影し、Driveアプリで `receipt_inbox` への保存を確認してから、
+GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、画像が
+`receipt_processed` に移り、Sheetsの「レシート」「取込データ」と、正常時は
+「支出一覧」に反映されることを確認する。
+
+参考: [Apple: 「ファイル」で他社製クラウドを使う](https://support.apple.com/ja-jp/102238)、
+[Apple: ショートカットの共有アクション](https://support.apple.com/ja-jp/guide/shortcuts/apdaf74d75a5/ios)、
+[Google: iPhoneからDriveへアップロード](https://support.google.com/drive/answer/2424368?co=GENIE.Platform%3DiOS&hl=ja)
 
 ## 8. GitHub Actions
 Secretsに以下を登録:
@@ -72,7 +94,7 @@ Secretsに以下を登録:
 - SPREADSHEET_ID
 - GOOGLE_SERVICE_ACCOUNT_JSON（JSON全文）
 - RECEIPT_DRIVE_FOLDER_ID
-- PROCESSED_DRIVE_FOLDER_ID（任意）
+- PROCESSED_DRIVE_FOLDER_ID（推奨。`receipt_processed` のフォルダURLまたはID）
 - GOOGLE_GMAIL_TOKEN_JSON（任意。Gmail読み取り専用OAuthのauthorized-user JSON）
 
 `GOOGLE_GMAIL_TOKEN_JSON` が未登録なら、定期処理は従来どおりレシートだけを処理し、
@@ -207,9 +229,8 @@ python -m app.cli expenses-refresh
 ```
 
 ## 次の実装
-1. Amazon商品明細を最終支出明細へ反映する処理を追加
-2. 店舗名マスタと照合ルールを拡充
-3. 確信度の低い行だけスマホ確認できる「要確認」ビューを追加
+1. 店舗名マスタと照合ルールを拡充
+2. 実運用データを使って要確認判定を調整
 
 ## 安全設計
 - APIキー、サービスアカウントJSONはGitにコミットしない。

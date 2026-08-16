@@ -4,6 +4,7 @@ import re
 from .google_clients import drive_service, download_drive_file
 from .receipt_pipeline import ReceiptPipeline
 
+
 def normalize_folder_id(value:str)->str:
     value=(value or "").strip()
     match=re.search(r"/folders/([A-Za-z0-9_-]+)",value)
@@ -11,6 +12,15 @@ def normalize_folder_id(value:str)->str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{10,}",value):
         raise ValueError("DriveフォルダIDが不正です。フォルダURLまたはfolders/以降のIDを設定してください")
     return value
+
+
+def should_archive_result(result: dict) -> bool:
+    """Return whether an inbox image was safely recorded and can be archived."""
+    status = result.get("status")
+    return status in {"imported", "needs_review"} or (
+        status == "skipped" and result.get("reason") == "already_imported"
+    )
+
 
 def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str=""):
     folder_id=normalize_folder_id(folder_id)
@@ -27,7 +37,13 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
         data=download_drive_file(f["id"])
         res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""))
         results.append((f["name"],res))
-        if res.get("status")=="imported" and processed_folder_id:
+        if processed_folder_id and should_archive_result(res):
             prev=",".join(f.get("parents",[]))
-            svc.files().update(fileId=f["id"],addParents=processed_folder_id,removeParents=prev,fields="id,parents").execute()
+            svc.files().update(
+                fileId=f["id"],
+                addParents=processed_folder_id,
+                removeParents=prev,
+                fields="id,parents",
+                supportsAllDrives=True,
+            ).execute()
     return results
