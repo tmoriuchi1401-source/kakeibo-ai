@@ -10,7 +10,8 @@ HEADERS={
 "取込データ":["取込ID","取込日時","データ元","元データID","日付","店舗","金額","支払方法","処理状態","統合先支出ID","元データハッシュ","備考"],
 "Amazon注文":["Amazonキー","Order ID","ASIN","注文日","商品名","数量","商品金額","支払方法","大カテゴリ","小カテゴリ","備考","データハッシュ","最終取込日時"],
 "商品マスタ":["商品ID","商品名","大カテゴリ","小カテゴリ","備考","最終更新日時"],
-"要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考"],
+"要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考",
+       "ユーザー判断","統合先取込ID","大カテゴリ","小カテゴリ","ユーザー備考","反映結果"],
 }
 
 class SheetsDB:
@@ -55,6 +56,23 @@ class SheetsDB:
                 spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
                 body={"values":[header]},
             ).execute()
+    def configure_review_validation(self):
+        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
+                      if s["properties"]["title"]=="要確認")
+        def rule(start_col,end_col,condition):
+            return {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
+                    "endRowIndex":1000,"startColumnIndex":start_col,"endColumnIndex":end_col},
+                    "rule":{"condition":condition,"strict":True,"showCustomUi":True}}}
+        requests=[
+            rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
+                 ["支出として計上","重複として除外","レシートと統合","保留"]]}),
+            rule(11,12,{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"=カテゴリ!$A$2:$A"}]}),
+            rule(12,13,{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"=カテゴリ!$B$2:$B"}]}),
+        ]
+        self.svc.spreadsheets().batchUpdate(
+            spreadsheetId=self.sid,body={"requests":requests}
+        ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):

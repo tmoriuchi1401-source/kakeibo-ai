@@ -1,5 +1,5 @@
 from app.reconciliation import parse_import_rows
-from app.review_pipeline import review_items
+from app.review_pipeline import ReviewApprovalPipeline, review_items
 
 
 def row(import_id,source,date,status):
@@ -25,3 +25,44 @@ def test_ambiguous_duplicate_is_high_priority():
     ]))
     assert items[0].priority == "高"
     assert "統合先" in items[0].recommendation
+
+
+class FakeDB:
+    def __init__(self,category=("食費","食料品")):
+        self.category=category
+        self.appended=[]; self.updated={}
+
+    def get(self,rng):
+        if rng=="取込データ!A2:L":
+            return [row("a1","au PAY","2026-08-16","unclassified_aupay")]
+        if rng=="要確認!A2:O":
+            return [["a1","中","2026-08-16","au PAY","店舗",100,"unclassified_aupay",
+                     "","","支出として計上","",self.category[0],self.category[1],"メモ",""]]
+        raise AssertionError(rng)
+
+    def categories(self): return [("食費","食料品")]
+    def expense_index(self): return {}
+    def expense_rows_for_import(self,import_id): return []
+    def ensure_expense_status_column(self): pass
+    def append(self,sheet,rows): self.appended.extend(rows)
+    def update_rows(self,sheet,rows): self.updated.setdefault(sheet,[]).extend(rows)
+
+
+def test_manual_expense_requires_master_category_and_creates_expense():
+    db=FakeDB()
+    result=ReviewApprovalPipeline(db).apply()
+    assert result["applied"]==1
+    assert result["errors"]==0
+    assert len(db.appended)==1
+    assert db.appended[0][5:7]==["食費","食料品"]
+    assert db.appended[0][12]=="active"
+    assert db.updated["取込データ"][0][1][8]=="manual_expense"
+
+
+def test_manual_expense_rejects_category_pair_outside_master():
+    db=FakeDB(category=("AI新設","勝手なカテゴリ"))
+    result=ReviewApprovalPipeline(db).apply()
+    assert result["applied"]==0
+    assert result["errors"]==1
+    assert db.appended==[]
+    assert "カテゴリマスタ" in db.updated["要確認"][0][1][14]

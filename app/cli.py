@@ -14,7 +14,7 @@ from .aupay_mail_pipeline import (
     parse_aupay_card_eml,
 )
 from .reconciliation import ReconciliationPipeline
-from .review_pipeline import ReviewPipeline
+from .review_pipeline import ReviewApprovalPipeline, ReviewPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -46,6 +46,7 @@ def main():
     sub.add_parser("reconcile")
     sub.add_parser("review-preview")
     sub.add_parser("review-refresh")
+    sub.add_parser("review-apply")
     sub.add_parser("drive-receipts")
     sub.add_parser("doctor")
     args=p.parse_args()
@@ -98,6 +99,8 @@ def main():
         s,db,_=make(False); print(ReviewPipeline(db).preview())
     elif args.cmd=="review-refresh":
         s,db,_=make(False); print(ReviewPipeline(db).refresh())
+    elif args.cmd=="review-apply":
+        s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
