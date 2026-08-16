@@ -28,13 +28,13 @@ jobs:
           test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" && echo "Google service account: configured" || echo "Google service account: not configured"
           test -n "$RECEIPT_DRIVE_FOLDER_ID" && echo "Receipt Drive folder: configured" || echo "Receipt Drive folder: not configured"
           test -n "$GOOGLE_GMAIL_TOKEN_JSON" && echo "Gmail: configured" || echo "Gmail: not configured"
-      - name: Process Google Drive receipt inbox
-        if: ${{ env.GEMINI_API_KEY != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.RECEIPT_DRIVE_FOLDER_ID != '' }}
-        env:
-          GEMINI_MODEL: gemini-3.6-flash
-        run: python -m app.cli drive-receipts
       - name: Import au PAY notices from Gmail
         if: ${{ env.GOOGLE_GMAIL_TOKEN_JSON != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         env:
           AUPAY_GMAIL_QUERY: ${{ vars.AUPAY_GMAIL_QUERY }}
         run: python -m app.cli aupay-gmail
+      - name: Process Google Drive receipt inbox
+        if: ${{ env.GEMINI_API_KEY != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.RECEIPT_DRIVE_FOLDER_ID != '' }}
+        env:
+          GEMINI_MODEL: gemini-3.6-flash
+        run: python -m app.cli drive-receipts
