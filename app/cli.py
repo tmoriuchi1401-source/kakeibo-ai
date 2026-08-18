@@ -13,6 +13,7 @@ from .aupay_mail_pipeline import (
     parse_eml,
     parse_aupay_card_eml,
 )
+from .aupay_csv_pipeline import AuPayCsvPipeline
 from .reconciliation import ReconciliationPipeline
 from .review_pipeline import ReviewApprovalPipeline, ReviewPipeline
 from .expense_view import ExpenseViewPipeline
@@ -39,6 +40,8 @@ def main():
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
+    acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
+    aci=sub.add_parser("aupay-csv-import"); aci.add_argument("csv")
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
     ga=sub.add_parser("gmail-authorize")
     ga.add_argument("client_json")
@@ -88,6 +91,10 @@ def main():
     elif args.cmd=="aupay-gmail":
         s,db,_=make(False); s.validate(need_gmail=True)
         print(AuPayMailPipeline(db).import_gmail(s.gmail_token_json,s.aupay_gmail_query,args.max_results))
+    elif args.cmd=="aupay-csv-preview":
+        s,db,_=make(False); print(AuPayCsvPipeline(db).preview(args.csv))
+    elif args.cmd=="aupay-csv-import":
+        s,db,_=make(False); print(AuPayCsvPipeline(db).import_csv(args.csv))
     elif args.cmd=="card-eml-import":
         s,db,_=make(False)
         print(AuPayCardPipeline(db).import_transactions(parse_aupay_card_eml(args.eml)))
