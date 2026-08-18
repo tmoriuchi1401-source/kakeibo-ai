@@ -70,5 +70,23 @@ def test_existing_amazon_card_row_can_be_reclassified():
     assert result["updated"] == 1
     updated = db.updated[0][1]
     assert updated[8] == "matched_amazon"
-    assert updated[9] == "amazon:ORDER-1"
+    assert updated[9] == ""
     assert "Amazon候補数=0" not in updated[11]
+    assert "Amazonキー=amazon:ORDER-1" in updated[11]
+
+
+def test_manual_amazon_match_is_not_reclassified():
+    imports = [[
+        "card:1", "", "au PAYカード", "card:1", "2026-08-03",
+        "AMAZON.CO.JP", 780, "一括", "matched_amazon", "item-key", "",
+        "手動照合=2026-08-01注文",
+    ]]
+    db = FakeDB([
+        amazon_row("key:1", "ORDER-1", "2026-08-01", 780),
+        amazon_row("key:2", "ORDER-2", "2026-08-02", 780),
+    ], imports)
+
+    result = AuPayCardPipeline(db).reclassify_amazon()
+
+    assert result["updated"] == 0
+    assert db.updated == []

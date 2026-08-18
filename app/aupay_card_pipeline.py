@@ -152,11 +152,15 @@ class AuPayCardPipeline:
             if row[2]!="au PAYカード" or not is_amazon(str(row[5])):
                 continue
             stats["amazon_rows"]+=1
+            if "手動照合=" in str(row[11]):
+                continue
             try: amount=parse_money(row[6])
             except (TypeError,ValueError): amount=0
             state,candidates=self._classify_amazon(str(row[4]),amount,amazon)
             stats[state]+=1
-            target=candidates[0]["key"] if state=="matched_amazon" else ""
+            # Baseline orders may not have a canonical import row, so keep the
+            # target column empty and record the stable order key in the note.
+            target=""
             if row[8]==state and row[9]==target:
                 continue
             note_parts=[part.strip() for part in str(row[11]).split(";") if part.strip()]
@@ -166,7 +170,10 @@ class AuPayCardPipeline:
                 or part.startswith("Amazon注文と照合済み")
                 or part.startswith("Amazon再照合=")
             )]
-            note_parts.append(f"Amazon再照合={state}; 候補数={len(candidates)}")
+            note_parts.append(f"Amazon再照合={state}")
+            note_parts.append(f"候補数={len(candidates)}")
+            if state=="matched_amazon":
+                note_parts.append(f"Amazonキー={candidates[0]['key']}")
             row[8]=state; row[9]=target; row[11]="; ".join(note_parts)
             updates.append((row_num,row))
         self.db.update_rows("取込データ",updates)
