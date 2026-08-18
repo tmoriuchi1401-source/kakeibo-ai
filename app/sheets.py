@@ -67,18 +67,17 @@ class SheetsDB:
                 spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
                 body={"values":[header]},
             ).execute()
-    def configure_review_validation(self, review_row_count:int,
-                                    categories:list[tuple[str,str]]):
+    def configure_review_validation(self, categories:list[tuple[str,str]]):
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]=="要確認")
         def rule(start_col,end_col,condition):
             return {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
-                    "endRowIndex":1000,"startColumnIndex":start_col,"endColumnIndex":end_col},
+                    "startColumnIndex":start_col,"endColumnIndex":end_col},
                     "rule":{"condition":condition,"strict":True,"showCustomUi":True}}}
         requests=[
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,
-             "endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},
+             "startColumnIndex":2,"endColumnIndex":3},
              "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
              "fields":"userEnteredFormat.numberFormat"}},
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
@@ -86,7 +85,7 @@ class SheetsDB:
             rule(11,12,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
                  for x in combined_category_options(categories)]}),
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
-             "endRowIndex":1000,"startColumnIndex":12,"endColumnIndex":13}}},
+             "startColumnIndex":12,"endColumnIndex":13}}},
         ]
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":requests}
@@ -97,7 +96,7 @@ class SheetsDB:
                       if s["properties"]["title"]==sheet_title)
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":[{"repeatCell":{"range":{
-                "sheetId":sheet_id,"startRowIndex":1,"endRowIndex":10000,
+                "sheetId":sheet_id,"startRowIndex":1,
                 "startColumnIndex":column_index,"endColumnIndex":column_index+1},
                 "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
                 "fields":"userEnteredFormat.numberFormat"}}]}

@@ -86,6 +86,8 @@ Secretsに以下を登録:
 - GOOGLE_SERVICE_ACCOUNT_JSON（JSON全文）
 - RECEIPT_DRIVE_FOLDER_ID
 - PROCESSED_DRIVE_FOLDER_ID（推奨。`receipt_processed` のフォルダURLまたはID）
+- BACKUP_DRIVE_FOLDER_ID（月次バックアップ先のフォルダID）
+- GOOGLE_DRIVE_BACKUP_TOKEN_JSON（Driveバックアップ用OAuth authorized-user JSON）
 - GOOGLE_GMAIL_TOKEN_JSON（任意。Gmail読み取り専用OAuthのauthorized-user JSON）
 
 `GOOGLE_GMAIL_TOKEN_JSON` が未登録なら、定期処理は従来どおりレシートだけを処理し、
@@ -153,6 +155,10 @@ python -m app.cli reconcile-preview
 ```bash
 python -m app.cli reconcile
 ```
+
+照合対象は標準で直近6か月、全未処理行、最近取り込んだ過去日付のデータ、
+およびそれらに一致し得る過去候補とする。期間は
+`RECONCILIATION_LOOKBACK_MONTHS` で変更できる。
 
 解析済みレシートを正本とし、au PAYまたは通常カード利用が金額・日付・店舗で
 一意に一致した場合だけ決済側を `matched_receipt` にする。候補が複数ある場合や、
@@ -254,6 +260,37 @@ python -m app.cli card-amazon-reclassify
 
 一意に一致した請求は `matched_amazon`、候補が複数なら
 `amazon_needs_review`、候補がなければ `amazon_unmatched` とする。
+
+## 月次バックアップとレシート保存期限
+
+毎月、Spreadsheet全体を `kakeibo-backup-YYYY-MM` という名前で
+`BACKUP_DRIVE_FOLDER_ID` へコピーする。同じ月のバックアップが既にあれば再作成しない。
+サービスアカウントには保存容量がないため、バックアップだけは本人のDrive OAuthを使う。
+
+```bash
+python -m app.cli drive-backup-authorize client_secret.json drive-backup-token.json
+python -m app.cli backup
+```
+
+GitHub Actionsでは `drive-backup-token.json` の内容を
+`GOOGLE_DRIVE_BACKUP_TOKEN_JSON` Secretへ登録する。
+
+処理済みフォルダへ移動した画像・PDFには処理日時を記録する。1年以上経過した
+対象を確認する場合はプレビューを使う。
+
+```bash
+python -m app.cli receipts-cleanup-preview
+```
+
+次のコマンドは対象ファイルをゴミ箱へ移さず完全削除する。
+
+```bash
+python -m app.cli receipts-cleanup
+```
+
+`.github/workflows/monthly-maintenance.yml` は毎月バックアップを作成した後、
+1年以上経過した処理済み画像・PDFを完全削除する。旧ファイルに処理日時がない場合は
+Driveの最終更新日時を基準にする。
 
 ## 次の実装
 1. 店舗名マスタと照合ルールを拡充

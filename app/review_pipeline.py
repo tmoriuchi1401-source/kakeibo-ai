@@ -89,7 +89,7 @@ class ReviewPipeline:
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                          tx.status,item.recommendation,tx.note]+manual)
         self.db.append("要確認",rows)
-        self.db.configure_review_validation(len(rows),categories)
+        self.db.configure_review_validation(categories)
         result=self._summary(items)
         result["refreshed"]=True
         return result

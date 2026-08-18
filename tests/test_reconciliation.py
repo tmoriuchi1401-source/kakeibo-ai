@@ -1,7 +1,10 @@
+from datetime import datetime
+
 from app.reconciliation import (
     merchants_match,
     parse_import_rows,
     parse_store_aliases,
+    reconciliation_scope,
     reconcile_transactions,
 )
 
@@ -110,3 +113,28 @@ def test_store_master_alias_chain_and_cycle_are_safe():
     }
     assert merchants_match("別名A", "標準店", aliases)
     assert not merchants_match("循環A", "標準店", aliases)
+
+
+def test_scope_keeps_old_unresolved_and_its_historical_candidate():
+    transactions = parse_import_rows([
+        row("receipt:r1", "receipt", "2025-01-10", "テスト店", 550, "解析済"),
+        row("aupay:1", "au PAY", "2025-01-10", "テスト店", 550, "unclassified_aupay"),
+        row("receipt:unrelated", "receipt", "2025-01-10", "別店舗", 999, "解析済"),
+    ])
+
+    scoped = reconciliation_scope(
+        transactions, months=6, as_of=datetime(2026, 8, 18),
+    )
+
+    assert {tx.import_id for tx in scoped} == {"receipt:r1", "aupay:1"}
+
+
+def test_scope_keeps_recently_imported_old_dated_receipt():
+    receipt = row("receipt:r1", "receipt", "2020-01-10", "テスト店", 550, "解析済")
+    receipt[1] = "2026-08-17 12:00:00"
+
+    scoped = reconciliation_scope(
+        parse_import_rows([receipt]), months=6, as_of=datetime(2026, 8, 18),
+    )
+
+    assert [tx.import_id for tx in scoped] == ["receipt:r1"]

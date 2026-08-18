@@ -17,6 +17,12 @@ from .aupay_csv_pipeline import AuPayCsvPipeline
 from .reconciliation import ReconciliationPipeline
 from .review_pipeline import ReviewApprovalPipeline, ReviewPipeline
 from .expense_view import ExpenseViewPipeline
+from .maintenance import (
+    authorize_drive_backup,
+    backup_drive_service,
+    backup_spreadsheet,
+    cleanup_processed_receipts,
+)
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -55,6 +61,12 @@ def main():
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
     sub.add_parser("drive-receipts")
+    sub.add_parser("backup")
+    dba=sub.add_parser("drive-backup-authorize")
+    dba.add_argument("client_json")
+    dba.add_argument("token_output",nargs="?",default="drive-backup-token.json")
+    sub.add_parser("receipts-cleanup-preview")
+    sub.add_parser("receipts-cleanup")
     sub.add_parser("doctor")
     args=p.parse_args()
     if args.cmd=="doctor":
@@ -105,9 +117,9 @@ def main():
         authorize_gmail(args.client_json,args.token_output)
         print(f"Gmail読み取り用トークンを保存しました: {args.token_output}")
     elif args.cmd=="reconcile-preview":
-        s,db,_=make(False); print(ReconciliationPipeline(db).preview())
+        s,db,_=make(False); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).preview())
     elif args.cmd=="reconcile":
-        s,db,_=make(False); print(ReconciliationPipeline(db).apply())
+        s,db,_=make(False); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).apply())
     elif args.cmd=="review-preview":
         s,db,_=make(False); print(ReviewPipeline(db).preview())
     elif args.cmd=="review-refresh":
@@ -121,5 +133,20 @@ def main():
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
+    elif args.cmd=="backup":
+        s=Settings(); s.validate(need_sheet=True,need_backup=True)
+        print(backup_spreadsheet(
+            s.spreadsheet_id,s.backup_drive_folder_id,
+            service=backup_drive_service(s.drive_backup_token()),
+        ))
+    elif args.cmd=="drive-backup-authorize":
+        authorize_drive_backup(args.client_json,args.token_output)
+        print(f"Driveバックアップ用トークンを保存しました: {args.token_output}")
+    elif args.cmd=="receipts-cleanup-preview":
+        s=Settings(); s.validate(need_processed=True)
+        print(cleanup_processed_receipts(s.processed_drive_folder_id))
+    elif args.cmd=="receipts-cleanup":
+        s=Settings(); s.validate(need_processed=True)
+        print(cleanup_processed_receipts(s.processed_drive_folder_id,apply=True))
 
 if __name__=="__main__":main()

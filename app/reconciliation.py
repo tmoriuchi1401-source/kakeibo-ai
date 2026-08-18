@@ -19,6 +19,7 @@ class ImportTransaction:
     target_id: str
     note: str
     row: list
+    imported_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ def parse_import_rows(rows: list[list]) -> list[ImportTransaction]:
             target_id=str(row[9]),
             note=str(row[11]),
             row=row[:12],
+            imported_at=str(row[1]),
         ))
     return transactions
 
@@ -65,6 +67,73 @@ def _days(left: str, right: str) -> int:
         return abs((a - b).days)
     except ValueError:
         return 999
+
+
+def _date(value: str) -> datetime | None:
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _months_ago(value: datetime, months: int) -> datetime:
+    year = value.year
+    month = value.month - months
+    while month <= 0:
+        year -= 1
+        month += 12
+    days = [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+            31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    return value.replace(year=year, month=month, day=min(value.day, days[month - 1]))
+
+
+def reconciliation_scope(transactions: list[ImportTransaction], *, months: int = 6,
+                         as_of: datetime | None = None,
+                         store_aliases: dict[str, str] | None = None) -> list[ImportTransaction]:
+    """Keep recent/unresolved rows plus historical rows that can match them."""
+    as_of = as_of or datetime.now()
+    cutoff = _months_ago(as_of, months)
+    aliases = store_aliases or {}
+    def unresolved(status: str) -> bool:
+        return (
+            status == "要確認"
+            or status.startswith("needs_review")
+            or status.endswith("_needs_review")
+            or status in {"unclassified_aupay", "unclassified_card", "amazon_unmatched"}
+        )
+    selected = {
+        tx.import_id for tx in transactions
+        if unresolved(tx.status)
+        or any(parsed is not None and parsed >= cutoff for parsed in
+               (_date(tx.date), _date(tx.imported_at)))
+    }
+    active = [tx for tx in transactions if tx.import_id in selected]
+    amounts = {tx.amount for tx in active if tx.amount > 0}
+    active_by_amount: dict[int, list[ImportTransaction]] = {}
+    for tx in active:
+        active_by_amount.setdefault(tx.amount, []).append(tx)
+    # A related historical counterpart remains eligible even when its own date
+    # and import timestamp are outside the lookback window.
+    for tx in transactions:
+        if tx.import_id in selected or tx.amount not in amounts:
+            continue
+        for subject in active_by_amount.get(tx.amount, []):
+            is_receipt_payment = (
+                tx.source == "receipt"
+                and subject.status in {"unclassified_aupay", "unclassified_card"}
+                and _days(tx.date, subject.date) <= (1 if subject.source == "au PAY" else 3)
+            )
+            is_amazon_pair = (
+                {tx.source, subject.source} == {"receipt", "Amazon"}
+                and _days(tx.date, subject.date) <= 7
+            )
+            if (is_receipt_payment or is_amazon_pair) and merchants_match(
+                    tx.merchant, subject.merchant, aliases):
+                selected.add(tx.import_id)
+                break
+    return [tx for tx in transactions if tx.import_id in selected]
 
 
 def parse_store_aliases(rows: list[list]) -> dict[str, str]:
@@ -108,6 +177,9 @@ def reconcile_transactions(
         if tx.source == "receipt" and tx.status in {"解析済", "canonical_receipt"}
         and tx.amount > 0 and tx.date
     ]
+    receipts_by_amount: dict[int, list[ImportTransaction]] = {}
+    for receipt in receipts:
+        receipts_by_amount.setdefault(receipt.amount, []).append(receipt)
     secondaries = [
         tx for tx in transactions
         if (
@@ -121,9 +193,8 @@ def reconcile_transactions(
     for tx in secondaries:
         tolerance = 1 if tx.source == "au PAY" else 3
         candidate_map[tx.import_id] = [
-            receipt for receipt in receipts
-            if receipt.amount == tx.amount
-            and _days(receipt.date, tx.date) <= tolerance
+            receipt for receipt in receipts_by_amount.get(tx.amount, [])
+            if _days(receipt.date, tx.date) <= tolerance
             and merchants_match(receipt.merchant, tx.merchant, store_aliases)
         ]
 
@@ -153,13 +224,15 @@ def reconcile_transactions(
         if tx.source == "Amazon" and tx.status == "canonical_amazon"
         and tx.amount > 0 and tx.date
     ]
+    amazon_by_amount: dict[int, list[ImportTransaction]] = {}
+    for order in amazon_orders:
+        amazon_by_amount.setdefault(order.amount, []).append(order)
     amazon_candidates: dict[str, list[ImportTransaction]] = {}
     for receipt in receipts:
         # Amazon is canonical only when the receipt itself also identifies Amazon.
         amazon_candidates[receipt.import_id] = [
-            order for order in amazon_orders
-            if order.amount == receipt.amount
-            and _days(order.date, receipt.date) <= 7
+            order for order in amazon_by_amount.get(receipt.amount, [])
+            if _days(order.date, receipt.date) <= 7
             and merchants_match(order.merchant, receipt.merchant, store_aliases)
         ]
     amazon_reverse: dict[str, list[str]] = {}
@@ -183,20 +256,29 @@ def reconcile_transactions(
 
 
 class ReconciliationPipeline:
-    def __init__(self, db: SheetsDB):
+    def __init__(self, db: SheetsDB, lookback_months: int = 6):
         self.db = db
+        self.lookback_months = lookback_months
 
     def preview(self) -> dict:
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
         aliases = parse_store_aliases(self.db.get("店舗!A2:C"))
-        decisions = reconcile_transactions(transactions, aliases)
-        return self._summary(transactions, decisions)
+        scoped = reconciliation_scope(
+            transactions, months=self.lookback_months, store_aliases=aliases,
+        )
+        decisions = reconcile_transactions(scoped, aliases)
+        result = self._summary(transactions, decisions)
+        result["scoped_transactions"] = len(scoped)
+        return result
 
     def apply(self) -> dict:
         self.db.ensure_expense_status_column()
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
         aliases = parse_store_aliases(self.db.get("店舗!A2:C"))
-        decisions = reconcile_transactions(transactions, aliases)
+        scoped = reconciliation_scope(
+            transactions, months=self.lookback_months, store_aliases=aliases,
+        )
+        decisions = reconcile_transactions(scoped, aliases)
         updates = []
         for decision in decisions:
             row = list(decision.transaction.row)
@@ -221,6 +303,7 @@ class ReconciliationPipeline:
             self.db.ensure_expense_status_column()
             self.db.update_rows("支出明細",excluded_expenses)
         result = self._summary(transactions, decisions)
+        result["scoped_transactions"] = len(scoped)
         result["updated"] = len(updates)
         result["expenses_excluded"] = len(excluded_expenses)
         return result

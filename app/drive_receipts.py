@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from datetime import datetime, timezone
 from .google_clients import drive_service, download_drive_file
 from .receipt_pipeline import ReceiptPipeline
 
@@ -31,7 +32,7 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
     svc=drive_service()
     q=f"'{folder_id}' in parents and trashed=false"
     files=svc.files().list(
-        q=q,fields="files(id,name,mimeType,webViewLink,parents)",orderBy="createdTime",
+        q=q,fields="files(id,name,mimeType,webViewLink,parents,appProperties)",orderBy="createdTime",
         supportsAllDrives=True,includeItemsFromAllDrives=True,
     ).execute().get("files",[])
     results=[]
@@ -46,6 +47,10 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
                 fileId=f["id"],
                 addParents=processed_folder_id,
                 removeParents=prev,
+                body={"appProperties":{
+                    **f.get("appProperties", {}),
+                    "kakeiboProcessedAt":datetime.now(timezone.utc).isoformat(),
+                }},
                 fields="id,parents",
                 supportsAllDrives=True,
             ).execute()
