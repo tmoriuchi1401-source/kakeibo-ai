@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass
 
 from .reconciliation import ImportTransaction, parse_import_rows
-from .sheets import HEADERS, SheetsDB
+from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,15 @@ def is_reviewable_status(status: str) -> bool:
         or status.endswith("_needs_review")
         or status in {"unclassified_aupay", "unclassified_card"}
     )
+
+
+def selected_category_pair(major: str, minor: str) -> tuple[str, str]:
+    major = major.strip()
+    minor = minor.strip()
+    if CATEGORY_SEPARATOR in major:
+        combined_major, combined_minor = major.split(CATEGORY_SEPARATOR, 1)
+        return combined_major.strip(), combined_minor.strip()
+    return major, minor
 
 
 def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
@@ -64,6 +73,7 @@ class ReviewPipeline:
     def refresh(self)->dict:
         tx=parse_import_rows(self.db.get("取込データ!A2:L"))
         items=review_items(tx)
+        categories=self.db.categories()
         self.db.ensure_sheet("要確認",HEADERS["要確認"])
         existing={r[0]:list(r[9:15])+[""]*max(0,6-len(r[9:15]))
                   for r in self.db.get("要確認!A2:O") if r}
@@ -76,7 +86,7 @@ class ReviewPipeline:
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                          tx.status,item.recommendation,tx.note]+manual)
         self.db.append("要確認",rows)
-        self.db.configure_review_validation(len(rows))
+        self.db.configure_review_validation(len(rows),categories)
         result=self._summary(items)
         result["refreshed"]=True
         return result
@@ -126,7 +136,7 @@ class ReviewApprovalPipeline:
 
             target=""; new_status=""
             if action=="支出として計上":
-                pair=(str(row[11]).strip(),str(row[12]).strip())
+                pair=selected_category_pair(str(row[11]),str(row[12]))
                 if pair not in categories:
                     row[14]="エラー: カテゴリマスタに存在する大・小カテゴリを選択してください"
                     stats["errors"]+=1; review_updates.append((row_num,row)); continue

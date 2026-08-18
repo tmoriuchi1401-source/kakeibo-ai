@@ -1,6 +1,11 @@
 from app.reconciliation import parse_import_rows
-from app.review_pipeline import ReviewApprovalPipeline, is_reviewable_status, review_items
-from app.sheets import review_category_helper_formulas
+from app.review_pipeline import (
+    ReviewApprovalPipeline,
+    is_reviewable_status,
+    review_items,
+    selected_category_pair,
+)
+from app.sheets import combined_category_options
 
 
 def row(import_id,source,date,status):
@@ -30,19 +35,23 @@ def test_ambiguous_duplicate_is_high_priority():
     assert "統合先" in items[0].recommendation
 
 
-def test_review_category_helper_filters_each_review_row():
-    formulas=review_category_helper_formulas(2)
-    assert len(formulas)==2
-    assert "要確認!L2" in formulas[0][0]
-    assert "要確認!L3" in formulas[1][0]
-    assert "FILTER(カテゴリ!$B$2:$B" in formulas[0][0]
-
-
 def test_all_extracted_status_patterns_can_be_manually_applied():
     assert is_reviewable_status("needs_review_aupay_csv")
     assert is_reviewable_status("amazon_needs_review")
     assert is_reviewable_status("unclassified_aupay")
     assert not is_reviewable_status("matched_receipt")
+
+
+def test_combined_mobile_category_options_are_unique():
+    options=combined_category_options([
+        ("食費","食料品"),("食費","外食"),("食費","食料品"),
+    ])
+    assert options == ["食費｜食料品","食費｜外食"]
+
+
+def test_combined_mobile_category_selection_takes_precedence():
+    assert selected_category_pair("食費｜外食", "従来の値") == ("食費", "外食")
+    assert selected_category_pair("食費", "食料品") == ("食費", "食料品")
 
 
 class FakeDB:
@@ -84,3 +93,10 @@ def test_manual_expense_rejects_category_pair_outside_master():
     assert result["errors"]==1
     assert db.appended==[]
     assert "カテゴリマスタ" in db.updated["要確認"][0][1][14]
+
+
+def test_manual_expense_accepts_combined_mobile_category():
+    db=FakeDB(category=("食費｜食料品",""))
+    result=ReviewApprovalPipeline(db).apply()
+    assert result["applied"]==1
+    assert db.appended[0][5:7]==["食費","食料品"]
