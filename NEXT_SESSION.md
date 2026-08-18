@@ -1,23 +1,22 @@
 # 次回作業メモ
 
-最終更新: 2026-08-17 (UTC)
+最終更新: 2026-08-18 (UTC)
 
 ## 現在地
 
 - ブランチ: `main`
-- 作業開始時点の最新コミット: `ef3f40a` (`Support scanned receipt PDFs`)
-- 未コミット差分あり。既存変更: `README.md`, `app/cli.py`, `app/reconciliation.py`, `app/review_pipeline.py`, `app/sheets.py`, `tests/test_reconciliation.py`, `tests/test_review_pipeline.py`
-- 未追跡の新規ファイル: `NEXT_SESSION.md`, `app/aupay_csv_pipeline.py`, `tests/test_aupay_csv.py`
+- 最新コミット: `d679f76` (`Add long-term maintenance and retention`)
+- 作業ツリーはクリーン。
 - iPhone の Google Drive アプリが生成するスキャン PDF を、レシート画像と同じ取込フローで処理できる状態
 - 正常取込、要確認、既取込の画像/PDFは `receipt_processed` へ移動する
 
 ## 確認済み
 
-2026-08-17 に以下を実行し、全テストが成功した。
+2026-08-18 に以下を実行し、全テストが成功した。
 
 ```bash
 .venv/bin/pytest -q
-# 46 passed in 1.14s
+# 60 passed in 1.17s
 ```
 
 ## 次の工程
@@ -45,9 +44,45 @@ Amazonカード照合は、商品単価ではなく注文ID単位の合計金額
 
 次回の優先候補:
 
-1. 未コミット差分をレビューし、機能単位でコミットする。
-2. 中155件はレシート・Amazon注文履歴の有無を確認し、正規化で一致しない店舗表記があれば「店舗」マスタへ登録する。
+1. Google Cloudの復旧後、Driveバックアップ用OAuthを完了する（下記参照）。
+2. 月次Workflowをリモートへ反映し、手動実行でバックアップと削除処理を検証する。
+3. 中155件はレシート・Amazon注文履歴の有無を確認し、正規化で一致しない店舗表記があれば「店舗」マスタへ登録する。
 4. 次月以降はGmail速報取込を継続し、月1回 `auPAY_YYYYMM.csv` と `auPAY_Card_YYYYMM.csv` で確定する。
+
+## DriveバックアップOAuthの再開地点
+
+Google Cloudの調子が悪かったため、Google Auth Platformの `Audience` 設定で中断した。
+コード実装、専用フォルダ作成、ローカル設定までは完了している。
+
+- バックアップフォルダ: `receipt_processed/kakeibo_backup`
+- フォルダID: `1GtC7iPw4YA_e4UnajAd7Fw9yryCc7Rxf`
+- サービスアカウントによるコピーは `storageQuotaExceeded` になることを確認済み。
+- 本人のDrive OAuthトークンを使う方式へ変更済み。
+- GitHub CLIの認証トークンが無効なため、Secretsは未登録。
+- 月次Workflow: `.github/workflows/monthly-maintenance.yml`
+
+再開時は、手元のPCでGoogle CloudのDesktop app用OAuthクライアントJSONを取得する。
+Google Auth PlatformのAudienceは通常の個人Gmailなら `External` とし、自分をテストユーザーへ追加する。
+その後、ローカルPCへリポジトリをclone/pullして次を実行する。
+
+```bash
+python -m app.cli drive-backup-authorize "/path/to/client_secret.json" drive-backup-token.json
+```
+
+ローカルで `SPREADSHEET_ID` と `BACKUP_DRIVE_FOLDER_ID` を設定して確認する。
+
+```bash
+python -m app.cli backup
+```
+
+成功後、GitHub ActionsのRepository Secretsへ以下を登録する。
+
+- `BACKUP_DRIVE_FOLDER_ID`: 上記フォルダID
+- `GOOGLE_DRIVE_BACKUP_TOKEN_JSON`: `drive-backup-token.json` の全文
+
+最後に `Monthly backup and receipt retention` を手動実行する。バックアップ用トークンや
+クライアントJSONはコミットしない。処理済みレシートの期限切れプレビュー・実行経路は
+確認済みで、2026-08-18時点の対象は0件（削除0件）。
 
 ## 再開時の手順
 
@@ -63,7 +98,8 @@ git log -1 --oneline
 - `app/reconciliation.py`: 金額・日付・店舗による照合ロジック
 - `app/aupay_csv_pipeline.py`: au PAY月次CSVの取込、メール行との照合、CSV確認済み記録
 - `app/review_pipeline.py`: Amazon曖昧候補を含む要確認抽出と手動反映
-- `app/sheets.py`: 大カテゴリ連動の小カテゴリ入力規則
+- `app/sheets.py`: モバイル向け一体型カテゴリ入力規則
+- `app/maintenance.py`: 月次Spreadsheetバックアップと1年経過レシートの完全削除
 - `tests/test_reconciliation.py`: 現在の照合仕様と追加すべき回帰テスト
 - `config/categories.tsv`: カテゴリマスタ（店舗名マスタとは別物なので混同しない）
 - `README.md`: 現在の運用手順と「次の実装」
@@ -74,7 +110,3 @@ git log -1 --oneline
 - 実運用データをテストへ追加する場合は、氏名、住所、注文番号、伝票番号などを匿名化する。
 - 重複候補が曖昧な場合は自動統合せず、従来どおり `needs_review_duplicate` とする。
 - レシートや既存行は監査用データなので、照合ルール変更時も削除しない。
-
-## このメモについて
-
-このファイルの追加自体は未コミット。次回、内容を確認してから実装変更と分けてコミットしてもよい。
