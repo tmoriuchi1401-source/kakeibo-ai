@@ -1,4 +1,9 @@
-from app.reconciliation import parse_import_rows, reconcile_transactions
+from app.reconciliation import (
+    merchants_match,
+    parse_import_rows,
+    parse_store_aliases,
+    reconcile_transactions,
+)
 
 
 def row(import_id, source, date, merchant, amount, status):
@@ -73,3 +78,35 @@ def test_non_amazon_receipt_does_not_match_amazon_by_amount_only():
         row("amazon:o1", "Amazon", "2026-08-14", "Amazon.co.jp", 1200, "canonical_amazon"),
     ])
     assert result == []
+
+
+def test_store_master_alias_enables_match():
+    aliases = parse_store_aliases([
+        ["store:1", "（株）テストストア", "テストストア"],
+    ])
+    transactions = parse_import_rows([
+        row("receipt:r1", "receipt", "2026-08-16", "テストストア", 550, "解析済"),
+        row("aupay:1", "au PAY", "2026-08-16", "（株）テストストア", 550, "unclassified_aupay"),
+    ])
+
+    result = reconcile_transactions(transactions, aliases)
+
+    assert result[0].status == "matched_receipt"
+
+
+def test_store_master_ignores_incomplete_rows():
+    assert parse_store_aliases([
+        ["store:1", "別名のみ", ""],
+        ["store:2", "", "標準名のみ"],
+    ]) == {}
+
+
+def test_store_master_alias_chain_and_cycle_are_safe():
+    aliases = {
+        "別名a": "別名b",
+        "別名b": "標準店",
+        "循環a": "循環b",
+        "循環b": "循環a",
+    }
+    assert merchants_match("別名A", "標準店", aliases)
+    assert not merchants_match("循環A", "標準店", aliases)

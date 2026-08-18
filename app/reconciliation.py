@@ -67,8 +67,29 @@ def _days(left: str, right: str) -> int:
         return 999
 
 
-def merchants_match(left: str, right: str) -> bool:
-    a, b = normalize_store(left), normalize_store(right)
+def parse_store_aliases(rows: list[list]) -> dict[str, str]:
+    aliases = {}
+    for raw in rows:
+        row = list(raw) + [""] * max(0, 3 - len(raw))
+        name = normalize_store(str(row[1]))
+        canonical = normalize_store(str(row[2]))
+        if name and canonical:
+            aliases[name] = canonical
+    return aliases
+
+
+def _canonical_store(value: str, aliases: dict[str, str]) -> str:
+    store = normalize_store(value)
+    seen = set()
+    while store in aliases and store not in seen:
+        seen.add(store)
+        store = aliases[store]
+    return store
+
+
+def merchants_match(left: str, right: str, aliases: dict[str, str] | None = None) -> bool:
+    aliases = aliases or {}
+    a, b = _canonical_store(left, aliases), _canonical_store(right, aliases)
     if not a or not b:
         return False
     if a == b:
@@ -77,7 +98,11 @@ def merchants_match(left: str, right: str) -> bool:
     return min(len(a), len(b)) >= 4 and (a in b or b in a)
 
 
-def reconcile_transactions(transactions: list[ImportTransaction]) -> list[ReconcileDecision]:
+def reconcile_transactions(
+    transactions: list[ImportTransaction],
+    store_aliases: dict[str, str] | None = None,
+) -> list[ReconcileDecision]:
+    store_aliases = store_aliases or {}
     receipts = [
         tx for tx in transactions
         if tx.source == "receipt" and tx.status in {"解析済", "canonical_receipt"}
@@ -99,7 +124,7 @@ def reconcile_transactions(transactions: list[ImportTransaction]) -> list[Reconc
             receipt for receipt in receipts
             if receipt.amount == tx.amount
             and _days(receipt.date, tx.date) <= tolerance
-            and merchants_match(receipt.merchant, tx.merchant)
+            and merchants_match(receipt.merchant, tx.merchant, store_aliases)
         ]
 
     # A receipt claimed by multiple payment records is never merged automatically.
@@ -135,7 +160,7 @@ def reconcile_transactions(transactions: list[ImportTransaction]) -> list[Reconc
             order for order in amazon_orders
             if order.amount == receipt.amount
             and _days(order.date, receipt.date) <= 7
-            and merchants_match(order.merchant, receipt.merchant)
+            and merchants_match(order.merchant, receipt.merchant, store_aliases)
         ]
     amazon_reverse: dict[str, list[str]] = {}
     for receipt_id, candidates in amazon_candidates.items():
@@ -163,13 +188,15 @@ class ReconciliationPipeline:
 
     def preview(self) -> dict:
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
-        decisions = reconcile_transactions(transactions)
+        aliases = parse_store_aliases(self.db.get("店舗!A2:C"))
+        decisions = reconcile_transactions(transactions, aliases)
         return self._summary(transactions, decisions)
 
     def apply(self) -> dict:
         self.db.ensure_expense_status_column()
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
-        decisions = reconcile_transactions(transactions)
+        aliases = parse_store_aliases(self.db.get("店舗!A2:C"))
+        decisions = reconcile_transactions(transactions, aliases)
         updates = []
         for decision in decisions:
             row = list(decision.transaction.row)
