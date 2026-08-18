@@ -159,6 +159,10 @@ python -m app.cli reconcile
 同じレシートを複数決済が参照する場合は `needs_review_duplicate` とし、自動統合しない。
 au PAY残高オートチャージとAmazon照合済みカードは対象外とする。
 
+店舗名に表記揺れがある場合は、「店舗」シートへ1行ずつ登録する。
+「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
+照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
+
 ## スマホ用「要確認」シート
 
 Google Sheetsアプリでは「要確認」シートだけを開けば、対応が必要な取引を確認できる。
@@ -190,7 +194,8 @@ J〜N列だけを入力する。
 - ユーザー備考: 任意
 - 反映結果: システムが結果またはエラーを記録
 
-判断とカテゴリはシート上のドロップダウンから選択する。大・小カテゴリの組合せが
+判断とカテゴリはシート上のドロップダウンから選択する。小カテゴリの候補は、
+同じ行で選択した大カテゴリに紐づくものだけに絞り込まれる。大・小カテゴリの組合せが
 カテゴリマスタに存在しない場合は反映しない。入力した判断は次の3時間ごとの
 GitHub Actionsで反映される。すぐ反映したい場合はActionsを手動実行する。
 
@@ -217,6 +222,26 @@ python -m app.cli expenses-preview
 
 ```bash
 python -m app.cli expenses-refresh
+```
+
+## au PAY CSV取込
+
+au PAYサイトから出力した `auPAY_YYYYMM.csv` は、月次確定データとして取り込める。
+日常は3時間ごとのGmail取込で速報反映し、月1回CSVを取り込んで不足分を補完する。
+既存のメール取込と同日・同店舗・同額の支払いは件数単位で照合し、二重登録せず
+既存行の備考へ `CSV確認済=YYYYMM` を記録する。
+オートチャージは監査用に保持するが、支出には計上しない。
+
+```bash
+python -m app.cli aupay-csv-preview auPAY_202608.csv
+python -m app.cli aupay-csv-import auPAY_202608.csv
+```
+
+カード明細の `auPAY_Card_YYYYMM.csv` は従来どおり次で取り込む。
+
+```bash
+python -m app.cli card-preview auPAY_Card_202608.csv
+python -m app.cli card-import auPAY_Card_202608.csv
 ```
 
 ## 次の実装
