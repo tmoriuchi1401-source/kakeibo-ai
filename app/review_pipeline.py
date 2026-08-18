@@ -19,7 +19,7 @@ def is_reviewable_status(status: str) -> bool:
         status == "要確認"
         or status.startswith("needs_review")
         or status.endswith("_needs_review")
-        or status in {"unclassified_aupay", "unclassified_card"}
+        or status in {"unclassified_aupay", "unclassified_card", "amazon_unmatched"}
     )
 
 
@@ -50,6 +50,9 @@ def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
         elif status == "unclassified_card":
             priority="中"
             recommendation="レシート・Amazon・au PAYとの重複を確認"
+        elif status == "amazon_unmatched":
+            priority="中"
+            recommendation="Amazon注文履歴に一致なし。注文履歴の不足または請求内訳を確認"
         else:
             continue
         items.append(ReviewItem(tx,priority,recommendation))

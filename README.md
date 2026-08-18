@@ -245,6 +245,16 @@ python -m app.cli card-preview auPAY_Card_202608.csv
 python -m app.cli card-import auPAY_Card_202608.csv
 ```
 
+Amazonのカード請求は、商品単価ではなく注文ID単位の合計金額で照合する。
+既存のカード行を現在のAmazon注文データで再判定する場合は次を実行する。
+
+```bash
+python -m app.cli card-amazon-reclassify
+```
+
+一意に一致した請求は `matched_amazon`、候補が複数なら
+`amazon_needs_review`、候補がなければ `amazon_unmatched` とする。
+
 ## 次の実装
 1. 店舗名マスタと照合ルールを拡充
 2. 実運用データを使って要確認判定を調整

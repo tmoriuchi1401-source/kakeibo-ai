@@ -38,6 +38,7 @@ def main():
     ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
+    sub.add_parser("card-amazon-reclassify")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
@@ -86,6 +87,8 @@ def main():
         s,db,_=make(False); print(AuPayCardPipeline(db).preview(args.csv))
     elif args.cmd=="card-import":
         s,db,_=make(False); print(AuPayCardPipeline(db).import_csv(args.csv))
+    elif args.cmd=="card-amazon-reclassify":
+        s,db,_=make(False); print(AuPayCardPipeline(db).reclassify_amazon())
     elif args.cmd=="aupay-eml":
         s,db,_=make(False); print(AuPayMailPipeline(db).import_notice(parse_eml(args.eml)))
     elif args.cmd=="aupay-gmail":

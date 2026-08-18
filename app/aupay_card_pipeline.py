@@ -57,17 +57,29 @@ class AuPayCardPipeline:
 
     def _amazon_candidates(self):
         rows=self.db.get("Amazon注文!A2:M")
-        out=[]
+        grouped={}
         for r in rows:
             if len(r)<7: continue
             try: amt=int(float(str(r[6]).replace(",","")))
             except: continue
-            out.append({
-                "key":r[0],"order_id":r[1] if len(r)>1 else "",
-                "date":r[3] if len(r)>3 else "","amount":amt,
-                "name":r[4] if len(r)>4 else ""
+            order_id=str(r[1]) if len(r)>1 else ""
+            if not order_id: continue
+            candidate=grouped.setdefault(order_id,{
+                "key":f"amazon:{order_id}","order_id":order_id,
+                "date":r[3] if len(r)>3 else "","amount":0,"items":0,
             })
-        return out
+            candidate["amount"]+=amt
+            candidate["items"]+=1
+        return list(grouped.values())
+
+    def _classify_amazon(self,date:str,amount:int,amazon:list[dict]):
+        candidates=[x for x in amazon
+                    if x["amount"]==amount and self._days(x["date"],date)<=7]
+        if len(candidates)==1:
+            return "matched_amazon",candidates
+        if candidates:
+            return "amazon_needs_review",candidates
+        return "amazon_unmatched",candidates
 
     @staticmethod
     def _days(a,b):
@@ -77,17 +89,20 @@ class AuPayCardPipeline:
     def preview(self,path:str):
         tx=parse_aupay_card_csv(path)
         amazon=self._amazon_candidates()
-        counts={"rows":len(tx),"aupay_charge":0,"amazon_matched":0,"amazon_ambiguous":0,"other":0}
+        counts={"rows":len(tx),"aupay_charge":0,"amazon_matched":0,
+                "amazon_ambiguous":0,"amazon_unmatched":0,"other":0}
         samples=[]
         for d in tx:
             if is_aupay_charge(d["merchant"]):
                 state="transfer_aupay_charge"; counts["aupay_charge"]+=1
             elif is_amazon(d["merchant"]):
-                c=[x for x in amazon if x["amount"]==d["amount"] and self._days(x["date"],d["date"])<=7]
-                if len(c)==1:
-                    state="matched_amazon"; counts["amazon_matched"]+=1
+                state,c=self._classify_amazon(d["date"],d["amount"],amazon)
+                if state=="matched_amazon":
+                    counts["amazon_matched"]+=1
+                elif state=="amazon_needs_review":
+                    counts["amazon_ambiguous"]+=1
                 else:
-                    state="amazon_needs_review"; counts["amazon_ambiguous"]+=1
+                    counts["amazon_unmatched"]+=1
                 if len(samples)<5: samples.append({"card":d,"candidates":c[:5]})
             else:
                 state="unclassified_card"; counts["other"]+=1
@@ -100,7 +115,8 @@ class AuPayCardPipeline:
         existing=self.db.import_ids()
         amazon=self._amazon_candidates()
         rows=[]; stats={"source_rows":len(tx),"new":0,"unchanged":0,"aupay_charge":0,
-                        "amazon_matched":0,"amazon_needs_review":0,"unclassified_card":0}
+                        "amazon_matched":0,"amazon_needs_review":0,
+                        "amazon_unmatched":0,"unclassified_card":0}
         for d in tx:
             if d["import_id"] in existing:
                 stats["unchanged"]+=1; continue
@@ -110,12 +126,11 @@ class AuPayCardPipeline:
                 state="transfer_aupay_charge"; stats["aupay_charge"]+=1
                 note += "; 支出計上しない（au PAY残高への資金移動）"
             elif is_amazon(d["merchant"]):
-                c=[x for x in amazon if x["amount"]==d["amount"] and self._days(x["date"],d["date"])<=7]
-                if len(c)==1:
-                    state="matched_amazon"; stats["amazon_matched"]+=1
+                state,c=self._classify_amazon(d["date"],d["amount"],amazon)
+                stats[state]+=1
+                if state=="matched_amazon":
                     note += f"; Amazonキー={c[0]['key']}; Amazon注文と照合済み・カード側は支出計上しない"
                 else:
-                    state="amazon_needs_review"; stats["amazon_needs_review"]+=1
                     note += f"; Amazon候補数={len(c)}"
             else:
                 state="unclassified_card"; stats["unclassified_card"]+=1
@@ -124,4 +139,36 @@ class AuPayCardPipeline:
                          d["merchant"],d["amount"],d["payment_type"],state,"",h,note])
             stats["new"]+=1
         self.db.append("取込データ",rows)
+        return stats
+
+    def reclassify_amazon(self):
+        amazon=self._amazon_candidates()
+        rows=self.db.get("取込データ!A2:L")
+        updates=[]
+        stats={"amazon_rows":0,"updated":0,"matched_amazon":0,
+               "amazon_needs_review":0,"amazon_unmatched":0}
+        for row_num,raw in enumerate(rows,start=2):
+            row=list(raw)+[""]*max(0,12-len(raw)); row=row[:12]
+            if row[2]!="au PAYカード" or not is_amazon(str(row[5])):
+                continue
+            stats["amazon_rows"]+=1
+            try: amount=parse_money(row[6])
+            except (TypeError,ValueError): amount=0
+            state,candidates=self._classify_amazon(str(row[4]),amount,amazon)
+            stats[state]+=1
+            target=candidates[0]["key"] if state=="matched_amazon" else ""
+            if row[8]==state and row[9]==target:
+                continue
+            note_parts=[part.strip() for part in str(row[11]).split(";") if part.strip()]
+            note_parts=[part for part in note_parts if not (
+                part.startswith("Amazonキー=")
+                or part.startswith("Amazon候補数=")
+                or part.startswith("Amazon注文と照合済み")
+                or part.startswith("Amazon再照合=")
+            )]
+            note_parts.append(f"Amazon再照合={state}; 候補数={len(candidates)}")
+            row[8]=state; row[9]=target; row[11]="; ".join(note_parts)
+            updates.append((row_num,row))
+        self.db.update_rows("取込データ",updates)
+        stats["updated"]=len(updates)
         return stats

@@ -39,6 +39,7 @@ def test_all_extracted_status_patterns_can_be_manually_applied():
     assert is_reviewable_status("needs_review_aupay_csv")
     assert is_reviewable_status("amazon_needs_review")
     assert is_reviewable_status("unclassified_aupay")
+    assert is_reviewable_status("amazon_unmatched")
     assert not is_reviewable_status("matched_receipt")
 
 
