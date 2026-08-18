@@ -14,13 +14,24 @@ class ReviewItem:
     recommendation: str
 
 
+def is_reviewable_status(status: str) -> bool:
+    return (
+        status == "要確認"
+        or status.startswith("needs_review")
+        or status.endswith("_needs_review")
+        or status in {"unclassified_aupay", "unclassified_card"}
+    )
+
+
 def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
     items=[]
     for tx in transactions:
         status=tx.status
-        if status == "要確認" or status.startswith("needs_review"):
+        if status == "要確認" or status.startswith("needs_review") or status.endswith("_needs_review"):
             priority="高"
-            if tx.source == "receipt":
+            if status == "amazon_needs_review":
+                recommendation="Amazon注文との重複候補を確認"
+            elif tx.source == "receipt":
                 recommendation="レシート画像・合計・カテゴリを確認"
             else:
                 recommendation="重複候補を確認し、統合先を選択"
@@ -65,7 +76,7 @@ class ReviewPipeline:
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                          tx.status,item.recommendation,tx.note]+manual)
         self.db.append("要確認",rows)
-        self.db.configure_review_validation()
+        self.db.configure_review_validation(len(rows))
         result=self._summary(items)
         result["refreshed"]=True
         return result
@@ -108,7 +119,7 @@ class ReviewApprovalPipeline:
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
-            elif tx.status not in {"要確認","unclassified_aupay","unclassified_card","needs_review_duplicate"}:
+            elif not is_reviewable_status(tx.status):
                 error=f"既に処理済みです: {tx.status}"
             if error:
                 row[14]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue

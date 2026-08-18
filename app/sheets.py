@@ -2,6 +2,15 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from .google_clients import sheets_service
 
+REVIEW_CATEGORY_HELPER = "_要確認カテゴリ候補"
+
+
+def review_category_helper_formulas(row_count:int)->list[list[str]]:
+    return [[
+        (f'=IFERROR(TRANSPOSE(FILTER(カテゴリ!$B$2:$B,'
+         f'カテゴリ!$A$2:$A=要確認!L{row_num})),"")')
+    ] for row_num in range(2,row_count+2)]
+
 HEADERS={
 "支出明細":["支出ID","日付","店舗","商品名","金額","大カテゴリ","小カテゴリ","支払方法","データ元","レシートID","取込ID","備考","計上状態"],
 "レシート":["レシートID","日付","店舗","合計金額","支払方法","画像URL","解析状態","解析日時","備考"],
@@ -57,10 +66,35 @@ class SheetsDB:
                 spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
                 body={"values":[header]},
             ).execute()
-    def configure_review_validation(self):
+    def configure_review_validation(self, review_row_count:int):
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]=="要確認")
+        helper=next((s for s in meta["sheets"]
+                     if s["properties"]["title"]==REVIEW_CATEGORY_HELPER),None)
+        if helper is None:
+            reply=self.svc.spreadsheets().batchUpdate(
+                spreadsheetId=self.sid,body={"requests":[{"addSheet":{"properties":{
+                    "title":REVIEW_CATEGORY_HELPER,"hidden":True,
+                }}}]}
+            ).execute()
+            helper_id=reply["replies"][0]["addSheet"]["properties"]["sheetId"]
+        else:
+            helper_id=helper["properties"]["sheetId"]
+            if not helper["properties"].get("hidden",False):
+                self.svc.spreadsheets().batchUpdate(
+                    spreadsheetId=self.sid,body={"requests":[{"updateSheetProperties":{
+                        "properties":{"sheetId":helper_id,"hidden":True},
+                        "fields":"hidden",
+                    }}]}
+                ).execute()
+        helper_rows=review_category_helper_formulas(review_row_count)
+        self.clear(f"'{REVIEW_CATEGORY_HELPER}'!A:Z")
+        if helper_rows:
+            self.svc.spreadsheets().values().update(
+                spreadsheetId=self.sid,range=f"'{REVIEW_CATEGORY_HELPER}'!A2",
+                valueInputOption="USER_ENTERED",body={"values":helper_rows},
+            ).execute()
         def rule(start_col,end_col,condition):
             return {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
                     "endRowIndex":1000,"startColumnIndex":start_col,"endColumnIndex":end_col},
@@ -73,8 +107,18 @@ class SheetsDB:
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
                  ["支出として計上","重複として除外","レシートと統合","保留"]]}),
             rule(11,12,{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"=カテゴリ!$A$2:$A"}]}),
-            rule(12,13,{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"=カテゴリ!$B$2:$B"}]}),
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
+             "endRowIndex":1000,"startColumnIndex":12,"endColumnIndex":13}}},
         ]
+        requests.extend(
+            {"setDataValidation":{"range":{"sheetId":sheet_id,
+             "startRowIndex":row_num-1,"endRowIndex":row_num,
+             "startColumnIndex":12,"endColumnIndex":13},"rule":{"condition":{
+                 "type":"ONE_OF_RANGE","values":[{"userEnteredValue":
+                     f"='{REVIEW_CATEGORY_HELPER}'!A{row_num}:Z{row_num}"}]},
+                 "strict":True,"showCustomUi":True}}}
+            for row_num in range(2,review_row_count+2)
+        )
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":requests}
         ).execute()

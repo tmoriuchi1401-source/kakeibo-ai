@@ -1,5 +1,6 @@
 from app.reconciliation import parse_import_rows
-from app.review_pipeline import ReviewApprovalPipeline, review_items
+from app.review_pipeline import ReviewApprovalPipeline, is_reviewable_status, review_items
+from app.sheets import review_category_helper_formulas
 
 
 def row(import_id,source,date,status):
@@ -11,12 +12,14 @@ def test_review_extracts_only_actionable_states():
         row("r1","receipt","2026-08-10","要確認"),
         row("a1","au PAY","2026-08-16","unclassified_aupay"),
         row("c1","au PAYカード","2026-08-15","unclassified_card"),
+        row("c3","au PAYカード","2026-08-13","amazon_needs_review"),
         row("a2","au PAY","2026-08-14","matched_receipt"),
         row("c2","au PAYカード","2026-08-14","transfer_aupay_charge"),
         row("m1","Amazon","2026-08-14","canonical_amazon"),
     ]))
-    assert [x.transaction.import_id for x in items] == ["r1","a1","c1"]
-    assert [x.priority for x in items] == ["高","中","中"]
+    assert [x.transaction.import_id for x in items] == ["c3","r1","a1","c1"]
+    assert [x.priority for x in items] == ["高","高","中","中"]
+    assert "Amazon" in items[0].recommendation
 
 
 def test_ambiguous_duplicate_is_high_priority():
@@ -25,6 +28,21 @@ def test_ambiguous_duplicate_is_high_priority():
     ]))
     assert items[0].priority == "高"
     assert "統合先" in items[0].recommendation
+
+
+def test_review_category_helper_filters_each_review_row():
+    formulas=review_category_helper_formulas(2)
+    assert len(formulas)==2
+    assert "要確認!L2" in formulas[0][0]
+    assert "要確認!L3" in formulas[1][0]
+    assert "FILTER(カテゴリ!$B$2:$B" in formulas[0][0]
+
+
+def test_all_extracted_status_patterns_can_be_manually_applied():
+    assert is_reviewable_status("needs_review_aupay_csv")
+    assert is_reviewable_status("amazon_needs_review")
+    assert is_reviewable_status("unclassified_aupay")
+    assert not is_reviewable_status("matched_receipt")
 
 
 class FakeDB:
