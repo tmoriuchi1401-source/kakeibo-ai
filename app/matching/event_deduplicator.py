@@ -256,8 +256,9 @@ class EventDeduplicator:
 
         if canonical_fingerprint(incoming) == canonical_fingerprint(existing):
             return DedupResult(
-                **base, status="duplicate", reason="canonical fingerprint matches",
-                evidence=["canonical_fingerprint"], confidence=0.9,
+                **base, status="possible_duplicate",
+                reason="canonical fingerprint matches without shared strong identity",
+                evidence=["canonical_fingerprint"], confidence=0.6,
             )
 
         weak = _weak_similarity(incoming, existing)
@@ -283,6 +284,17 @@ class EventDeduplicator:
         rank = {"conflict": 4, "duplicate": 3, "revision": 3, "possible_duplicate": 2, "new": 1}
         best_rank = max(rank[result.status] for result in results)
         best = [result for result in results if rank[result.status] == best_rank]
+        if len(best) > 1 and best[0].status == "conflict":
+            return DedupResult(
+                status="conflict", incoming_event_id=incoming.event_id,
+                candidate_event_ids=[result.existing_event_id for result in best
+                                     if result.existing_event_id],
+                reason="multiple candidates conflict with strong identity",
+                evidence=sorted({item for result in best for item in result.evidence}),
+                confidence=max(result.confidence for result in best),
+                changed_fields=sorted({item for result in best
+                                       for item in result.changed_fields}),
+            )
         if len(best) > 1 and best_rank >= 2:
             return DedupResult(
                 status="possible_duplicate", incoming_event_id=incoming.event_id,

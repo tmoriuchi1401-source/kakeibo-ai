@@ -83,16 +83,45 @@ def test_purchase_without_item_id_can_use_message_identity():
     assert DEDUP.compare(purchase(**values), purchase(event_id="other", **values)).status == "duplicate"
 
 
-def test_payment_without_transaction_id_can_use_fingerprint():
-    assert DEDUP.compare(
-        payment(external_transaction_id=None),
-        payment(event_id="other", external_transaction_id=None),
-    ).status == "duplicate"
+def test_payment_without_transaction_or_shared_observation_id_is_only_possible_duplicate():
+    incoming = payment(
+        external_transaction_id=None, source_message_id="<mail-new>",
+        source_provider_id="provider-new",
+    )
+    existing = payment(
+        event_id="other", external_transaction_id=None, source_message_id="<mail-old>",
+        source_provider_id="provider-old",
+    )
+    assert DEDUP.compare(incoming, existing).status == "possible_duplicate"
 
 
 def test_source_message_id_and_mail_index_are_strong_payment_identity():
     values = dict(external_transaction_id=None, source_message_id="<mail-1>")
     assert DEDUP.compare(payment(**values), payment(event_id="other", **values)).status == "duplicate"
+
+
+def test_same_message_with_different_mail_item_index_is_not_duplicate_without_transaction_id():
+    incoming = payment(
+        external_transaction_id=None, source_message_id="<mail-1>",
+        metadata={"mail_item_index": 1},
+    )
+    existing = payment(
+        event_id="other", external_transaction_id=None, source_message_id="<mail-1>",
+        metadata={"mail_item_index": 2},
+    )
+    assert DEDUP.compare(incoming, existing).status == "possible_duplicate"
+
+
+def test_purchase_fingerprint_without_shared_strong_identity_is_not_duplicate():
+    incoming = purchase(
+        external_order_id=None, external_item_id=None,
+        source_message_id="<mail-new>", source_provider_id="provider-new",
+    )
+    existing = purchase(
+        event_id="other", external_order_id=None, external_item_id=None,
+        source_message_id="<mail-old>", source_provider_id="provider-old",
+    )
+    assert DEDUP.compare(incoming, existing).status == "possible_duplicate"
 
 
 def test_source_provider_id_is_purchase_fallback():
@@ -147,6 +176,16 @@ def test_same_transaction_with_incompatible_type_and_amount_is_conflict():
     result = DEDUP.compare(incoming, payment())
     assert result.status == "conflict"
     assert {"event_type", "amount"}.issubset(result.changed_fields)
+
+
+def test_multiple_conflicts_remain_conflict_and_report_all_candidates():
+    incoming = payment(event_type="refund", direction="credit", amount=9000)
+    candidates = [payment(event_id="old-1"), payment(event_id="old-2")]
+    result = DEDUP.find_best_duplicate(incoming, candidates)
+
+    assert result.status == "conflict"
+    assert result.candidate_event_ids == ["old-1", "old-2"]
+    assert result.reason == "multiple candidates conflict with strong identity"
 
 
 def test_small_amount_difference_across_event_types_is_only_possible_duplicate():
