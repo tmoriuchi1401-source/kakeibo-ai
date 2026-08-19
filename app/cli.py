@@ -7,6 +7,7 @@ from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
 from .aupay_card_pipeline import AuPayCardPipeline
+from .paypay_pipeline import PayPayPipeline
 from .aupay_mail_pipeline import (
     AuPayMailPipeline,
     authorize_gmail,
@@ -37,6 +38,7 @@ def main():
     ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
+    pp=sub.add_parser("paypay-preview"); pp.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -83,6 +85,8 @@ def main():
         s,db,_=make(False); print(AuPayCardPipeline(db).preview(args.csv))
     elif args.cmd=="card-import":
         s,db,_=make(False); print(AuPayCardPipeline(db).import_csv(args.csv))
+    elif args.cmd=="paypay-preview":
+        print(PayPayPipeline().preview(args.csv))
     elif args.cmd=="aupay-eml":
         s,db,_=make(False); print(AuPayMailPipeline(db).import_notice(parse_eml(args.eml)))
     elif args.cmd=="aupay-gmail":
