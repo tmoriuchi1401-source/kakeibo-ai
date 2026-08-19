@@ -47,6 +47,37 @@ def test_two_payments_cannot_claim_one_receipt():
     assert all(x.status == "needs_review_duplicate" for x in result)
 
 
+def test_paypay_matches_receipt_within_one_day():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店 本店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert len(result) == 1
+    assert result[0].status == "matched_receipt"
+    assert result[0].target_id == "receipt:r1"
+
+
+def test_paypay_multiple_receipt_candidates_need_review():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("receipt:r2", "receipt", "2026-08-17", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert result[0].status == "needs_review_duplicate"
+    assert set(result[0].candidate_ids) == {"receipt:r1", "receipt:r2"}
+
+
+def test_paypay_does_not_match_receipt_more_than_one_day_apart():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-15", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert result == []
+
+
 def test_card_charge_and_amazon_states_are_excluded():
     result = decisions([
         row("receipt:r1", "receipt", "2026-08-16", "Amazon.co.jp", 522, "解析済"),

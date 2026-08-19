@@ -7,6 +7,9 @@ import unicodedata
 from datetime import datetime
 from pathlib import Path
 
+from .sheets import SheetsDB
+from .utils import canonical_hash, now_jst_string
+
 
 _REQUIRED_COLUMNS = (
     "取引日",
@@ -98,11 +101,16 @@ def parse_paypay_csv(path: str | Path) -> list[dict[str, str | int]]:
             "payment_type": row["取引方法"],
             "transaction_id": transaction_id,
             "import_id": f"paypay:{transaction_id}",
+            "payment_category": row.get("支払い区分", ""),
+            "user": row.get("利用者", ""),
         })
     return payments
 
 
 class PayPayPipeline:
+    def __init__(self, db: SheetsDB | None = None):
+        self.db = db
+
     def preview(self, path: str | Path, sample_limit: int = 5) -> dict:
         rows = _read_paypay_rows(path)
         payments = parse_paypay_csv(path)
@@ -115,3 +123,45 @@ class PayPayPipeline:
             },
             "payment_samples": payments[:max(0, sample_limit)],
         }
+
+    def import_csv(self, path: str | Path) -> dict:
+        if self.db is None:
+            raise ValueError("PayPay importにはSheetsDBが必要です")
+        payments = parse_paypay_csv(path)
+        existing = self.db.import_ids()
+        rows = []
+        stats = {
+            "source_rows": len(payments),
+            "new": 0,
+            "unchanged": 0,
+            "unclassified_paypay": 0,
+        }
+        for payment in payments:
+            import_id = str(payment["import_id"])
+            if import_id in existing:
+                stats["unchanged"] += 1
+                continue
+            note_parts = []
+            if payment["payment_category"]:
+                note_parts.append(f"支払い区分={payment['payment_category']}")
+            if payment["user"]:
+                note_parts.append(f"利用者={payment['user']}")
+            rows.append([
+                import_id,
+                now_jst_string(),
+                "PayPay",
+                payment["transaction_id"],
+                payment["date"],
+                payment["merchant"],
+                payment["amount"],
+                payment["payment_type"],
+                "unclassified_paypay",
+                "",
+                canonical_hash(payment),
+                "; ".join(note_parts),
+            ])
+            existing.add(import_id)
+            stats["new"] += 1
+            stats["unclassified_paypay"] += 1
+        self.db.append("取込データ", rows)
+        return stats

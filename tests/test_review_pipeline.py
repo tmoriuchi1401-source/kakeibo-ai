@@ -11,12 +11,14 @@ def test_review_extracts_only_actionable_states():
         row("r1","receipt","2026-08-10","要確認"),
         row("a1","au PAY","2026-08-16","unclassified_aupay"),
         row("c1","au PAYカード","2026-08-15","unclassified_card"),
+        row("p1","PayPay","2026-08-13","unclassified_paypay"),
         row("a2","au PAY","2026-08-14","matched_receipt"),
         row("c2","au PAYカード","2026-08-14","transfer_aupay_charge"),
         row("m1","Amazon","2026-08-14","canonical_amazon"),
     ]))
-    assert [x.transaction.import_id for x in items] == ["r1","a1","c1"]
-    assert [x.priority for x in items] == ["高","中","中"]
+    assert [x.transaction.import_id for x in items] == ["r1","a1","c1","p1"]
+    assert [x.priority for x in items] == ["高","中","中","中"]
+    assert items[-1].recommendation == "レシート有無とカテゴリを確認"
 
 
 def test_ambiguous_duplicate_is_high_priority():
@@ -28,15 +30,17 @@ def test_ambiguous_duplicate_is_high_priority():
 
 
 class FakeDB:
-    def __init__(self,category=("食費","食料品")):
+    def __init__(self,category=("食費","食料品"),source="au PAY",
+                 status="unclassified_aupay",import_id="a1"):
         self.category=category
+        self.source=source; self.status=status; self.import_id=import_id
         self.appended=[]; self.updated={}
 
     def get(self,rng):
         if rng=="取込データ!A2:L":
-            return [row("a1","au PAY","2026-08-16","unclassified_aupay")]
+            return [row(self.import_id,self.source,"2026-08-16",self.status)]
         if rng=="要確認!A2:O":
-            return [["a1","中","2026-08-16","au PAY","店舗",100,"unclassified_aupay",
+            return [[self.import_id,"中","2026-08-16",self.source,"店舗",100,self.status,
                      "","","支出として計上","",self.category[0],self.category[1],"メモ",""]]
         raise AssertionError(rng)
 
@@ -66,3 +70,13 @@ def test_manual_expense_rejects_category_pair_outside_master():
     assert result["errors"]==1
     assert db.appended==[]
     assert "カテゴリマスタ" in db.updated["要確認"][0][1][14]
+
+
+def test_paypay_unclassified_can_be_manually_recorded_as_expense():
+    db=FakeDB(source="PayPay",status="unclassified_paypay",import_id="paypay:test-1")
+    result=ReviewApprovalPipeline(db).apply()
+
+    assert result["applied"]==1
+    assert db.appended[0][8]=="PayPay"
+    assert db.appended[0][10]=="paypay:test-1"
+    assert db.updated["取込データ"][0][1][8]=="manual_expense"

@@ -63,6 +63,8 @@ def test_payment_fields_are_normalized(paypay_csv):
         "payment_type": "PayPay残高",
         "transaction_id": "TEST-PAY-001",
         "import_id": "paypay:TEST-PAY-001",
+        "payment_category": "一回払い",
+        "user": "本人",
     }
     assert isinstance(transaction["amount"], int)
 
@@ -108,3 +110,50 @@ def test_cli_paypay_preview_does_not_require_sheets(paypay_csv, monkeypatch, cap
     main()
     output = ast.literal_eval(capsys.readouterr().out.strip())
     assert output["summary"]["payments"] == 2
+
+
+class FakeDB:
+    def __init__(self):
+        self.rows = []
+
+    def import_ids(self):
+        return {row[0] for row in self.rows}
+
+    def append(self, sheet, rows):
+        assert sheet == "取込データ"
+        self.rows.extend(rows)
+
+
+def test_import_writes_payments_in_import_data_format(paypay_csv):
+    db = FakeDB()
+    result = PayPayPipeline(db).import_csv(paypay_csv)
+
+    assert result == {
+        "source_rows": 2,
+        "new": 2,
+        "unchanged": 0,
+        "unclassified_paypay": 2,
+    }
+    first = db.rows[0]
+    assert first[0] == "paypay:TEST-PAY-001"
+    assert first[2:10] == [
+        "PayPay", "TEST-PAY-001", "2026-08-01", "テスト食堂", 1200,
+        "PayPay残高", "unclassified_paypay", "",
+    ]
+    assert first[10]
+    assert first[11] == "支払い区分=一回払い; 利用者=本人"
+
+
+def test_reimport_is_unchanged_and_does_not_append_duplicates(paypay_csv):
+    db = FakeDB()
+    pipeline = PayPayPipeline(db)
+    pipeline.import_csv(paypay_csv)
+    result = pipeline.import_csv(paypay_csv)
+
+    assert result == {
+        "source_rows": 2,
+        "new": 0,
+        "unchanged": 2,
+        "unclassified_paypay": 0,
+    }
+    assert len(db.rows) == 2

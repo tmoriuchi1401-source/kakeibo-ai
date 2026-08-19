@@ -39,6 +39,7 @@ def main():
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
     pp=sub.add_parser("paypay-preview"); pp.add_argument("csv")
+    pi=sub.add_parser("paypay-import"); pi.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -87,6 +88,8 @@ def main():
         s,db,_=make(False); print(AuPayCardPipeline(db).import_csv(args.csv))
     elif args.cmd=="paypay-preview":
         print(PayPayPipeline().preview(args.csv))
+    elif args.cmd=="paypay-import":
+        s,db,_=make(False); print(PayPayPipeline(db).import_csv(args.csv))
     elif args.cmd=="aupay-eml":
         s,db,_=make(False); print(AuPayMailPipeline(db).import_notice(parse_eml(args.eml)))
     elif args.cmd=="aupay-gmail":

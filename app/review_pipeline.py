@@ -30,6 +30,9 @@ def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
         elif status == "unclassified_card":
             priority="中"
             recommendation="レシート・Amazon・au PAYとの重複を確認"
+        elif status == "unclassified_paypay":
+            priority="中"
+            recommendation="レシート有無とカテゴリを確認"
         else:
             continue
         items.append(ReviewItem(tx,priority,recommendation))
@@ -108,7 +111,8 @@ class ReviewApprovalPipeline:
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
-            elif tx.status not in {"要確認","unclassified_aupay","unclassified_card","needs_review_duplicate"}:
+            elif tx.status not in {"要確認","unclassified_aupay","unclassified_card",
+                                   "unclassified_paypay","needs_review_duplicate"}:
                 error=f"既に処理済みです: {tx.status}"
             if error:
                 row[14]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue

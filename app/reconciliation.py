@@ -89,12 +89,14 @@ def reconcile_transactions(transactions: list[ImportTransaction]) -> list[Reconc
             tx.source == "au PAY" and tx.status == "unclassified_aupay"
         ) or (
             tx.source == "au PAYカード" and tx.status == "unclassified_card"
+        ) or (
+            tx.source == "PayPay" and tx.status == "unclassified_paypay"
         )
     ]
 
     candidate_map: dict[str, list[ImportTransaction]] = {}
     for tx in secondaries:
-        tolerance = 1 if tx.source == "au PAY" else 3
+        tolerance = 1 if tx.source in {"au PAY", "PayPay"} else 3
         candidate_map[tx.import_id] = [
             receipt for receipt in receipts
             if receipt.amount == tx.amount
