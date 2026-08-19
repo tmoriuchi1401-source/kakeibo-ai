@@ -13,9 +13,10 @@ HEADER = (
 )
 
 
-def row(kind, transaction_id, amount="", merchant="", method="PayPay残高"):
+def row(kind, transaction_id, amount="", merchant="", method="PayPay残高",
+        date="2026/08/01 12:34"):
     return (
-        f'2026/08/01 12:34,"{amount}",,,,,,{kind},{merchant},{method},一回払い,本人,'
+        f'{date},"{amount}",,,,,,{kind},{merchant},{method},一回払い,本人,'
         f"{transaction_id}\n"
     )
 
@@ -70,6 +71,18 @@ def test_import_id_is_stable(paypay_csv):
     first = parse_paypay_csv(paypay_csv)
     second = parse_paypay_csv(paypay_csv)
     assert [item["import_id"] for item in first] == [item["import_id"] for item in second]
+
+
+def test_timestamp_with_seconds_is_converted_to_date(tmp_path):
+    path = tmp_path / "paypay-with-seconds.csv"
+    path.write_text(
+        HEADER + row(
+            "支払い", "TEST-PAY-SECONDS", "100", "秒あり店舗",
+            date="2026/08/01 12:34:56",
+        ),
+        encoding="utf-8-sig",
+    )
+    assert parse_paypay_csv(path)[0]["date"] == "2026-08-01"
 
 
 def test_preview_counts_total_and_samples(paypay_csv):

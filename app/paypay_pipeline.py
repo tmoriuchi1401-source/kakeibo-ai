@@ -42,7 +42,13 @@ def _parse_amount(value: str) -> int:
 
 def _parse_date(value: str) -> str:
     normalized = _normalize(value)
-    for pattern in ("%Y/%m/%d %H:%M", "%Y/%m/%d", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+    for pattern in (
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+        "%Y/%m/%d",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+    ):
         try:
             return datetime.strptime(normalized, pattern).strftime("%Y-%m-%d")
         except ValueError:
