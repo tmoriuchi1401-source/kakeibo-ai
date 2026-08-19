@@ -24,6 +24,7 @@ _AUTHORIZATION_RE = re.compile(r"ご利用速報|利用速報")
 _REFUND_RE = re.compile(r"返品|返金")
 _REVERSAL_RE = re.compile(r"ご利用取消|利用取消|取消のお知らせ|利用を取り消し|キャンセル")
 _BLOCK_RE = re.compile(r"(?im)^\s*No\.\s*(\d+)\s*-*\s*$")
+_MEMBER_SECTION_RE = re.compile(r"(本会員|家族会員)さま\s*ご利用分")
 
 
 def _normalize(value: str) -> str:
@@ -116,18 +117,28 @@ def _block_kind(default: tuple[str, str, str], block: str) -> tuple[str, str, st
     return default
 
 
-def _blocks(text: str) -> list[tuple[str | None, int, str]]:
+def _blocks(text: str) -> list[tuple[str | None, int, str, str | None]]:
     markers = list(_BLOCK_RE.finditer(text))
     if not markers:
-        return [(None, 1, text)]
-    return [
-        (
+        return [(None, 1, text, None)]
+
+    blocks = []
+    for index, marker in enumerate(markers):
+        next_marker_start = markers[index + 1].start() if index + 1 < len(markers) else len(text)
+        block_end = next_marker_start
+        next_member = _MEMBER_SECTION_RE.search(text, marker.end(), next_marker_start)
+        if next_member:
+            block_end = next_member.start()
+
+        preceding_members = list(_MEMBER_SECTION_RE.finditer(text, 0, marker.start()))
+        member = preceding_members[-1].group(1) if preceding_members else None
+        blocks.append((
             f"No.{int(marker.group(1)):03d}",
             index + 1,
-            text[marker.end():(markers[index + 1].start() if index + 1 < len(markers) else len(text))].strip(),
-        )
-        for index, marker in enumerate(markers)
-    ]
+            text[marker.end():block_end].strip(),
+            member,
+        ))
+    return blocks
 
 
 def _member(text: str) -> tuple[str | None, str | None]:
@@ -164,8 +175,7 @@ class AuPayCardMailConnector:
         text = _message_text(message)
         if not _CARD_MARKER_RE.search(f"{subject}\n{text[:1000]}"):
             return False
-        if not (_DETAIL_RE.search(subject) or _AUTHORIZATION_RE.search(subject)
-                or _REFUND_RE.search(subject) or _REVERSAL_RE.search(subject)):
+        if _message_kind(subject, text) is None:
             return False
 
         sender = _normalize(str(message.get("sender") or "")).lower()
@@ -197,7 +207,7 @@ class AuPayCardMailConnector:
             payment_method += f" ({card_match.group(1).strip()})"
 
         events: list[PaymentEvent] = []
-        for detail_number, item_index, block in _blocks(text):
+        for detail_number, item_index, block, section_member in _blocks(text):
             amount_raw = _field(
                 block,
                 ("▼ご利用金額", "ご利用金額", "利用金額", "返金額", "取消金額"),
@@ -221,6 +231,9 @@ class AuPayCardMailConnector:
             occurred_at = _date(occurred_raw) or message_date
             event_type, status, direction = _block_kind(default_kind, block)
             account_type, member = _member(block)
+            if section_member:
+                account_type = "primary" if section_member == "本会員" else "family"
+                member = section_member
             account_type = account_type or global_account_type
             member = member or global_member
             payment_type = _field(block, ("支払い区分", "お支払い区分"))

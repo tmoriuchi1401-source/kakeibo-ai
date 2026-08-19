@@ -93,6 +93,24 @@ def test_family_member_is_preserved():
     assert event.metadata["member"] == "家族会員"
 
 
+def test_primary_and_family_sections_are_assigned_to_their_own_details():
+    body = """▼カード情報
+au PAY カード（Mastercard）
+本会員さま ご利用分
+
+""" + detail_block("001", "ABCストア", "1,000円") + """
+家族会員さま ご利用分
+
+""" + detail_block("002", "XYZストア", "2,000円")
+    events = parse(body=body)
+
+    assert [(event.external_transaction_id, event.account_type, event.merchant, event.amount)
+            for event in events] == [
+        ("No.001", "primary", "ABCストア", 1000),
+        ("No.002", "family", "XYZストア", 2000),
+    ]
+
+
 def test_merchant_is_nfkc_normalized_and_trimmed():
     event = parse(body=detail_body(blocks=detail_block(merchant="  ＡＢＣ ストア  ")))[0]
     assert event.merchant == "ABC ストア"
@@ -153,6 +171,35 @@ def test_forwarded_aupay_card_mail_is_supported():
         body="From: info@kddi-fs.com\n" + detail_body(),
     )
     assert AuPayCardMailConnector().supports(raw)
+
+
+def test_forwarded_mail_with_generic_subject_uses_detail_kind_from_body():
+    raw = message(
+        subject="Fwd: カードのお知らせ",
+        sender="User <user@example.com>",
+        body="From: info@kddi-fs.com\nau PAY カード\nご利用詳細\n" + detail_body(),
+    )
+    connector = AuPayCardMailConnector()
+
+    assert connector.supports(raw)
+    event = connector.parse(raw)[0]
+    assert (event.event_type, event.status, event.direction) == (
+        "payment_confirmed", "confirmed", "debit"
+    )
+
+
+def test_forwarded_mail_with_generic_subject_uses_refund_kind_from_body():
+    raw = message(
+        subject="Fwd: カードのお知らせ",
+        sender="User <user@example.com>",
+        body=("From: info@kddi-fs.com\nau PAY カード\n返品・返金のお知らせ\n"
+              + detail_body(blocks=detail_block(amount="1,478円（返品）"))),
+    )
+    connector = AuPayCardMailConnector()
+
+    assert connector.supports(raw)
+    event = connector.parse(raw)[0]
+    assert (event.event_type, event.direction, event.amount) == ("refund", "credit", 1478)
 
 
 def test_amazon_mail_is_not_misidentified():
