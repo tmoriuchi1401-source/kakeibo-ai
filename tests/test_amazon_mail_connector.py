@@ -64,6 +64,14 @@ def test_multiple_orders_in_one_mail_are_separated():
     assert [event.external_order_id for event in events] == [ORDER_1, ORDER_2]
 
 
+def test_repeated_same_order_id_does_not_duplicate_purchase_event():
+    body = ordered_block() + f"\n注文番号: {ORDER_1}\n注文内容を確認する\n"
+    events = parse(body=body)
+    assert len(events) == 1
+    assert events[0].external_order_id == ORDER_1
+    assert events[0].product_name == "テスト商品"
+
+
 def test_multiple_items_in_one_order():
     body = f"""注文番号: {ORDER_1}
 注文日: 2026年8月19日
@@ -195,6 +203,34 @@ def test_asin_can_be_extracted_from_html_href():
         body_html=f'<a href="https://amazon.co.jp/dp/{ASIN_1}">HTML商品</a>',
     )
     assert AmazonMailConnector().parse(raw)[0].external_item_id == ASIN_1
+
+
+def test_multiple_html_items_use_their_own_asin_and_exclude_advertising():
+    asin_3 = "B099999999"
+    raw = message(
+        body_text="",
+        body_html=f"""
+        <h1>Amazon.co.jp ご注文の確認</h1>
+        <div>注文番号: {ORDER_1}</div>
+        <div>注文日: 2026年8月19日</div>
+        <div>商品: HTML商品1<br>数量: 1<br>商品価格: 500円<br>
+          <a href="https://amazon.co.jp/dp/{ASIN_1}">HTML商品1を見る</a>
+        </div>
+        <div>商品: HTML商品2<br>数量: 2<br>商品価格: 700円<br>
+          <a href="https://amazon.co.jp/dp/{ASIN_2}">HTML商品2を見る</a>
+        </div>
+        <div>注文合計: 1,900円</div>
+        <h2>おすすめ商品</h2>
+        <div>商品: 広告商品
+          <a href="https://amazon.co.jp/dp/{asin_3}">広告商品を見る</a>
+        </div>
+        """,
+    )
+    events = AmazonMailConnector().parse(raw)
+    assert [(event.product_name, event.external_item_id) for event in events] == [
+        ("HTML商品1", ASIN_1),
+        ("HTML商品2", ASIN_2),
+    ]
 
 
 def test_unrecognized_amazon_template_returns_no_events():

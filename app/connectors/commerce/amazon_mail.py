@@ -164,11 +164,15 @@ def _source_hash(message: RawMessage) -> str:
 
 def _order_blocks(text: str) -> list[tuple[str, str]]:
     matches = list(_ORDER_ID_RE.finditer(text))
-    blocks = []
+    fragments: dict[str, list[str]] = {}
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        blocks.append((match.group(0), text[match.end():end].strip()))
-    return blocks
+        order_id = match.group(0)
+        fragments.setdefault(order_id, []).append(text[match.end():end].strip())
+    return [
+        (order_id, "\n".join(fragment for fragment in parts if fragment))
+        for order_id, parts in fragments.items()
+    ]
 
 
 def _item_blocks(order_block: str) -> list[str]:
@@ -263,11 +267,23 @@ class AmazonMailConnector:
             refund_amount = _amount(order_block, ("返金額", "返金予定額"))
 
             item_blocks = _item_blocks(order_block)
+            seen_items: set[tuple[Any, ...]] = set()
             for item_index, item_block in enumerate(item_blocks, start=1):
                 product_name = _product_name(item_block)
                 item_asin = _asin(item_block, hrefs if len(blocks) == 1 and len(item_blocks) == 1 else [])
                 list_price = _amount(item_block, ("商品価格", "価格"))
                 explicit_paid = _amount(item_block, ("商品のお支払い額", "お支払い額", "支払額"))
+                quantity = _quantity(item_block)
+                item_signature = (
+                    item_asin,
+                    product_name,
+                    quantity,
+                    list_price,
+                    explicit_paid,
+                )
+                if item_signature in seen_items:
+                    continue
+                seen_items.add(item_signature)
                 paid_amount = (
                     refund_amount
                     if event_type == "refund" and len(item_blocks) == 1
@@ -320,7 +336,7 @@ class AmazonMailConnector:
                     ordered_at=ordered_at,
                     occurred_at=occurred_at,
                     product_name=product_name,
-                    quantity=_quantity(item_block),
+                    quantity=quantity,
                     list_price=list_price,
                     paid_amount=paid_amount,
                     order_total=order_total,
