@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 
+from .auto_expense import expense_id
 from .reconciliation import ImportTransaction, parse_import_rows
 from .sheets import HEADERS, SheetsDB
 
@@ -20,19 +20,16 @@ def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
         status=tx.status
         if status == "要確認" or status.startswith("needs_review"):
             priority="高"
-            if tx.source == "receipt":
+            if status == "needs_review_amazon_installment":
+                recommendation="Amazon注文・元利用との二重計上を確認"
+            elif status == "needs_review_refund":
+                recommendation="返金・取消と元取引の扱いを確認"
+            elif status == "needs_review_transfer":
+                recommendation="チャージ・送金・資金移動かを確認"
+            elif tx.source == "receipt":
                 recommendation="レシート画像・合計・カテゴリを確認"
             else:
                 recommendation="重複候補を確認し、統合先を選択"
-        elif status == "unclassified_aupay":
-            priority="中"
-            recommendation="レシート有無とカテゴリを確認"
-        elif status == "unclassified_card":
-            priority="中"
-            recommendation="レシート・Amazon・au PAYとの重複を確認"
-        elif status == "unclassified_paypay":
-            priority="中"
-            recommendation="レシート有無とカテゴリを確認"
         else:
             continue
         items.append(ReviewItem(tx,priority,recommendation))
@@ -87,9 +84,7 @@ class ReviewApprovalPipeline:
 
     def __init__(self,db:SheetsDB): self.db=db
 
-    @staticmethod
-    def _expense_id(import_id:str)->str:
-        return "M-"+hashlib.sha256(import_id.encode("utf-8")).hexdigest()[:24]
+    _expense_id = staticmethod(expense_id)
 
     def apply(self)->dict:
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
@@ -111,8 +106,11 @@ class ReviewApprovalPipeline:
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
-            elif tx.status not in {"要確認","unclassified_aupay","unclassified_card",
-                                   "unclassified_paypay","needs_review_duplicate"}:
+            elif not (
+                tx.status == "要確認"
+                or tx.status.startswith("needs_review")
+                or tx.status in {"unclassified_aupay", "unclassified_card", "unclassified_paypay"}
+            ):
                 error=f"既に処理済みです: {tx.status}"
             if error:
                 row[14]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue

@@ -17,6 +17,7 @@ from .aupay_mail_pipeline import (
 from .reconciliation import ReconciliationPipeline
 from .review_pipeline import ReviewApprovalPipeline, ReviewPipeline
 from .expense_view import ExpenseViewPipeline
+from .auto_expense import AutoExpensePipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -53,6 +54,8 @@ def main():
     sub.add_parser("review-apply")
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
+    sub.add_parser("auto-expense-preview")
+    sub.add_parser("auto-expense")
     sub.add_parser("drive-receipts")
     sub.add_parser("doctor")
     args=p.parse_args()
@@ -115,6 +118,10 @@ def main():
         s,db,_=make(False); print(ExpenseViewPipeline(db).preview())
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
+    elif args.cmd=="auto-expense-preview":
+        s,db,_=make(False); print(AutoExpensePipeline(db).preview())
+    elif args.cmd=="auto-expense":
+        s,db,_=make(False); print(AutoExpensePipeline(db).apply())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)

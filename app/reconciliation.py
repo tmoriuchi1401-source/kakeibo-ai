@@ -91,6 +91,9 @@ def reconcile_transactions(transactions: list[ImportTransaction]) -> list[Reconc
             tx.source == "au PAYカード" and tx.status == "unclassified_card"
         ) or (
             tx.source == "PayPay" and tx.status == "unclassified_paypay"
+        ) or (
+            tx.source in {"au PAY", "au PAYカード", "PayPay"}
+            and tx.status == "auto_expense"
         )
     ]
 
@@ -185,7 +188,14 @@ class ReconciliationPipeline:
         self.db.update_rows("取込データ", updates)
         excluded_expenses=[]
         for decision in decisions:
-            if decision.status != "matched_amazon":
+            should_exclude = (
+                decision.status == "matched_amazon"
+                or (
+                    decision.status == "matched_receipt"
+                    and decision.transaction.status == "auto_expense"
+                )
+            )
+            if not should_exclude:
                 continue
             for row_num,raw in self.db.expense_rows_for_import(decision.transaction.import_id):
                 expense=list(raw)+[""]*max(0,13-len(raw))

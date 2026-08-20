@@ -9,16 +9,16 @@ def row(import_id,source,date,status):
 def test_review_extracts_only_actionable_states():
     items=review_items(parse_import_rows([
         row("r1","receipt","2026-08-10","要確認"),
-        row("a1","au PAY","2026-08-16","unclassified_aupay"),
-        row("c1","au PAYカード","2026-08-15","unclassified_card"),
-        row("p1","PayPay","2026-08-13","unclassified_paypay"),
+        row("a1","au PAY","2026-08-16","auto_expense"),
+        row("c1","au PAYカード","2026-08-15","auto_expense"),
+        row("p1","PayPay","2026-08-13","auto_expense"),
+        row("amz","au PAYカード","2026-08-12","needs_review_amazon_installment"),
         row("a2","au PAY","2026-08-14","matched_receipt"),
         row("c2","au PAYカード","2026-08-14","transfer_aupay_charge"),
         row("m1","Amazon","2026-08-14","canonical_amazon"),
     ]))
-    assert [x.transaction.import_id for x in items] == ["r1","a1","c1","p1"]
-    assert [x.priority for x in items] == ["高","中","中","中"]
-    assert items[-1].recommendation == "レシート有無とカテゴリを確認"
+    assert [x.transaction.import_id for x in items] == ["amz","r1"]
+    assert [x.priority for x in items] == ["高","高"]
 
 
 def test_ambiguous_duplicate_is_high_priority():

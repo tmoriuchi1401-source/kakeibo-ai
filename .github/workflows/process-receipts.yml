@@ -44,6 +44,9 @@ jobs:
       - name: Reconcile imported transactions
         if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli reconcile
+      - name: Auto-post clear payment transactions
+        if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli auto-expense
       - name: Refresh mobile review sheet
         if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli review-refresh
