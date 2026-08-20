@@ -12,6 +12,7 @@ jobs:
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
+      PAYPAY_DRIVE_FOLDER_ID: ${{ secrets.PAYPAY_DRIVE_FOLDER_ID }}
       PROCESSED_DRIVE_FOLDER_ID: ${{ secrets.PROCESSED_DRIVE_FOLDER_ID }}
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
     steps:
@@ -27,6 +28,7 @@ jobs:
           test -n "$SPREADSHEET_ID" && echo "Sheets: configured" || echo "Sheets: not configured"
           test -n "$GOOGLE_SERVICE_ACCOUNT_JSON" && echo "Google service account: configured" || echo "Google service account: not configured"
           test -n "$RECEIPT_DRIVE_FOLDER_ID" && echo "Receipt Drive folder: configured" || echo "Receipt Drive folder: not configured"
+          test -n "$PAYPAY_DRIVE_FOLDER_ID" && echo "PayPay Drive folder: configured" || echo "PayPay Drive folder: not configured"
           test -n "$GOOGLE_GMAIL_TOKEN_JSON" && echo "Gmail: configured" || echo "Gmail: not configured"
       - name: Import au PAY notices from Gmail
         if: ${{ env.GOOGLE_GMAIL_TOKEN_JSON != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
@@ -41,6 +43,9 @@ jobs:
       - name: Apply mobile review decisions
         if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli review-apply
+      - name: Import PayPay CSV files from Google Drive
+        if: ${{ env.PAYPAY_DRIVE_FOLDER_ID != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli drive-paypay
       - name: Reconcile imported transactions
         if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli reconcile

@@ -6,6 +6,7 @@ from .gemini_ai import GeminiAI
 from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
+from .drive_paypay import DrivePayPayPipeline
 from .aupay_card_pipeline import AuPayCardPipeline
 from .paypay_pipeline import PayPayPipeline
 from .aupay_mail_pipeline import (
@@ -70,6 +71,8 @@ def main():
     sub.add_parser("amazon-installment-preview")
     sub.add_parser("amazon-installment-apply")
     sub.add_parser("drive-receipts")
+    sub.add_parser("drive-paypay-preview")
+    sub.add_parser("drive-paypay")
     sub.add_parser("backup")
     dba=sub.add_parser("drive-backup-authorize")
     dba.add_argument("client_json")
@@ -154,6 +157,14 @@ def main():
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
+    elif args.cmd=="drive-paypay-preview":
+        s=Settings(); s.validate(need_paypay_drive=True)
+        print(DrivePayPayPipeline(s.paypay_drive_folder_id).preview())
+    elif args.cmd=="drive-paypay":
+        s,db,_=make(False); s.validate(need_paypay_drive=True)
+        print(DrivePayPayPipeline(
+            s.paypay_drive_folder_id, db, s.processed_drive_folder_id,
+        ).apply())
     elif args.cmd=="backup":
         s=Settings(); s.validate(need_sheet=True,need_backup=True)
         print(backup_spreadsheet(
