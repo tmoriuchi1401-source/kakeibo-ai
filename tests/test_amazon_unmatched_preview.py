@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from app.amazon_unmatched import AmazonUnmatchedPreview
+import json
+import sys
+
+import pandas as pd
+import pytest
+
+from app.amazon_csv_diagnostics import payment_method_class
+from app.amazon_unmatched import (
+    AmazonUnmatchedPreview,
+    export_amazon_unmatched_input,
+    load_amazon_unmatched_input,
+)
 
 
 class FakeDB:
@@ -42,6 +53,35 @@ def amazon_row(order_id, date, amount, *, note="incremental", asin=None):
 
 def preview(imports, amazon):
     return AmazonUnmatchedPreview(FakeDB(imports, amazon)).preview()
+
+
+def raw_row(
+    order_id, date, total, *, payment="Visa", ship_date=None, tracking="TRACK-TEST",
+    shipment_subtotal=0, shipment_tax=0, shipping=0, unit_price=0, unit_tax=0,
+    quantity=1, asin=None,
+):
+    return {
+        "ASIN": asin or f"ASIN-{order_id}", "Order Date": date, "Order ID": order_id,
+        "Original Quantity": quantity, "Payment Method Type": payment,
+        "Product Name": "匿名商品", "Total Amount": total,
+        "Ship Date": ship_date or date, "Carrier Name & Tracking Number": tracking,
+        "Shipment Item Subtotal": shipment_subtotal,
+        "Shipment Item Subtotal Tax": shipment_tax, "Shipment Status": "Shipped",
+        "Shipping Charge": shipping, "Total Discounts": 0, "Unit Price": unit_price,
+        "Unit Price Tax": unit_tax, "Order Status": "Closed", "Currency": "JPY",
+    }
+
+
+def raw_csv_preview(tmp_path, raw_rows, *, amount=1000, date="2026-08-10"):
+    path = tmp_path / "Order History.csv"
+    pd.DataFrame(raw_rows).to_csv(path, index=False, encoding="utf-8-sig")
+    sheet_rows = [
+        amazon_row(row["Order ID"], row["Order Date"], row["Total Amount"], asin=row["ASIN"])
+        for row in raw_rows
+    ]
+    return AmazonUnmatchedPreview(
+        FakeDB([import_row("card:1", date, amount)], sheet_rows),
+    ).preview(str(path))["raw_csv_diagnostics"]
 
 
 def test_exact_match():
@@ -267,3 +307,175 @@ def test_preview_counts_only_strict_unique_extended_matches():
     assert result["date_outside_window"] == 3
     assert result["extended_match_candidates"] == 1
     assert result["extended_match_samples"][0]["candidate_orders"] == 1
+
+
+def test_payment_method_classifies_gift_and_single_methods():
+    assert payment_method_class(["Gift Card; Visa"]) == "gift_or_mixed"
+    assert payment_method_class(["Visa"]) == "single_payment_method"
+    assert payment_method_class(["Visa", "Mastercard"]) == "multiple_payment_methods"
+
+
+def test_unique_shipment_group_match(tmp_path):
+    rows = [raw_row(
+        "o1", "2026-08-09", 1100, shipment_subtotal=900, shipment_tax=100,
+    )]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["shipment_amount_match"]["unique"] == 1
+
+
+def test_multiple_shipment_group_matches_are_ambiguous(tmp_path):
+    rows = [
+        raw_row("o1", "2026-08-09", 1100, shipment_subtotal=900, shipment_tax=100),
+        raw_row("o2", "2026-08-11", 1200, shipment_subtotal=950, shipment_tax=50),
+    ]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["shipment_amount_match"]["ambiguous"] == 1
+
+
+def test_shipment_subtotal_formula_match(tmp_path):
+    rows = [raw_row(
+        "o1", "2026-08-09", 1100, shipment_subtotal=850, shipment_tax=100, shipping=50,
+    )]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["method_matches"]["shipment_subtotal_plus_tax_plus_shipping"]["unique"] == 1
+
+
+def test_unit_price_formula_match(tmp_path):
+    rows = [raw_row(
+        "o1", "2026-08-09", 1100, unit_price=450, unit_tax=50, quantity=2,
+    )]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["method_matches"]["row_unit_price_plus_tax_times_quantity"]["unique"] == 1
+
+
+def test_multiple_matching_formulas_are_kept_manual(tmp_path):
+    rows = [raw_row(
+        "o1", "2026-08-09", 1100, shipment_subtotal=900, shipment_tax=100,
+        unit_price=900, unit_tax=100,
+    )]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["final_classification"]["multiple_possible_explanations"] == 1
+
+
+def test_gift_payment_is_only_a_candidate_without_gift_amount(tmp_path):
+    rows = [raw_row("o1", "2026-08-09", 1100, payment="Gift Card; Visa")]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["final_classification"]["gift_or_mixed_payment_candidate"] == 1
+
+
+def test_csv_can_remain_insufficient(tmp_path):
+    rows = [raw_row("o1", "2026-08-09", 1100)]
+    result = raw_csv_preview(tmp_path, rows)
+    assert result["final_classification"]["csv_still_insufficient"] == 1
+
+
+def test_csv_diagnostics_remain_read_only(tmp_path):
+    rows = [raw_row("o1", "2026-08-09", 1100)]
+    path = tmp_path / "Order History.csv"
+    pd.DataFrame(rows).to_csv(path, index=False, encoding="utf-8-sig")
+    db = FakeDB(
+        [import_row("card:1", "2026-08-10", 1000)],
+        [amazon_row("o1", "2026-08-09", 1100)],
+    )
+    AmazonUnmatchedPreview(db).preview(str(path))
+    assert db.writes == []
+    assert path.exists()
+
+
+def test_export_contains_only_amount_near_match_and_minimum_fields(tmp_path):
+    imports = [
+        import_row("card:amount", "2026-08-10", 1000, note="会員=個人情報"),
+        import_row("card:date", "2026-08-20", 2000, note="会員=個人情報"),
+    ]
+    orders = [
+        amazon_row("o1", "2026-08-09", 1100),
+        amazon_row("o2", "2026-08-01", 2000),
+    ]
+    db = FakeDB(imports, orders)
+    output = tmp_path / "amazon-unmatched-input.json"
+
+    result = export_amazon_unmatched_input(db, output)
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result["exported"] == 1
+    assert len(payload["transactions"]) == 1
+    exported = payload["transactions"][0]
+    assert set(exported) == {"diagnostic_id", "card_date", "card_amount", "payment_type"}
+    assert exported["card_amount"] == 1000
+    serialized = output.read_text(encoding="utf-8")
+    assert "card:amount" not in serialized
+    assert "個人情報" not in serialized
+    assert "o1" not in serialized
+    assert db.writes == []
+
+
+def test_transactions_json_and_csv_run_without_sheets(tmp_path, monkeypatch, capsys):
+    csv_path = tmp_path / "Order History.csv"
+    pd.DataFrame([raw_row(
+        "o1", "2026-08-09", 1100, shipment_subtotal=900, shipment_tax=100,
+    )]).to_csv(csv_path, index=False, encoding="utf-8-sig")
+    json_path = tmp_path / "amazon-unmatched-input.json"
+    json_path.write_text(json.dumps({
+        "schema_version": 1,
+        "transactions": [{
+            "diagnostic_id": "a" * 24,
+            "card_date": "2026-08-10",
+            "card_amount": 1000,
+            "payment_type": "一括",
+        }],
+    }), encoding="utf-8")
+    import app.cli as cli
+    monkeypatch.setattr(cli, "make", lambda *_: (_ for _ in ()).throw(AssertionError("Sheets used")))
+    monkeypatch.setattr(sys, "argv", [
+        "app.cli", "amazon-unmatched-preview", "--amazon-csv", str(csv_path),
+        "--transactions-json", str(json_path),
+    ])
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "raw_csv_diagnostics" in output
+    assert "shipment_amount_match" in output
+
+
+def test_exported_transactions_can_drive_csv_diagnostics(tmp_path):
+    json_path = tmp_path / "input.json"
+    json_path.write_text(json.dumps({
+        "schema_version": 1,
+        "transactions": [{
+            "diagnostic_id": "b" * 24, "card_date": "2026-08-10",
+            "card_amount": 1000, "payment_type": "一括",
+        }],
+    }), encoding="utf-8")
+    transactions = load_amazon_unmatched_input(json_path)
+    assert len(transactions) == 1
+    assert transactions[0].amount == 1000
+    assert transactions[0].merchant == "AMAZON.CO.JP"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not-json",
+        json.dumps({"schema_version": 1, "transactions": [{"card_amount": 1000}]}),
+        json.dumps({
+            "schema_version": 1,
+            "transactions": [{
+                "diagnostic_id": "c" * 24, "card_date": "invalid",
+                "card_amount": 1000, "payment_type": "一括",
+            }],
+        }),
+        json.dumps({
+            "schema_version": 1,
+            "transactions": [{
+                "diagnostic_id": "d" * 24, "card_date": "2026-08-10",
+                "card_amount": 1000, "payment_type": "一括", "merchant": "secret",
+            }],
+        }),
+    ],
+)
+def test_invalid_or_overbroad_transactions_json_is_rejected(tmp_path, payload):
+    path = tmp_path / "bad.json"
+    path.write_text(payload, encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_amazon_unmatched_input(path)

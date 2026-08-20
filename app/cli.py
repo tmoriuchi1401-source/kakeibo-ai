@@ -27,7 +27,12 @@ from .maintenance import (
 )
 from .auto_expense import AutoExpensePipeline
 from .amazon_installment import AmazonInstallmentPipeline
-from .amazon_unmatched import AmazonUnmatchedPreview
+from .amazon_csv_diagnostics import diagnose_amazon_csv_amounts
+from .amazon_unmatched import (
+    AmazonUnmatchedPreview,
+    export_amazon_unmatched_input,
+    load_amazon_unmatched_input,
+)
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -71,7 +76,11 @@ def main():
     sub.add_parser("auto-expense")
     sub.add_parser("amazon-installment-preview")
     sub.add_parser("amazon-installment-apply")
-    sub.add_parser("amazon-unmatched-preview")
+    aup=sub.add_parser("amazon-unmatched-preview")
+    aup.add_argument("--amazon-csv")
+    aup.add_argument("--transactions-json")
+    aue=sub.add_parser("amazon-unmatched-export")
+    aue.add_argument("--output",required=True)
     sub.add_parser("drive-receipts")
     sub.add_parser("drive-paypay-preview")
     sub.add_parser("drive-paypay")
@@ -157,7 +166,15 @@ def main():
     elif args.cmd=="amazon-installment-apply":
         s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
     elif args.cmd=="amazon-unmatched-preview":
-        s,db,_=make(False); print(AmazonUnmatchedPreview(db).preview())
+        if args.transactions_json:
+            if not args.amazon_csv:
+                p.error("--transactions-jsonには--amazon-csvが必要です")
+            transactions=load_amazon_unmatched_input(args.transactions_json)
+            print({"raw_csv_diagnostics":diagnose_amazon_csv_amounts(args.amazon_csv,transactions)})
+        else:
+            s,db,_=make(False); print(AmazonUnmatchedPreview(db).preview(args.amazon_csv))
+    elif args.cmd=="amazon-unmatched-export":
+        s,db,_=make(False); print(export_amazon_unmatched_input(db,args.output))
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)

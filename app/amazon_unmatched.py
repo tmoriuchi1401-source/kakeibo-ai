@@ -3,7 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime
+import hashlib
 from itertools import combinations
+import json
+from pathlib import Path
+import re
 
 from .amazon_installment import (
     INSTALLMENT_STATUS,
@@ -11,6 +15,7 @@ from .amazon_installment import (
     find_installment_matches,
     parse_baseline_orders,
 )
+from .amazon_csv_diagnostics import diagnose_amazon_csv_amounts
 from .aupay_card_pipeline import AuPayCardPipeline, is_amazon
 from .auto_expense import _amazon_installment
 from .reconciliation import ImportTransaction, parse_import_rows
@@ -309,7 +314,7 @@ class AmazonUnmatchedPreview:
             return "no_order_candidate", []
         return "no_order_candidate", []
 
-    def preview(self) -> dict:
+    def _diagnosed_state(self) -> dict:
         import_rows = self.db.get("取込データ!A2:L")
         amazon_rows = self.db.get("Amazon注文!A2:M")
         all_transactions = parse_import_rows(import_rows)
@@ -324,15 +329,38 @@ class AmazonUnmatchedPreview:
         item_orders = self._amazon_items(amazon_rows)
         installment_ids = self._installment_ids(targets, amazon_rows)
 
-        counts = Counter()
-        samples: dict[str, list[dict]] = {}
-        diagnosed: list[tuple[ImportTransaction, str]] = []
+        diagnosed: list[tuple[ImportTransaction, str, list[dict]]] = []
         for tx in targets:
             diagnosis, candidates = self._diagnose(
                 tx, amazon, installment_ids, card_pipeline,
             )
-            counts[diagnosis] += 1
-            diagnosed.append((tx, diagnosis))
+            diagnosed.append((tx, diagnosis, candidates))
+        return {
+            "amazon_rows": amazon_rows,
+            "amazon": amazon,
+            "item_orders": item_orders,
+            "card_pipeline": card_pipeline,
+            "targets": targets,
+            "diagnosed": diagnosed,
+        }
+
+    def amount_near_transactions(self) -> list[ImportTransaction]:
+        return [
+            tx for tx, diagnosis, _ in self._diagnosed_state()["diagnosed"]
+            if diagnosis == "amount_near_match"
+        ]
+
+    def preview(self, amazon_csv: str | None = None) -> dict:
+        state = self._diagnosed_state()
+        amazon_rows = state["amazon_rows"]
+        amazon = state["amazon"]
+        item_orders = state["item_orders"]
+        card_pipeline = state["card_pipeline"]
+        targets = state["targets"]
+        diagnosed = state["diagnosed"]
+        counts = Counter(diagnosis for _, diagnosis, _ in diagnosed)
+        samples: dict[str, list[dict]] = {}
+        for tx, diagnosis, candidates in diagnosed:
             if len(samples.setdefault(diagnosis, [])) < self.sample_limit:
                 samples[diagnosis].append(self._sample(tx, candidates))
 
@@ -343,8 +371,8 @@ class AmazonUnmatchedPreview:
         }
         result.update({name: counts[name] for name in DIAGNOSES})
         result["samples"] = {name: rows for name, rows in samples.items() if rows}
-        amount_near = [tx for tx, diagnosis in diagnosed if diagnosis == "amount_near_match"]
-        date_outside = [tx for tx, diagnosis in diagnosed if diagnosis == "date_outside_window"]
+        amount_near = [tx for tx, diagnosis, _ in diagnosed if diagnosis == "amount_near_match"]
+        date_outside = [tx for tx, diagnosis, _ in diagnosed if diagnosis == "date_outside_window"]
         methods = (
             "single_item", "same_order_2_items", "same_order_3_items",
             "nearby_2_orders", "nearby_3_orders",
@@ -386,4 +414,65 @@ class AmazonUnmatchedPreview:
                 })
         result["extended_match_candidates"] = len(extended)
         result["extended_match_samples"] = extended[:self.sample_limit]
+        if amazon_csv:
+            result["raw_csv_diagnostics"] = diagnose_amazon_csv_amounts(
+                amazon_csv, amount_near, sample_limit=self.sample_limit,
+            )
         return result
+
+
+EXPORT_SCHEMA_VERSION = 1
+EXPORT_FIELDS = {"diagnostic_id", "card_date", "card_amount", "payment_type"}
+
+
+def export_amazon_unmatched_input(db: SheetsDB, output: str | Path) -> dict:
+    transactions = AmazonUnmatchedPreview(db).amount_near_transactions()
+    rows = [{
+        "diagnostic_id": hashlib.sha256(tx.import_id.encode("utf-8")).hexdigest()[:24],
+        "card_date": tx.date,
+        "card_amount": tx.amount,
+        "payment_type": str(tx.row[7]) if len(tx.row) > 7 else "",
+    } for tx in transactions]
+    payload = {"schema_version": EXPORT_SCHEMA_VERSION, "transactions": rows}
+    Path(output).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"exported": len(rows), "output": str(output), "schema_version": EXPORT_SCHEMA_VERSION}
+
+
+def load_amazon_unmatched_input(path: str | Path) -> list[ImportTransaction]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Amazon未一致診断JSONを読み取れません") from exc
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "transactions"}:
+        raise ValueError("Amazon未一致診断JSONのトップレベル形式が不正です")
+    if payload["schema_version"] != EXPORT_SCHEMA_VERSION or not isinstance(payload["transactions"], list):
+        raise ValueError("Amazon未一致診断JSONのschema versionまたはtransactionsが不正です")
+    transactions = []
+    for index, item in enumerate(payload["transactions"]):
+        if not isinstance(item, dict) or set(item) != EXPORT_FIELDS:
+            raise ValueError(f"Amazon未一致診断JSONのtransaction[{index}]形式が不正です")
+        diagnostic_id = item["diagnostic_id"]
+        card_date = item["card_date"]
+        card_amount = item["card_amount"]
+        payment_type = item["payment_type"]
+        if (
+            not isinstance(diagnostic_id, str) or not re.fullmatch(r"[0-9a-f]{24}", diagnostic_id)
+            or not isinstance(card_date, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", card_date)
+            or not isinstance(card_amount, int) or isinstance(card_amount, bool) or card_amount <= 0
+            or not isinstance(payment_type, str)
+        ):
+            raise ValueError(f"Amazon未一致診断JSONのtransaction[{index}]値が不正です")
+        try:
+            datetime.strptime(card_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise ValueError(f"Amazon未一致診断JSONのtransaction[{index}]日付が不正です") from exc
+        row = [
+            diagnostic_id, "", "au PAYカード", diagnostic_id, card_date,
+            "AMAZON.CO.JP", card_amount, payment_type, "amazon_unmatched", "", "", "",
+        ]
+        transactions.append(ImportTransaction(
+            row_num=index + 2, import_id=diagnostic_id, source="au PAYカード",
+            date=card_date, merchant="AMAZON.CO.JP", amount=card_amount,
+            status="amazon_unmatched", target_id="", note="", row=row,
+        ))
+    return transactions
