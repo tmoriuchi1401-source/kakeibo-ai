@@ -1,0 +1,29 @@
+name: Reclassify Amazon card transactions
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reclassify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Reclassify Amazon card transactions
+        run: python -m app.cli card-amazon-reclassify
+      - name: Preview unmatched Amazon transactions
+        run: python -m app.cli amazon-unmatched-preview
+      - name: Preview review items
+        run: python -m app.cli review-preview
+      - name: Preview active expenses
+        run: python -m app.cli expenses-preview
+      - name: Preview reconciliation
+        run: python -m app.cli reconcile-preview
