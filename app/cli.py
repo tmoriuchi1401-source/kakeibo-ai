@@ -18,6 +18,7 @@ from .reconciliation import ReconciliationPipeline
 from .review_pipeline import ReviewApprovalPipeline, ReviewPipeline
 from .expense_view import ExpenseViewPipeline
 from .auto_expense import AutoExpensePipeline
+from .amazon_installment import AmazonInstallmentPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -56,6 +57,8 @@ def main():
     sub.add_parser("expenses-refresh")
     sub.add_parser("auto-expense-preview")
     sub.add_parser("auto-expense")
+    sub.add_parser("amazon-installment-preview")
+    sub.add_parser("amazon-installment-apply")
     sub.add_parser("drive-receipts")
     sub.add_parser("doctor")
     args=p.parse_args()
@@ -122,6 +125,10 @@ def main():
         s,db,_=make(False); print(AutoExpensePipeline(db).preview())
     elif args.cmd=="auto-expense":
         s,db,_=make(False); print(AutoExpensePipeline(db).apply())
+    elif args.cmd=="amazon-installment-preview":
+        s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
+    elif args.cmd=="amazon-installment-apply":
+        s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
