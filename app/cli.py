@@ -27,6 +27,7 @@ from .maintenance import (
 )
 from .auto_expense import AutoExpensePipeline
 from .amazon_installment import AmazonInstallmentPipeline
+from .amazon_unmatched import AmazonUnmatchedPreview
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -70,6 +71,7 @@ def main():
     sub.add_parser("auto-expense")
     sub.add_parser("amazon-installment-preview")
     sub.add_parser("amazon-installment-apply")
+    sub.add_parser("amazon-unmatched-preview")
     sub.add_parser("drive-receipts")
     sub.add_parser("drive-paypay-preview")
     sub.add_parser("drive-paypay")
@@ -154,6 +156,8 @@ def main():
         s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
     elif args.cmd=="amazon-installment-apply":
         s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
+    elif args.cmd=="amazon-unmatched-preview":
+        s,db,_=make(False); print(AmazonUnmatchedPreview(db).preview())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
