@@ -169,6 +169,21 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
+## Google DriveからPayPay CSVを取り込む
+
+`PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定する。
+書き込みなしの確認と取込は次のコマンドで行う:
+
+```bash
+python -m app.cli drive-paypay-preview
+python -m app.cli drive-paypay
+```
+
+PayPay CSVとして解析できる `.csv` だけをファイル単位で取り込む。成功後は
+`PROCESSED_DRIVE_FOLDER_ID` があればそこへ移動し、未設定ならDriveのファイルプロパティに
+処理済みを記録する。ファイルは削除しない。壊れたCSVはエラーとして残し、他ファイルの
+取込は継続する。
+
 ## スマホ用「要確認」シート
 
 未分類のPayPay・au PAY・au PAYカードの明確な支払いは、先に書き込みなしで
