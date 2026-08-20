@@ -1,4 +1,4 @@
-from app.aupay_card_pipeline import AuPayCardPipeline
+from app.aupay_card_pipeline import AuPayCardPipeline, _amazon_extended_eligible
 
 
 class FakeDB:
@@ -90,3 +90,69 @@ def test_manual_amazon_match_is_not_reclassified():
 
     assert result["updated"] == 0
     assert db.updated == []
+
+
+def test_normal_match_within_seven_days_is_unchanged():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [{"key": "amazon:o1", "date": "2026-08-01", "amount": 1000}]
+    state, matched, match_type, days = pipeline._classify_amazon_details(
+        "2026-08-08", 1000, candidates,
+    )
+    assert (state, match_type, days) == ("matched_amazon", "normal", 7)
+    assert matched == candidates
+
+
+def test_unique_same_amount_order_eight_to_twenty_one_days_before_is_extended_match():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [{"key": "amazon:o1", "date": "2026-08-01", "amount": 1000}]
+    state, matched, match_type, days = pipeline._classify_amazon_details(
+        "2026-08-16", 1000, candidates,
+    )
+    assert (state, match_type, days) == ("matched_amazon", "extended", 15)
+    assert matched == candidates
+
+
+def test_order_more_than_twenty_one_days_before_is_unmatched():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [{"key": "amazon:o1", "date": "2026-08-01", "amount": 1000}]
+    assert pipeline._classify_amazon("2026-08-23", 1000, candidates)[0] == "amazon_unmatched"
+
+
+def test_order_after_card_date_is_not_extended_match():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [{"key": "amazon:o1", "date": "2026-08-20", "amount": 1000}]
+    assert pipeline._classify_amazon("2026-08-01", 1000, candidates)[0] == "amazon_unmatched"
+
+
+def test_multiple_extended_candidates_are_never_auto_matched():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [
+        {"key": "amazon:o1", "date": "2026-08-01", "amount": 1000},
+        {"key": "amazon:o2", "date": "2026-08-03", "amount": 1000},
+    ]
+    assert pipeline._classify_amazon("2026-08-16", 1000, candidates)[0] == "amazon_needs_review"
+
+
+def test_amount_mismatch_is_not_extended_match():
+    pipeline = AuPayCardPipeline(FakeDB([]))
+    candidates = [{"key": "amazon:o1", "date": "2026-08-01", "amount": 1100}]
+    assert pipeline._classify_amazon("2026-08-16", 1000, candidates)[0] == "amazon_unmatched"
+
+
+def test_refund_and_installment_are_ineligible_for_extended_matching():
+    assert not _amazon_extended_eligible("AMAZON.CO.JP", "一括", "返品による返金")
+    assert not _amazon_extended_eligible("AMAZON.CO.JP 分割払い", "分割", "")
+
+
+def test_reclassification_records_extended_match_audit_note():
+    imports = [[
+        "card:1", "", "au PAYカード", "card:1", "2026-08-16",
+        "AMAZON.CO.JP", 1000, "一括", "amazon_unmatched", "", "", "会員=本人",
+    ]]
+    db = FakeDB([amazon_row("key:1", "ORDER-1", "2026-08-01", 1000)], imports)
+    result = AuPayCardPipeline(db).reclassify_amazon()
+    updated = db.updated[0][1]
+    assert result["updated"] == 1
+    assert updated[8] == "matched_amazon"
+    assert "Amazon拡張照合=21日以内" in updated[11]
+    assert "日付差=15日" in updated[11]

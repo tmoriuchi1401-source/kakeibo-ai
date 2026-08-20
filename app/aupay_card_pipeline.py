@@ -52,6 +52,18 @@ def is_aupay_charge(merchant:str)->bool:
 def is_amazon(merchant:str)->bool:
     return "AMAZON.CO.JP" in norm_text(merchant).upper()
 
+def _amazon_extended_eligible(*parts)->bool:
+    text=" ".join(norm_text(part).upper() for part in parts)
+    compact=re.sub(r"[\s　\-_/\.]+","",text)
+    refund=any(x in text for x in (
+        "返金","取消","取り消し","キャンセル","払戻","返品","REFUND",
+    ))
+    installment=(
+        "アマゾンブンカツバライ" in compact
+        or ("AMAZON" in compact and ("分割" in compact or "BUNKATSU" in compact))
+    )
+    return not refund and not installment
+
 class AuPayCardPipeline:
     def __init__(self,db:SheetsDB): self.db=db
 
@@ -72,33 +84,65 @@ class AuPayCardPipeline:
             candidate["items"]+=1
         return list(grouped.values())
 
-    def _classify_amazon(self,date:str,amount:int,amazon:list[dict]):
+    def _classify_amazon_details(
+        self,date:str,amount:int,amazon:list[dict],*,allow_extended:bool=True,
+    ):
         candidates=[x for x in amazon
                     if x["amount"]==amount and self._days(x["date"],date)<=7]
         if len(candidates)==1:
-            return "matched_amazon",candidates
+            return "matched_amazon",candidates,"normal",self._days(candidates[0]["date"],date)
         if candidates:
-            return "amazon_needs_review",candidates
-        return "amazon_unmatched",candidates
+            return "amazon_needs_review",candidates,None,None
+        if allow_extended:
+            extended=[x for x in amazon if (
+                x["amount"]==amount
+                and 8 <= self._days_after(x["date"],date) <= 21
+            )]
+            if len(extended)==1:
+                days=self._days_after(extended[0]["date"],date)
+                return "matched_amazon",extended,"extended",days
+            if extended:
+                return "amazon_needs_review",extended,None,None
+        return "amazon_unmatched",[],None,None
+
+    def _classify_amazon(
+        self,date:str,amount:int,amazon:list[dict],*,allow_extended:bool=True,
+    ):
+        state,candidates,_,_=self._classify_amazon_details(
+            date,amount,amazon,allow_extended=allow_extended,
+        )
+        return state,candidates
 
     @staticmethod
     def _days(a,b):
         try:return abs((datetime.strptime(a,"%Y-%m-%d")-datetime.strptime(b,"%Y-%m-%d")).days)
         except:return 999
 
+    @staticmethod
+    def _days_after(order_date,card_date):
+        try:return (datetime.strptime(card_date,"%Y-%m-%d")-datetime.strptime(order_date,"%Y-%m-%d")).days
+        except:return -999
+
     def preview(self,path:str):
         tx=parse_aupay_card_csv(path)
         amazon=self._amazon_candidates()
         counts={"rows":len(tx),"aupay_charge":0,"amazon_matched":0,
+                "amazon_extended_matched":0,
                 "amazon_ambiguous":0,"amazon_unmatched":0,"other":0}
         samples=[]
         for d in tx:
             if is_aupay_charge(d["merchant"]):
                 state="transfer_aupay_charge"; counts["aupay_charge"]+=1
             elif is_amazon(d["merchant"]):
-                state,c=self._classify_amazon(d["date"],d["amount"],amazon)
+                state,c,match_type,_=self._classify_amazon_details(
+                    d["date"],d["amount"],amazon,
+                    allow_extended=_amazon_extended_eligible(
+                        d["merchant"],d["payment_type"],d["memo"],
+                    ),
+                )
                 if state=="matched_amazon":
                     counts["amazon_matched"]+=1
+                    if match_type=="extended": counts["amazon_extended_matched"]+=1
                 elif state=="amazon_needs_review":
                     counts["amazon_ambiguous"]+=1
                 else:
@@ -115,7 +159,7 @@ class AuPayCardPipeline:
         existing=self.db.import_ids()
         amazon=self._amazon_candidates()
         rows=[]; stats={"source_rows":len(tx),"new":0,"unchanged":0,"aupay_charge":0,
-                        "amazon_matched":0,"amazon_needs_review":0,
+                        "amazon_matched":0,"amazon_extended_matched":0,"amazon_needs_review":0,
                         "amazon_unmatched":0,"unclassified_card":0}
         for d in tx:
             if d["import_id"] in existing:
@@ -126,10 +170,18 @@ class AuPayCardPipeline:
                 state="transfer_aupay_charge"; stats["aupay_charge"]+=1
                 note += "; 支出計上しない（au PAY残高への資金移動）"
             elif is_amazon(d["merchant"]):
-                state,c=self._classify_amazon(d["date"],d["amount"],amazon)
+                state,c,match_type,date_diff=self._classify_amazon_details(
+                    d["date"],d["amount"],amazon,
+                    allow_extended=_amazon_extended_eligible(
+                        d["merchant"],d["payment_type"],d["memo"],
+                    ),
+                )
                 stats[state]+=1
                 if state=="matched_amazon":
                     note += f"; Amazonキー={c[0]['key']}; Amazon注文と照合済み・カード側は支出計上しない"
+                    if match_type=="extended":
+                        stats["amazon_extended_matched"]+=1
+                        note += f"; Amazon拡張照合=21日以内; 日付差={date_diff}日"
                 else:
                     note += f"; Amazon候補数={len(c)}"
             else:
@@ -156,7 +208,10 @@ class AuPayCardPipeline:
                 continue
             try: amount=parse_money(row[6])
             except (TypeError,ValueError): amount=0
-            state,candidates=self._classify_amazon(str(row[4]),amount,amazon)
+            state,candidates,match_type,date_diff=self._classify_amazon_details(
+                str(row[4]),amount,amazon,
+                allow_extended=_amazon_extended_eligible(row[5],row[7],row[11]),
+            )
             stats[state]+=1
             # Baseline orders may not have a canonical import row, so keep the
             # target column empty and record the stable order key in the note.
@@ -169,11 +224,16 @@ class AuPayCardPipeline:
                 or part.startswith("Amazon候補数=")
                 or part.startswith("Amazon注文と照合済み")
                 or part.startswith("Amazon再照合=")
+                or part.startswith("Amazon拡張照合=")
+                or part.startswith("日付差=")
             )]
             note_parts.append(f"Amazon再照合={state}")
             note_parts.append(f"候補数={len(candidates)}")
             if state=="matched_amazon":
                 note_parts.append(f"Amazonキー={candidates[0]['key']}")
+                if match_type=="extended":
+                    note_parts.append("Amazon拡張照合=21日以内")
+                    note_parts.append(f"日付差={date_diff}日")
             row[8]=state; row[9]=target; row[11]="; ".join(note_parts)
             updates.append((row_num,row))
         self.db.update_rows("取込データ",updates)

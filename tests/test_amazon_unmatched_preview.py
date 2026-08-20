@@ -249,3 +249,21 @@ def test_date_direction_uses_order_date_to_card_date():
     direction = preview(imports, orders)["date_direction"]
     assert direction["amazon_order_before_card"] == 1
     assert direction["card_before_amazon_order"] == 1
+
+
+def test_preview_counts_only_strict_unique_extended_matches():
+    imports = [
+        import_row("card:1", "2026-08-16", 1000),
+        import_row("card:2", "2026-08-16", 2000),
+        import_row("card:3", "2026-08-16", 3000),
+    ]
+    orders = [
+        amazon_row("o1", "2026-08-01", 1000),
+        amazon_row("o2", "2026-08-01", 2000),
+        amazon_row("o3", "2026-08-03", 2000),
+        amazon_row("o4", "2026-07-01", 3000),
+    ]
+    result = preview(imports, orders)
+    assert result["date_outside_window"] == 3
+    assert result["extended_match_candidates"] == 1
+    assert result["extended_match_samples"][0]["candidate_orders"] == 1

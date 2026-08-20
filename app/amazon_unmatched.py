@@ -287,7 +287,9 @@ class AmazonUnmatchedPreview:
         if tx.import_id in installment_ids:
             return "installment_candidate", []
 
-        match_status, exact = card_pipeline._classify_amazon(tx.date, tx.amount, amazon)
+        match_status, exact = card_pipeline._classify_amazon(
+            tx.date, tx.amount, amazon, allow_extended=False,
+        )
         if match_status == "amazon_needs_review":
             return "multiple_exact_candidates", exact
         if match_status == "matched_amazon":
@@ -368,4 +370,20 @@ class AmazonUnmatchedPreview:
         )
         result["date_window_simulation"] = self._date_simulation(date_outside, amazon)
         result["date_direction"] = self._date_directions(date_outside, amazon)
+        extended = []
+        for tx in date_outside:
+            state, candidates, match_type, days = card_pipeline._classify_amazon_details(
+                tx.date, tx.amount, amazon,
+                allow_extended=not _has_refund_text(tx)
+                and not _amazon_installment(self._installment_text(tx)),
+            )
+            if state == "matched_amazon" and match_type == "extended":
+                extended.append({
+                    "card_date": tx.date,
+                    "card_amount": tx.amount,
+                    "date_difference_days": days,
+                    "candidate_orders": len(candidates),
+                })
+        result["extended_match_candidates"] = len(extended)
+        result["extended_match_samples"] = extended[:self.sample_limit]
         return result
