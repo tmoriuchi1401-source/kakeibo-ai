@@ -101,7 +101,10 @@ def reconciliation_scope(transactions: list[ImportTransaction], *, months: int =
             status == "要確認"
             or status.startswith("needs_review")
             or status.endswith("_needs_review")
-            or status in {"unclassified_aupay", "unclassified_card", "amazon_unmatched"}
+            or status in {
+                "unclassified_aupay", "unclassified_card", "unclassified_paypay",
+                "amazon_unmatched",
+            }
         )
     selected = {
         tx.import_id for tx in transactions
@@ -122,8 +125,12 @@ def reconciliation_scope(transactions: list[ImportTransaction], *, months: int =
         for subject in active_by_amount.get(tx.amount, []):
             is_receipt_payment = (
                 tx.source == "receipt"
-                and subject.status in {"unclassified_aupay", "unclassified_card"}
-                and _days(tx.date, subject.date) <= (1 if subject.source == "au PAY" else 3)
+                and subject.status in {
+                    "unclassified_aupay", "unclassified_card", "unclassified_paypay",
+                }
+                and _days(tx.date, subject.date) <= (
+                    1 if subject.source in {"au PAY", "PayPay"} else 3
+                )
             )
             is_amazon_pair = (
                 {tx.source, subject.source} == {"receipt", "Amazon"}

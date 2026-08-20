@@ -225,6 +225,33 @@ def test_scope_keeps_old_unresolved_and_its_historical_candidate():
     assert {tx.import_id for tx in scoped} == {"receipt:r1", "aupay:1"}
 
 
+def test_scope_keeps_old_unclassified_paypay_and_its_historical_candidate():
+    transactions = parse_import_rows([
+        row("receipt:r1", "receipt", "2025-01-10", "テスト店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2025-01-11", "テスト店", 550,
+            "unclassified_paypay"),
+    ])
+
+    scoped = reconciliation_scope(
+        transactions, months=6, as_of=datetime(2026, 8, 18),
+    )
+
+    assert {tx.import_id for tx in scoped} == {"receipt:r1", "paypay:1"}
+
+
+def test_scope_does_not_keep_old_resolved_paypay_without_recent_activity():
+    transactions = parse_import_rows([
+        row("paypay:1", "PayPay", "2025-01-10", "テスト店", 550,
+            "matched_receipt"),
+    ])
+
+    scoped = reconciliation_scope(
+        transactions, months=6, as_of=datetime(2026, 8, 18),
+    )
+
+    assert scoped == []
+
+
 def test_scope_keeps_recently_imported_old_dated_receipt():
     receipt = row("receipt:r1", "receipt", "2020-01-10", "テスト店", 550, "解析済")
     receipt[1] = "2026-08-17 12:00:00"
