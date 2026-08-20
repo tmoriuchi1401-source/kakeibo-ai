@@ -109,3 +109,143 @@ def test_non_target_rows_are_ignored():
     ]
     result = preview(rows, [amazon_row("o1", "2026-08-10", 1000)])
     assert result["diagnosed"] == 0
+
+
+def amount_structure(imports, amazon):
+    return preview(imports, amazon)["amount_structure"]["summary"]
+
+
+def test_single_item_amount_match():
+    orders = [
+        amazon_row("o1", "2026-08-09", 1000, asin="item-1"),
+        amazon_row("o1", "2026-08-09", 200, asin="item-2"),
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["single_item"]["unique"] == 1
+
+
+def test_unique_two_item_same_order_sum():
+    orders = [
+        amazon_row("o1", "2026-08-09", 400, asin="item-1"),
+        amazon_row("o1", "2026-08-09", 600, asin="item-2"),
+        amazon_row("o1", "2026-08-09", 50, asin="item-3"),
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["same_order_2_items"]["unique"] == 1
+
+
+def test_unique_three_item_same_order_sum():
+    orders = [
+        amazon_row("o1", "2026-08-09", 200, asin="item-1"),
+        amazon_row("o1", "2026-08-09", 300, asin="item-2"),
+        amazon_row("o1", "2026-08-09", 500, asin="item-3"),
+        amazon_row("o1", "2026-08-09", 75, asin="item-4"),
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["same_order_3_items"]["unique"] == 1
+
+
+def test_multiple_same_order_subsets_are_ambiguous():
+    amounts = [400, 600, 300, 700, 25]
+    orders = [
+        amazon_row("o1", "2026-08-09", amount, asin=f"item-{index}")
+        for index, amount in enumerate(amounts)
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["same_order_2_items"]["ambiguous"] == 1
+
+
+def test_unique_two_order_sum():
+    orders = [
+        amazon_row("o1", "2026-08-09", 400),
+        amazon_row("o2", "2026-08-11", 600),
+        amazon_row("o3", "2026-08-10", 50),
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["nearby_2_orders"]["unique"] == 1
+
+
+def test_multiple_order_sums_are_ambiguous():
+    amounts = [400, 600, 300, 700, 25]
+    orders = [amazon_row(f"o{index}", "2026-08-09", amount) for index, amount in enumerate(amounts)]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["nearby_2_orders"]["ambiguous"] == 1
+
+
+def test_unique_three_order_sum():
+    orders = [
+        amazon_row("o1", "2026-08-09", 200),
+        amazon_row("o2", "2026-08-10", 300),
+        amazon_row("o3", "2026-08-11", 500),
+        amazon_row("o4", "2026-08-10", 25),
+    ]
+    result = amount_structure([import_row("card:1", "2026-08-10", 1000)], orders)
+    assert result["nearby_3_orders"]["unique"] == 1
+
+
+def test_date_window_simulation_for_10_14_21_and_30_days():
+    imports = [
+        import_row("card:1", "2026-08-20", 1000),
+        import_row("card:2", "2026-08-20", 2000),
+        import_row("card:3", "2026-08-20", 3000),
+        import_row("card:4", "2026-08-20", 4000),
+    ]
+    orders = [
+        amazon_row("o1", "2026-08-11", 1000),
+        amazon_row("o2", "2026-08-08", 2000),
+        amazon_row("o3", "2026-08-02", 3000),
+        amazon_row("o4", "2026-07-26", 4000),
+    ]
+    simulation = preview(imports, orders)["date_window_simulation"]
+    assert simulation["plus_minus_10_days"] == {"unique": 1, "ambiguous": 0, "unmatched": 3}
+    assert simulation["plus_minus_14_days"] == {"unique": 2, "ambiguous": 0, "unmatched": 2}
+    assert simulation["plus_minus_21_days"] == {"unique": 3, "ambiguous": 0, "unmatched": 1}
+    assert simulation["plus_minus_30_days"] == {"unique": 4, "ambiguous": 0, "unmatched": 0}
+
+
+def test_date_window_simulation_detects_ambiguity():
+    imports = [import_row("card:1", "2026-08-20", 1000)]
+    orders = [
+        amazon_row("o1", "2026-08-11", 1000),
+        amazon_row("o2", "2026-08-08", 1000),
+    ]
+    simulation = preview(imports, orders)["date_window_simulation"]
+    assert simulation["plus_minus_10_days"]["unique"] == 1
+    assert simulation["plus_minus_14_days"]["ambiguous"] == 1
+
+
+def test_adjustment_schema_distinguishes_confirmed_columns_from_note_inference():
+    orders = [amazon_row("o1", "2026-08-09", 1100, note="ポイント利用の可能性")]
+    result = preview([import_row("card:1", "2026-08-10", 1000)], orders)
+    evidence = result["amount_differences"]["amazon_csv_evidence"]
+    assert evidence["confirmed_dedicated_adjustment_columns"] == []
+    assert evidence["source_csv_extra_columns_observable"] is False
+    assert evidence["inferred_note_keyword_hits"]["ポイント"] == 1
+
+
+def test_repeated_amount_difference_and_rate_are_counted():
+    imports = [
+        import_row("card:1", "2026-08-10", 900),
+        import_row("card:2", "2026-08-12", 900),
+    ]
+    orders = [
+        amazon_row("o1", "2026-08-09", 1000),
+        amazon_row("o2", "2026-08-13", 1000),
+    ]
+    analysis = preview(imports, orders)["amount_differences"]
+    assert {"difference": 100, "count": 2} in analysis["repeated_amount_differences"]
+    assert {"rate": 10.0, "count": 2} in analysis["repeated_difference_rates_percent"]
+
+
+def test_date_direction_uses_order_date_to_card_date():
+    imports = [
+        import_row("card:1", "2026-08-20", 1000),
+        import_row("card:2", "2026-08-01", 2000),
+    ]
+    orders = [
+        amazon_row("o1", "2026-08-01", 1000),
+        amazon_row("o2", "2026-08-20", 2000),
+    ]
+    direction = preview(imports, orders)["date_direction"]
+    assert direction["amazon_order_before_card"] == 1
+    assert direction["card_before_amazon_order"] == 1
