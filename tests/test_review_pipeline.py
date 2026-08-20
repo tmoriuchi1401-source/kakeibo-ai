@@ -18,12 +18,17 @@ def test_review_extracts_only_actionable_states():
         row("a1","au PAY","2026-08-16","unclassified_aupay"),
         row("c1","au PAYカード","2026-08-15","unclassified_card"),
         row("c3","au PAYカード","2026-08-13","amazon_needs_review"),
+        row("p0","PayPay","2026-08-14","unclassified_paypay"),
+        row("ae1","au PAY","2026-08-16","auto_expense"),
+        row("ce1","au PAYカード","2026-08-15","auto_expense"),
+        row("p1","PayPay","2026-08-13","auto_expense"),
+        row("amz","au PAYカード","2026-08-12","needs_review_amazon_installment"),
         row("a2","au PAY","2026-08-14","matched_receipt"),
         row("c2","au PAYカード","2026-08-14","transfer_aupay_charge"),
         row("m1","Amazon","2026-08-14","canonical_amazon"),
     ]))
-    assert [x.transaction.import_id for x in items] == ["c3","r1","a1","c1"]
-    assert [x.priority for x in items] == ["高","高","中","中"]
+    assert [x.transaction.import_id for x in items] == ["c3","amz","r1"]
+    assert [x.priority for x in items] == ["高","高","高"]
     assert "Amazon" in items[0].recommendation
 
 
@@ -38,7 +43,9 @@ def test_ambiguous_duplicate_is_high_priority():
 def test_all_extracted_status_patterns_can_be_manually_applied():
     assert is_reviewable_status("needs_review_aupay_csv")
     assert is_reviewable_status("amazon_needs_review")
-    assert is_reviewable_status("unclassified_aupay")
+    assert not is_reviewable_status("unclassified_aupay")
+    assert not is_reviewable_status("unclassified_card")
+    assert not is_reviewable_status("unclassified_paypay")
     assert is_reviewable_status("amazon_unmatched")
     assert not is_reviewable_status("matched_receipt")
 
@@ -56,15 +63,17 @@ def test_combined_mobile_category_selection_takes_precedence():
 
 
 class FakeDB:
-    def __init__(self,category=("食費","食料品")):
+    def __init__(self,category=("食費","食料品"),source="au PAY",
+                 status="unclassified_aupay",import_id="a1"):
         self.category=category
+        self.source=source; self.status=status; self.import_id=import_id
         self.appended=[]; self.updated={}
 
     def get(self,rng):
         if rng=="取込データ!A2:L":
-            return [row("a1","au PAY","2026-08-16","unclassified_aupay")]
+            return [row(self.import_id,self.source,"2026-08-16",self.status)]
         if rng=="要確認!A2:O":
-            return [["a1","中","2026-08-16","au PAY","店舗",100,"unclassified_aupay",
+            return [[self.import_id,"中","2026-08-16",self.source,"店舗",100,self.status,
                      "","","支出として計上","",self.category[0],self.category[1],"メモ",""]]
         raise AssertionError(rng)
 
@@ -101,3 +110,13 @@ def test_manual_expense_accepts_combined_mobile_category():
     result=ReviewApprovalPipeline(db).apply()
     assert result["applied"]==1
     assert db.appended[0][5:7]==["食費","食料品"]
+
+
+def test_paypay_unclassified_can_be_manually_recorded_as_expense():
+    db=FakeDB(source="PayPay",status="unclassified_paypay",import_id="paypay:test-1")
+    result=ReviewApprovalPipeline(db).apply()
+
+    assert result["applied"]==1
+    assert db.appended[0][8]=="PayPay"
+    assert db.appended[0][10]=="paypay:test-1"
+    assert db.updated["取込データ"][0][1][8]=="manual_expense"

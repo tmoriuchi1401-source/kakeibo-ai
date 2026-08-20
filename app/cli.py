@@ -7,6 +7,7 @@ from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
 from .aupay_card_pipeline import AuPayCardPipeline
+from .paypay_pipeline import PayPayPipeline
 from .aupay_mail_pipeline import (
     AuPayMailPipeline,
     authorize_gmail,
@@ -23,6 +24,8 @@ from .maintenance import (
     backup_spreadsheet,
     cleanup_processed_receipts,
 )
+from .auto_expense import AutoExpensePipeline
+from .amazon_installment import AmazonInstallmentPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -45,6 +48,8 @@ def main():
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
     sub.add_parser("card-amazon-reclassify")
+    pp=sub.add_parser("paypay-preview"); pp.add_argument("csv")
+    pi=sub.add_parser("paypay-import"); pi.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
@@ -60,6 +65,10 @@ def main():
     sub.add_parser("review-apply")
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
+    sub.add_parser("auto-expense-preview")
+    sub.add_parser("auto-expense")
+    sub.add_parser("amazon-installment-preview")
+    sub.add_parser("amazon-installment-apply")
     sub.add_parser("drive-receipts")
     sub.add_parser("backup")
     dba=sub.add_parser("drive-backup-authorize")
@@ -101,6 +110,10 @@ def main():
         s,db,_=make(False); print(AuPayCardPipeline(db).import_csv(args.csv))
     elif args.cmd=="card-amazon-reclassify":
         s,db,_=make(False); print(AuPayCardPipeline(db).reclassify_amazon())
+    elif args.cmd=="paypay-preview":
+        print(PayPayPipeline().preview(args.csv))
+    elif args.cmd=="paypay-import":
+        s,db,_=make(False); print(PayPayPipeline(db).import_csv(args.csv))
     elif args.cmd=="aupay-eml":
         s,db,_=make(False); print(AuPayMailPipeline(db).import_notice(parse_eml(args.eml)))
     elif args.cmd=="aupay-gmail":
@@ -130,6 +143,14 @@ def main():
         s,db,_=make(False); print(ExpenseViewPipeline(db).preview())
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
+    elif args.cmd=="auto-expense-preview":
+        s,db,_=make(False); print(AutoExpensePipeline(db).preview())
+    elif args.cmd=="auto-expense":
+        s,db,_=make(False); print(AutoExpensePipeline(db).apply())
+    elif args.cmd=="amazon-installment-preview":
+        s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
+    elif args.cmd=="amazon-installment-apply":
+        s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)

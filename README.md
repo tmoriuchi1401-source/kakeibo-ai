@@ -171,6 +171,29 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 
 ## スマホ用「要確認」シート
 
+未分類のPayPay・au PAY・au PAYカードの明確な支払いは、先に書き込みなしで
+件数を確認できる:
+
+```bash
+python -m app.cli auto-expense-preview
+```
+
+確認後に `python -m app.cli auto-expense` を実行すると、明確な支払いを
+`その他 / 未分類` または限定的な高信頼ルールのカテゴリで支出化する。
+Amazon分割払い、返金・取消、資金移動候補、既存レシート候補は自動計上しない。
+後から一意に一致するレシートが取り込まれた場合は `reconcile` がレシートを
+正本とし、自動支出行を `duplicate_excluded` にする。
+
+Amazon baseline注文とカードのAmazon分割払いは、次の専用previewで照合できる:
+
+```bash
+python -m app.cli amazon-installment-preview
+```
+
+同一会員・同一分割表記の未解決行全体と、単一商品のbaseline注文が期間・合計金額で
+双方一意に一致する場合だけ、`amazon-installment-apply` でAmazon商品を正本として
+支出化する。分割払い側は `matched_amazon_installment` とし、別支出を作らない。
+
 Google Sheetsアプリでは「要確認」シートだけを開けば、対応が必要な取引を確認できる。
 このシートは自動生成専用で、3時間ごとのGitHub Actions実行時に最新状態へ更新される。
 日付列はスマホ表示を含め `yyyy/mm/dd` 形式に統一する。

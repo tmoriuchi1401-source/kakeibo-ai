@@ -55,6 +55,102 @@ def test_two_payments_cannot_claim_one_receipt():
     assert all(x.status == "needs_review_duplicate" for x in result)
 
 
+def test_paypay_matches_receipt_within_one_day():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店 本店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert len(result) == 1
+    assert result[0].status == "matched_receipt"
+    assert result[0].target_id == "receipt:r1"
+
+
+def test_paypay_multiple_receipt_candidates_need_review():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("receipt:r2", "receipt", "2026-08-17", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert result[0].status == "needs_review_duplicate"
+    assert set(result[0].candidate_ids) == {"receipt:r1", "receipt:r2"}
+
+
+def test_paypay_does_not_match_receipt_more_than_one_day_apart():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-15", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-17", "テスト商店", 550,
+            "unclassified_paypay"),
+    ])
+    assert result == []
+
+
+def test_auto_expense_matches_later_receipt():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-16", "テスト商店", 550, "auto_expense"),
+    ])
+    assert len(result) == 1
+    assert result[0].status == "matched_receipt"
+
+
+def test_auto_expense_with_multiple_receipts_needs_review():
+    result = decisions([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("receipt:r2", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-16", "テスト商店", 550, "auto_expense"),
+    ])
+    assert result[0].status == "needs_review_duplicate"
+
+
+class ApplyDB:
+    def __init__(self, rows):
+        self.rows = rows
+        self.updated = {}
+
+    def get(self, rng):
+        if rng == "取込データ!A2:L":
+            return self.rows
+        if rng == "店舗!A2:C":
+            return []
+        raise AssertionError(rng)
+
+    def ensure_expense_status_column(self): pass
+    def update_rows(self, sheet, rows): self.updated.setdefault(sheet, []).extend(rows)
+    def expense_rows_for_import(self, import_id):
+        if import_id == "paypay:1":
+            return [(2, ["M-1", "2026-08-16", "テスト商店", "自動計上", 550,
+                         "その他", "未分類", "PayPay", "PayPay", "", import_id, "", "active"])]
+        return []
+
+
+def test_apply_excludes_auto_expense_after_receipt_match():
+    from app.reconciliation import ReconciliationPipeline
+    db = ApplyDB([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-16", "テスト商店", 550, "auto_expense"),
+    ])
+    result = ReconciliationPipeline(db).apply()
+    assert result["expenses_excluded"] == 1
+    assert db.updated["支出明細"][0][1][12] == "duplicate_excluded"
+    assert db.updated["取込データ"][0][1][8] == "matched_receipt"
+
+
+def test_apply_does_not_exclude_auto_expense_for_ambiguous_receipts():
+    from app.reconciliation import ReconciliationPipeline
+    db = ApplyDB([
+        row("receipt:r1", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("receipt:r2", "receipt", "2026-08-16", "テスト商店", 550, "解析済"),
+        row("paypay:1", "PayPay", "2026-08-16", "テスト商店", 550, "auto_expense"),
+    ])
+    result = ReconciliationPipeline(db).apply()
+    assert result["needs_review"] == 1
+    assert result["expenses_excluded"] == 0
+    assert "支出明細" not in db.updated
+    assert db.updated["取込データ"][0][1][8] == "needs_review_duplicate"
+
+
 def test_card_charge_and_amazon_states_are_excluded():
     result = decisions([
         row("receipt:r1", "receipt", "2026-08-16", "Amazon.co.jp", 522, "解析済"),

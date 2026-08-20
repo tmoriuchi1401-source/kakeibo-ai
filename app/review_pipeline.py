@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 
+from .auto_expense import expense_id
 from .reconciliation import ImportTransaction, parse_import_rows
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 
@@ -19,7 +19,7 @@ def is_reviewable_status(status: str) -> bool:
         status == "要確認"
         or status.startswith("needs_review")
         or status.endswith("_needs_review")
-        or status in {"unclassified_aupay", "unclassified_card", "amazon_unmatched"}
+        or status == "amazon_unmatched"
     )
 
 
@@ -40,16 +40,16 @@ def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
             priority="高"
             if status == "amazon_needs_review":
                 recommendation="Amazon注文との重複候補を確認"
+            elif status == "needs_review_amazon_installment":
+                recommendation="Amazon注文・元利用との二重計上を確認"
+            elif status == "needs_review_refund":
+                recommendation="返金・取消と元取引の扱いを確認"
+            elif status == "needs_review_transfer":
+                recommendation="チャージ・送金・資金移動かを確認"
             elif tx.source == "receipt":
                 recommendation="レシート画像・合計・カテゴリを確認"
             else:
                 recommendation="重複候補を確認し、統合先を選択"
-        elif status == "unclassified_aupay":
-            priority="中"
-            recommendation="レシート有無とカテゴリを確認"
-        elif status == "unclassified_card":
-            priority="中"
-            recommendation="レシート・Amazon・au PAYとの重複を確認"
         elif status == "amazon_unmatched":
             priority="中"
             recommendation="Amazon注文履歴に一致なし。注文履歴の不足または請求内訳を確認"
@@ -108,9 +108,7 @@ class ReviewApprovalPipeline:
 
     def __init__(self,db:SheetsDB): self.db=db
 
-    @staticmethod
-    def _expense_id(import_id:str)->str:
-        return "M-"+hashlib.sha256(import_id.encode("utf-8")).hexdigest()[:24]
+    _expense_id = staticmethod(expense_id)
 
     def apply(self)->dict:
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
@@ -132,7 +130,10 @@ class ReviewApprovalPipeline:
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
-            elif not is_reviewable_status(tx.status):
+            elif not (
+                is_reviewable_status(tx.status)
+                or tx.status in {"unclassified_aupay", "unclassified_card", "unclassified_paypay"}
+            ):
                 error=f"既に処理済みです: {tx.status}"
             if error:
                 row[14]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue
