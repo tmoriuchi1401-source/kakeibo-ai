@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import app.drive_paypay as drive_paypay
 from app.drive_paypay import DrivePayPayPipeline, PROCESSED_PROPERTY
 from app.settings import Settings
 
@@ -112,6 +113,23 @@ def test_invalid_csv_does_not_stop_other_files():
     assert result["imported_files"] == 1
     assert result["failed_files"] == 1
     assert len(db.rows) == 1
+
+
+def test_temporary_csv_is_removed_when_parsing_raises(monkeypatch):
+    created = []
+    original = drive_paypay.tempfile.NamedTemporaryFile
+
+    def tracked_temporary_file(*args, **kwargs):
+        handle = original(*args, **kwargs)
+        created.append(Path(handle.name))
+        return handle
+
+    monkeypatch.setattr(drive_paypay.tempfile, "NamedTemporaryFile", tracked_temporary_file)
+    result = pipeline([drive_file()], {"f1": b"not,paypay,csv\n"}).preview()
+
+    assert result["processable_csvs"] == 0
+    assert created
+    assert all(not path.exists() for path in created)
 
 
 def test_processed_property_skips_file_without_deleting_it():

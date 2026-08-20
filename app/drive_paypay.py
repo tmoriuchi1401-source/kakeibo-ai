@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 import tempfile
 
 from .drive_receipts import normalize_folder_id
@@ -9,6 +11,19 @@ from .paypay_pipeline import PayPayPipeline
 
 
 PROCESSED_PROPERTY = "kakeiboPayPayProcessedAt"
+
+
+@contextmanager
+def _temporary_csv(data: bytes):
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as handle:
+            path = handle.name
+            handle.write(data)
+        yield path
+    finally:
+        if path is not None:
+            Path(path).unlink(missing_ok=True)
 
 
 def is_csv_file(file: dict) -> bool:
@@ -53,10 +68,8 @@ class DrivePayPayPipeline:
             return result, None
         try:
             data = self.downloader(file["id"])
-            with tempfile.NamedTemporaryFile(suffix=".csv") as handle:
-                handle.write(data)
-                handle.flush()
-                preview = PayPayPipeline().preview(handle.name, sample_limit=0)["summary"]
+            with _temporary_csv(data) as path:
+                preview = PayPayPipeline().preview(path, sample_limit=0)["summary"]
             result.update({
                 "rows": preview["rows"], "payments": preview["payments"],
                 "payment_total": preview["payment_total"], "processable": True,
@@ -103,10 +116,8 @@ class DrivePayPayPipeline:
                 details.append(inspected)
                 continue
             try:
-                with tempfile.NamedTemporaryFile(suffix=".csv") as handle:
-                    handle.write(data)
-                    handle.flush()
-                    imported = PayPayPipeline(self.db).import_csv(handle.name)
+                with _temporary_csv(data) as path:
+                    imported = PayPayPipeline(self.db).import_csv(path)
                 self._mark_processed(file)
                 inspected["result"] = "imported"
                 inspected["import"] = imported
