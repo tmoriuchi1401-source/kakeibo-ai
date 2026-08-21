@@ -34,6 +34,7 @@ from .amazon_unmatched import (
     load_amazon_unmatched_input,
 )
 from .amazon_email import parse_amazon_email
+from .amazon_shipping import AmazonShippingBackfillPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -53,6 +54,8 @@ def main():
     an=sub.add_parser("analyze"); an.add_argument("image")
     a=sub.add_parser("amazon"); a.add_argument("csv")
     ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
+    asp=sub.add_parser("amazon-shipping-backfill-preview"); asp.add_argument("csv")
+    asa=sub.add_parser("amazon-shipping-backfill"); asa.add_argument("csv")
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
     sub.add_parser("card-amazon-reclassify")
@@ -122,6 +125,10 @@ def main():
         s,db,ai=make(); print(AmazonPipeline(db,ai).import_csv(args.csv))
     elif args.cmd=="amazon-baseline":
         s,db,_=make(False); print(AmazonPipeline(db,None).import_csv(args.csv,baseline=True))
+    elif args.cmd=="amazon-shipping-backfill-preview":
+        s,db,_=make(False); print(AmazonShippingBackfillPipeline(db).preview(args.csv))
+    elif args.cmd=="amazon-shipping-backfill":
+        s,db,_=make(False); print(AmazonShippingBackfillPipeline(db).apply(args.csv))
     elif args.cmd=="card-preview":
         s,db,_=make(False); print(AuPayCardPipeline(db).preview(args.csv))
     elif args.cmd=="card-import":

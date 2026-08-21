@@ -39,6 +39,8 @@ def write_csv(path):
         "Original Quantity": 1,
         "Total Amount": "1,200",
         "Payment Method Type": "カード",
+        "Ship Date": "2026-08-18T01:00:00Z",
+        "Carrier Name & Tracking Number": "not-stored",
     }]).to_csv(path, index=False)
 
 
@@ -58,3 +60,6 @@ def test_incremental_amazon_creates_item_expense_and_order_import(tmp_path):
     assert imported[0] == "amazon:ORDER-1"
     assert imported[6] == 1200
     assert imported[8] == "canonical_amazon"
+    amazon = db.appended["Amazon注文"][0]
+    assert amazon[13:] == ["2026-08-18", 1]
+    assert "not-stored" not in amazon

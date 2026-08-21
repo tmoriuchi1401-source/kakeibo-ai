@@ -7,15 +7,17 @@ from app.amazon_manual_matching import (
     candidate_id,
     existing_manual_usage,
     find_amazon_candidates,
+    major_category_summary,
     validate_manual_batch,
 )
 from app.reconciliation import parse_import_rows
 
 
 def amazon_row(order_id, asin, date, amount, *, name="商品", category="食費",
-               method="Visa", kind="baseline", data_hash="hash"):
+               method="Visa", kind="baseline", data_hash="hash", ship_date="",
+               shipment_count=0):
     return [f"{order_id}|{asin}", order_id, asin, date, name, 1, amount, method,
-            category, "小分類", kind, data_hash, ""]
+            category, "小分類", kind, data_hash, "", ship_date, shipment_count]
 
 
 def card(import_id="card:1", *, date="2026-08-20", amount=1000,
@@ -42,8 +44,26 @@ def test_orders_are_aggregated_by_order_id():
     assert order.order_amount == 1000
     assert order.item_count == 2
     assert order.major_categories == ("日用品", "食費")
-    assert order.short_item_summary.endswith("ほか1件")
-    assert len(order.short_item_summary) < 40
+    assert " / " in order.short_item_summary
+    assert len(order.short_item_summary) < 45
+
+
+def test_summary_shows_at_most_two_products_and_remaining_count():
+    order = aggregate_amazon_orders([
+        amazon_row("ORDER", "A1", "2026-08-18", 100, name="商品名A" * 8),
+        amazon_row("ORDER", "A2", "2026-08-18", 100, name="商品名B" * 8),
+        amazon_row("ORDER", "A3", "2026-08-18", 100, name="商品名C" * 8),
+        amazon_row("ORDER", "A4", "2026-08-18", 100, name="商品名D" * 8),
+    ])[0]
+    assert order.short_item_summary.count(" / ") == 1
+    assert order.short_item_summary.endswith("ほか2点")
+
+
+def test_major_category_summary_handles_single_multiple_and_unclassified():
+    assert major_category_summary(("日用品",)) == "日用品"
+    assert major_category_summary(("日用品", "食品")) == "日用品ほか"
+    assert major_category_summary(()) == "未分類"
+    assert major_category_summary(("未分類",)) == "未分類"
 
 
 def test_search_uses_previous_thirty_days_and_returns_top_three_and_total():
@@ -77,6 +97,25 @@ def test_candidate_id_is_stable_opaque_and_independent_of_order_details():
                       short_item_summary="変更後")
     after = find_amazon_candidates(card(), [changed]).candidates[0]
     assert before.candidate_id == after.candidate_id
+
+
+def test_shipping_information_is_optional_and_does_not_change_candidate_identity():
+    tx = card(date="2026-08-20")
+    without = aggregate_amazon_orders([
+        amazon_row("ORDER-SHIP", "A1", "2026-08-18", 1000),
+    ])[0]
+    with_shipping = aggregate_amazon_orders([
+        amazon_row("ORDER-SHIP", "A1", "2026-08-18", 1000,
+                   ship_date="2026-08-20", shipment_count=1),
+    ])[0]
+    first = find_amazon_candidates(tx, [without]).candidates[0]
+    second = find_amazon_candidates(tx, [with_shipping]).candidates[0]
+    assert first.ship_date is None
+    assert first.shipping_date_difference_days is None
+    assert second.ship_date == "2026-08-20"
+    assert second.shipping_date_difference_days == 0
+    assert second.shipment_count == 1
+    assert first.candidate_id == second.candidate_id
 
 
 def test_non_target_card_states_and_refund_installment_are_excluded():

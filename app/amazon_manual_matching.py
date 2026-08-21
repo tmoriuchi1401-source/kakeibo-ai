@@ -23,6 +23,8 @@ class AmazonOrder:
     payment_method: str
     source_kind: str
     order_fingerprint: str
+    ship_dates: tuple[str, ...]
+    shipment_count: int
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,9 @@ class AmazonManualCandidate:
     payment_method: str
     source_kind: str
     order_fingerprint: str
+    ship_date: str | None
+    shipping_date_difference_days: int | None
+    shipment_count: int
 
 
 @dataclass(frozen=True)
@@ -92,19 +97,29 @@ def _stable_hash(value: object) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def _short_summary(names: list[str], item_count: int, limit: int = 24) -> str:
-    first = next((name for name in names if name), "商品")
-    shortened = first if len(first) <= limit else first[:limit] + "…"
-    return shortened + (f" ほか{item_count - 1}件" if item_count > 1 else "")
+def _short_summary(names: list[str], item_count: int, per_item_limit: int = 18) -> str:
+    present = [name for name in names if name]
+    shown = present[:2] or ["商品"]
+    shortened = [name if len(name) <= per_item_limit else name[:per_item_limit] + "…" for name in shown]
+    summary = " / ".join(shortened)
+    remaining = max(0, item_count - len(shown))
+    return summary + (f" ほか{remaining}点" if remaining else "")
+
+
+def major_category_summary(categories: tuple[str, ...]) -> str:
+    classified = [value for value in categories if value and value not in {"未分類", "その他"}]
+    if not classified:
+        return "未分類"
+    return classified[0] + ("ほか" if len(classified) < len(categories) or len(classified) > 1 else "")
 
 
 def aggregate_amazon_orders(rows: list[list]) -> list[AmazonOrder]:
     grouped: dict[str, list[list]] = {}
     for raw in rows:
-        row = list(raw) + [""] * max(0, 13 - len(raw))
+        row = list(raw) + [""] * max(0, 15 - len(raw))
         order_id = _text(row[1])
         if order_id:
-            grouped.setdefault(order_id, []).append(row[:13])
+            grouped.setdefault(order_id, []).append(row[:15])
 
     orders = []
     for order_id, items in grouped.items():
@@ -113,6 +128,8 @@ def aggregate_amazon_orders(rows: list[list]) -> list[AmazonOrder]:
         categories = tuple(sorted({_text(row[8]) for row in items if _text(row[8])}))
         methods = sorted({_text(row[7]) for row in items if _text(row[7])})
         kinds = sorted({_text(row[10]) for row in items if _text(row[10])})
+        ship_dates = tuple(sorted({_text(row[13]) for row in items if _text(row[13])}))
+        shipment_counts = [_money(row[14]) for row in items if _text(row[14])]
         item_count = len(items)
         fingerprint_data = {
             "order_id": order_id,
@@ -132,6 +149,8 @@ def aggregate_amazon_orders(rows: list[list]) -> list[AmazonOrder]:
             payment_method=" / ".join(methods),
             source_kind=kinds[0] if len(kinds) == 1 else "mixed" if kinds else "unknown",
             order_fingerprint=_stable_hash(fingerprint_data),
+            ship_dates=ship_dates,
+            shipment_count=max(shipment_counts,default=len(ship_dates)),
         ))
     return sorted(orders, key=lambda order: (order.order_date, order.order_id))
 
@@ -160,6 +179,15 @@ def _candidate(card: ImportTransaction, order: AmazonOrder) -> AmazonManualCandi
     days = (card_date - order_date).days if card_date and order_date else 999
     difference = order.order_amount - card.amount
     rate = abs(difference) / card.amount if card.amount else math.inf
+    dated_shipments = [(value,_date(value)) for value in order.ship_dates]
+    dated_shipments = [(value,value_date) for value,value_date in dated_shipments if value_date]
+    selected_ship = min(
+        dated_shipments,
+        key=lambda item: abs((card_date-item[1]).days) if card_date else 999,
+        default=None,
+    )
+    ship_date = selected_ship[0] if selected_ship else None
+    shipping_days = (card_date-selected_ship[1]).days if card_date and selected_ship else None
     return AmazonManualCandidate(
         candidate_id=candidate_id(card.import_id, order.order_id),
         card_import_id=card.import_id,
@@ -177,6 +205,9 @@ def _candidate(card: ImportTransaction, order: AmazonOrder) -> AmazonManualCandi
         payment_method=order.payment_method,
         source_kind=order.source_kind,
         order_fingerprint=order.order_fingerprint,
+        ship_date=ship_date,
+        shipping_date_difference_days=shipping_days,
+        shipment_count=order.shipment_count,
     )
 
 
@@ -284,8 +315,8 @@ def audit_information(candidate: AmazonManualCandidate) -> dict:
 
 
 def candidate_from_storage_row(raw: list) -> AmazonManualCandidate:
-    row = list(raw) + [""] * max(0, 19 - len(raw))
-    row = row[:19]
+    row = list(raw) + [""] * max(0, 22 - len(raw))
+    row = row[:22]
     if not row[0] or not row[1] or not row[2]:
         raise ValueError("stored candidate is missing required identity fields")
     try:
@@ -306,6 +337,9 @@ def candidate_from_storage_row(raw: list) -> AmazonManualCandidate:
             payment_method=str(row[14]),
             source_kind=str(row[15]),
             order_fingerprint=str(row[16]),
+            ship_date=str(row[19]) or None,
+            shipping_date_difference_days=(int(float(row[20])) if str(row[20]).strip() else None),
+            shipment_count=(int(float(row[21])) if str(row[21]).strip() else 0),
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("stored candidate contains invalid numeric fields") from exc

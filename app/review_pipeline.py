@@ -11,6 +11,7 @@ from .amazon_manual_matching import (
     candidate_from_storage_row,
     find_amazon_candidates,
     is_manual_match_target,
+    major_category_summary,
     validate_manual_batch,
 )
 from .aupay_card_pipeline import is_amazon
@@ -92,13 +93,24 @@ class ReviewPipeline:
     def _selection_label(candidate:AmazonManualCandidate)->str:
         date=candidate.order_date[5:].replace("-","/") if len(candidate.order_date)>=10 else candidate.order_date
         difference=f"{candidate.amount_difference:+,}円"
-        summary=candidate.short_item_summary.replace("\n"," ")[:30]
+        summary=candidate.short_item_summary.replace("\n"," ")[:48]
+        if candidate.ship_date:
+            ship_date=candidate.ship_date[5:].replace("-","/") if len(candidate.ship_date)>=10 else candidate.ship_date
+            shipping_days=candidate.shipping_date_difference_days
+            if shipping_days==0: shipping=f"{ship_date}発送・同日"
+            elif shipping_days is not None and shipping_days>0: shipping=f"{ship_date}発送・{shipping_days}日前"
+            elif shipping_days is not None: shipping=f"{ship_date}発送・{abs(shipping_days)}日後"
+            else: shipping=f"{ship_date}発送"
+            if candidate.shipment_count>1: shipping+=f"・{candidate.shipment_count}発送"
+        else:
+            shipping="発送日不明"
+        category=major_category_summary(candidate.major_categories)
         return (f"#{candidate.candidate_id[-8:]}｜{date}｜{candidate.order_amount:,}円｜"
-                f"差{difference}｜{candidate.date_difference_days}日前｜"
-                f"{candidate.item_count}商品｜{summary}")
+                f"差{difference}｜注文{candidate.date_difference_days}日前｜{shipping}｜"
+                f"{category}｜{summary}")
 
     def _candidate_rows(self,transactions:list[ImportTransaction]):
-        orders=aggregate_amazon_orders(self.db.get("Amazon注文!A2:M"))
+        orders=aggregate_amazon_orders(self.db.get("Amazon注文!A2:O"))
         generated=[]
         for tx in transactions:
             result=find_amazon_candidates(tx,orders)
@@ -113,6 +125,12 @@ class ReviewPipeline:
             "candidates_generated":sum(len(result.candidates) for _,result in targets),
             "rows_with_candidates":sum(bool(result.candidates) for _,result in targets),
             "rows_without_candidates":sum(not result.candidates for _,result in targets),
+            "amazon_candidates_with_ship_date":sum(
+                bool(candidate.ship_date) for _,result in targets for candidate in result.candidates
+            ),
+            "amazon_candidates_without_ship_date":sum(
+                not candidate.ship_date for _,result in targets for candidate in result.candidates
+            ),
         }
 
     def refresh(self)->dict:
@@ -127,13 +145,13 @@ class ReviewPipeline:
                   for r in self.db.get("要確認!A2:T") if r}
         old_candidates={}
         old_labels={}
-        for raw in self.db.get("Amazon照合候補!A2:S"):
+        for raw in self.db.get("Amazon照合候補!A2:V"):
             row=list(raw)+[""]*max(0,19-len(raw)); row=row[:19]
             if row[0]:
                 old_candidates[str(row[0])]={"fingerprint":str(row[16]),"label":str(row[17])}
                 if row[17]: old_labels[str(row[17])]=str(row[0])
         self.db.clear("要確認!A2:T")
-        self.db.clear("Amazon照合候補!A2:S")
+        self.db.clear("Amazon照合候補!A2:V")
         rows=[]
         candidate_rows=[]
         validation_options={}
@@ -156,6 +174,9 @@ class ReviewPipeline:
                     candidate.date_difference_days,candidate.item_count,candidate.short_item_summary,
                     " / ".join(candidate.major_categories),candidate.payment_method,
                     candidate.source_kind,candidate.order_fingerprint,label,generated_at,
+                    candidate.ship_date or "",candidate.shipping_date_difference_days
+                    if candidate.shipping_date_difference_days is not None else "",
+                    candidate.shipment_count,
                 ])
             summary="\n".join(f"{index}. {label}" for index,label in enumerate(labels,start=1))
             selected_label=str(old[17]); selected_id=str(old[18])
@@ -173,6 +194,7 @@ class ReviewPipeline:
                 elif previous and previous["fingerprint"]!=current.order_fingerprint:
                     selection_state="選択無効: 注文内容変更（要再選択）"
                 else:
+                    selected_label=self._selection_label(current)
                     selection_state="選択済み"
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                          tx.status,item.recommendation,tx.note]+manual+

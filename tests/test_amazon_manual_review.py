@@ -5,9 +5,10 @@ def import_row(import_id, source, date, amount, status, *, merchant="AMAZON.CO.J
     return [import_id, "", source, import_id, date, merchant, amount, "Visa", status, "", "", note]
 
 
-def amazon_row(order_id, date, amount, *, asin="ASIN", name="商品", kind="baseline", data_hash="h"):
+def amazon_row(order_id, date, amount, *, asin="ASIN", name="商品", kind="baseline", data_hash="h",
+               ship_date="", shipment_count=0):
     return [f"{order_id}|{asin}", order_id, asin, date, name, 1, amount, "Visa",
-            "日用品", "雑貨", kind, data_hash, ""]
+            "日用品", "雑貨", kind, data_hash, "", ship_date, shipment_count]
 
 
 class MemoryDB:
@@ -32,9 +33,11 @@ class MemoryDB:
         mapping = {
             "取込データ!A2:L": "取込データ",
             "Amazon注文!A2:M": "Amazon注文",
+            "Amazon注文!A2:O": "Amazon注文",
             "要確認!A2:T": "要確認",
             "要確認!A2:O": "要確認",
             "Amazon照合候補!A2:S": "Amazon照合候補",
+            "Amazon照合候補!A2:V": "Amazon照合候補",
         }
         if rng not in mapping:
             raise AssertionError(rng)
@@ -111,6 +114,34 @@ def test_selection_label_maps_to_candidate_id_and_survives_refresh():
     assert refreshed[19] == "選択済み"
     assert chosen_id not in chosen_label
     assert chosen_label.startswith("#" + chosen_id[-8:])
+
+
+def test_selection_label_adds_shipping_category_and_unknown_shipping():
+    db = MemoryDB()
+    db.sheets["Amazon注文"][0][13:] = ["2026-08-20", 1]
+    db.sheets["Amazon注文"][1][13:] = ["2026-08-12", 1]
+    ReviewPipeline(db).refresh()
+    labels = [row[17] for row in db.sheets["Amazon照合候補"]]
+    assert any("8/20発送・同日" in label and "日用品" in label for label in labels)
+    assert any("8/12発送・8日前" in label for label in labels)
+    assert any("発送日不明" in label for label in labels)
+
+
+def test_selected_candidate_keeps_id_and_adopts_new_label_after_shipping_backfill():
+    db = MemoryDB()
+    ReviewPipeline(db).refresh()
+    candidate = db.sheets["Amazon照合候補"][0]
+    old_label, chosen_id = candidate[17], candidate[0]
+    row = review_row(db, "card:1")
+    row[17], row[18] = old_label, chosen_id
+    db.sheets["Amazon注文"][0][13:] = ["2026-08-20", 1]
+
+    ReviewPipeline(db).refresh()
+    refreshed = review_row(db, "card:1")
+    assert refreshed[18] == chosen_id
+    assert refreshed[17] != old_label
+    assert "8/20発送・同日" in refreshed[17]
+    assert refreshed[19] == "選択済み"
 
 
 def test_deleted_candidate_is_not_reassigned_to_another_order():

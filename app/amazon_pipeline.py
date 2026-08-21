@@ -30,6 +30,24 @@ def load_amazon_rows(path:str):
                          + dup.head(5).to_dict(orient="records").__repr__())
     return df
 
+
+def shipping_fields(df:pd.DataFrame)->dict[str,tuple[str,int]]:
+    """Return per-item ship date and per-order shipment count without retaining tracking IDs."""
+    groups:dict[str,set[tuple[str,str]]]={}
+    for _,r in df.iterrows():
+        order_id=str(r["Order ID"])
+        ship_date=date_ymd(r.get("Ship Date",""))
+        tracking="" if pd.isna(r.get("Carrier Name & Tracking Number","")) else str(r.get("Carrier Name & Tracking Number","")).strip()
+        if ship_date or tracking:
+            groups.setdefault(order_id,set()).add((ship_date,tracking))
+    counts={order_id:len(values) for order_id,values in groups.items()}
+    return {
+        f"{str(r['Order ID'])}|{str(r['ASIN'])}":(
+            date_ymd(r.get("Ship Date","")),counts.get(str(r["Order ID"]),0),
+        )
+        for _,r in df.iterrows()
+    }
+
 class AmazonPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI|None):
         self.db=db
@@ -53,6 +71,7 @@ class AmazonPipeline:
 
     def import_csv(self,path:str,batch_size:int=20,baseline:bool=False):
         df=load_amazon_rows(path)
+        shipping=shipping_fields(df)
         idx=self.db.amazon_index()
         baseline_keys=self.db.amazon_baseline_keys()
         master=self.db.product_master()
@@ -83,7 +102,7 @@ class AmazonPipeline:
                 asin=str(r["ASIN"])
                 out=[key,str(r["Order ID"]),asin,date_ymd(r["Order Date"]),str(r["Product Name"]),
                      float(r["Original Quantity"]),money(r["Total Amount"]),str(r["Payment Method Type"]),
-                     "","", "baseline",h,now_jst_string()]
+                     "","", "baseline",h,now_jst_string(),*shipping.get(key,("",0))]
                 if kind=="new":
                     new_rows.append(out)
                 else:
@@ -141,7 +160,8 @@ class AmazonPipeline:
             baseline_update=kind=="updated" and key in baseline_keys
             out=[key,str(r["Order ID"]),asin,date_ymd(r["Order Date"]),str(r["Product Name"]),
                  float(r["Original Quantity"]),money(r["Total Amount"]),str(r["Payment Method Type"]),
-                 maj,minr,"baseline" if baseline_update else "incremental",h,now_jst_string()]
+                 maj,minr,"baseline" if baseline_update else "incremental",h,now_jst_string(),
+                 *shipping.get(key,("",0))]
             if kind=="new":
                 new_rows.append(out)
             else:
