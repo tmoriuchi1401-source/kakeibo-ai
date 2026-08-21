@@ -313,3 +313,70 @@ def test_html_only_candidate_does_not_output_value_or_url():
     assert "987654" not in serialized
     assert "https://" not in serialized
     assert "private" not in serialized
+
+
+def test_parent_summary_table_and_adjacent_label_are_transaction_likely():
+    result = diagnose_amazon_email_money_context(html_mail(f"""
+<table>
+  <tr><td>注文番号 {ORDER_ID}</td></tr>
+  <tr><td>注文合計</td></tr>
+  <tr><td>¥987654</td></tr>
+</table>
+"""))
+    assert result["transaction_likely_count"] == 1
+    assert result["adjacent_row_keywords"]["previous"]["transaction"] is True
+    assert "standalone_amount" in result["placement_patterns"]
+    assert result["parent_table_row_count_bands"] == {"2-5": 1}
+
+
+def test_one_level_parent_table_contributes_order_context():
+    result = diagnose_amazon_email_money_context(html_mail(f"""
+<table><tr><td>注文番号 {ORDER_ID}</td></tr><tr><td>
+  <table><tr><td>注文合計</td><td>¥987654</td></tr></table>
+</td></tr></table>
+"""))
+    assert result["transaction_likely_count"] == 1
+    assert "same_block" in result["order_id_proximity"]
+    assert "summary_total" in result["placement_patterns"]
+
+
+def test_product_table_images_links_and_multiple_prices_are_advertisement_likely():
+    result = diagnose_amazon_email_money_context(html_mail("""
+<table>
+  <tr><td>おすすめ商品</td></tr>
+  <tr><td><a href="https://amazon.co.jp/dp/B000000001?secret=yes"><img src="private1">商品A</a></td><td>¥987654</td></tr>
+  <tr><td><a href="https://amazon.co.jp/dp/B000000002?secret=yes"><img src="private2">商品B</a></td><td>¥123456</td></tr>
+</table>
+"""))
+    assert result["advertisement_likely_count"] == 2
+    assert result["message_classification"] == "advertisement_prices_only"
+    assert result["adjacent_row_keywords"]["previous"]["advertisement"] is True
+    assert "amazon_product_page" in result["link_context_categories"]
+    assert result["image_count_bands"] == {"2-5": 2}
+    assert result["linked_image_count_bands"] == {"2-5": 2}
+    assert "product_card_price" in result["placement_patterns"]
+    assert "multi_price_table" not in result["placement_patterns"]
+    serialized = repr(result)
+    assert "secret=yes" not in serialized
+    assert "private1" not in serialized
+    assert "987654" not in serialized
+
+
+def test_parent_table_link_categories_are_anonymized():
+    result = diagnose_amazon_email_money_context(html_mail("""
+<table><tr><td><a href="https://amazon.co.jp/gp/your-account/order-details?secret=1">注文詳細</a></td></tr>
+<tr><td>ご請求</td><td>¥987654</td></tr></table>
+"""))
+    assert result["transaction_likely_count"] == 1
+    assert "order_details" in result["link_context_categories"]
+    assert "summary_total" in result["placement_patterns"]
+    assert "secret=1" not in repr(result)
+
+
+def test_mixed_structural_signals_remain_ambiguous():
+    result = diagnose_amazon_email_money_context(html_mail("""
+<table><tr><td>ご請求 おすすめ商品
+<a href="https://amazon.co.jp/dp/B000000001"><img src="x">¥987654</a></td></tr></table>
+"""))
+    assert result["ambiguous_count"] == 1
+    assert result["message_classification"] == "inconclusive"

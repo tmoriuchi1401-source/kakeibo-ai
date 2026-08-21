@@ -80,36 +80,63 @@ class _HTMLText(HTMLParser):
 class _HTMLContext(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.rows: list[dict] = []
-        self._row: dict | None = None
-        self._cell: list[str] | None = None
+        self.tables: list[dict] = []
+        self._tables: list[dict] = []
+        self._rows: list[dict] = []
+        self._cells: list[list[str]] = []
+        self._link_depth = 0
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = dict(attrs)
-        if tag == "tr":
-            self._row = {"parts": [], "cells": [], "links": [], "image": False}
-        elif tag in {"td", "th"} and self._row is not None:
-            self._cell = []
-        elif tag == "a" and self._row is not None and attributes.get("href"):
-            self._row["links"].append(attributes["href"])
-        elif tag == "img" and self._row is not None:
-            self._row["image"] = True
+        if tag == "table":
+            table = {
+                "rows": [], "links": [], "image_count": 0, "linked_image_count": 0,
+                "parent": self._tables[-1] if self._tables else None,
+            }
+            self.tables.append(table)
+            self._tables.append(table)
+        elif tag == "tr" and self._tables:
+            row = {
+                "parts": [], "cells": [], "links": [],
+                "image_count": 0, "linked_image_count": 0,
+                "table": self._tables[-1],
+            }
+            self._tables[-1]["rows"].append(row)
+            self._rows.append(row)
+        elif tag in {"td", "th"} and self._rows:
+            self._cells.append([])
+        elif tag == "a":
+            self._link_depth += 1
+            href = attributes.get("href")
+            if href:
+                if self._rows:
+                    self._rows[-1]["links"].append(href)
+                for table in self._tables:
+                    table["links"].append(href)
+        elif tag == "img":
+            if self._rows:
+                self._rows[-1]["image_count"] += 1
+                self._rows[-1]["linked_image_count"] += int(self._link_depth > 0)
+            for table in self._tables:
+                table["image_count"] += 1
+                table["linked_image_count"] += int(self._link_depth > 0)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {"td", "th"} and self._row is not None and self._cell is not None:
-            self._row["cells"].append(_normalize("".join(self._cell)))
-            self._cell = None
-        elif tag == "tr" and self._row is not None:
-            self._row["text"] = _normalize(" ".join(self._row.pop("parts")))
-            self.rows.append(self._row)
-            self._row = None
-            self._cell = None
+        if tag in {"td", "th"} and self._rows and self._cells:
+            self._rows[-1]["cells"].append(_normalize("".join(self._cells.pop())))
+        elif tag == "tr" and self._rows:
+            row = self._rows.pop()
+            row["text"] = _normalize(" ".join(row.pop("parts")))
+        elif tag == "table" and self._tables:
+            self._tables.pop()
+        elif tag == "a" and self._link_depth:
+            self._link_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        if self._row is not None:
-            self._row["parts"].append(data)
-        if self._cell is not None:
-            self._cell.append(data)
+        for row in self._rows:
+            row["parts"].append(data)
+        if self._cells:
+            self._cells[-1].append(data)
 
 
 def _normalize(value: str) -> str:
@@ -274,7 +301,14 @@ STRONG_TRANSACTION_TERMS = (
 )
 ADVERTISEMENT_TERMS = (
     "おすすめ", "あわせて購入", "関連商品", "セール", "タイムセール", "今すぐ購入",
-    "詳細を見る", "商品ページ", "カート", "Prime",
+    "詳細を見る", "商品ページ", "カート", "Prime", "商品", "関連", "購入", "詳細",
+)
+ADJACENT_TRANSACTION_TERMS = (
+    "注文", "注文番号", "注文合計", "合計", "小計", "請求", "支払い", "税", "送料",
+    "ポイント", "ギフト", "割引",
+)
+ADJACENT_ADVERTISEMENT_TERMS = (
+    "商品", "おすすめ", "関連", "セール", "カート", "Prime", "購入", "詳細",
 )
 
 
@@ -290,14 +324,23 @@ def _link_categories(urls: list[str]) -> set[str]:
     categories: set[str] = set()
     for url in urls:
         lower = url.lower()
+        is_amazon = "amazon." in lower or "amzn." in lower
         if "/dp/" in lower or "/gp/product/" in lower:
             categories.add("amazon_product_page")
         elif any(term in lower for term in ("your-orders", "order-details", "order-history")):
             categories.add("order_details")
+        elif any(term in lower for term in ("/cart", "checkout", "buy-now")):
+            categories.add("cart_or_checkout")
         elif any(term in lower for term in ("payment", "billing", "payments")):
             categories.add("payment_or_billing")
+        elif any(term in lower for term in ("account", "membership", "prime")):
+            categories.add("account_or_membership")
+        elif any(term in lower for term in ("track", "shipment")):
+            categories.add("tracking")
+        elif is_amazon:
+            categories.add("other_amazon_link")
         else:
-            categories.add("other_link")
+            categories.add("external_link")
     if not categories:
         categories.add("no_link")
     return categories
@@ -312,13 +355,65 @@ def _table_category(row: dict) -> str:
     if any(term in text for term in STRONG_TRANSACTION_TERMS + ("小計", "税", "送料")):
         return "summary_row"
     links = _link_categories(row.get("links", []))
-    if row.get("image") or "amazon_product_page" in links or any(term in text for term in ADVERTISEMENT_TERMS):
+    if row.get("image_count", 0) or "amazon_product_page" in links or any(term in text for term in ADVERTISEMENT_TERMS):
         return "product_card_row"
     if len(cells) == 1:
         return "single_price_cell"
     if len(cells) == 2:
         return "label_value_row"
     return "unknown_table_row"
+
+
+def _count_band(value: int) -> str:
+    if value <= 0:
+        return "0"
+    if value == 1:
+        return "1"
+    if value <= 5:
+        return "2-5"
+    return "6+"
+
+
+def _table_text(table: dict | None) -> str:
+    if not table:
+        return ""
+    return _normalize(" ".join(row.get("text", "") for row in table.get("rows", [])))
+
+
+def _row_keyword_flags(row: dict | None) -> dict[str, bool]:
+    text = row.get("text", "") if row else ""
+    return {
+        "transaction": any(term in text for term in ADJACENT_TRANSACTION_TERMS),
+        "advertisement": any(term in text for term in ADJACENT_ADVERTISEMENT_TERMS),
+    }
+
+
+def _placement_pattern(row: dict, table: dict) -> str:
+    text = row.get("text", "")
+    cells = [cell for cell in row.get("cells", []) if cell]
+    money_cells = [index for index, cell in enumerate(cells) if _amount_occurrences(cell)]
+    links = _link_categories(row.get("links", []))
+    if any(term in text for term in STRONG_TRANSACTION_TERMS + ("小計", "税", "送料")):
+        return "summary_total"
+    if (
+        row.get("linked_image_count", 0)
+        or "amazon_product_page" in links
+        or any(term in text for term in ADVERTISEMENT_TERMS)
+    ):
+        return "product_card_price"
+    if len(_amount_occurrences(_table_text(table))) > 1:
+        return "multi_price_table"
+    if len(cells) == 1:
+        return "standalone_amount"
+    if money_cells:
+        index = money_cells[0]
+        before = " ".join(cells[:index])
+        after = " ".join(cells[index + 1:])
+        if any(term in before for term in TRANSACTION_TERMS):
+            return "label_then_amount"
+        if any(term in after for term in TRANSACTION_TERMS):
+            return "amount_then_label"
+    return "unknown_layout"
 
 
 def _order_proximity(text: str, value: int, same_block: bool) -> str:
@@ -348,17 +443,28 @@ def diagnose_amazon_email_money_context(
     html_occurrences = _amount_occurrences(html_visible)
     values = sorted({item["value"] for item in plain_occurrences + html_occurrences})
 
-    rows: list[dict] = []
+    tables: list[dict] = []
     for html_source in html_sources:
         parser = _HTMLContext()
         parser.feed(html_source)
-        rows.extend(parser.rows)
+        tables.extend(parser.tables)
+    rows = [row for table in tables for row in table.get("rows", [])]
 
     classifications = Counter()
     source_patterns = Counter()
     table_categories: set[str] = set()
     link_categories: set[str] = set()
     proximities: set[str] = set()
+    table_row_bands = Counter()
+    same_table_money_bands = Counter()
+    image_count_bands = Counter()
+    linked_image_count_bands = Counter()
+    placement_patterns: set[str] = set()
+    adjacent_flags = {
+        "previous": {"transaction": False, "advertisement": False},
+        "same": {"transaction": False, "advertisement": False},
+        "next": {"transaction": False, "advertisement": False},
+    }
     for value in values:
         in_plain = any(item["value"] == value for item in plain_occurrences)
         in_html = any(item["value"] == value for item in html_occurrences)
@@ -368,44 +474,103 @@ def diagnose_amazon_email_money_context(
             row for row in rows
             if any(item["value"] == value for item in _amount_occurrences(row.get("text", "")))
         ]
-        contexts = []
-        sources = [(plain, plain_occurrences)]
-        if not matching_rows:
-            sources.append((html_visible, html_occurrences))
-        for source, occurrences in sources:
-            for occurrence in occurrences:
-                if occurrence["value"] == value:
-                    contexts.append(source[max(0, occurrence["start"] - 200):occurrence["end"] + 200])
-        row_text = " ".join(row.get("text", "") for row in matching_rows)
-        context = _normalize(" ".join(contexts + [row_text]))
-        same_order_block = any(ORDER_ID_RE.search(row.get("text", "")) for row in matching_rows)
+        matching_tables = []
+        for row in matching_rows:
+            table = row["table"]
+            if table not in matching_tables:
+                matching_tables.append(table)
+            parent = table.get("parent")
+            if parent is not None and parent not in matching_tables:
+                matching_tables.append(parent)
+        block_text = _normalize(" ".join(_table_text(table) for table in matching_tables))
+        same_order_block = bool(ORDER_ID_RE.search(block_text))
         proximity = _order_proximity(combined, value, same_order_block)
         proximities.add(proximity)
         candidate_tables = {_table_category(row) for row in matching_rows}
         table_categories.update(candidate_tables)
         candidate_links = _link_categories([
-            url for row in matching_rows for url in row.get("links", [])
+            url for table in matching_tables for url in table.get("links", [])
         ])
         link_categories.update(candidate_links)
+        candidate_placements: set[str] = set()
+        candidate_adjacent = {
+            "previous": {"transaction": False, "advertisement": False},
+            "same": {"transaction": False, "advertisement": False},
+            "next": {"transaction": False, "advertisement": False},
+        }
+        image_count = 0
+        linked_image_count = 0
+        row_link_categories = _link_categories([
+            url for row in matching_rows for url in row.get("links", [])
+        ])
+        row_linked_images = sum(row.get("linked_image_count", 0) for row in matching_rows)
+        for table in matching_tables:
+            table_text = _table_text(table)
+            table_row_bands[_count_band(len(table.get("rows", [])))] += 1
+            same_table_money_bands[_count_band(len({
+                item["value"] for item in _amount_occurrences(table_text)
+            }))] += 1
+            image_count += table.get("image_count", 0)
+            linked_image_count += table.get("linked_image_count", 0)
+        image_count_bands[_count_band(image_count)] += 1
+        linked_image_count_bands[_count_band(linked_image_count)] += 1
+        for row in matching_rows:
+            table = row["table"]
+            candidate_placements.add(_placement_pattern(row, table))
+            row_index = table["rows"].index(row)
+            neighbors = {
+                "previous": table["rows"][row_index - 1] if row_index > 0 else None,
+                "same": row,
+                "next": table["rows"][row_index + 1] if row_index + 1 < len(table["rows"]) else None,
+            }
+            for position, neighbor in neighbors.items():
+                flags = _row_keyword_flags(neighbor)
+                candidate_adjacent[position]["transaction"] |= flags["transaction"]
+                candidate_adjacent[position]["advertisement"] |= flags["advertisement"]
+                adjacent_flags[position]["transaction"] |= flags["transaction"]
+                adjacent_flags[position]["advertisement"] |= flags["advertisement"]
+        placement_patterns.update(candidate_placements)
+        adjacent_transaction = any(
+            candidate_adjacent[position]["transaction"] for position in ("previous", "same", "next")
+        )
+        adjacent_advertisement = any(
+            candidate_adjacent[position]["advertisement"] for position in ("previous", "same", "next")
+        )
         strong_transaction = (
             same_order_block
-            or any(term in context for term in STRONG_TRANSACTION_TERMS)
-            or "summary_row" in candidate_tables
+            or (adjacent_transaction and any(term in block_text for term in STRONG_TRANSACTION_TERMS))
+            or "summary_total" in candidate_placements
             or bool({"order_details", "payment_or_billing"} & candidate_links)
         )
         advertisement_score = sum((
-            any(term in context for term in ADVERTISEMENT_TERMS),
-            "amazon_product_page" in candidate_links,
-            "product_card_row" in candidate_tables,
+            adjacent_advertisement,
+            "amazon_product_page" in row_link_categories,
+            row_linked_images > 0,
+            "product_card_price" in candidate_placements,
+            "multi_price_table" in candidate_placements,
         ))
         transaction_score = sum((
-            strong_transaction,
-            proximity in {"same_block", "near"},
-            any(term in context for term in TRANSACTION_TERMS),
+            same_order_block,
+            adjacent_transaction,
+            "summary_total" in candidate_placements,
+            bool({"order_details", "payment_or_billing"} & candidate_links),
+            strong_transaction and row_linked_images == 0 and "amazon_product_page" not in row_link_categories,
         ))
-        if strong_transaction and transaction_score >= 2 and advertisement_score == 0:
+        direct_product_evidence = (
+            "amazon_product_page" in row_link_categories
+            or row_linked_images > 0
+            or "product_card_price" in candidate_placements
+        )
+        same_row_conflict = (
+            candidate_adjacent["same"]["transaction"]
+            and candidate_adjacent["same"]["advertisement"]
+            and direct_product_evidence
+        )
+        if same_row_conflict:
+            classification = "ambiguous"
+        elif strong_transaction and transaction_score >= 2 and not direct_product_evidence:
             classification = "transaction_likely"
-        elif advertisement_score >= 2 and not strong_transaction:
+        elif advertisement_score >= 2 and direct_product_evidence:
             classification = "advertisement_likely"
         else:
             classification = "ambiguous"
@@ -434,6 +599,12 @@ def diagnose_amazon_email_money_context(
         "source_presence_patterns": dict(source_patterns),
         "table_structure_categories": sorted(table_categories),
         "link_context_categories": sorted(link_categories),
+        "parent_table_row_count_bands": dict(table_row_bands),
+        "same_table_money_count_bands": dict(same_table_money_bands),
+        "image_count_bands": dict(image_count_bands),
+        "linked_image_count_bands": dict(linked_image_count_bands),
+        "adjacent_row_keywords": adjacent_flags,
+        "placement_patterns": sorted(placement_patterns),
         "message_classification": message_class,
     }
 
