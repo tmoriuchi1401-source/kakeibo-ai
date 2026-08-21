@@ -34,14 +34,10 @@ class MemoryDB:
         assert rng == "Amazon注文!A2:O"
         return [list(row) for row in self.rows]
 
-    def ensure_sheet(self, title, header):
-        assert title == "Amazon注文"
-
-    def update_rows(self, sheet, updates):
-        assert sheet == "Amazon注文"
+    def update_shipping_fields(self, updates):
         self.updated.extend((number, list(row)) for number, row in updates)
         for number, row in updates:
-            self.rows[number - 2] = list(row)
+            self.rows[number - 2][13:15] = list(row[13:15])
 
 
 def test_preview_is_read_only_and_matches_by_order_and_asin(tmp_path):

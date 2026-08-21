@@ -35,8 +35,13 @@ from .amazon_unmatched import (
 )
 from .amazon_email import parse_amazon_email
 from .amazon_shipping import AmazonShippingBackfillPipeline
-from .drive_amazon_shipping import DriveAmazonShippingPreview
-from .google_clients import read_only_drive_service, read_only_sheets_service
+from .drive_amazon_shipping import DriveAmazonShippingPipeline
+from .google_clients import (
+    read_only_drive_service,
+    read_only_sheets_service,
+    shipping_backfill_drive_service,
+    shipping_backfill_sheets_service,
+)
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -59,6 +64,7 @@ def main():
     asp=sub.add_parser("amazon-shipping-backfill-preview"); asp.add_argument("csv")
     asa=sub.add_parser("amazon-shipping-backfill"); asa.add_argument("csv")
     sub.add_parser("amazon-shipping-backfill-drive-preview")
+    sub.add_parser("amazon-shipping-backfill-drive-apply")
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
     sub.add_parser("card-amazon-reclassify")
@@ -138,12 +144,25 @@ def main():
         if not s.amazon_order_history_folder_id:
             raise RuntimeError("未設定: AMAZON_ORDER_HISTORY_FOLDER_ID")
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        result=DriveAmazonShippingPreview(
+        result=DriveAmazonShippingPipeline(
             s.amazon_order_history_folder_id,db,read_only_drive_service(),
         ).preview()
         for key in ("csv_file","csv_rows","matched_amazon_rows",
                     "would_update_ship_date","would_update_shipment_count",
                     "ambiguous","unmatched"):
+            print(f"{key}={result[key]}")
+    elif args.cmd=="amazon-shipping-backfill-drive-apply":
+        s=Settings()
+        s.validate(need_sheet=True)
+        if not s.amazon_order_history_folder_id:
+            raise RuntimeError("未設定: AMAZON_ORDER_HISTORY_FOLDER_ID")
+        db=SheetsDB(s.spreadsheet_id,service=shipping_backfill_sheets_service())
+        result=DriveAmazonShippingPipeline(
+            s.amazon_order_history_folder_id,db,shipping_backfill_drive_service(),
+        ).apply()
+        for key in ("csv_file","csv_rows","matched_amazon_rows",
+                    "would_update_ship_date","would_update_shipment_count",
+                    "ambiguous","unmatched","updated_rows"):
             print(f"{key}={result[key]}")
     elif args.cmd=="card-preview":
         s,db,_=make(False); print(AuPayCardPipeline(db).preview(args.csv))

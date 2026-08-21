@@ -124,6 +124,14 @@ class SheetsDB:
             spreadsheetId=self.sid,
             body={"valueInputOption":"USER_ENTERED","data":data}
         ).execute()
+    def update_shipping_fields(self, rows:list[tuple[int,list]]):
+        if not rows:return
+        data=[{"range":f"Amazon注文!N{row_num}:O{row_num}","values":[row[13:15]]}
+              for row_num,row in rows]
+        self.svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=self.sid,
+            body={"valueInputOption":"USER_ENTERED","data":data}
+        ).execute()
     def categories(self)->list[tuple[str,str]]:
         return [(r[0],r[1]) for r in self.get("カテゴリ!A2:B") if len(r)>=2 and r[0] and r[1]]
     def product_master(self)->dict[str,tuple[str,str,str]]:

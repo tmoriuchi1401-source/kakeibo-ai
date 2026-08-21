@@ -36,7 +36,7 @@ def _temporary_csv(data: bytes):
             Path(path).unlink(missing_ok=True)
 
 
-class DriveAmazonShippingPreview:
+class DriveAmazonShippingPipeline:
     def __init__(self, folder_id: str, db, service, downloader=None):
         self.folder_id = normalize_folder_id(folder_id)
         self.db = db
@@ -61,3 +61,12 @@ class DriveAmazonShippingPreview:
         with _temporary_csv(self.downloader(selected["id"])) as path:
             summary = AmazonShippingBackfillPipeline(self.db).preview(path)
         return {"csv_file": selected["name"], **summary}
+
+    def apply(self) -> dict:
+        selected = select_latest_csv(self._files())
+        with _temporary_csv(self.downloader(selected["id"])) as path:
+            summary = AmazonShippingBackfillPipeline(self.db).apply(path)
+        return {"csv_file": selected["name"], **summary}
+
+
+DriveAmazonShippingPreview = DriveAmazonShippingPipeline

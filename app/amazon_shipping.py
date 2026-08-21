@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .amazon_pipeline import date_ymd
-from .sheets import HEADERS, SheetsDB
+from .sheets import SheetsDB
 
 
 @dataclass(frozen=True)
@@ -111,7 +111,6 @@ class AmazonShippingBackfillPipeline:
         return plan_shipping_backfill(path, self.db.get("Amazon注文!A2:O")).summary
 
     def apply(self, path: str) -> dict:
-        self.db.ensure_sheet("Amazon注文", HEADERS["Amazon注文"])
         plan = plan_shipping_backfill(path, self.db.get("Amazon注文!A2:O"))
-        self.db.update_rows("Amazon注文", list(plan.updates))
+        self.db.update_shipping_fields(list(plan.updates))
         return {**plan.summary, "updated_rows": len(plan.updates)}
