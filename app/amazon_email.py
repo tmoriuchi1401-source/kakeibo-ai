@@ -94,23 +94,138 @@ def _message(value: bytes | Message) -> tuple[Message, bytes]:
 
 
 def _body(message: Message) -> str:
-    parts: list[str] = []
+    plain, html_visible, _ = _body_parts(message)
+    return _normalize("\n".join(part for part in (plain, html_visible) if part))
+
+
+def _part_content(part: Message) -> str:
+    try:
+        return str(part.get_content())
+    except (LookupError, UnicodeError):
+        payload = part.get_payload(decode=True) or b""
+        return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+
+
+def _body_parts(message: Message) -> tuple[str, str, list[str]]:
+    plain_parts: list[str] = []
+    html_parts: list[str] = []
+    html_sources: list[str] = []
     candidates = message.walk() if message.is_multipart() else (message,)
     for part in candidates:
         content_type = part.get_content_type()
         if content_type not in {"text/plain", "text/html"}:
             continue
-        try:
-            content = part.get_content()
-        except (LookupError, UnicodeError):
-            payload = part.get_payload(decode=True) or b""
-            content = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        content = _part_content(part)
         if content_type == "text/html":
+            html_sources.append(content)
             parser = _HTMLText()
-            parser.feed(str(content))
-            content = "".join(parser.parts)
-        parts.append(str(content))
-    return _normalize("\n".join(parts))
+            parser.feed(content)
+            html_parts.append("".join(parser.parts))
+        else:
+            plain_parts.append(content)
+    return (
+        _normalize("\n".join(plain_parts)),
+        _normalize("\n".join(html_parts)),
+        html_sources,
+    )
+
+
+def _length_band(length: int) -> str:
+    if length <= 0:
+        return "0"
+    if length <= 500:
+        return "1-500"
+    if length <= 2000:
+        return "501-2000"
+    if length <= 5000:
+        return "2001-5000"
+    return "5001+"
+
+
+def _money_candidates(text: str) -> list[str]:
+    return re.findall(r"(?:[￥¥]\s*[0-9][0-9,]*|[0-9][0-9,]*\s*円)", text)
+
+
+def diagnose_amazon_email_structure(
+    raw_email: bytes | Message,
+    event: AmazonMailEvent | None = None,
+) -> dict:
+    message, _ = _message(raw_email)
+    plain, html_visible, html_sources = _body_parts(message)
+    combined = _normalize("\n".join(part for part in (plain, html_visible) if part))
+    subject = _normalize(str(message.get("Subject", "")))
+    searchable = f"{subject}\n{combined}"
+    raw_symbols = f"{subject}\n{plain}\n{html_visible}"
+    event = event or parse_amazon_email(raw_email)
+    parts = list(message.walk()) if message.is_multipart() else [message]
+    has_plain_part = any(part.get_content_type() == "text/plain" for part in parts)
+    keyword_terms = {
+        "order": "注文", "polite_order": "ご注文", "order_number": "注文番号",
+        "total": "合計", "order_total": "注文合計", "polite_billing": "ご請求",
+        "billing": "請求", "payment": "支払い", "polite_payment": "お支払い",
+        "amount": "金額", "yen_kanji": "円", "points": "ポイント",
+        "amazon_points": "Amazonポイント", "gift": "ギフト",
+        "gift_card": "ギフトカード", "coupon": "クーポン", "discount": "割引",
+        "shipment": "発送", "delivery": "お届け", "refund": "返金",
+        "return": "返品", "cancellation": "キャンセル",
+    }
+    keywords = {name: term in searchable for name, term in keyword_terms.items()}
+    keywords["yen_fullwidth"] = "￥" in raw_symbols
+    keywords["yen_ascii"] = "¥" in raw_symbols
+    money_count = len(_money_candidates(combined))
+    html_joined = "\n".join(html_sources)
+    html_lower = html_joined.lower()
+    script_blocks = re.findall(r"<script\b[^>]*>(.*?)</script>", html_joined, re.I | re.S)
+    html_structure = {
+        "table_present": bool(re.search(r"<table\b", html_joined, re.I)),
+        "json_ld_present": bool(re.search(
+            r"<script\b[^>]*type\s*=\s*['\"]application/ld\+json['\"]", html_joined, re.I,
+        )),
+        "script_json_present": any("{" in block and ":" in block for block in script_blocks),
+        "hidden_text_heavy": sum(
+            html_lower.count(marker) for marker in ("display:none", "display: none", "visibility:hidden", " hidden")
+        ) >= 3,
+        "visible_money_candidate_count": len(_money_candidates(html_visible)),
+    }
+    amount_fields = (
+        event.charged_amount, event.order_amount, event.refund_amount,
+        event.gift_card_amount, event.points_amount, event.coupon_amount,
+        event.discount_amount, event.shipment_amount,
+    )
+    if html_sources and not has_plain_part and not html_visible:
+        failure = "html_only_not_extracted"
+    elif not combined:
+        failure = "no_body_text"
+    elif event.event_type != "unknown":
+        failure = "other"
+    elif event.order_id is not None and money_count == 0:
+        failure = "order_id_only"
+    elif money_count > 0 and not any(value is not None for value in amount_fields):
+        failure = "money_present_but_labels_unknown"
+    elif any(keywords.values()):
+        failure = "labels_not_recognized"
+    else:
+        failure = "template_unknown"
+    attachment_present = any(
+        part.get_content_disposition() == "attachment" or part.get_filename() is not None
+        for part in parts
+    )
+    return {
+        "has_text_plain": has_plain_part,
+        "has_text_html": bool(html_sources),
+        "multipart": message.is_multipart(),
+        "mime_part_count": len(parts),
+        "attachment_present": attachment_present,
+        "plain_length_band": _length_band(len(plain)),
+        "html_visible_length_band": _length_band(len(html_visible)),
+        "body_length_band": _length_band(len(combined)),
+        "money_candidate_count": money_count,
+        "money_candidate_band": "0" if money_count == 0 else "1" if money_count == 1 else "2-5" if money_count <= 5 else "6+",
+        "keywords": keywords,
+        "html_structure": html_structure,
+        "order_id_present": event.order_id is not None,
+        "parser_failure_reason": failure,
+    }
 
 
 def _amount(text: str, labels: tuple[str, ...]) -> int | None:

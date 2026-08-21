@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from app.amazon_email import parse_amazon_email
+from app.amazon_email import diagnose_amazon_email_structure, parse_amazon_email
 
 
 ORDER_ID = "123-1234567-1234567"
@@ -170,3 +170,65 @@ def test_cli_preview_is_anonymized(tmp_path, monkeypatch, capsys):
 def test_invalid_input_type_is_rejected():
     with pytest.raises(TypeError):
         parse_amazon_email("not bytes")
+
+
+def test_structure_diagnostic_for_plain_email_and_order_id_only():
+    result = diagnose_amazon_email_structure(mail(
+        "Amazon.co.jpのお知らせ", f"注文番号: {ORDER_ID}",
+    ))
+    assert result["has_text_plain"] is True
+    assert result["has_text_html"] is False
+    assert result["money_candidate_count"] == 0
+    assert result["keywords"]["order_number"] is True
+    assert result["order_id_present"] is True
+    assert result["parser_failure_reason"] == "order_id_only"
+
+
+def test_structure_diagnostic_for_html_table_and_json_ld():
+    message = EmailMessage()
+    message["Subject"] = "Amazon.co.jpのお知らせ"
+    message.set_content("", subtype="plain")
+    message.add_alternative("""
+<html><body><table><tr><td>特別価格 1,234円</td></tr></table>
+<script type="application/ld+json">{"kind": "test"}</script></body></html>
+""", subtype="html")
+    result = diagnose_amazon_email_structure(message)
+    assert result["has_text_html"] is True
+    assert result["multipart"] is True
+    assert result["money_candidate_count"] == 1
+    assert result["html_structure"]["table_present"] is True
+    assert result["html_structure"]["json_ld_present"] is True
+    assert result["html_structure"]["script_json_present"] is True
+    assert result["html_structure"]["visible_money_candidate_count"] == 1
+    assert result["parser_failure_reason"] == "money_present_but_labels_unknown"
+
+
+def test_structure_diagnostic_for_html_only_email():
+    message = EmailMessage()
+    message["Subject"] = "Amazon.co.jp"
+    message.set_content("<div>注文合計: ￥500</div>", subtype="html")
+    result = diagnose_amazon_email_structure(message)
+    assert result["has_text_plain"] is False
+    assert result["has_text_html"] is True
+    assert result["html_visible_length_band"] != "0"
+    assert result["keywords"]["order_total"] is True
+    assert result["money_candidate_count"] == 1
+
+
+def test_structure_diagnostic_detects_attachment_without_name_output():
+    message = EmailMessage()
+    message.set_content("本文")
+    message.add_attachment(b"secret", maintype="application", subtype="octet-stream", filename="private.txt")
+    result = diagnose_amazon_email_structure(message)
+    assert result["attachment_present"] is True
+    assert "private.txt" not in repr(result)
+
+
+def test_empty_html_only_body_reports_extraction_failure():
+    message = EmailMessage()
+    message["Subject"] = "Amazon.co.jp"
+    message.set_content("<div></div>", subtype="html")
+    result = diagnose_amazon_email_structure(message)
+    assert result["has_text_plain"] is False
+    assert result["has_text_html"] is True
+    assert result["parser_failure_reason"] == "html_only_not_extracted"

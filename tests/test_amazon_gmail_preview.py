@@ -99,6 +99,7 @@ Amazonポイント利用額: 100円
     assert result["shipment_amount_present"] == 1
     assert result["payment_method_present"] == 1
     assert result["charged_and_order_amount_both_present"] == 1
+    assert result["parser_failure_reasons"]
     assert {name for name, _ in service.messages_api.operations} == {"list", "get"}
     assert all(
         kwargs.get("format") == "raw"
@@ -147,6 +148,9 @@ def test_samples_are_anonymized():
     assert "private@example.invalid" not in serialized
     assert "m1" not in serialized
     assert '"source_category": "order"' in serialized
+    assert '"body_length_band"' in serialized
+    assert '"money_candidate_count"' in serialized
+    assert '"parser_failure_reason"' in serialized
 
 
 class FakeCredentials:
