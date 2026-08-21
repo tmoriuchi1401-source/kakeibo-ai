@@ -4,6 +4,8 @@ import sys
 import pytest
 
 from app.amazon_email import (
+    _append_identity_unique,
+    _identity_index,
     diagnose_amazon_email_money_context,
     diagnose_amazon_email_structure,
     parse_amazon_email,
@@ -380,3 +382,35 @@ def test_mixed_structural_signals_remain_ambiguous():
 """))
     assert result["ambiguous_count"] == 1
     assert result["message_classification"] == "inconclusive"
+
+
+def test_cyclic_tables_are_deduplicated_by_identity_without_value_comparison():
+    table_a = {"rows": [], "parent": None}
+    row_a = {"table": table_a}
+    table_a["rows"].append(row_a)
+    table_b = {"rows": [], "parent": table_a}
+    row_b = {"table": table_b}
+    table_b["rows"].append(row_b)
+
+    candidates = []
+    _append_identity_unique(candidates, table_a)
+    _append_identity_unique(candidates, table_a)
+    _append_identity_unique(candidates, table_b)
+
+    assert len(candidates) == 2
+    assert candidates[0] is table_a
+    assert candidates[1] is table_b
+    assert _identity_index(table_a["rows"], row_a) == 0
+
+
+def test_multiple_nested_table_candidates_do_not_recurse():
+    result = diagnose_amazon_email_money_context(html_mail(f"""
+<table><tr><td>注文番号 {ORDER_ID}</td></tr><tr><td>
+  <table><tr><td>注文合計</td><td>¥987654</td></tr></table>
+  <table><tr><td>関連商品</td><td>¥987654</td></tr></table>
+</td></tr></table>
+"""))
+    assert result["money_candidate_count"] == 1
+    assert result["message_classification"] in {
+        "transaction_amount_present", "advertisement_prices_only", "inconclusive",
+    }

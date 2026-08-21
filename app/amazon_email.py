@@ -374,6 +374,18 @@ def _count_band(value: int) -> str:
     return "6+"
 
 
+def _append_identity_unique(items: list, candidate) -> None:
+    if all(existing is not candidate for existing in items):
+        items.append(candidate)
+
+
+def _identity_index(items: list, candidate) -> int:
+    for index, existing in enumerate(items):
+        if existing is candidate:
+            return index
+    raise ValueError("candidate is not present by identity")
+
+
 def _table_text(table: dict | None) -> str:
     if not table:
         return ""
@@ -477,11 +489,10 @@ def diagnose_amazon_email_money_context(
         matching_tables = []
         for row in matching_rows:
             table = row["table"]
-            if table not in matching_tables:
-                matching_tables.append(table)
+            _append_identity_unique(matching_tables, table)
             parent = table.get("parent")
-            if parent is not None and parent not in matching_tables:
-                matching_tables.append(parent)
+            if parent is not None:
+                _append_identity_unique(matching_tables, parent)
         block_text = _normalize(" ".join(_table_text(table) for table in matching_tables))
         same_order_block = bool(ORDER_ID_RE.search(block_text))
         proximity = _order_proximity(combined, value, same_order_block)
@@ -517,7 +528,7 @@ def diagnose_amazon_email_money_context(
         for row in matching_rows:
             table = row["table"]
             candidate_placements.add(_placement_pattern(row, table))
-            row_index = table["rows"].index(row)
+            row_index = _identity_index(table["rows"], row)
             neighbors = {
                 "previous": table["rows"][row_index - 1] if row_index > 0 else None,
                 "same": row,
