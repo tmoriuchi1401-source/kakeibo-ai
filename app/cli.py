@@ -33,6 +33,7 @@ from .amazon_unmatched import (
     export_amazon_unmatched_input,
     load_amazon_unmatched_input,
 )
+from .amazon_email import parse_amazon_email
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -81,6 +82,8 @@ def main():
     aup.add_argument("--transactions-json")
     aue=sub.add_parser("amazon-unmatched-export")
     aue.add_argument("--output",required=True)
+    aep=sub.add_parser("amazon-email-preview")
+    aep.add_argument("eml")
     sub.add_parser("drive-receipts")
     sub.add_parser("drive-paypay-preview")
     sub.add_parser("drive-paypay")
@@ -175,6 +178,9 @@ def main():
             s,db,_=make(False); print(AmazonUnmatchedPreview(db).preview(args.amazon_csv))
     elif args.cmd=="amazon-unmatched-export":
         s,db,_=make(False); print(export_amazon_unmatched_input(db,args.output))
+    elif args.cmd=="amazon-email-preview":
+        with open(args.eml,"rb") as f:
+            print(parse_amazon_email(f.read()).anonymized())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
