@@ -1,0 +1,66 @@
+name: Apply Amazon manual review
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+
+      - name: Verify Amazon manual selections (read-only)
+        shell: bash
+        run: |
+          python -m app.cli review-apply-preview | tee "$RUNNER_TEMP/review-apply-preview.txt"
+          python -c 'import ast, pathlib; value=ast.literal_eval(pathlib.Path("'"$RUNNER_TEMP"'/review-apply-preview.txt").read_text()); expected={"amazon_manual_selected":8,"amazon_manual_valid":8,"amazon_manual_invalid":0,"amazon_manual_conflicts":0,"amazon_manual_would_match":8}; assert value == expected, f"unsafe apply preview: {value}"'
+
+      - name: Record matched Amazon baseline (read-only)
+        shell: bash
+        run: |
+          count=$(python -c 'from app.cli import make; from app.reconciliation import parse_import_rows; _,db,_=make(False); print(sum(tx.status == "matched_amazon" for tx in parse_import_rows(db.get("取込データ!A2:L"))))')
+          echo "matched_amazon_before=$count"
+          echo "MATCHED_AMAZON_BEFORE=$count" >> "$GITHUB_ENV"
+
+      - name: Apply Amazon manual matches
+        shell: bash
+        run: |
+          python -m app.cli review-apply | tee "$RUNNER_TEMP/review-apply.txt"
+          python -c 'import ast, pathlib; value=ast.literal_eval(pathlib.Path("'"$RUNNER_TEMP"'/review-apply.txt").read_text()); assert value.get("amazon_manual_matched") == 8, f"unexpected matched count: {value}"; assert value.get("errors") == 0, f"apply errors: {value}"; assert value.get("expenses_created") == 0, f"unexpected expenses created: {value}"'
+
+      - name: Verify review result (read-only)
+        shell: bash
+        run: |
+          python -m app.cli review-preview | tee "$RUNNER_TEMP/review-preview.txt"
+          python -c 'import ast, pathlib; value=ast.literal_eval(pathlib.Path("'"$RUNNER_TEMP"'/review-preview.txt").read_text()); assert value.get("review_rows") == 1, f"unexpected review rows: {value}"'
+
+      - name: Verify unmatched Amazon result (read-only)
+        shell: bash
+        run: |
+          python -m app.cli amazon-unmatched-preview | tee "$RUNNER_TEMP/amazon-unmatched-preview.txt"
+          python -c 'import ast, pathlib; value=ast.literal_eval(pathlib.Path("'"$RUNNER_TEMP"'/amazon-unmatched-preview.txt").read_text()); assert value.get("amazon_unmatched") == 1, f"unexpected unmatched count: {value.get('"'"'amazon_unmatched'"'"')}"; assert value.get("amazon_needs_review") == 0, f"unexpected needs-review count: {value.get('"'"'amazon_needs_review'"'"')}"'
+
+      - name: Verify matched Amazon increase (read-only)
+        shell: bash
+        run: |
+          count=$(python -c 'from app.cli import make; from app.reconciliation import parse_import_rows; _,db,_=make(False); print(sum(tx.status == "matched_amazon" for tx in parse_import_rows(db.get("取込データ!A2:L"))))')
+          echo "matched_amazon_after=$count"
+          test "$((count - MATCHED_AMAZON_BEFORE))" -eq 8
+
+      - name: Verify active expenses (read-only)
+        shell: bash
+        run: |
+          python -m app.cli expenses-preview | tee "$RUNNER_TEMP/expenses-preview.txt"
+          python -c 'import ast, pathlib; value=ast.literal_eval(pathlib.Path("'"$RUNNER_TEMP"'/expenses-preview.txt").read_text()); assert value.get("active_expenses") == 216, f"unexpected active expenses: {value}"; assert value.get("total") == 765569, f"unexpected expense total: {value}"'
+
+      - name: Preview reconciliation (read-only)
+        run: python -m app.cli reconcile-preview
