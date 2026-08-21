@@ -30,7 +30,8 @@ HEADERS={
 }
 
 class SheetsDB:
-    def __init__(self, spreadsheet_id:str): self.sid=spreadsheet_id; self.svc=sheets_service()
+    def __init__(self, spreadsheet_id:str, service=None):
+        self.sid=spreadsheet_id; self.svc=service or sheets_service()
     def sheet_titles(self):
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         return [s["properties"]["title"] for s in meta["sheets"]]

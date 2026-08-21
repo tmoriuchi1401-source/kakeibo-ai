@@ -1,0 +1,25 @@
+name: Preview Amazon shipping backfill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      AMAZON_ORDER_HISTORY_FOLDER_ID: ${{ secrets.AMAZON_ORDER_HISTORY_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Preview Amazon shipping backfill (read-only)
+        run: python -m app.cli amazon-shipping-backfill-drive-preview
