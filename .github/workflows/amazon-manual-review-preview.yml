@@ -1,0 +1,27 @@
+name: Preview Amazon manual review
+
+on:
+  workflow_dispatch:
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - name: Preview review candidates (read-only)
+        run: python -m app.cli review-preview
+      - name: Preview Amazon manual selections (read-only)
+        run: python -m app.cli review-apply-preview
+      - name: Preview active expenses (read-only)
+        run: python -m app.cli expenses-preview
+      - name: Preview reconciliation (read-only)
+        run: python -m app.cli reconcile-preview
