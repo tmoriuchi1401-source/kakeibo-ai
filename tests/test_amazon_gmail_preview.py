@@ -151,6 +151,9 @@ def test_samples_are_anonymized():
     assert '"body_length_band"' in serialized
     assert '"money_candidate_count"' in serialized
     assert '"parser_failure_reason"' in serialized
+    assert '"money_context"' in serialized
+    assert "123-1234567-1234567" not in serialized
+    assert "TRACK-SECRET" not in serialized
 
 
 class FakeCredentials:

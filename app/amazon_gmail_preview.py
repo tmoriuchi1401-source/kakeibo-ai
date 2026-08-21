@@ -11,7 +11,12 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-from .amazon_email import AmazonMailEvent, diagnose_amazon_email_structure, parse_amazon_email
+from .amazon_email import (
+    AmazonMailEvent,
+    diagnose_amazon_email_money_context,
+    diagnose_amazon_email_structure,
+    parse_amazon_email,
+)
 
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
@@ -87,20 +92,16 @@ def _raw_bytes(encoded: str) -> bytes:
         raise ValueError("gmail_raw_status: invalid") from exc
 
 
-def _anonymous_sample(source_category: str, event: AmazonMailEvent, structure: dict) -> dict:
+def _anonymous_sample(
+    source_category: str, event: AmazonMailEvent, structure: dict, money_context: dict,
+) -> dict:
     return {
         "source_category": source_category,
         "event_type": event.event_type,
-        "charged_amount": event.charged_amount,
-        "order_amount": event.order_amount,
-        "gift_card_amount": event.gift_card_amount,
-        "points_amount": event.points_amount,
-        "coupon_amount": event.coupon_amount,
-        "discount_amount": event.discount_amount,
-        "shipment_amount": event.shipment_amount,
         "order_id_present": event.order_id is not None,
         "payment_method_present": event.payment_method is not None,
         "structure": structure,
+        "money_context": money_context,
     }
 
 
@@ -121,7 +122,7 @@ def preview_amazon_gmail(
     sample_limit: int = 3,
 ) -> dict:
     seen: set[str] = set()
-    events: list[tuple[str, AmazonMailEvent, dict]] = []
+    events: list[tuple[str, AmazonMailEvent, dict, dict]] = []
     search_counts: Counter[str] = Counter()
     messages_api = service.users().messages()
 
@@ -139,25 +140,34 @@ def preview_amazon_gmail(
             raw_bytes = _raw_bytes(raw.get("raw", ""))
             event = parser(raw_bytes)
             events.append((
-                search_name, event, diagnose_amazon_email_structure(raw_bytes, event),
+                search_name,
+                event,
+                diagnose_amazon_email_structure(raw_bytes, event),
+                diagnose_amazon_email_money_context(raw_bytes, event),
             ))
             search_counts[search_name] += 1
             if search_counts[search_name] >= limit:
                 break
 
-    event_types = Counter(event.event_type for _, event, _ in events)
-    failure_reasons = Counter(structure["parser_failure_reason"] for _, _, structure in events)
+    event_types = Counter(event.event_type for _, event, _, _ in events)
+    failure_reasons = Counter(structure["parser_failure_reason"] for _, _, structure, _ in events)
+    money_context = Counter()
+    message_context = Counter()
+    for _, _, _, context in events:
+        for name in ("transaction_likely", "advertisement_likely", "ambiguous"):
+            money_context[name] += context[f"{name}_count"]
+        message_context[context["message_classification"]] += 1
     presence_fields = (
         "charged_amount", "order_amount", "gift_card_amount", "points_amount",
         "coupon_amount", "discount_amount", "shipment_amount", "payment_method",
     )
     presence = {
-        f"{field}_present": sum(getattr(event, field) is not None for _, event, _ in events)
+        f"{field}_present": sum(getattr(event, field) is not None for _, event, _, _ in events)
         for field in presence_fields
     }
     both = sum(
         event.charged_amount is not None and event.order_amount is not None
-        for _, event, _ in events
+        for _, event, _, _ in events
     )
     return {
         "gmail_scope_ok": True,
@@ -166,14 +176,16 @@ def preview_amazon_gmail(
         "fallback_sampled": search_counts["fallback"],
         "event_types": dict(event_types),
         "parser_failure_reasons": dict(failure_reasons),
+        "money_context": dict(money_context),
+        "message_context": dict(message_context),
         **presence,
         "charged_and_order_amount_both_present": both,
         "outlook": _outlook(
             len(events), presence["charged_amount_present"], presence["order_amount_present"],
         ),
         "samples": [
-            _anonymous_sample(source_category, event, structure)
-            for source_category, event, structure in events[:sample_limit]
+            _anonymous_sample(source_category, event, structure, money_context)
+            for source_category, event, structure, money_context in events[:sample_limit]
         ],
     }
 

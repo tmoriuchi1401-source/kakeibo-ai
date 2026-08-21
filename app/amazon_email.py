@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from email import policy
@@ -65,15 +66,50 @@ class _HTMLText(HTMLParser):
         self.parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in {"br", "p", "div", "tr", "li", "h1", "h2", "h3"}:
+        if tag in {"br", "p", "div", "tr", "td", "th", "li", "h1", "h2", "h3"}:
             self.parts.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in {"p", "div", "tr", "li", "h1", "h2", "h3"}:
+        if tag in {"p", "div", "tr", "td", "th", "li", "h1", "h2", "h3"}:
             self.parts.append("\n")
 
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
+
+
+class _HTMLContext(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.rows: list[dict] = []
+        self._row: dict | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        if tag == "tr":
+            self._row = {"parts": [], "cells": [], "links": [], "image": False}
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+        elif tag == "a" and self._row is not None and attributes.get("href"):
+            self._row["links"].append(attributes["href"])
+        elif tag == "img" and self._row is not None:
+            self._row["image"] = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"td", "th"} and self._row is not None and self._cell is not None:
+            self._row["cells"].append(_normalize("".join(self._cell)))
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self._row["text"] = _normalize(" ".join(self._row.pop("parts")))
+            self.rows.append(self._row)
+            self._row = None
+            self._cell = None
+
+    def handle_data(self, data: str) -> None:
+        if self._row is not None:
+            self._row["parts"].append(data)
+        if self._cell is not None:
+            self._cell.append(data)
 
 
 def _normalize(value: str) -> str:
@@ -225,6 +261,180 @@ def diagnose_amazon_email_structure(
         "html_structure": html_structure,
         "order_id_present": event.order_id is not None,
         "parser_failure_reason": failure,
+    }
+
+
+TRANSACTION_TERMS = (
+    "注文", "ご注文", "注文番号", "請求", "ご請求", "合計", "注文合計",
+    "支払い", "お支払い", "決済", "料金", "金額", "小計", "税", "送料",
+    "ポイント", "ギフト", "クーポン", "割引", "返金",
+)
+STRONG_TRANSACTION_TERMS = (
+    "注文番号", "請求", "ご請求", "注文合計", "支払い", "お支払い", "決済",
+)
+ADVERTISEMENT_TERMS = (
+    "おすすめ", "あわせて購入", "関連商品", "セール", "タイムセール", "今すぐ購入",
+    "詳細を見る", "商品ページ", "カート", "Prime",
+)
+
+
+def _amount_occurrences(text: str) -> list[dict]:
+    found = []
+    for match in re.finditer(r"(?:[￥¥]\s*([0-9][0-9,]*)|([0-9][0-9,]*)\s*円)", text):
+        digits = (match.group(1) or match.group(2)).replace(",", "")
+        found.append({"value": int(digits), "start": match.start(), "end": match.end()})
+    return found
+
+
+def _link_categories(urls: list[str]) -> set[str]:
+    categories: set[str] = set()
+    for url in urls:
+        lower = url.lower()
+        if "/dp/" in lower or "/gp/product/" in lower:
+            categories.add("amazon_product_page")
+        elif any(term in lower for term in ("your-orders", "order-details", "order-history")):
+            categories.add("order_details")
+        elif any(term in lower for term in ("payment", "billing", "payments")):
+            categories.add("payment_or_billing")
+        else:
+            categories.add("other_link")
+    if not categories:
+        categories.add("no_link")
+    return categories
+
+
+def _table_category(row: dict) -> str:
+    text = row.get("text", "")
+    cells = [cell for cell in row.get("cells", []) if cell]
+    has_money = bool(_amount_occurrences(text))
+    if not has_money:
+        return "unknown_table_row"
+    if any(term in text for term in STRONG_TRANSACTION_TERMS + ("小計", "税", "送料")):
+        return "summary_row"
+    links = _link_categories(row.get("links", []))
+    if row.get("image") or "amazon_product_page" in links or any(term in text for term in ADVERTISEMENT_TERMS):
+        return "product_card_row"
+    if len(cells) == 1:
+        return "single_price_cell"
+    if len(cells) == 2:
+        return "label_value_row"
+    return "unknown_table_row"
+
+
+def _order_proximity(text: str, value: int, same_block: bool) -> str:
+    if same_block:
+        return "same_block"
+    order_positions = [match.start() for match in ORDER_ID_RE.finditer(text)]
+    if not order_positions:
+        return "absent"
+    amount_positions = [
+        item["start"] for item in _amount_occurrences(text) if item["value"] == value
+    ]
+    if not amount_positions:
+        return "far"
+    distance = min(abs(amount - order) for amount in amount_positions for order in order_positions)
+    return "near" if distance <= 300 else "far"
+
+
+def diagnose_amazon_email_money_context(
+    raw_email: bytes | Message,
+    event: AmazonMailEvent | None = None,
+) -> dict:
+    message, _ = _message(raw_email)
+    plain, html_visible, html_sources = _body_parts(message)
+    combined = _normalize("\n".join(part for part in (plain, html_visible) if part))
+    event = event or parse_amazon_email(raw_email)
+    plain_occurrences = _amount_occurrences(plain)
+    html_occurrences = _amount_occurrences(html_visible)
+    values = sorted({item["value"] for item in plain_occurrences + html_occurrences})
+
+    rows: list[dict] = []
+    for html_source in html_sources:
+        parser = _HTMLContext()
+        parser.feed(html_source)
+        rows.extend(parser.rows)
+
+    classifications = Counter()
+    source_patterns = Counter()
+    table_categories: set[str] = set()
+    link_categories: set[str] = set()
+    proximities: set[str] = set()
+    for value in values:
+        in_plain = any(item["value"] == value for item in plain_occurrences)
+        in_html = any(item["value"] == value for item in html_occurrences)
+        source_pattern = "both" if in_plain and in_html else "plain_only" if in_plain else "html_only"
+        source_patterns[source_pattern] += 1
+        matching_rows = [
+            row for row in rows
+            if any(item["value"] == value for item in _amount_occurrences(row.get("text", "")))
+        ]
+        contexts = []
+        sources = [(plain, plain_occurrences)]
+        if not matching_rows:
+            sources.append((html_visible, html_occurrences))
+        for source, occurrences in sources:
+            for occurrence in occurrences:
+                if occurrence["value"] == value:
+                    contexts.append(source[max(0, occurrence["start"] - 200):occurrence["end"] + 200])
+        row_text = " ".join(row.get("text", "") for row in matching_rows)
+        context = _normalize(" ".join(contexts + [row_text]))
+        same_order_block = any(ORDER_ID_RE.search(row.get("text", "")) for row in matching_rows)
+        proximity = _order_proximity(combined, value, same_order_block)
+        proximities.add(proximity)
+        candidate_tables = {_table_category(row) for row in matching_rows}
+        table_categories.update(candidate_tables)
+        candidate_links = _link_categories([
+            url for row in matching_rows for url in row.get("links", [])
+        ])
+        link_categories.update(candidate_links)
+        strong_transaction = (
+            same_order_block
+            or any(term in context for term in STRONG_TRANSACTION_TERMS)
+            or "summary_row" in candidate_tables
+            or bool({"order_details", "payment_or_billing"} & candidate_links)
+        )
+        advertisement_score = sum((
+            any(term in context for term in ADVERTISEMENT_TERMS),
+            "amazon_product_page" in candidate_links,
+            "product_card_row" in candidate_tables,
+        ))
+        transaction_score = sum((
+            strong_transaction,
+            proximity in {"same_block", "near"},
+            any(term in context for term in TRANSACTION_TERMS),
+        ))
+        if strong_transaction and transaction_score >= 2 and advertisement_score == 0:
+            classification = "transaction_likely"
+        elif advertisement_score >= 2 and not strong_transaction:
+            classification = "advertisement_likely"
+        else:
+            classification = "ambiguous"
+        classifications[classification] += 1
+
+    transaction = classifications["transaction_likely"]
+    advertisement = classifications["advertisement_likely"]
+    ambiguous = classifications["ambiguous"]
+    if not values:
+        message_class = "no_money_candidates"
+    elif transaction and advertisement:
+        message_class = "mixed_context"
+    elif transaction and not advertisement and not ambiguous:
+        message_class = "transaction_amount_present"
+    elif advertisement and not transaction and not ambiguous:
+        message_class = "advertisement_prices_only"
+    else:
+        message_class = "inconclusive"
+    return {
+        "money_candidate_count": len(values),
+        "transaction_likely_count": transaction,
+        "advertisement_likely_count": advertisement,
+        "ambiguous_count": ambiguous,
+        "order_id_present": event.order_id is not None,
+        "order_id_proximity": sorted(proximities) if proximities else ["absent"],
+        "source_presence_patterns": dict(source_patterns),
+        "table_structure_categories": sorted(table_categories),
+        "link_context_categories": sorted(link_categories),
+        "message_classification": message_class,
     }
 
 

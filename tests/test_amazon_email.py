@@ -3,7 +3,11 @@ import sys
 
 import pytest
 
-from app.amazon_email import diagnose_amazon_email_structure, parse_amazon_email
+from app.amazon_email import (
+    diagnose_amazon_email_money_context,
+    diagnose_amazon_email_structure,
+    parse_amazon_email,
+)
 
 
 ORDER_ID = "123-1234567-1234567"
@@ -232,3 +236,80 @@ def test_empty_html_only_body_reports_extraction_failure():
     assert result["has_text_plain"] is False
     assert result["has_text_html"] is True
     assert result["parser_failure_reason"] == "html_only_not_extracted"
+
+
+def html_mail(body: str) -> EmailMessage:
+    message = EmailMessage()
+    message["Subject"] = "Amazon.co.jp"
+    message.set_content("HTMLをご覧ください")
+    message.add_alternative(body, subtype="html")
+    return message
+
+
+def test_billing_label_near_money_is_transaction_likely():
+    result = diagnose_amazon_email_money_context(html_mail(
+        "<table><tr><td>カードへのご請求額</td><td>¥987654</td></tr></table>",
+    ))
+    assert result["transaction_likely_count"] == 1
+    assert result["message_classification"] == "transaction_amount_present"
+    assert "summary_row" in result["table_structure_categories"]
+
+
+def test_order_id_in_same_row_is_transaction_likely():
+    result = diagnose_amazon_email_money_context(html_mail(
+        f"<table><tr><td>注文番号 {ORDER_ID}</td><td>987654円</td></tr></table>",
+    ))
+    assert result["transaction_likely_count"] == 1
+    assert "same_block" in result["order_id_proximity"]
+
+
+def test_product_link_price_is_advertisement_likely():
+    result = diagnose_amazon_email_money_context(html_mail(
+        '<table><tr><td><img src="x"><a href="https://amazon.co.jp/dp/B000000000">'
+        "おすすめ商品 詳細を見る</a></td><td>¥987654</td></tr></table>",
+    ))
+    assert result["advertisement_likely_count"] == 1
+    assert result["message_classification"] == "advertisement_prices_only"
+    assert "product_card_row" in result["table_structure_categories"]
+    assert "amazon_product_page" in result["link_context_categories"]
+
+
+def test_transaction_and_advertisement_mixed_context():
+    result = diagnose_amazon_email_money_context(html_mail(f"""
+<table><tr><td>注文番号 {ORDER_ID} ご請求額</td><td>¥987654</td></tr>
+<tr><td><img src="x"><a href="https://amazon.co.jp/dp/B000000000">おすすめ商品</a></td>
+<td>¥123456</td></tr></table>
+"""))
+    assert result["transaction_likely_count"] == 1
+    assert result["advertisement_likely_count"] == 1
+    assert result["message_classification"] == "mixed_context"
+
+
+def test_no_money_candidates_and_order_distance():
+    result = diagnose_amazon_email_money_context(mail("Amazon", f"注文番号: {ORDER_ID}"))
+    assert result["money_candidate_count"] == 0
+    assert result["message_classification"] == "no_money_candidates"
+    assert result["order_id_proximity"] == ["absent"]
+
+
+def test_plain_and_html_same_candidate_is_anonymously_correlated():
+    message = EmailMessage()
+    message.set_content("ご請求額 ¥987654")
+    message.add_alternative("<div>ご請求額 ¥987654</div>", subtype="html")
+    result = diagnose_amazon_email_money_context(message)
+    assert result["money_candidate_count"] == 1
+    assert result["source_presence_patterns"] == {"both": 1}
+
+
+def test_html_only_candidate_does_not_output_value_or_url():
+    message = EmailMessage()
+    message.set_content(
+        '<a href="https://amazon.co.jp/dp/B000000000?private=yes">おすすめ ¥987654</a>',
+        subtype="html",
+    )
+    result = diagnose_amazon_email_money_context(message)
+    serialized = repr(result)
+    assert result["source_presence_patterns"] == {"html_only": 1}
+    assert "987654" not in serialized
+    assert "https://" not in serialized
+    assert "private" not in serialized
