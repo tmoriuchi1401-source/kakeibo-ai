@@ -5,10 +5,15 @@ from dataclasses import dataclass
 from .auto_expense import expense_id
 from .amazon_manual_matching import (
     AmazonManualCandidate,
+    ManualMatchRequest,
     aggregate_amazon_orders,
+    audit_information,
+    candidate_from_storage_row,
     find_amazon_candidates,
     is_manual_match_target,
+    validate_manual_batch,
 )
+from .aupay_card_pipeline import is_amazon
 from .reconciliation import ImportTransaction, parse_import_rows
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 from .utils import now_jst_string
@@ -198,17 +203,73 @@ class ReviewApprovalPipeline:
 
     _expense_id = staticmethod(expense_id)
 
+    @staticmethod
+    def _amazon_error(errors:tuple[str,...])->str:
+        text=" ".join(errors)
+        if "more than once" in text: return "Amazon注文候補が他の選択と競合しています"
+        if "already used" in text: return "このAmazon注文は別取引で使用済みです"
+        if "changed after" in text: return "注文内容が変更されています"
+        if "no longer exists" in text: return "Amazon候補が無効です"
+        if "does not belong" in text: return "Amazon候補が対象カードと一致しません"
+        return "Amazon候補を安全に確認できません"
+
+    def _amazon_plan(self,imports,review_rows):
+        selected=[]; preliminary={}
+        candidate_rows=self.db.get("Amazon照合候補!A2:S")
+        candidates={}; duplicate_ids=set()
+        for raw in candidate_rows:
+            try: candidate=candidate_from_storage_row(raw)
+            except ValueError: continue
+            if candidate.candidate_id in candidates: duplicate_ids.add(candidate.candidate_id)
+            else: candidates[candidate.candidate_id]=candidate
+        by_id={tx.import_id:tx for tx in imports}
+        for raw in review_rows:
+            row=(list(raw)+[""]*20)[:20]
+            if str(row[9]).strip()!="Amazon注文と照合": continue
+            card_id=str(row[0]); candidate_id=str(row[18]).strip()
+            tx=by_id.get(card_id); candidate=candidates.get(candidate_id)
+            errors=[]
+            if tx is None: errors.append("card transaction no longer exists")
+            if str(row[19]).strip()!="選択済み": errors.append("candidate selection is not current")
+            if not candidate_id or candidate is None: errors.append("candidate no longer exists")
+            if candidate_id in duplicate_ids: errors.append("candidate storage contains duplicate identity")
+            if errors: preliminary[card_id]=tuple(errors)
+            else: selected.append(ManualMatchRequest(tx,candidate))
+        validation=validate_manual_batch(
+            selected,aggregate_amazon_orders(self.db.get("Amazon注文!A2:M")),imports,
+        ) if selected else None
+        errors=dict(preliminary)
+        if validation: errors.update(validation.errors_by_card)
+        requests={request.card.import_id:request for request in selected if request.card.import_id not in errors}
+        return requests,errors
+
+    def preview(self)->dict:
+        imports=parse_import_rows(self.db.get("取込データ!A2:L"))
+        review_rows=self.db.get("要確認!A2:T")
+        selected=sum(str((list(row)+[""]*10)[9]).strip()=="Amazon注文と照合"
+                     for row in review_rows)
+        requests,errors=self._amazon_plan(imports,review_rows) if selected else ({},{})
+        conflicts=sum(any("more than once" in error for error in values)
+                      for values in errors.values())
+        return {"amazon_manual_selected":selected,"amazon_manual_valid":len(requests),
+                "amazon_manual_invalid":len(errors),"amazon_manual_conflicts":conflicts,
+                "amazon_manual_would_match":len(requests)}
+
     def apply(self)->dict:
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
         by_id={tx.import_id:tx for tx in imports}
         categories=set(self.db.categories())
         expense_idx=self.db.expense_index()
-        review_rows=self.db.get("要確認!A2:O")
+        review_rows=self.db.get("要確認!A2:T")
+        amazon_selected=any(str((list(row)+[""]*10)[9]).strip()=="Amazon注文と照合"
+                            for row in review_rows)
+        amazon_requests,amazon_errors=self._amazon_plan(imports,review_rows) if amazon_selected else ({},{})
         import_updates=[]; expense_new=[]; expense_updates=[]; review_updates=[]
         stats={"requested":0,"applied":0,"held":0,"errors":0,
-               "expenses_created":0,"expenses_excluded":0}
+               "expenses_created":0,"expenses_excluded":0,
+               "amazon_manual_matched":0,"amazon_manual_invalid":0}
         for row_num,raw in enumerate(review_rows,start=2):
-            row=list(raw)+[""]*max(0,15-len(raw)); row=row[:15]
+            row=list(raw)+[""]*max(0,20-len(raw)); row=row[:20]
             action=str(row[9]).strip()
             if not action: continue
             stats["requested"]+=1
@@ -217,10 +278,34 @@ class ReviewApprovalPipeline:
             if action not in self.ACTIONS: error="許可されていない判断です"
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
-            elif action=="Amazon注文と照合":
-                row[14]="未反映: Amazon手動照合はPhase 3で適用"
-                stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
+            elif action=="Amazon注文と照合":
+                request=amazon_requests.get(tx.import_id)
+                errors=amazon_errors.get(tx.import_id,())
+                if request is None or errors:
+                    row[14]="未反映: "+self._amazon_error(errors)
+                    row[19]="未反映"
+                    stats["errors"]+=1; stats["amazon_manual_invalid"]+=1
+                    review_updates.append((row_num,row)); continue
+                candidate=request.candidate; audit=audit_information(candidate)
+                updated=list(tx.row); updated[8]="matched_amazon"
+                updated[9]=f"amazon:{candidate.order_id}"
+                rate=f"{audit['amount_difference_rate']:.4%}"
+                annotation=(f"手動照合={candidate.candidate_id}; Amazonキー=amazon:{candidate.order_id}; "
+                            f"カード側は支出計上しない; 手動照合監査="
+                            f"カード額:{audit['card_amount']},注文額:{audit['amazon_order_amount']},"
+                            f"差額:{audit['amount_difference']},差額率:{rate},"
+                            f"日付差:{audit['date_difference_days']}日,商品数:{audit['item_count']},"
+                            f"支払方法:{audit['payment_method']},データ種別:{audit['source_kind']}")
+                updated[11]="; ".join(x for x in (tx.note,annotation) if x)
+                import_updates.append((tx.row_num,updated))
+                for expense_row_num,expense_raw in self.db.expense_rows_for_import(tx.import_id):
+                    expense=list(expense_raw)+[""]*max(0,13-len(expense_raw)); expense=expense[:13]
+                    expense[12]="duplicate_excluded"
+                    expense_updates.append((expense_row_num,expense)); stats["expenses_excluded"]+=1
+                row[14]="反映済み"; row[19]="反映済み"
+                review_updates.append((row_num,row)); stats["applied"]+=1
+                stats["amazon_manual_matched"]+=1; continue
             elif not (
                 is_reviewable_status(tx.status)
                 or tx.status in {"unclassified_aupay", "unclassified_card", "unclassified_paypay"}
@@ -231,6 +316,10 @@ class ReviewApprovalPipeline:
 
             target=""; new_status=""
             if action=="支出として計上":
+                if (tx.source=="au PAYカード" and is_amazon(tx.merchant)
+                        and tx.status=="amazon_unmatched"):
+                    row[14]="未反映: Amazon注文と照合 または 保留 を選択してください"
+                    stats["errors"]+=1; review_updates.append((row_num,row)); continue
                 pair=selected_category_pair(str(row[11]),str(row[12]))
                 if pair not in categories:
                     row[14]="エラー: カテゴリマスタに存在する大・小カテゴリを選択してください"

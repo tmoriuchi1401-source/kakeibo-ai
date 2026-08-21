@@ -57,9 +57,17 @@ class MemoryDB:
 
     def update_rows(self, sheet, rows):
         self.sheets.setdefault("updates:" + sheet, []).extend(rows)
+        if sheet in self.sheets:
+            for row_num, row in rows:
+                index = row_num - 2
+                if 0 <= index < len(self.sheets[sheet]):
+                    self.sheets[sheet][index] = list(row)
 
-    def expense_index(self): return {}
-    def expense_rows_for_import(self, import_id): return []
+    def expense_index(self):
+        return {row[0]:index for index,row in enumerate(self.sheets.get("支出明細",[]),start=2)}
+    def expense_rows_for_import(self, import_id):
+        return [(index,row) for index,row in enumerate(self.sheets.get("支出明細",[]),start=2)
+                if len(row)>10 and row[10]==import_id]
     def ensure_expense_status_column(self): pass
 
 
@@ -145,7 +153,7 @@ def test_preview_is_read_only_and_reports_candidate_counts():
     assert db.sheets["Amazon照合候補"] == []
 
 
-def test_amazon_action_is_available_but_phase_two_does_not_update_import_or_expense():
+def test_amazon_action_without_selection_does_not_update_import_or_expense():
     db = MemoryDB()
     ReviewPipeline(db).refresh()
     row = review_row(db, "card:1")
@@ -153,6 +161,129 @@ def test_amazon_action_is_available_but_phase_two_does_not_update_import_or_expe
     result = ReviewApprovalPipeline(db).apply()
     assert "Amazon注文と照合" in ReviewApprovalPipeline.ACTIONS
     assert result["applied"] == 0
-    assert result["held"] == 1
+    assert result["errors"] == 1
     assert db.sheets.get("updates:取込データ", []) == []
     assert db.sheets.get("支出明細", []) == []
+
+
+def select_candidate(db, card_id="card:1", order_id="ORDER-1"):
+    if not db.sheets["Amazon照合候補"]:
+        ReviewPipeline(db).refresh()
+    candidate = next(row for row in db.sheets["Amazon照合候補"]
+                     if row[1] == card_id and row[2] == order_id)
+    row = review_row(db, card_id)
+    row[9] = "Amazon注文と照合"
+    row[17] = candidate[17]
+    ReviewPipeline(db).refresh()
+    return candidate
+
+
+def test_phase_three_valid_candidate_updates_only_card_and_review():
+    db = MemoryDB()
+    original_orders = [list(row) for row in db.sheets["Amazon注文"]]
+    candidate = select_candidate(db)
+    preview = ReviewApprovalPipeline(db).preview()
+    assert preview == {
+        "amazon_manual_selected": 1, "amazon_manual_valid": 1,
+        "amazon_manual_invalid": 0, "amazon_manual_conflicts": 0,
+        "amazon_manual_would_match": 1,
+    }
+
+    result = ReviewApprovalPipeline(db).apply()
+    card_row = db.sheets["取込データ"][0]
+    reviewed = review_row(db, "card:1")
+    assert result["amazon_manual_matched"] == 1
+    assert card_row[8] == "matched_amazon"
+    assert card_row[9] == "amazon:ORDER-1"
+    assert f"手動照合={candidate[0]}" in card_row[11]
+    assert "Amazonキー=amazon:ORDER-1" in card_row[11]
+    assert "カード側は支出計上しない" in card_row[11]
+    assert "カード額:" in card_row[11] and "差額率:" in card_row[11]
+    assert "商品数:" in card_row[11] and "データ種別:" in card_row[11]
+    assert reviewed[14] == "反映済み" and reviewed[19] == "反映済み"
+    assert db.sheets["Amazon注文"] == original_orders
+    assert db.sheets.get("支出明細", []) == []
+
+    ReviewPipeline(db).refresh()
+    assert all(row[0] != "card:1" for row in db.sheets["要確認"])
+
+
+def test_existing_card_expense_is_excluded_but_no_expense_is_created():
+    db = MemoryDB()
+    db.sheets["支出明細"] = [[
+        "E-card", "2026-08-20", "Amazon", "", 1000, "", "", "Visa",
+        "au PAYカード", "", "card:1", "", "active",
+    ]]
+    select_candidate(db)
+    result = ReviewApprovalPipeline(db).apply()
+    assert result["expenses_created"] == 0
+    assert result["expenses_excluded"] == 1
+    assert len(db.sheets["支出明細"]) == 1
+    assert db.sheets["支出明細"][0][12] == "duplicate_excluded"
+
+
+def test_invalid_deleted_and_changed_candidates_do_not_update_import():
+    for mutation in ("invalid_id", "deleted", "changed"):
+        db = MemoryDB(); candidate = select_candidate(db)
+        if mutation == "invalid_id":
+            row = review_row(db, "card:1"); row[18] = "amcand:invalid"; row[19] = "選択済み"
+        elif mutation == "deleted":
+            db.sheets["Amazon注文"] = [row for row in db.sheets["Amazon注文"]
+                                           if row[1] != candidate[2]]
+        else:
+            next(row for row in db.sheets["Amazon注文"] if row[1] == candidate[2])[11] = "changed"
+        result = ReviewApprovalPipeline(db).apply()
+        assert result["amazon_manual_invalid"] == 1
+        assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
+        assert review_row(db, "card:1")[14].startswith("未反映:")
+
+
+def test_resolved_manual_refund_and_installment_cards_are_rejected_at_apply():
+    mutations = [
+        lambda row: row.__setitem__(8, "matched_amazon"),
+        lambda row: row.__setitem__(11, "手動照合=legacy"),
+        lambda row: row.__setitem__(11, "返金"),
+        lambda row: row.__setitem__(7, "分割払い"),
+    ]
+    for mutate in mutations:
+        db = MemoryDB(); select_candidate(db)
+        mutate(db.sheets["取込データ"][0])
+        result = ReviewApprovalPipeline(db).apply()
+        assert result["amazon_manual_invalid"] == 1
+        assert "updates:取込データ" not in db.sheets or not db.sheets["updates:取込データ"]
+
+
+def test_used_order_and_batch_conflicts_reject_all_rows():
+    db = MemoryDB()
+    db.sheets["取込データ"].append(import_row(
+        "old", "au PAYカード", "2026-08-10", 1000, "matched_amazon",
+        note="手動照合=old; Amazonキー=amazon:ORDER-1",
+    ))
+    select_candidate(db)
+    assert ReviewApprovalPipeline(db).apply()["amazon_manual_invalid"] == 1
+    assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
+
+    db = MemoryDB()
+    db.sheets["取込データ"].append(import_row(
+        "card:2", "au PAYカード", "2026-08-20", 1000, "amazon_unmatched",
+    ))
+    ReviewPipeline(db).refresh()
+    select_candidate(db, "card:1", "ORDER-1")
+    select_candidate(db, "card:2", "ORDER-1")
+    preview = ReviewApprovalPipeline(db).preview()
+    assert preview["amazon_manual_conflicts"] == 2
+    result = ReviewApprovalPipeline(db).apply()
+    assert result["amazon_manual_invalid"] == 2
+    assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
+    assert db.sheets["取込データ"][2][8] == "amazon_unmatched"
+
+
+def test_amazon_unmatched_cannot_be_manually_created_as_expense():
+    db = MemoryDB(); ReviewPipeline(db).refresh()
+    row = review_row(db, "card:1")
+    row[9] = "支出として計上"; row[11] = "日用品｜雑貨"
+    result = ReviewApprovalPipeline(db).apply()
+    assert result["errors"] == 1
+    assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
+    assert db.sheets.get("支出明細", []) == []
+    assert "Amazon注文と照合" in review_row(db, "card:1")[14]

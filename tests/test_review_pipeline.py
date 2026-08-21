@@ -72,7 +72,7 @@ class FakeDB:
     def get(self,rng):
         if rng=="取込データ!A2:L":
             return [row(self.import_id,self.source,"2026-08-16",self.status)]
-        if rng=="要確認!A2:O":
+        if rng in {"要確認!A2:O","要確認!A2:T"}:
             return [[self.import_id,"中","2026-08-16",self.source,"店舗",100,self.status,
                      "","","支出として計上","",self.category[0],self.category[1],"メモ",""]]
         raise AssertionError(rng)

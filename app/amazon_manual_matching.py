@@ -281,3 +281,31 @@ def audit_information(candidate: AmazonManualCandidate) -> dict:
         "payment_method": candidate.payment_method,
         "source_kind": candidate.source_kind,
     }
+
+
+def candidate_from_storage_row(raw: list) -> AmazonManualCandidate:
+    row = list(raw) + [""] * max(0, 19 - len(raw))
+    row = row[:19]
+    if not row[0] or not row[1] or not row[2]:
+        raise ValueError("stored candidate is missing required identity fields")
+    try:
+        return AmazonManualCandidate(
+            candidate_id=str(row[0]),
+            card_import_id=str(row[1]),
+            order_id=str(row[2]),
+            card_date=str(row[4]),
+            order_date=str(row[5]),
+            card_amount=int(float(str(row[6]).replace(",", ""))),
+            order_amount=int(float(str(row[7]).replace(",", ""))),
+            amount_difference=int(float(str(row[8]).replace(",", ""))),
+            amount_difference_rate=float(row[9]),
+            date_difference_days=int(float(row[10])),
+            item_count=int(float(row[11])),
+            short_item_summary=str(row[12]),
+            major_categories=tuple(x.strip() for x in str(row[13]).split("/") if x.strip()),
+            payment_method=str(row[14]),
+            source_kind=str(row[15]),
+            order_fingerprint=str(row[16]),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("stored candidate contains invalid numeric fields") from exc

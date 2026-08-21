@@ -70,6 +70,7 @@ def main():
     sub.add_parser("reconcile")
     sub.add_parser("review-preview")
     sub.add_parser("review-refresh")
+    sub.add_parser("review-apply-preview")
     sub.add_parser("review-apply")
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
@@ -154,6 +155,8 @@ def main():
         s,db,_=make(False); print(ReviewPipeline(db).preview())
     elif args.cmd=="review-refresh":
         s,db,_=make(False); print(ReviewPipeline(db).refresh())
+    elif args.cmd=="review-apply-preview":
+        s,db,_=make(False); print(ReviewApprovalPipeline(db).preview())
     elif args.cmd=="review-apply":
         s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
     elif args.cmd=="expenses-preview":
