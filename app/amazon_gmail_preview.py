@@ -17,37 +17,17 @@ from .amazon_email import AmazonMailEvent, parse_amazon_email
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 SEARCHES = (
     (
-        "payment",
-        'in:anywhere from:amazon.co.jp newer_than:2y '
-        '{subject:請求 subject:支払い subject:お支払い "ご請求額" "請求金額"}',
-        2,
-    ),
-    (
-        "shipment",
-        "in:anywhere from:shipment-tracking@amazon.co.jp newer_than:2y "
-        "{subject:発送 subject:お届け}",
-        2,
-    ),
-    (
         "order",
-        'in:anywhere from:auto-confirm@amazon.co.jp newer_than:2y '
-        '{subject:注文 subject:"ご注文の確認"}',
+        "in:anywhere from:amazon.co.jp newer_than:2y subject:注文",
         2,
     ),
     (
-        "refund_return",
-        "in:anywhere {from:return@amazon.co.jp from:order-update@amazon.co.jp} "
-        "newer_than:2y {subject:返金 subject:返品}",
-        2,
-    ),
-    (
-        "cancellation",
-        "in:anywhere {from:order-update@amazon.co.jp from:auto-confirm@amazon.co.jp} "
-        "newer_than:2y subject:キャンセル",
+        "fallback",
+        "in:anywhere from:amazon.co.jp newer_than:2y",
         2,
     ),
 )
-MAX_MESSAGES = 10
+MAX_MESSAGES = 4
 
 
 class GmailPreviewAuthError(RuntimeError):
@@ -107,8 +87,9 @@ def _raw_bytes(encoded: str) -> bytes:
         raise ValueError("gmail_raw_status: invalid") from exc
 
 
-def _anonymous_sample(event: AmazonMailEvent) -> dict:
+def _anonymous_sample(source_category: str, event: AmazonMailEvent) -> dict:
     return {
+        "source_category": source_category,
         "event_type": event.event_type,
         "charged_amount": event.charged_amount,
         "order_amount": event.order_amount,
@@ -139,51 +120,54 @@ def preview_amazon_gmail(
     sample_limit: int = 3,
 ) -> dict:
     seen: set[str] = set()
-    events: list[AmazonMailEvent] = []
+    events: list[tuple[str, AmazonMailEvent]] = []
     search_counts: Counter[str] = Counter()
     messages_api = service.users().messages()
 
     for search_name, query, limit in SEARCHES:
         if len(seen) >= MAX_MESSAGES:
             break
-        response = messages_api.list(
-            userId="me", q=query, maxResults=min(limit, MAX_MESSAGES - len(seen)),
-        ).execute()
+        request_limit = min(MAX_MESSAGES, limit + len(seen))
+        response = messages_api.list(userId="me", q=query, maxResults=request_limit).execute()
         for item in response.get("messages", []):
             message_id = item.get("id")
             if not message_id or message_id in seen or len(seen) >= MAX_MESSAGES:
                 continue
             seen.add(message_id)
             raw = messages_api.get(userId="me", id=message_id, format="raw").execute()
-            events.append(parser(_raw_bytes(raw.get("raw", ""))))
+            events.append((search_name, parser(_raw_bytes(raw.get("raw", "")))))
             search_counts[search_name] += 1
             if search_counts[search_name] >= limit:
                 break
 
-    event_types = Counter(event.event_type for event in events)
+    event_types = Counter(event.event_type for _, event in events)
     presence_fields = (
         "charged_amount", "order_amount", "gift_card_amount", "points_amount",
         "coupon_amount", "discount_amount", "shipment_amount", "payment_method",
     )
     presence = {
-        f"{field}_present": sum(getattr(event, field) is not None for event in events)
+        f"{field}_present": sum(getattr(event, field) is not None for _, event in events)
         for field in presence_fields
     }
     both = sum(
         event.charged_amount is not None and event.order_amount is not None
-        for event in events
+        for _, event in events
     )
     return {
         "gmail_scope_ok": True,
         "sampled_messages": len(events),
-        "search_categories": dict(search_counts),
+        "order_search_sampled": search_counts["order"],
+        "fallback_sampled": search_counts["fallback"],
         "event_types": dict(event_types),
         **presence,
         "charged_and_order_amount_both_present": both,
         "outlook": _outlook(
             len(events), presence["charged_amount_present"], presence["order_amount_present"],
         ),
-        "samples": [_anonymous_sample(event) for event in events[:sample_limit]],
+        "samples": [
+            _anonymous_sample(source_category, event)
+            for source_category, event in events[:sample_limit]
+        ],
     }
 
 

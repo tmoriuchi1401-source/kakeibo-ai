@@ -10,6 +10,7 @@ from google.auth.exceptions import RefreshError
 from app.amazon_gmail_preview import (
     GMAIL_READONLY,
     GmailPreviewAuthError,
+    SEARCHES,
     credentials_from_token,
     preview_amazon_gmail,
 )
@@ -64,6 +65,13 @@ class FakeService:
         return FakeUsers(self.messages_api)
 
 
+def test_order_search_uses_domain_and_subject_without_specific_sender():
+    name, query, limit = SEARCHES[0]
+    assert (name, limit) == ("order", 2)
+    assert query == "in:anywhere from:amazon.co.jp newer_than:2y subject:注文"
+    assert "auto-confirm" not in query
+
+
 def test_preview_uses_only_list_and_raw_get_and_aggregates_amounts():
     raws = {
         "payment": raw_mail("ご請求のお知らせ", """
@@ -77,11 +85,13 @@ Amazonポイント利用額: 100円
         "shipment": raw_mail("発送のお知らせ", "発送分合計: 980円"),
     }
     service = FakeService(
-        [[{"id": "payment"}], [{"id": "shipment"}], [], [], []], raws,
+        [[{"id": "payment"}], [{"id": "shipment"}]], raws,
     )
     result = preview_amazon_gmail(service)
 
     assert result["sampled_messages"] == 2
+    assert result["order_search_sampled"] == 1
+    assert result["fallback_sampled"] == 1
     assert result["charged_amount_present"] == 1
     assert result["order_amount_present"] == 1
     assert result["gift_card_amount_present"] == 1
@@ -96,26 +106,25 @@ Amazonポイント利用額: 100円
     )
 
 
-def test_duplicate_messages_are_parsed_once_and_total_is_capped_at_ten():
-    ids = [f"m{i}" for i in range(12)]
+def test_order_and_fallback_are_capped_at_two_each_and_four_total():
+    ids = [f"m{i}" for i in range(6)]
     raws = {item: raw_mail("ご注文の確認", "注文合計: 100円") for item in ids}
     searches = [
         [{"id": "m0"}, {"id": "m1"}],
-        [{"id": "m0"}, {"id": "m2"}],
-        [{"id": "m3"}, {"id": "m4"}],
-        [{"id": "m5"}, {"id": "m6"}],
-        [{"id": "m7"}, {"id": "m8"}],
+        [{"id": "m0"}, {"id": "m1"}, {"id": "m2"}, {"id": "m3"}, {"id": "m4"}],
     ]
     service = FakeService(searches, raws)
     result = preview_amazon_gmail(service)
     get_ids = [kwargs["id"] for name, kwargs in service.messages_api.operations if name == "get"]
-    assert result["sampled_messages"] == 9
+    assert result["sampled_messages"] == 4
+    assert result["order_search_sampled"] == 2
+    assert result["fallback_sampled"] == 2
     assert len(get_ids) == len(set(get_ids))
-    assert result["sampled_messages"] <= 10
+    assert [kwargs["maxResults"] for name, kwargs in service.messages_api.operations if name == "list"] == [2, 4]
 
 
 def test_zero_messages_is_successful():
-    result = preview_amazon_gmail(FakeService([[], [], [], [], []], {}))
+    result = preview_amazon_gmail(FakeService([[], []], {}))
     assert result["sampled_messages"] == 0
     assert result["outlook"] == "D"
     assert result["samples"] == []
@@ -129,7 +138,7 @@ def test_samples_are_anonymized():
 追跡番号: TRACK-SECRET
 カード請求額: 500円
 """
-    service = FakeService([[{"id": "m1"}], [], [], [], []], {"m1": raw_mail("ご請求", body)})
+    service = FakeService([[{"id": "m1"}], []], {"m1": raw_mail("ご請求", body)})
     serialized = json.dumps(preview_amazon_gmail(service), ensure_ascii=False)
     assert "秘密太郎" not in serialized
     assert "東京都" not in serialized
@@ -137,6 +146,7 @@ def test_samples_are_anonymized():
     assert "123-1234567-1234567" not in serialized
     assert "private@example.invalid" not in serialized
     assert "m1" not in serialized
+    assert '"source_category": "order"' in serialized
 
 
 class FakeCredentials:
