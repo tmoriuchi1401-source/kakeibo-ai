@@ -3,8 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .auto_expense import expense_id
+from .amazon_manual_matching import (
+    AmazonManualCandidate,
+    aggregate_amazon_orders,
+    find_amazon_candidates,
+    is_manual_match_target,
+)
 from .reconciliation import ImportTransaction, parse_import_rows
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
+from .utils import now_jst_string
 
 
 @dataclass(frozen=True)
@@ -71,26 +78,107 @@ class ReviewPipeline:
     def preview(self)->dict:
         tx=parse_import_rows(self.db.get("取込データ!A2:L"))
         items=review_items(tx)
-        return self._summary(items)
+        candidates=self._candidate_rows(tx)
+        result=self._summary(items)
+        result.update(self._candidate_summary(candidates))
+        return result
+
+    @staticmethod
+    def _selection_label(candidate:AmazonManualCandidate)->str:
+        date=candidate.order_date[5:].replace("-","/") if len(candidate.order_date)>=10 else candidate.order_date
+        difference=f"{candidate.amount_difference:+,}円"
+        summary=candidate.short_item_summary.replace("\n"," ")[:30]
+        return (f"#{candidate.candidate_id[-8:]}｜{date}｜{candidate.order_amount:,}円｜"
+                f"差{difference}｜{candidate.date_difference_days}日前｜"
+                f"{candidate.item_count}商品｜{summary}")
+
+    def _candidate_rows(self,transactions:list[ImportTransaction]):
+        orders=aggregate_amazon_orders(self.db.get("Amazon注文!A2:M"))
+        generated=[]
+        for tx in transactions:
+            result=find_amazon_candidates(tx,orders)
+            generated.append((tx,result))
+        return generated
+
+    @staticmethod
+    def _candidate_summary(generated)->dict:
+        targets=[(tx,result) for tx,result in generated if is_manual_match_target(tx)]
+        return {
+            "amazon_manual_matching_rows":len(targets),
+            "candidates_generated":sum(len(result.candidates) for _,result in targets),
+            "rows_with_candidates":sum(bool(result.candidates) for _,result in targets),
+            "rows_without_candidates":sum(not result.candidates for _,result in targets),
+        }
 
     def refresh(self)->dict:
         tx=parse_import_rows(self.db.get("取込データ!A2:L"))
         items=review_items(tx)
+        generated=self._candidate_rows(tx)
+        generated_by_card={item.import_id:result for item,result in generated}
         categories=self.db.categories()
         self.db.ensure_sheet("要確認",HEADERS["要確認"])
-        existing={r[0]:list(r[9:15])+[""]*max(0,6-len(r[9:15]))
-                  for r in self.db.get("要確認!A2:O") if r}
-        self.db.clear("要確認!A2:O")
+        self.db.ensure_sheet("Amazon照合候補",HEADERS["Amazon照合候補"])
+        existing={r[0]:(list(r)+[""]*max(0,20-len(r)))[:20]
+                  for r in self.db.get("要確認!A2:T") if r}
+        old_candidates={}
+        old_labels={}
+        for raw in self.db.get("Amazon照合候補!A2:S"):
+            row=list(raw)+[""]*max(0,19-len(raw)); row=row[:19]
+            if row[0]:
+                old_candidates[str(row[0])]={"fingerprint":str(row[16]),"label":str(row[17])}
+                if row[17]: old_labels[str(row[17])]=str(row[0])
+        self.db.clear("要確認!A2:T")
+        self.db.clear("Amazon照合候補!A2:S")
         rows=[]
+        candidate_rows=[]
+        validation_options={}
+        generated_at=now_jst_string()
         for item in items:
             tx=item.transaction
-            manual=existing.get(tx.import_id,[""]*6)[:6]
+            old=existing.get(tx.import_id,[""]*20)
+            manual=old[9:15]
             display_date=tx.date.replace("-","/") if tx.date else ""
+            result=generated_by_card.get(tx.import_id)
+            candidates=list(result.candidates) if result else []
+            labels=[]; current_by_id={}
+            for rank,candidate in enumerate(candidates,start=1):
+                label=self._selection_label(candidate); labels.append(label)
+                current_by_id[candidate.candidate_id]=candidate
+                candidate_rows.append([
+                    candidate.candidate_id,candidate.card_import_id,candidate.order_id,rank,
+                    candidate.card_date,candidate.order_date,candidate.card_amount,candidate.order_amount,
+                    candidate.amount_difference,candidate.amount_difference_rate,
+                    candidate.date_difference_days,candidate.item_count,candidate.short_item_summary,
+                    " / ".join(candidate.major_categories),candidate.payment_method,
+                    candidate.source_kind,candidate.order_fingerprint,label,generated_at,
+                ])
+            summary="\n".join(f"{index}. {label}" for index,label in enumerate(labels,start=1))
+            selected_label=str(old[17]); selected_id=str(old[18])
+            mapped=old_labels.get(selected_label)
+            if mapped and mapped!=selected_id:
+                selected_id=mapped
+            if not selected_id and mapped:
+                selected_id=mapped
+            selection_state=""
+            if selected_id:
+                current=current_by_id.get(selected_id)
+                previous=old_candidates.get(selected_id)
+                if current is None:
+                    selection_state="選択無効: 候補なし（要再選択）"
+                elif previous and previous["fingerprint"]!=current.order_fingerprint:
+                    selection_state="選択無効: 注文内容変更（要再選択）"
+                else:
+                    selection_state="選択済み"
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
-                         tx.status,item.recommendation,tx.note]+manual)
+                         tx.status,item.recommendation,tx.note]+manual+
+                        [summary,result.total_candidate_count if result else 0,
+                         selected_label,selected_id,selection_state])
+            if labels: validation_options[len(rows)+1]=labels
         self.db.append("要確認",rows)
-        self.db.configure_review_validation(categories)
+        self.db.append("Amazon照合候補",candidate_rows)
+        self.db.configure_review_validation(categories,validation_options)
         result=self._summary(items)
+        result.update(self._candidate_summary(generated))
         result["refreshed"]=True
         return result
 
@@ -104,7 +192,7 @@ class ReviewPipeline:
 
 
 class ReviewApprovalPipeline:
-    ACTIONS={"支出として計上","重複として除外","レシートと統合","保留"}
+    ACTIONS={"支出として計上","重複として除外","レシートと統合","Amazon注文と照合","保留"}
 
     def __init__(self,db:SheetsDB): self.db=db
 
@@ -129,6 +217,9 @@ class ReviewApprovalPipeline:
             if action not in self.ACTIONS: error="許可されていない判断です"
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
+            elif action=="Amazon注文と照合":
+                row[14]="未反映: Amazon手動照合はPhase 3で適用"
+                stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
             elif not (
                 is_reviewable_status(tx.status)

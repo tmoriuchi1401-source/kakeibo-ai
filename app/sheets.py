@@ -19,9 +19,13 @@ HEADERS={
 "店舗":["店舗ID","店舗名","標準店舗名","備考"],
 "取込データ":["取込ID","取込日時","データ元","元データID","日付","店舗","金額","支払方法","処理状態","統合先支出ID","元データハッシュ","備考"],
 "Amazon注文":["Amazonキー","Order ID","ASIN","注文日","商品名","数量","商品金額","支払方法","大カテゴリ","小カテゴリ","備考","データハッシュ","最終取込日時"],
+"Amazon照合候補":["候補ID","カード取込ID","Order ID","候補順位","カード日","注文日","カード金額",
+              "注文金額","差額","差額率","日付差","商品数","商品概要","大カテゴリ",
+              "支払方法","データ種別","注文fingerprint","選択表示","生成日時"],
 "商品マスタ":["商品ID","商品名","大カテゴリ","小カテゴリ","備考","最終更新日時"],
 "要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考",
-       "ユーザー判断","統合先取込ID","カテゴリ（大｜小）","小カテゴリ（従来）","ユーザー備考","反映結果"],
+       "ユーザー判断","統合先取込ID","カテゴリ（大｜小）","小カテゴリ（従来）","ユーザー備考","反映結果",
+       "Amazon候補","Amazon候補数","Amazon注文候補選択","Amazon候補ID","Amazon選択状態"],
 "支出一覧":["日付","店舗","商品名","金額","大カテゴリ","小カテゴリ","支払方法","データ元","備考","支出ID"],
 }
 
@@ -67,7 +71,8 @@ class SheetsDB:
                 spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
                 body={"values":[header]},
             ).execute()
-    def configure_review_validation(self, categories:list[tuple[str,str]]):
+    def configure_review_validation(self, categories:list[tuple[str,str]],
+                                    amazon_options_by_row:dict[int,list[str]]|None=None):
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]=="要確認")
@@ -81,12 +86,20 @@ class SheetsDB:
              "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
              "fields":"userEnteredFormat.numberFormat"}},
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
-                 ["支出として計上","重複として除外","レシートと統合","保留"]]}),
+                 ["支出として計上","重複として除外","レシートと統合","Amazon注文と照合","保留"]]}),
             rule(11,12,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
                  for x in combined_category_options(categories)]}),
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
              "startColumnIndex":12,"endColumnIndex":13}}},
         ]
+        for row_num,options in (amazon_options_by_row or {}).items():
+            if options:
+                requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,
+                    "startRowIndex":row_num-1,"endRowIndex":row_num,
+                    "startColumnIndex":17,"endColumnIndex":18},
+                    "rule":{"condition":{"type":"ONE_OF_LIST","values":[
+                        {"userEnteredValue":value} for value in options
+                    ]},"strict":True,"showCustomUi":True}}})
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":requests}
         ).execute()
