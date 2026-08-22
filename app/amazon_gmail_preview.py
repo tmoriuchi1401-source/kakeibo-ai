@@ -21,18 +21,23 @@ from .amazon_email import (
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 SEARCHES = (
-    (
-        "order",
-        "in:anywhere from:amazon.co.jp newer_than:2y subject:注文",
-        2,
-    ),
-    (
-        "fallback",
-        "in:anywhere from:amazon.co.jp newer_than:2y",
-        2,
-    ),
+    ("order", "in:anywhere from:amazon.co.jp newer_than:1y {subject:注文 subject:ご注文}", 10),
+    ("payment", "in:anywhere from:amazon.co.jp newer_than:1y {subject:請求 subject:支払い subject:お支払い}", 5),
+    ("shipment", "in:anywhere from:amazon.co.jp newer_than:1y {subject:発送 subject:出荷}", 10),
+    ("delivery", "in:anywhere from:amazon.co.jp newer_than:1y {subject:配達 subject:お届け}", 5),
+    ("cancellation", "in:anywhere from:amazon.co.jp newer_than:1y {subject:キャンセル subject:取消}", 5),
+    ("return", "in:anywhere from:amazon.co.jp newer_than:1y {subject:返品 subject:返送}", 5),
+    ("refund", "in:anywhere from:amazon.co.jp newer_than:1y subject:返金", 5),
+    ("fallback", "in:anywhere from:amazon.co.jp newer_than:1y", 5),
 )
-MAX_MESSAGES = 4
+MAX_MESSAGES = sum(limit for _, _, limit in SEARCHES)
+EVENT_TYPES = (
+    "order", "payment", "shipment", "delivery", "cancellation", "return", "refund", "unknown",
+)
+SUMMARY_FIELDS = (
+    "order_id", "event_date", "charged_amount", "order_amount", "refund_amount",
+    "shipment_amount", "payment_method",
+)
 
 
 class GmailPreviewAuthError(RuntimeError):
@@ -99,7 +104,14 @@ def _anonymous_sample(
         "source_category": source_category,
         "event_type": event.event_type,
         "order_id_present": event.order_id is not None,
+        "event_date_present": event.event_date is not None,
+        "charged_amount_present": event.charged_amount is not None,
+        "order_amount_present": event.order_amount is not None,
+        "refund_amount_present": event.refund_amount is not None,
+        "shipment_amount_present": event.shipment_amount is not None,
         "payment_method_present": event.payment_method is not None,
+        "message_id_present": event.message_id is not None,
+        "auto_applicability": classify_auto_applicability(event),
         "structure": structure,
         "money_context": money_context,
     }
@@ -115,6 +127,28 @@ def _outlook(sampled: int, charged: int, order_amount: int) -> str:
     return "D"
 
 
+def classify_auto_applicability(event: AmazonMailEvent) -> str:
+    """Classify a parsed event without applying it to any external system."""
+    if event.event_type == "refund":
+        return "auto_applicable" if event.order_id and event.refund_amount is not None else "needs_review"
+    if event.event_type in {"order", "payment", "shipment", "delivery", "cancellation", "return"}:
+        return "auto_applicable" if event.order_id else "needs_review"
+    return "needs_review" if event.order_id else "unusable"
+
+
+def _event_type_summary(events: list[tuple[str, AmazonMailEvent, dict, dict]]) -> dict:
+    summary = {}
+    for event_type in EVENT_TYPES:
+        matching = [event for _, event, _, _ in events if event.event_type == event_type]
+        values = {"message_count": len(matching)}
+        values.update({
+            f"{field}_present_count": sum(getattr(event, field) is not None for event in matching)
+            for field in SUMMARY_FIELDS
+        })
+        summary[event_type] = values
+    return summary
+
+
 def preview_amazon_gmail(
     service,
     *,
@@ -124,17 +158,22 @@ def preview_amazon_gmail(
     seen: set[str] = set()
     events: list[tuple[str, AmazonMailEvent, dict, dict]] = []
     search_counts: Counter[str] = Counter()
+    duplicate_messages_skipped = 0
     messages_api = service.users().messages()
 
     for search_name, query, limit in SEARCHES:
         if len(seen) >= MAX_MESSAGES:
             break
-        request_limit = min(MAX_MESSAGES, limit + len(seen))
-        response = messages_api.list(userId="me", q=query, maxResults=request_limit).execute()
+        response = messages_api.list(userId="me", q=query, maxResults=limit).execute()
         for item in response.get("messages", []):
             message_id = item.get("id")
-            if not message_id or message_id in seen or len(seen) >= MAX_MESSAGES:
+            if not message_id:
                 continue
+            if message_id in seen:
+                duplicate_messages_skipped += 1
+                continue
+            if len(seen) >= MAX_MESSAGES:
+                break
             seen.add(message_id)
             raw = messages_api.get(userId="me", id=message_id, format="raw").execute()
             raw_bytes = _raw_bytes(raw.get("raw", ""))
@@ -169,12 +208,18 @@ def preview_amazon_gmail(
         event.charged_amount is not None and event.order_amount is not None
         for _, event, _, _ in events
     )
+    applicability = Counter(classify_auto_applicability(event) for _, event, _, _ in events)
     return {
         "gmail_scope_ok": True,
         "sampled_messages": len(events),
-        "order_search_sampled": search_counts["order"],
-        "fallback_sampled": search_counts["fallback"],
+        "duplicate_messages_skipped": duplicate_messages_skipped,
+        "search_categories": {name: search_counts[name] for name, _, _ in SEARCHES},
         "event_types": dict(event_types),
+        "unknown_count": event_types["unknown"],
+        "event_type_summary": _event_type_summary(events),
+        "auto_applicability": {
+            name: applicability[name] for name in ("auto_applicable", "needs_review", "unusable")
+        },
         "parser_failure_reasons": dict(failure_reasons),
         "money_context": dict(money_context),
         "message_context": dict(message_context),

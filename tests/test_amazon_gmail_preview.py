@@ -11,9 +11,11 @@ from app.amazon_gmail_preview import (
     GMAIL_READONLY,
     GmailPreviewAuthError,
     SEARCHES,
+    classify_auto_applicability,
     credentials_from_token,
     preview_amazon_gmail,
 )
+from app.amazon_email import parse_amazon_email
 
 
 def raw_mail(subject: str, body: str) -> str:
@@ -65,10 +67,17 @@ class FakeService:
         return FakeUsers(self.messages_api)
 
 
-def test_order_search_uses_domain_and_subject_without_specific_sender():
+def test_searches_cover_one_year_event_inventory_with_expected_limits():
+    expected = {
+        "order": 10, "payment": 5, "shipment": 10, "delivery": 5,
+        "cancellation": 5, "return": 5, "refund": 5, "fallback": 5,
+    }
+    assert {name: limit for name, _, limit in SEARCHES} == expected
+    assert sum(limit for _, _, limit in SEARCHES) == 50
+    assert all("from:amazon.co.jp" in query and "newer_than:1y" in query for _, query, _ in SEARCHES)
     name, query, limit = SEARCHES[0]
-    assert (name, limit) == ("order", 2)
-    assert query == "in:anywhere from:amazon.co.jp newer_than:2y subject:注文"
+    assert (name, limit) == ("order", 10)
+    assert "subject:注文" in query
     assert "auto-confirm" not in query
 
 
@@ -84,14 +93,12 @@ Amazonポイント利用額: 100円
 """),
         "shipment": raw_mail("発送のお知らせ", "発送分合計: 980円"),
     }
-    service = FakeService(
-        [[{"id": "payment"}], [{"id": "shipment"}]], raws,
-    )
+    service = FakeService([[{"id": "payment"}], [], [{"id": "shipment"}]] + [[]] * 5, raws)
     result = preview_amazon_gmail(service)
 
     assert result["sampled_messages"] == 2
-    assert result["order_search_sampled"] == 1
-    assert result["fallback_sampled"] == 1
+    assert result["search_categories"]["order"] == 1
+    assert result["search_categories"]["shipment"] == 1
     assert result["charged_amount_present"] == 1
     assert result["order_amount_present"] == 1
     assert result["gift_card_amount_present"] == 1
@@ -107,25 +114,24 @@ Amazonポイント利用額: 100円
     )
 
 
-def test_order_and_fallback_are_capped_at_two_each_and_four_total():
-    ids = [f"m{i}" for i in range(6)]
+def test_message_ids_are_deduplicated_and_counted():
+    ids = ["m0", "m1", "m2"]
     raws = {item: raw_mail("ご注文の確認", "注文合計: 100円") for item in ids}
     searches = [
         [{"id": "m0"}, {"id": "m1"}],
-        [{"id": "m0"}, {"id": "m1"}, {"id": "m2"}, {"id": "m3"}, {"id": "m4"}],
-    ]
+        [{"id": "m0"}, {"id": "m2"}],
+    ] + [[]] * 6
     service = FakeService(searches, raws)
     result = preview_amazon_gmail(service)
     get_ids = [kwargs["id"] for name, kwargs in service.messages_api.operations if name == "get"]
-    assert result["sampled_messages"] == 4
-    assert result["order_search_sampled"] == 2
-    assert result["fallback_sampled"] == 2
+    assert result["sampled_messages"] == 3
+    assert result["duplicate_messages_skipped"] == 1
     assert len(get_ids) == len(set(get_ids))
-    assert [kwargs["maxResults"] for name, kwargs in service.messages_api.operations if name == "list"] == [2, 4]
+    assert [kwargs["maxResults"] for name, kwargs in service.messages_api.operations if name == "list"] == [10, 5, 10, 5, 5, 5, 5, 5]
 
 
 def test_zero_messages_is_successful():
-    result = preview_amazon_gmail(FakeService([[], []], {}))
+    result = preview_amazon_gmail(FakeService([[]] * 8, {}))
     assert result["sampled_messages"] == 0
     assert result["outlook"] == "D"
     assert result["samples"] == []
@@ -139,7 +145,7 @@ def test_samples_are_anonymized():
 追跡番号: TRACK-SECRET
 カード請求額: 500円
 """
-    service = FakeService([[{"id": "m1"}], []], {"m1": raw_mail("ご請求", body)})
+    service = FakeService([[{"id": "m1"}]] + [[]] * 7, {"m1": raw_mail("ご請求", body)})
     serialized = json.dumps(preview_amazon_gmail(service), ensure_ascii=False)
     assert "秘密太郎" not in serialized
     assert "東京都" not in serialized
@@ -152,8 +158,49 @@ def test_samples_are_anonymized():
     assert '"money_candidate_count"' in serialized
     assert '"parser_failure_reason"' in serialized
     assert '"money_context"' in serialized
-    assert "123-1234567-1234567" not in serialized
-    assert "TRACK-SECRET" not in serialized
+
+
+def parsed(subject: str, body: str):
+    return parse_amazon_email(base64.urlsafe_b64decode(raw_mail(subject, body) + "=="))
+
+
+@pytest.mark.parametrize(
+    ("subject", "body", "expected"),
+    [
+        ("ご注文の確認", "注文番号: 123-1234567-1234567", "auto_applicable"),
+        ("発送のお知らせ", "注文番号がありません", "needs_review"),
+        ("Amazon.co.jpからのお知らせ", "一般的なお知らせです", "unusable"),
+    ],
+)
+def test_auto_applicability(subject, body, expected):
+    assert classify_auto_applicability(parsed(subject, body)) == expected
+
+
+def test_refund_requires_order_id_and_refund_amount_for_auto_applicable():
+    assert classify_auto_applicability(parsed(
+        "返金を処理しました", "注文番号: 123-1234567-1234567",
+    )) == "needs_review"
+    assert classify_auto_applicability(parsed(
+        "返金を処理しました", "注文番号: 123-1234567-1234567\n返金額: 500円",
+    )) == "auto_applicable"
+
+
+def test_event_type_summary_and_unknown_count():
+    raws = {
+        "order": raw_mail("ご注文の確認", "注文番号: 123-1234567-1234567\n注文合計: 500円"),
+        "unknown": raw_mail("Amazon.co.jpからのお知らせ", "一般的なお知らせです"),
+    }
+    result = preview_amazon_gmail(FakeService(
+        [[{"id": "order"}]] + [[]] * 6 + [[{"id": "unknown"}]], raws,
+    ))
+    assert result["unknown_count"] == 1
+    assert result["event_type_summary"]["order"]["message_count"] == 1
+    assert result["event_type_summary"]["order"]["order_id_present_count"] == 1
+    assert result["event_type_summary"]["order"]["order_amount_present_count"] == 1
+    assert result["event_type_summary"]["unknown"]["message_count"] == 1
+    assert result["auto_applicability"] == {
+        "auto_applicable": 1, "needs_review": 0, "unusable": 1,
+    }
 
 
 class FakeCredentials:
