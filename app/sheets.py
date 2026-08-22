@@ -19,6 +19,7 @@ HEADERS={
 "店舗":["店舗ID","店舗名","標準店舗名","備考"],
 "取込データ":["取込ID","取込日時","データ元","元データID","日付","店舗","金額","支払方法","処理状態","統合先支出ID","元データハッシュ","備考"],
 "Amazon注文":["Amazonキー","Order ID","ASIN","注文日","商品名","数量","商品金額","支払方法","大カテゴリ","小カテゴリ","備考","データハッシュ","最終取込日時","発送日","発送数"],
+"Amazonイベント":["イベントID","Gmail Message ID","RFC Message-ID","Thread ID","Source Hash","Event Type","Order ID","Event Date","Charged Amount","Order Amount","Refund Amount","Shipment Amount","Gift Card Amount","Points Amount","Coupon Amount","Discount Amount","Payment Method","Item Count","Parse Status","Match Status","Apply Status","Parser Version","Imported At","Last Parsed At"],
 "Amazon照合候補":["候補ID","カード取込ID","Order ID","候補順位","カード日","注文日","カード金額",
               "注文金額","差額","差額率","日付差","商品数","商品概要","大カテゴリ",
               "支払方法","データ種別","注文fingerprint","選択表示","生成日時","発送日","発送日差","発送数"],
