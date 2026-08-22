@@ -141,3 +141,21 @@ def test_event_type_and_status_values_match_phase_b1_specification():
         "unmatched", "matched", "order_not_found", "missing_order_id", "item_unresolved",
     )
     assert APPLY_STATUSES == ("pending", "no_action", "review")
+
+
+def test_amazon_event_identity_index_reads_identity_columns_once():
+    db = SheetsDB("sheet-id", service=object())
+    calls = []
+    db.get = lambda rng: calls.append(rng) or [
+        ["gmail-1", "<one@example.com>", "thread-1", "hash-1"],
+        ["gmail-2", "", "thread-2", ""],
+    ]
+
+    identities = db.amazon_event_identity_index()
+
+    assert calls == ["Amazonイベント!B2:E"]
+    assert identities == {
+        "gmail_message_ids": {"gmail-1", "gmail-2"},
+        "rfc_message_ids": {"<one@example.com>"},
+        "source_hashes": {"hash-1"},
+    }

@@ -148,6 +148,14 @@ class SheetsDB:
     def amazon_baseline_keys(self)->set[str]:
         return {r[0] for r in self.get("Amazon注文!A2:K")
                 if len(r)>10 and r[10]=="baseline"}
+    def amazon_event_identity_index(self)->dict[str,set[str]]:
+        identities={"gmail_message_ids":set(),"rfc_message_ids":set(),"source_hashes":set()}
+        for raw in self.get("Amazonイベント!B2:E"):
+            row=list(raw)+[""]*max(0,4-len(raw))
+            if row[0]: identities["gmail_message_ids"].add(str(row[0]))
+            if row[1]: identities["rfc_message_ids"].add(str(row[1]))
+            if row[3]: identities["source_hashes"].add(str(row[3]))
+        return identities
     def import_ids(self)->set[str]:
         return {r[0] for r in self.get("取込データ!A2:A") if r}
     def import_index(self)->dict[str,tuple[int,str]]:
