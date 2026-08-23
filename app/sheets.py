@@ -170,6 +170,12 @@ class SheetsDB:
                 if r and str(r[0]).strip()}
     def amazon_order_creation_event_rows(self)->list[list]:
         return self.get("Amazonイベント!F2:R")
+    def amazon_order_header_rows(self)->list[tuple[int,list]]:
+        return [(i,r) for i,r in enumerate(
+            self.get("Amazon注文ヘッダ!A2:O"),start=2
+        ) if r and str(r[0]).strip()]
+    def update_amazon_order_headers(self,rows:list[tuple[int,list]]):
+        self.update_rows("Amazon注文ヘッダ",rows)
     def import_ids(self)->set[str]:
         return {r[0] for r in self.get("取込データ!A2:A") if r}
     def import_index(self)->dict[str,tuple[int,str]]:
