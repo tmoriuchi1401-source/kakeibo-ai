@@ -133,6 +133,14 @@ class SheetsDB:
             spreadsheetId=self.sid,
             body={"valueInputOption":"USER_ENTERED","data":data}
         ).execute()
+    def update_amazon_event_match_statuses(self, rows:list[tuple[int,str]]):
+        if not rows:return
+        data=[{"range":f"Amazonイベント!T{row_num}","values":[[status]]}
+              for row_num,status in rows]
+        self.svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=self.sid,
+            body={"valueInputOption":"RAW","data":data}
+        ).execute()
     def categories(self)->list[tuple[str,str]]:
         return [(r[0],r[1]) for r in self.get("カテゴリ!A2:B") if len(r)>=2 and r[0] and r[1]]
     def product_master(self)->dict[str,tuple[str,str,str]]:

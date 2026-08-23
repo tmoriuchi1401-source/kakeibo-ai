@@ -34,6 +34,7 @@ from .amazon_unmatched import (
     load_amazon_unmatched_input,
 )
 from .amazon_email import parse_amazon_email
+from .amazon_event_matching import AmazonEventMatchingPipeline
 from .amazon_shipping import AmazonShippingBackfillPipeline
 from .drive_amazon_shipping import DriveAmazonShippingPipeline
 from .google_clients import (
@@ -90,6 +91,7 @@ def main():
     sub.add_parser("auto-expense")
     sub.add_parser("amazon-installment-preview")
     sub.add_parser("amazon-installment-apply")
+    sub.add_parser("amazon-event-match")
     aup=sub.add_parser("amazon-unmatched-preview")
     aup.add_argument("--amazon-csv")
     aup.add_argument("--transactions-json")
@@ -213,6 +215,8 @@ def main():
         s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
     elif args.cmd=="amazon-installment-apply":
         s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
+    elif args.cmd=="amazon-event-match":
+        s,db,_=make(False); print(AmazonEventMatchingPipeline(db).apply())
     elif args.cmd=="amazon-unmatched-preview":
         if args.transactions_json:
             if not args.amazon_csv:
