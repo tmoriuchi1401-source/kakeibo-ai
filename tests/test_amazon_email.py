@@ -42,6 +42,66 @@ def test_order_email_extracts_order_information():
     assert event.item_count == 2
 
 
+def test_actual_order_confirmation_template_extracts_only_labeled_total_and_quantity():
+    event = parse_amazon_email(mail("注文済み: 「商品名...」", """
+ご注文ありがとうございます。
+注文番号 249-1234567-1234567
+商品名
+数量: 1
+商品価格 ￥1,500
+合計 ￥1,780
+
+おすすめ商品
+￥4,300
+-17% ￥1,227
+"""))
+    assert event.event_type == "order"
+    assert event.order_id == "249-1234567-1234567"
+    assert event.order_amount == 1780
+    assert event.item_count == 1
+
+
+@pytest.mark.parametrize("gap", ["\n", "\u200b"])
+def test_actual_order_confirmation_total_allows_bounded_layout_gap(gap):
+    event = parse_amazon_email(mail("注文済み: 「商品名...」", f"""
+ご注文ありがとうございます。
+注文番号 {ORDER_ID}
+数量: 1
+合計{gap}￥1,780
+"""))
+    assert event.order_amount == 1780
+
+
+def test_order_confirmation_body_signals_are_sufficient():
+    event = parse_amazon_email(mail("Amazon.co.jpからのお知らせ", f"""
+ご注文ありがとうございます。
+注文番号 {ORDER_ID}
+合計 ￥500
+"""))
+    assert event.event_type == "order"
+
+
+def test_review_request_is_not_misclassified_as_order():
+    event = parse_amazon_email(mail(
+        "最近のAmazonの注文は期待に合っていましたか？ Amazonでレビューする",
+        "商品のレビューをお願いします。",
+    ))
+    assert event.event_type != "order"
+
+
+def test_ambiguous_standalone_totals_and_unbounded_quantities_are_not_guessed():
+    event = parse_amazon_email(mail("注文済み: 「商品名...」", f"""
+ご注文ありがとうございます。
+注文番号 {ORDER_ID}
+数量: 2
+合計 ￥1,780
+合計 ￥2,000
+"""))
+    assert event.event_type == "order"
+    assert event.order_amount is None
+    assert event.item_count is None
+
+
 def test_shipment_email_extracts_shipment_amount():
     event = parse_amazon_email(mail("Amazon.co.jp 発送のお知らせ", f"""
 注文番号: {ORDER_ID}

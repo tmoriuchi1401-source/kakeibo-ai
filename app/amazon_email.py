@@ -626,6 +626,33 @@ def _amount(text: str, labels: tuple[str, ...]) -> int | None:
     return int(match.group(1).replace(",", "")) if match else None
 
 
+def _standalone_total(text: str) -> tuple[int | None, re.Match | None]:
+    gap = r" \t\n\u00ad\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\u3000\ufeff"
+    matches = list(re.finditer(
+        rf"(?:^|\n)[ \t]*合計(?=[{gap}：:]{{0,16}}[￥¥])"
+        rf"[{gap}]*[：:]?[{gap}]*[￥¥][ \t]*([0-9][0-9,]*)[ \t]*円?",
+        text,
+        re.I,
+    ))
+    values = {int(match.group(1).replace(",", "")) for match in matches}
+    if len(values) != 1:
+        return None, None
+    return values.pop(), matches[0]
+
+
+def _order_item_count(text: str, total_match: re.Match | None) -> int | None:
+    if total_match is None:
+        return None
+    anchors = [match.end() for match in ORDER_ID_RE.finditer(text) if match.end() < total_match.start()]
+    if not anchors:
+        greeting = text.find("ご注文ありがとうございます。")
+        if greeting < 0 or greeting >= total_match.start():
+            return None
+        anchors = [greeting + len("ご注文ありがとうございます。")]
+    quantities = re.findall(r"数量\s*[：:]\s*(\d+)", text[max(anchors):total_match.start()])
+    return sum(int(value) for value in quantities) if quantities else None
+
+
 def _label(text: str, labels: tuple[str, ...]) -> str | None:
     names = "|".join(re.escape(label) for label in labels)
     match = re.search(rf"(?:{names})\s*[：:]?\s*([^\n]+)", text, re.I)
@@ -646,6 +673,10 @@ def _event_type(subject: str, text: str) -> str:
     for needles, kind in rules:
         if any(needle in value for needle in needles):
             return kind
+    if subject.startswith("注文済み:") or (
+        "ご注文ありがとうございます。" in text and "注文番号" in text
+    ):
+        return "order"
     return "unknown"
 
 
@@ -677,6 +708,7 @@ def parse_amazon_email(raw_email: bytes | Message) -> AmazonMailEvent:
     payment_method = _label(text, ("支払い方法", "お支払い方法", "返金方法"))
     item_count_value = _label(text, ("商品点数", "商品の数", "商品数"))
     item_count_match = re.search(r"\d+", item_count_value or "")
+    standalone_total, standalone_total_match = _standalone_total(text)
     gift_amount = _amount(text, ("ギフトカード利用額", "Amazonギフトカード利用額"))
     points_amount = _amount(text, ("Amazonポイント利用額", "ポイント利用額"))
     return AmazonMailEvent(
@@ -686,7 +718,7 @@ def parse_amazon_email(raw_email: bytes | Message) -> AmazonMailEvent:
         charged_amount=_amount(text, (
             "カードへのご請求額", "カード請求額", "実際の請求額", "今回の請求額", "ご請求額", "請求金額",
         )),
-        order_amount=_amount(text, ("注文合計", "ご注文合計")),
+        order_amount=_amount(text, ("注文合計", "ご注文合計")) or standalone_total,
         refund_amount=_amount(text, ("返金額", "返金予定額")),
         gift_card_amount=gift_amount,
         points_amount=points_amount,
@@ -694,7 +726,10 @@ def parse_amazon_email(raw_email: bytes | Message) -> AmazonMailEvent:
         discount_amount=_amount(text, ("割引額", "プロモーション割引")),
         payment_method=payment_method,
         shipment_amount=_amount(text, ("発送分合計", "今回発送分の合計", "発送商品合計")),
-        item_count=int(item_count_match.group(0)) if item_count_match else None,
+        item_count=(
+            int(item_count_match.group(0)) if item_count_match
+            else _order_item_count(text, standalone_total_match)
+        ),
         message_id=str(message.get("Message-ID")).strip() if message.get("Message-ID") else None,
         source_hash=hashlib.sha256(raw).hexdigest(),
         gift_card_used=gift_amount is not None or bool(re.search(r"ギフトカード(?:を)?使用", text)),
