@@ -165,6 +165,11 @@ class SheetsDB:
             if row[1]: identities["rfc_message_ids"].add(str(row[1]))
             if row[3]: identities["source_hashes"].add(str(row[3]))
         return identities
+    def amazon_order_header_ids(self)->set[str]:
+        return {str(r[0]).strip() for r in self.get("Amazon注文ヘッダ!A2:A")
+                if r and str(r[0]).strip()}
+    def amazon_order_creation_event_rows(self)->list[list]:
+        return self.get("Amazonイベント!F2:R")
     def import_ids(self)->set[str]:
         return {r[0] for r in self.get("取込データ!A2:A") if r}
     def import_index(self)->dict[str,tuple[int,str]]:
