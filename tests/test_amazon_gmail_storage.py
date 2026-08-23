@@ -15,6 +15,47 @@ from app.amazon_gmail_storage import (
 )
 
 
+def test_cli_import_uses_readonly_gmail_and_writable_sheets_db(monkeypatch, capsys):
+    import sys
+
+    import app.cli as cli
+
+    gmail_service = object()
+    db = object()
+    summary = {"fetched": 2, "new": 1}
+
+    class FakeSettings:
+        spreadsheet_id = "sheet-id"
+        gmail_token_json = "readonly-token"
+
+        def validate(self, **kwargs):
+            assert kwargs == {"need_sheet": True, "need_gmail": True}
+
+    def fake_sheets_db(spreadsheet_id, service=None):
+        assert spreadsheet_id == "sheet-id"
+        assert service is None
+        return db
+
+    monkeypatch.setattr(cli, "Settings", FakeSettings)
+    monkeypatch.setattr(cli, "SheetsDB", fake_sheets_db)
+    monkeypatch.setattr(
+        cli,
+        "gmail_readonly_service",
+        lambda token: gmail_service if token == "readonly-token" else None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "import_amazon_gmail_events",
+        lambda service, sheets_db: summary
+        if service is gmail_service and sheets_db is db else None,
+    )
+    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-gmail-import"])
+
+    cli.main()
+
+    assert capsys.readouterr().out.strip() == str(summary)
+
+
 def _raw(message_id: str | None, body: str) -> bytes:
     message = EmailMessage()
     if message_id is not None:

@@ -34,6 +34,8 @@ from .amazon_unmatched import (
     load_amazon_unmatched_input,
 )
 from .amazon_email import parse_amazon_email
+from .amazon_gmail_preview import gmail_readonly_service
+from .amazon_gmail_storage import import_amazon_gmail_events
 from .amazon_event_matching import AmazonEventMatchingPipeline
 from .amazon_order_header_preview import preview_amazon_order_headers
 from .amazon_schema_install import install_amazon_schema
@@ -96,6 +98,7 @@ def main():
     sub.add_parser("amazon-event-match")
     sub.add_parser("amazon-order-header-preview")
     sub.add_parser("amazon-schema-install")
+    sub.add_parser("amazon-gmail-import")
     aup=sub.add_parser("amazon-unmatched-preview")
     aup.add_argument("--amazon-csv")
     aup.add_argument("--transactions-json")
@@ -227,6 +230,11 @@ def main():
         print(preview_amazon_order_headers(db))
     elif args.cmd=="amazon-schema-install":
         s,db,_=make(False); print(install_amazon_schema(db))
+    elif args.cmd=="amazon-gmail-import":
+        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
+        db=SheetsDB(s.spreadsheet_id)
+        service=gmail_readonly_service(s.gmail_token_json)
+        print(import_amazon_gmail_events(service,db))
     elif args.cmd=="amazon-unmatched-preview":
         if args.transactions_json:
             if not args.amazon_csv:
