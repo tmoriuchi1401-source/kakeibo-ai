@@ -36,6 +36,7 @@ from .amazon_unmatched import (
 from .amazon_email import parse_amazon_email
 from .amazon_event_matching import AmazonEventMatchingPipeline
 from .amazon_order_header_preview import preview_amazon_order_headers
+from .amazon_schema_install import install_amazon_schema
 from .amazon_shipping import AmazonShippingBackfillPipeline
 from .drive_amazon_shipping import DriveAmazonShippingPipeline
 from .google_clients import (
@@ -94,6 +95,7 @@ def main():
     sub.add_parser("amazon-installment-apply")
     sub.add_parser("amazon-event-match")
     sub.add_parser("amazon-order-header-preview")
+    sub.add_parser("amazon-schema-install")
     aup=sub.add_parser("amazon-unmatched-preview")
     aup.add_argument("--amazon-csv")
     aup.add_argument("--transactions-json")
@@ -223,6 +225,8 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_amazon_order_headers(db))
+    elif args.cmd=="amazon-schema-install":
+        s,db,_=make(False); print(install_amazon_schema(db))
     elif args.cmd=="amazon-unmatched-preview":
         if args.transactions_json:
             if not args.amazon_csv:
