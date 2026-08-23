@@ -82,6 +82,90 @@ def _same(left, right, *, numeric: bool = False) -> bool:
     return _text(left) == _text(right)
 
 
+def group_amazon_order_events(event_rows) -> tuple[dict[str, list[list]], list[list]]:
+    """Group normalized event rows by explicit Order ID."""
+
+    groups: dict[str, list[list]] = defaultdict(list)
+    missing = []
+    for raw_row in event_rows:
+        row = _event_row(raw_row)
+        order_id = _text(row[1])
+        if order_id:
+            groups[order_id].append(row)
+        else:
+            missing.append(row)
+    return dict(groups), missing
+
+
+def aggregate_amazon_order_events(events: list[list], base_row=None) -> dict:
+    """Return the B4-3 header projection and aggregation diagnostics."""
+
+    new = _header_row(base_row or [])
+    conflicts = {
+        "order_amount": False,
+        "payment_method": False,
+        "item_count": False,
+        "gift_card_amount": False,
+        "points_amount": False,
+        "discount_amount": False,
+    }
+
+    order_date = _oldest_order_date(events)
+    if order_date is not None:
+        new[1] = order_date
+
+    for name, column, event_index, converter in (
+        ("order_amount", 2, 4, _number),
+        ("item_count", 4, 12, _number),
+        ("gift_card_amount", 10, 7, _number),
+        ("points_amount", 11, 8, _number),
+        ("discount_amount", 12, 10, _number),
+    ):
+        value, conflict = _unique(events, "order", event_index, converter)
+        conflicts[name] = conflict
+        if value is not None:
+            new[column] = value
+
+    payment_method, conflict = _unique(events, "order", 11, _text)
+    if payment_method is None and not conflict:
+        payment_method, conflict = _unique(events, "payment", 11, _text)
+    conflicts["payment_method"] = conflict
+    if payment_method is not None:
+        new[3] = payment_method
+
+    event_types = {_text(row[0]) for row in events}
+    if "delivery" in event_types:
+        new[5] = "delivered"
+    elif "shipment" in event_types:
+        new[5] = "partially_shipped"
+    elif "order" in event_types:
+        new[5] = "ordered"
+
+    charged_amount = _sum(events, "payment", 3)
+    refund_amount = _sum(events, "refund", 5)
+    shipment_amount = _sum(events, "shipment", 6)
+    if charged_amount is not None:
+        new[6] = charged_amount
+    if refund_amount is not None:
+        new[8] = refund_amount
+        order_amount = _number(new[2])
+        if refund_amount <= 0:
+            new[7] = "none"
+        else:
+            new[7] = "full" if order_amount is not None and refund_amount >= order_amount \
+                else "partial"
+    if shipment_amount is not None:
+        new[9] = shipment_amount
+
+    return {
+        "row": new,
+        "conflicts": conflicts,
+        "charged_amount_calculated": charged_amount is not None,
+        "refund_amount_calculated": refund_amount is not None,
+        "shipment_amount_calculated": shipment_amount is not None,
+    }
+
+
 def recalculate_amazon_order_headers(
     db,
     *,
@@ -89,15 +173,9 @@ def recalculate_amazon_order_headers(
 ) -> dict[str, int]:
     """Rebuild existing order-header state from all persisted Gmail events."""
 
-    groups: dict[str, list[list]] = defaultdict(list)
-    skipped_missing_order_id = 0
-    for raw_row in db.amazon_order_creation_event_rows():
-        row = _event_row(raw_row)
-        order_id = _text(row[1])
-        if not order_id:
-            skipped_missing_order_id += 1
-            continue
-        groups[order_id].append(row)
+    groups, missing = group_amazon_order_events(
+        db.amazon_order_creation_event_rows()
+    )
 
     existing = {
         _text(row[0]): (row_num, _header_row(row))
@@ -114,55 +192,10 @@ def recalculate_amazon_order_headers(
             continue
         processed += 1
         row_num, old = current_entry
-        new = list(old)
         events = groups[order_id]
-
-        order_date = _oldest_order_date(events)
-        if order_date is not None:
-            new[1] = order_date
-
-        for column, event_index, converter in (
-            (2, 4, _number),
-            (4, 12, _number),
-            (10, 7, _number),
-            (11, 8, _number),
-            (12, 10, _number),
-        ):
-            value, conflict = _unique(events, "order", event_index, converter)
-            conflicts += int(conflict)
-            if value is not None:
-                new[column] = value
-
-        payment_method, conflict = _unique(events, "order", 11, _text)
-        if payment_method is None and not conflict:
-            payment_method, conflict = _unique(events, "payment", 11, _text)
-        conflicts += int(conflict)
-        if payment_method is not None:
-            new[3] = payment_method
-
-        event_types = {_text(row[0]) for row in events}
-        if "delivery" in event_types:
-            new[5] = "delivered"
-        elif "shipment" in event_types:
-            new[5] = "partially_shipped"
-        elif "order" in event_types:
-            new[5] = "ordered"
-
-        charged_amount = _sum(events, "payment", 3)
-        refund_amount = _sum(events, "refund", 5)
-        shipment_amount = _sum(events, "shipment", 6)
-        if charged_amount is not None:
-            new[6] = charged_amount
-        if refund_amount is not None:
-            new[8] = refund_amount
-            order_amount = _number(new[2])
-            if refund_amount <= 0:
-                new[7] = "none"
-            else:
-                new[7] = "full" if order_amount is not None and refund_amount >= order_amount \
-                    else "partial"
-        if shipment_amount is not None:
-            new[9] = shipment_amount
+        aggregate = aggregate_amazon_order_events(events, old)
+        new = aggregate["row"]
+        conflicts += sum(aggregate["conflicts"].values())
 
         numeric_columns = {2, 4, 6, 8, 9, 10, 11, 12}
         changed = any(
@@ -181,6 +214,6 @@ def recalculate_amazon_order_headers(
         "orders": len(groups),
         "updated": len(updates),
         "unchanged": processed - len(updates),
-        "skipped_missing_order_id": skipped_missing_order_id,
+        "skipped_missing_order_id": len(missing),
         "conflicts": conflicts,
     }
