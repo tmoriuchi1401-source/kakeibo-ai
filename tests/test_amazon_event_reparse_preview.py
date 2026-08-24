@@ -4,9 +4,14 @@ import base64
 from email.message import EmailMessage
 import sys
 
+import pytest
+
 from app import cli
 from app.amazon_email import AmazonMailEvent
-from app.amazon_event_reparse_preview import preview_amazon_event_reparse
+from app.amazon_event_reparse_preview import (
+    apply_amazon_event_reparse,
+    preview_amazon_event_reparse,
+)
 
 
 def _raw(body="body"):
@@ -101,6 +106,11 @@ class ReadOnlyDB:
         raise AttributeError(name)
 
 
+class WritableDB(ReadOnlyDB):
+    def update_amazon_event_cells(self, row_number, cells):
+        self.write_calls.append((row_number, cells))
+
+
 def _response(gmail_id="gmail-1", raw=None):
     encoded = base64.urlsafe_b64encode(raw or _raw()).decode().rstrip("=")
     return {"id": gmail_id, "threadId": "thread-1", "raw": encoded}
@@ -193,3 +203,111 @@ def test_cli_uses_both_readonly_services(monkeypatch, capsys):
     cli.main()
 
     assert capsys.readouterr().out.strip() == "{'ok': True}"
+
+
+def test_apply_does_not_erase_existing_values_when_new_values_are_empty():
+    row = _row()
+    row[5] = "order"
+    row[6] = "keep-order-id"
+    row[9] = "5000"
+    db = WritableDB([row])
+
+    result = apply_amazon_event_reparse(
+        Service({"gmail-1": _response()}), db,
+        parser=lambda _: _event(
+            event_type="unknown", order_id=None, order_amount=None,
+            event_date=None, payment_method=None, item_count=None,
+        ),
+        timestamp_factory=lambda: "new-time",
+    )
+
+    assert result["metadata_only_updated_rows"] == 1
+    assert result["business_fields_updated_rows"] == 0
+    assert db.write_calls == [(2, [(21, "amazon_email_v2"), (23, "new-time")])]
+
+
+def test_apply_identity_mismatch_and_parser_error_do_not_write():
+    mismatch_db = WritableDB([_row()])
+    mismatch = apply_amazon_event_reparse(
+        Service({"gmail-1": _response("other")}), mismatch_db,
+    )
+    assert mismatch["identity_mismatch"] == 1
+    assert mismatch["skipped_rows"] == 1
+    assert mismatch_db.write_calls == []
+
+    parser_db = WritableDB([_row()])
+    parser_failure = apply_amazon_event_reparse(
+        Service({"gmail-1": _response()}), parser_db,
+        parser=lambda _: (_ for _ in ()).throw(ValueError("bad")),
+    )
+    assert parser_failure["parser_errors"] == 1
+    assert parser_failure["error_rows"] == 1
+    assert parser_db.write_calls == []
+
+
+def test_duplicate_gmail_message_id_stops_before_fetch_or_write():
+    db = WritableDB([_row("duplicate"), _row("duplicate")])
+    service = Service({"duplicate": _response("duplicate")})
+
+    with pytest.raises(RuntimeError, match="Gmail Message IDが重複"):
+        apply_amazon_event_reparse(service, db)
+
+    assert service.api.get_calls == []
+    assert db.write_calls == []
+
+
+def test_apply_metadata_only_is_counted():
+    row = _row()
+    for index, value in {
+        5: "order", 6: "123-1234567-1234567", 7: "2026-08-20", 9: "3980",
+        16: "Visa", 17: "2", 18: "parsed", 21: "amazon_email_v1",
+        23: "old-time",
+    }.items():
+        row[index] = value
+    db = WritableDB([row])
+
+    result = apply_amazon_event_reparse(
+        Service({"gmail-1": _response()}), db,
+        parser=lambda _: _event(), timestamp_factory=lambda: "new-time",
+    )
+
+    assert result["updated_rows"] == 1
+    assert result["metadata_only_updated_rows"] == 1
+    assert result["business_fields_updated_rows"] == 0
+    assert result["field_updates"]["parser_version"] == 1
+    assert result["field_updates"]["last_parsed_at"] == 1
+    assert db.write_calls == [(2, [(21, "amazon_email_v2"), (23, "new-time")])]
+
+
+def test_apply_updates_only_changed_cells_and_counts_fields():
+    db = WritableDB([_row()])
+
+    result = apply_amazon_event_reparse(
+        Service({"gmail-1": _response()}), db,
+        parser=lambda _: _event(), timestamp_factory=lambda: "new-time",
+    )
+
+    assert result["updated_rows"] == 1
+    assert result["business_fields_updated_rows"] == 1
+    assert result["metadata_only_updated_rows"] == 0
+    assert db.write_calls == [(2, [
+        (5, "order"), (6, "123-1234567-1234567"), (7, "2026-08-20"),
+        (9, 3980), (16, "Visa"), (17, 2), (18, "parsed"),
+        (21, "amazon_email_v2"), (23, "new-time"),
+    ])]
+    assert result["field_updates"]["order_amount"] == 1
+    assert all(column not in {0, 1, 2, 3, 4, 19, 20, 22}
+               for column, _value in db.write_calls[0][1])
+
+
+def test_cli_apply_without_safety_flag_does_not_initialize_or_write(monkeypatch):
+    monkeypatch.setattr(
+        cli, "Settings",
+        lambda: (_ for _ in ()).throw(AssertionError("must not initialize")),
+    )
+    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-event-reparse-apply"])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2

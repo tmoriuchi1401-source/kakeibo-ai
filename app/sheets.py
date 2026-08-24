@@ -170,6 +170,15 @@ class SheetsDB:
         return [(i, list(row)) for i, row in enumerate(
             self.get("Amazonイベント!A2:X"), start=2
         ) if row]
+    def update_amazon_event_cells(self,row_num:int,cells:list[tuple[int,object]]):
+        """Update only selected zero-based columns in one Amazon event row."""
+        if not cells:return
+        data=[{"range":f"Amazonイベント!{chr(65+column)}{row_num}","values":[[value]]}
+              for column,value in cells]
+        self.svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=self.sid,
+            body={"valueInputOption":"USER_ENTERED","data":data}
+        ).execute()
     def amazon_order_header_ids(self)->set[str]:
         return {str(r[0]).strip() for r in self.get("Amazon注文ヘッダ!A2:A")
                 if r and str(r[0]).strip()}
