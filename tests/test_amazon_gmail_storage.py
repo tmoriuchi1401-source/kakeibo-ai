@@ -201,9 +201,22 @@ def test_unknown_event_is_saved_with_unusable_status():
 
     row = db.append_calls[0][1][0]
     assert result["unknown"] == 1
+    assert result["unknown_new"] == 1
     assert result["new"] == 1
     assert row[5] == "unknown"
     assert row[18] == "unusable"
+
+
+def test_duplicate_unknown_is_fetched_unknown_but_not_new_unknown():
+    db = FakeDB(gmail={"gmail-1"})
+
+    result = _save(db, [_mail("gmail-1")], parser=lambda raw: _event(
+        raw, event_type="unknown", order_id=None,
+    ))
+
+    assert result["unknown"] == 1
+    assert result["unknown_new"] == 0
+    assert result["new"] == 0
 
 
 def test_undefined_event_type_is_normalized_before_parse_status_is_decided():

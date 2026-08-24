@@ -5,7 +5,7 @@ import pytest
 from app.amazon_daily_import import run_amazon_daily_import
 
 
-def _gmail_summary(new):
+def _gmail_summary(new, *, unknown=0, unknown_new=0):
     return {
         "fetched": 3,
         "new": new,
@@ -13,7 +13,8 @@ def _gmail_summary(new):
         "duplicate_rfc_message_id": 0,
         "duplicate_source_hash": 0,
         "parser_errors": 0,
-        "unknown": 0,
+        "unknown": unknown,
+        "unknown_new": unknown_new,
     }
 
 
@@ -33,7 +34,7 @@ def test_imports_gmail_before_creating_order_headers_and_combines_summary():
     def import_gmail(actual_service, actual_db):
         assert (actual_service, actual_db) == (service, db)
         calls.append("gmail")
-        return _gmail_summary(2)
+        return _gmail_summary(2, unknown=2, unknown_new=1)
 
     def create_headers(actual_db):
         assert actual_db is db
@@ -55,7 +56,8 @@ def test_imports_gmail_before_creating_order_headers_and_combines_summary():
         "duplicate RFC Message-ID": 0,
         "duplicate source hash": 0,
         "parser errors": 0,
-        "unknown": 0,
+        "unknown fetched": 2,
+        "unknown new": 1,
         "Amazon注文ヘッダ created": 1,
         "skipped existing": 0,
         "skipped missing order_id": 0,

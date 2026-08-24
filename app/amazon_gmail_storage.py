@@ -136,6 +136,7 @@ def save_amazon_gmail_events(
         "duplicate_rfc_message_id": 0,
         "duplicate_source_hash": 0,
         "unknown": 0,
+        "unknown_new": 0,
         "parser_errors": 0,
     }
 
@@ -161,6 +162,8 @@ def save_amazon_gmail_events(
             continue
 
         new_events.append(stored)
+        if stored.event_type == "unknown":
+            summary["unknown_new"] += 1
         gmail_ids.add(stored.gmail_message_id)
         if stored.rfc_message_id:
             rfc_ids.add(stored.rfc_message_id)
