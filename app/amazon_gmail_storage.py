@@ -18,7 +18,7 @@ from .amazon_stored_event import (
 )
 
 
-AMAZON_PARSER_VERSION = "amazon_email_v1"
+AMAZON_PARSER_VERSION = "amazon_email_v2"
 
 
 @dataclass(frozen=True)
