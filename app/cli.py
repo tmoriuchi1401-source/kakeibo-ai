@@ -53,6 +53,8 @@ from .google_clients import (
     shipping_backfill_drive_service,
     shipping_backfill_sheets_service,
 )
+from .payroll_statement_parser import preview_payroll_file
+from .drive_payroll import DrivePayrollPreview
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -127,6 +129,9 @@ def main():
     sub.add_parser("receipts-cleanup-preview")
     sub.add_parser("receipts-cleanup")
     sub.add_parser("doctor")
+    payroll_preview=sub.add_parser("payroll-file-preview")
+    payroll_preview.add_argument("file")
+    sub.add_parser("payroll-drive-preview")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -141,6 +146,13 @@ def main():
         if not all(checks.values()):
             raise SystemExit(1)
         print("開発環境チェック完了")
+    elif args.cmd=="payroll-file-preview":
+        import json
+        print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
+    elif args.cmd=="payroll-drive-preview":
+        import json
+        s=Settings(); s.validate(need_payroll_drive=True)
+        print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="receipt":

@@ -43,6 +43,11 @@ def shipping_backfill_drive_service():
         "drive", "v3", credentials=credentials(DRIVE_READ_ONLY_SCOPES),
         cache_discovery=False,
     )
+def payroll_read_only_drive_service():
+    return build(
+        "drive", "v3", credentials=credentials(DRIVE_READ_ONLY_SCOPES),
+        cache_discovery=False,
+    )
 
 def download_drive_file(file_id:str, service=None) -> bytes:
     svc=service or drive_service(); req=svc.files().get_media(fileId=file_id); buf=io.BytesIO(); dl=MediaIoBaseDownload(buf,req)

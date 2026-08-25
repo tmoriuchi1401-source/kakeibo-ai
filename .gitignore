@@ -12,6 +12,11 @@ token.json
 *.zip
 receipt_test.jpg
 
+# 実給与明細（ローカル検証専用、Git追跡禁止）
+*給与.pdf
+スクリーンショット 2026-08-25 12.06.11.png
+スクリーンショット 2026-08-25 12.10.04.png
+
 # OAuth authorized-user/client credentials
 gmail-token.json
 drive-backup-token.json
