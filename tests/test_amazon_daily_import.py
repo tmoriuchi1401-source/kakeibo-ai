@@ -26,7 +26,17 @@ def _header_summary(created):
     }
 
 
-def test_imports_gmail_before_creating_order_headers_and_combines_summary():
+def _recalculation_summary(*, orders=2, updated=1, unchanged=1, conflicts=0):
+    return {
+        "orders": orders,
+        "updated": updated,
+        "unchanged": unchanged,
+        "conflicts": conflicts,
+        "skipped_missing_order_id": 1,
+    }
+
+
+def test_imports_gmail_then_creates_and_recalculates_headers_and_combines_summary():
     calls = []
     service = object()
     db = object()
@@ -41,14 +51,20 @@ def test_imports_gmail_before_creating_order_headers_and_combines_summary():
         calls.append("headers")
         return _header_summary(1)
 
+    def recalculate_headers(actual_db):
+        assert actual_db is db
+        calls.append("recalculation")
+        return _recalculation_summary(conflicts=2)
+
     result = run_amazon_daily_import(
         service,
         db,
         gmail_importer=import_gmail,
         order_header_creator=create_headers,
+        order_header_recalculator=recalculate_headers,
     )
 
-    assert calls == ["gmail", "headers"]
+    assert calls == ["gmail", "headers", "recalculation"]
     assert result == {
         "Gmail fetched": 3,
         "Amazonイベント new": 2,
@@ -61,11 +77,17 @@ def test_imports_gmail_before_creating_order_headers_and_combines_summary():
         "Amazon注文ヘッダ created": 1,
         "skipped existing": 0,
         "skipped missing order_id": 0,
+        "recalculation orders": 2,
+        "recalculation updated": 1,
+        "recalculation unchanged": 1,
+        "recalculation conflicts": 2,
+        "recalculation skipped missing order_id": 1,
     }
 
 
 def test_second_run_reports_no_new_events_or_headers():
     run_number = 0
+    recalculation_calls = 0
 
     def import_gmail(service, db):
         return _gmail_summary(1 if run_number == 0 else 0)
@@ -76,13 +98,20 @@ def test_second_run_reports_no_new_events_or_headers():
         run_number += 1
         return result
 
+    def recalculate_headers(db):
+        nonlocal recalculation_calls
+        recalculation_calls += 1
+        return _recalculation_summary(updated=0, unchanged=2)
+
     first = run_amazon_daily_import(
         object(), object(), gmail_importer=import_gmail,
         order_header_creator=create_headers,
+        order_header_recalculator=recalculate_headers,
     )
     second = run_amazon_daily_import(
         object(), object(), gmail_importer=import_gmail,
         order_header_creator=create_headers,
+        order_header_recalculator=recalculate_headers,
     )
 
     assert first["Amazonイベント new"] == 1
@@ -91,10 +120,14 @@ def test_second_run_reports_no_new_events_or_headers():
     assert second["Amazon注文ヘッダ created"] == 0
     assert second["duplicate Gmail ID"] == 1
     assert second["skipped existing"] == 1
+    assert second["recalculation updated"] == 0
+    assert second["recalculation unchanged"] == 2
+    assert recalculation_calls == 2
 
 
-def test_gmail_import_failure_does_not_start_header_creation():
+def test_gmail_import_failure_does_not_start_header_creation_or_recalculation():
     header_called = False
+    recalculation_called = False
 
     def fail_gmail(service, db):
         raise RuntimeError("gmail failed")
@@ -104,13 +137,41 @@ def test_gmail_import_failure_does_not_start_header_creation():
         header_called = True
         return _header_summary(1)
 
+    def recalculate_headers(db):
+        nonlocal recalculation_called
+        recalculation_called = True
+        return _recalculation_summary()
+
     with pytest.raises(RuntimeError, match="gmail failed"):
         run_amazon_daily_import(
             object(), object(), gmail_importer=fail_gmail,
             order_header_creator=create_headers,
+            order_header_recalculator=recalculate_headers,
         )
 
     assert header_called is False
+    assert recalculation_called is False
+
+
+def test_header_creation_failure_does_not_start_recalculation():
+    recalculation_called = False
+
+    def fail_headers(db):
+        raise RuntimeError("header creation failed")
+
+    def recalculate_headers(db):
+        nonlocal recalculation_called
+        recalculation_called = True
+        return _recalculation_summary()
+
+    with pytest.raises(RuntimeError, match="header creation failed"):
+        run_amazon_daily_import(
+            object(), object(), gmail_importer=lambda service, db: _gmail_summary(1),
+            order_header_creator=fail_headers,
+            order_header_recalculator=recalculate_headers,
+        )
+
+    assert recalculation_called is False
 
 
 def test_cli_uses_readonly_gmail_and_writable_sheets(monkeypatch, capsys):
