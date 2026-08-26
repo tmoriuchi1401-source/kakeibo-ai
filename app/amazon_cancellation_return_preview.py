@@ -16,6 +16,7 @@ import unicodedata
 from .amazon_email import AmazonMailEvent, ORDER_ID_RE, parse_amazon_email
 from .amazon_gmail_preview import _raw_bytes
 from .amazon_gmail_storage import GmailRawMessage, fetch_amazon_gmail_messages
+from .amazon_review import AmazonReviewEventRow
 
 
 class _VisibleHTML(HTMLParser):
@@ -469,6 +470,25 @@ class _CancellationReviewPlan:
     candidate_count: str | None
     cancellation_scope: str
     source_event_key: str
+
+
+def cancellation_review_event_row(
+    plan: _CancellationReviewPlan,
+    *,
+    created_at: str,
+) -> AmazonReviewEventRow:
+    """Convert a cancellation plan to the future Amazon review sheet row."""
+
+    return AmazonReviewEventRow(
+        review_id=plan.review_id,
+        review_status="未確認",
+        event_type="cancellation",
+        event_date=plan.event_date or "",
+        reasons=plan.reasons,
+        scope=plan.cancellation_scope,
+        candidate_count_class=plan.candidate_count or "",
+        created_at=created_at,
+    )
 
 
 def _review_key(raw_mime: bytes, source_hash: str | None = None) -> str:
