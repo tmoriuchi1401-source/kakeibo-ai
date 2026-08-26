@@ -31,6 +31,38 @@ class _VisibleHTML(HTMLParser):
         self.parts.append(data)
 
 
+class _QuotedHTML(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._quoted_stack: list[bool] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        attributes = " ".join(
+            value or "" for name, value in attrs if name.lower() in {"class", "id"}
+        ).lower()
+        starts_quote = tag.lower() == "blockquote" or bool(re.search(
+            r"(?:^|[-_\s])(?:quote|quoted|forwarded)(?:$|[-_\s])", attributes,
+        ))
+        self._quoted_stack.append(starts_quote or any(self._quoted_stack))
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._quoted_stack:
+            self._quoted_stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if any(self._quoted_stack):
+            self.parts.append(data)
+
+
 def _part_text(part: Message) -> str:
     try:
         return str(part.get_content())
@@ -69,6 +101,119 @@ _ALT_ORDER_RE = re.compile(
     r"[0-9０-９]{7}(?:[\s_./:‐-―−－]+)[0-9０-９]{7}(?![0-9０-９])"
     r"|(?<![0-9０-９])[0-9０-９]{17}(?![0-9０-９])"
 )
+
+_FORWARDED_MARKER_RE = re.compile(
+    r"(?im)^\s*(?:-{2,}\s*(?:forwarded|original)\s+message\s*-*"
+    r"|転送されたメッセージ(?:\s*[-―ー]*)?|転送メッセージ(?:\s*[-―ー]*)?"
+    r"|元のメッセージ(?:\s*[-―ー]*)?)\s*$"
+)
+_FORWARDED_HEADER_RE = re.compile(
+    r"(?im)^\s*(?:>\s*)?(from|date|sent|subject|to|cc|差出人|送信者|日時|送信日時|件名|宛先)\s*[：:]"
+)
+_ORIGINAL_SUBJECT_RE = re.compile(
+    r"(?im)^\s*(?:>\s*)?(?:subject|件名)\s*[：:]\s*(.*)$"
+)
+_QUOTED_LINE_RE = re.compile(r"(?m)^\s*>+\s?(.*)$")
+
+
+def _message_text(message: Message) -> str:
+    """Return decoded headers and bodies for an in-memory pattern check."""
+
+    parts = [str(message.get("Subject", ""))]
+    candidates = message.walk() if message.is_multipart() else (message,)
+    for part in candidates:
+        if part.get_content_type() == "text/plain":
+            parts.append(_part_text(part))
+        elif part.get_content_type() == "text/html":
+            parser = _VisibleHTML()
+            parser.feed(_part_text(part))
+            parts.append("\n".join(parser.parts))
+    return unicodedata.normalize("NFKC", "\n".join(parts))
+
+
+def _forwarded_header_blocks(text: str) -> list[str]:
+    """Find compact header-like runs without retaining or returning their values."""
+
+    lines = text.splitlines()
+    blocks: list[str] = []
+    for index, line in enumerate(lines):
+        if not (_FORWARDED_MARKER_RE.match(line) or _FORWARDED_HEADER_RE.match(line)):
+            continue
+        window = lines[index:index + 16]
+        header_lines = [candidate for candidate in window if _FORWARDED_HEADER_RE.match(candidate)]
+        labels = {
+            _FORWARDED_HEADER_RE.match(candidate).group(1).lower()
+            for candidate in header_lines
+        }
+        if len(labels) >= 2:
+            blocks.append("\n".join(header_lines))
+    return blocks
+
+
+def diagnose_forwarded_cancellation_order_id(raw_mime: bytes) -> dict[str, bool]:
+    """Classify forwarded-message evidence without exposing message contents."""
+
+    message = BytesParser(policy=policy.default).parsebytes(raw_mime)
+    outer_text = _message_text(message)
+
+    nested_texts: list[str] = []
+    nested_subjects: list[str] = []
+    nested_rfc822_present = False
+    for part in message.walk():
+        if part.get_content_type() != "message/rfc822":
+            continue
+        nested_rfc822_present = True
+        payload = part.get_payload()
+        nested_messages = payload if isinstance(payload, list) else []
+        for nested in nested_messages:
+            if isinstance(nested, Message):
+                nested_texts.append(_message_text(nested))
+                nested_subjects.append(unicodedata.normalize(
+                    "NFKC", str(nested.get("Subject", "")),
+                ))
+
+    header_blocks = _forwarded_header_blocks(outer_text)
+    quoted_blocks = [match.group(1) for match in _QUOTED_LINE_RE.finditer(outer_text)]
+    for part in message.walk():
+        if part.get_content_type() == "text/html":
+            quoted_html = _QuotedHTML()
+            quoted_html.feed(_part_text(part))
+            if quoted_html.parts:
+                quoted_blocks.append("\n".join(quoted_html.parts))
+    original_subjects = [
+        match.group(1) for match in _ORIGINAL_SUBJECT_RE.finditer(outer_text)
+    ] + nested_subjects
+
+    nested_candidates = set(ORDER_ID_RE.findall("\n".join(nested_texts)))
+    header_candidates = set(ORDER_ID_RE.findall("\n".join(header_blocks)))
+    quoted_candidates = set(ORDER_ID_RE.findall("\n".join(quoted_blocks)))
+    subject_candidates = set(ORDER_ID_RE.findall("\n".join(original_subjects)))
+    candidates = (
+        nested_candidates | header_candidates | quoted_candidates | subject_candidates
+    )
+    count = len(candidates)
+
+    header_block_present = bool(header_blocks)
+    original_subject_present = bool(original_subjects)
+    return {
+        "forwarded_message_clue_present": bool(
+            _FORWARDED_MARKER_RE.search(outer_text)
+            or header_block_present
+            or nested_rfc822_present
+        ),
+        "nested_rfc822_present": nested_rfc822_present,
+        "nested_order_id_pattern_present": bool(nested_candidates),
+        "forwarded_header_block_present": header_block_present,
+        "forwarded_header_order_id_pattern_present": bool(header_candidates),
+        "quoted_block_present": bool(quoted_blocks),
+        "quoted_order_id_pattern_present": bool(quoted_candidates),
+        "original_subject_clue_present": original_subject_present,
+        "original_subject_order_id_pattern_present": bool(subject_candidates),
+        "forwarded_order_id_candidate_count_0": count == 0,
+        "forwarded_order_id_candidate_count_1": count == 1,
+        "forwarded_order_id_candidate_count_2plus": count >= 2,
+        "forwarded_order_id_unique_candidate_present": count == 1,
+    }
 
 
 def _mime_diagnostic_sources(raw_mime: bytes) -> tuple[str, str, str, str, str]:
@@ -154,6 +299,9 @@ def diagnose_cancellation_order_id(raw_mime: bytes) -> dict[str, bool]:
 
 
 ORDER_ID_DIAGNOSTIC_FIELDS = tuple(diagnose_cancellation_order_id(b"").keys())
+FORWARDED_DIAGNOSTIC_FIELDS = tuple(
+    diagnose_forwarded_cancellation_order_id(b"").keys()
+)
 
 
 def cancellation_clues(text: str) -> dict[str, bool | str]:
@@ -240,6 +388,10 @@ def preview_amazon_cancellation_returns(
         if event_type == "cancellation":
             for field, present in diagnose_cancellation_order_id(message.raw_mime).items():
                 counts[field] += present
+            for field, present in diagnose_forwarded_cancellation_order_id(
+                message.raw_mime,
+            ).items():
+                counts[field] += present
             clues = cancellation_clues(text)
             counts["full cancellation clue present"] += bool(clues["full"])
             counts["partial cancellation clue present"] += bool(clues["partial"])
@@ -264,6 +416,7 @@ def preview_amazon_cancellation_returns(
         "return order_level", "return ambiguous",
         "unknown cancellation candidates", "unknown return candidates",
         *ORDER_ID_DIAGNOSTIC_FIELDS,
+        *FORWARDED_DIAGNOSTIC_FIELDS,
     )
     result = {"fetched Amazon messages": len(messages), **{
         field: counts[field] for field in fields

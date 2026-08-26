@@ -4,6 +4,7 @@ from email.message import EmailMessage
 
 from app.amazon_cancellation_return_preview import (
     diagnose_cancellation_order_id,
+    diagnose_forwarded_cancellation_order_id,
     preview_amazon_cancellation_returns,
 )
 from app.amazon_gmail_storage import GmailRawMessage
@@ -160,6 +161,101 @@ def test_preview_order_id_diagnostics_are_anonymous():
     assert order_id not in rendered
     assert "注文番号" not in rendered
     assert "private-message-id" not in rendered
+
+
+def test_forwarded_diagnostic_finds_order_id_in_nested_rfc822():
+    order_id = "123-1234567-1234567"
+    nested = EmailMessage()
+    nested["Subject"] = "Amazon cancellation"
+    nested.set_content(f"Order ID: {order_id}")
+    outer = EmailMessage()
+    outer["Subject"] = "Forwarded message"
+    outer.set_content("Forwarded attachment")
+    outer.add_attachment(nested)
+
+    result = diagnose_forwarded_cancellation_order_id(outer.as_bytes())
+
+    assert result["nested_rfc822_present"]
+    assert result["nested_order_id_pattern_present"]
+    assert result["forwarded_order_id_candidate_count_1"]
+
+
+def test_forwarded_diagnostic_finds_header_and_original_subject_order_id():
+    order_id = "123-1234567-1234567"
+    result = diagnose_forwarded_cancellation_order_id(_raw(
+        "Fwd: cancellation",
+        f"""---------- Forwarded message ---------
+From: sender@example.invalid
+Date: Mon, 24 Aug 2026 12:00:00 +0900
+Subject: Cancellation for {order_id}
+To: recipient@example.invalid
+
+Original body
+""",
+    ))
+
+    assert result["forwarded_message_clue_present"]
+    assert result["forwarded_header_block_present"]
+    assert result["forwarded_header_order_id_pattern_present"]
+    assert result["original_subject_clue_present"]
+    assert result["original_subject_order_id_pattern_present"]
+
+
+def test_forwarded_diagnostic_finds_order_id_in_quoted_block():
+    order_id = "123-1234567-1234567"
+    result = diagnose_forwarded_cancellation_order_id(_raw(
+        "Fwd: cancellation", f"> 注文番号: {order_id}\n> キャンセルされました",
+    ))
+
+    assert result["quoted_block_present"]
+    assert result["quoted_order_id_pattern_present"]
+    assert result["forwarded_order_id_candidate_count_1"]
+
+    html_result = diagnose_forwarded_cancellation_order_id(_html_raw(
+        "Fwd: cancellation",
+        f'<div class="yahoo_quoted">注文番号: {order_id}</div>',
+    ))
+    assert html_result["quoted_block_present"]
+    assert html_result["quoted_order_id_pattern_present"]
+
+
+def test_forwarded_candidate_count_classifies_zero_one_and_two_plus():
+    zero = diagnose_forwarded_cancellation_order_id(_raw(
+        "Fwd: cancellation", "> no order id",
+    ))
+    one = diagnose_forwarded_cancellation_order_id(_raw(
+        "Fwd: cancellation", "> 123-1234567-1234567",
+    ))
+    two = diagnose_forwarded_cancellation_order_id(_raw(
+        "Fwd: cancellation",
+        "> 123-1234567-1234567\n> 987-7654321-7654321",
+    ))
+
+    assert zero["forwarded_order_id_candidate_count_0"]
+    assert one["forwarded_order_id_candidate_count_1"]
+    assert one["forwarded_order_id_unique_candidate_present"]
+    assert two["forwarded_order_id_candidate_count_2plus"]
+
+
+def test_forwarded_candidate_count_deduplicates_and_output_is_anonymous():
+    order_id = "123-1234567-1234567"
+    raw = _raw(
+        "Fwd: cancellation",
+        f"""-----Original Message-----
+From: sender@example.invalid
+Subject: Order {order_id}
+
+> Duplicate order {order_id}
+> Private original body
+""",
+    )
+
+    result = diagnose_forwarded_cancellation_order_id(raw)
+    rendered = str(result)
+
+    assert result["forwarded_order_id_candidate_count_1"]
+    assert order_id not in rendered
+    assert "Private original body" not in rendered
 
 
 def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys):
