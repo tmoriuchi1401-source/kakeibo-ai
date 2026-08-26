@@ -55,6 +55,18 @@ from .google_clients import (
 )
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
+from .payroll_sheets import PayrollSheetsReadRepository
+from .payroll_storage_preview import (
+    build_append_plan,
+    drive_storage_candidates,
+    preview_summary,
+)
+from .payroll_schema import (
+    PayrollSchemaWriteRepository,
+    apply_schema_initialization,
+    build_schema_initialization_plan,
+    schema_plan_preview,
+)
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -132,6 +144,10 @@ def main():
     payroll_preview=sub.add_parser("payroll-file-preview")
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-drive-preview")
+    sub.add_parser("payroll-storage-preview")
+    sub.add_parser("payroll-schema-preview")
+    payroll_schema_apply=sub.add_parser("payroll-schema-apply")
+    payroll_schema_apply.add_argument("--apply",action="store_true")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -153,6 +169,27 @@ def main():
         import json
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
+    elif args.cmd=="payroll-storage-preview":
+        import json
+        s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
+        snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        candidates=drive_storage_candidates(s.payroll_drive_folder_id,snapshot)
+        plans=build_append_plan(candidates,snapshot)
+        print(json.dumps(preview_summary(plans,snapshot),ensure_ascii=False))
+    elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
+        import json
+        s=Settings(); s.validate(need_sheet=True)
+        reader=PayrollSheetsReadRepository(s.spreadsheet_id)
+        plan=build_schema_initialization_plan(reader)
+        if args.cmd=="payroll-schema-apply" and args.apply:
+            result=apply_schema_initialization(
+                plan,PayrollSchemaWriteRepository(s.spreadsheet_id),confirmed=True,
+            )
+            print(json.dumps(result,ensure_ascii=False))
+        else:
+            output=schema_plan_preview(plan)
+            output["applied"]=False
+            print(json.dumps(output,ensure_ascii=False))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="receipt":
