@@ -264,9 +264,10 @@ def main():
         service=gmail_readonly_service(s.gmail_token_json)
         print(run_amazon_daily_import(service,db))
     elif args.cmd=="amazon-cancellation-return-preview":
-        s=Settings(); s.validate(need_gmail=True)
+        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
         service=gmail_readonly_service(s.gmail_token_json)
-        print(preview_amazon_cancellation_returns(service))
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(preview_amazon_cancellation_returns(service,db=db))
     elif args.cmd=="amazon-event-reparse-preview":
         s=Settings(); s.validate(need_sheet=True,need_gmail=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())

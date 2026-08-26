@@ -41,7 +41,7 @@ def _html_raw(subject: str, html: str) -> bytes:
     return message.as_bytes()
 
 
-def _preview(messages, *, thread_fetcher=None, parser=None):
+def _preview(messages, *, thread_fetcher=None, parser=None, db=None):
     by_thread = {
         message.thread_id: [
             candidate for candidate in messages
@@ -52,11 +52,43 @@ def _preview(messages, *, thread_fetcher=None, parser=None):
     return preview_amazon_cancellation_returns(
         object(),
         fetcher=lambda service: messages,
+        db=db,
         thread_fetcher=(
             thread_fetcher or (lambda service, thread_id: by_thread[thread_id])
         ),
         **({"parser": parser} if parser else {}),
     )
+
+
+class MatchingDB:
+    def __init__(self, *, orders=None, headers=None, events=None, fail=False):
+        self.rows = {
+            "Amazon注文!A2:O": list(orders or []),
+            "Amazon注文ヘッダ!A2:O": list(headers or []),
+            "Amazonイベント!A2:X": list(events or []),
+        }
+        self.fail = fail
+        self.reads = []
+
+    def get(self, rng):
+        self.reads.append(rng)
+        if self.fail:
+            raise RuntimeError("private read error")
+        return self.rows[rng]
+
+    def __getattr__(self, name):
+        if name.startswith(("append", "update", "clear", "ensure")):
+            raise AssertionError(f"write method must not be used: {name}")
+        raise AttributeError(name)
+
+
+def _order(order_id, *, order_date="2026-08-20", product="Secret Product", quantity=1,
+           amount=1200, shipment_date=""):
+    return [
+        "key", order_id, "asin", order_date, product, quantity, amount,
+        "payment", "major", "minor", "", "hash", "timestamp",
+        shipment_date, quantity,
+    ]
 
 
 def test_counts_cancellation_and_return_presence_and_clues():
@@ -438,7 +470,132 @@ def test_thread_fetcher_uses_threads_and_raw_message_gets():
     ]
 
 
-def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys):
+def test_order_matching_candidate_count_zero():
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル",
+        "対象商品: Unknown Product\n数量: 3\nキャンセル",
+    )
+    db = MatchingDB(orders=[_order(
+        "123-1234567-1234567", order_date="2026-01-01",
+        product="Different Product", quantity=1,
+    )])
+
+    result = _preview([cancellation], db=db)
+
+    assert result["cancellation_without_order_id_count"] == 1
+    assert result["candidate_count_0"] == 1
+    assert result["unique_candidate_strong"] == 0
+
+
+def test_order_matching_unique_candidate_strong():
+    product = "Private Product Name"
+    amount = 1200
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル",
+        f"対象商品: {product}\n数量: 2\n金額: {amount}円\nキャンセル",
+    )
+    db = MatchingDB(orders=[_order(
+        "123-1234567-1234567", product=product, quantity=2, amount=amount,
+    )])
+
+    result = _preview([cancellation], db=db)
+
+    assert result["candidate_count_1"] == 1
+    assert result["date_window_match_present"] == 1
+    assert result["product_match_present"] == 1
+    assert result["quantity_match_present"] == 1
+    assert result["amount_match_present"] == 1
+    assert result["unique_candidate_strong"] == 1
+
+
+def test_order_matching_unique_candidate_medium_for_product_and_date():
+    product = "Private Product Name"
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル",
+        f"対象商品: {product}\nキャンセル",
+    )
+    db = MatchingDB(orders=[_order(
+        "123-1234567-1234567", product=product, quantity=9, amount=9999,
+    )])
+
+    result = _preview([cancellation], db=db)
+
+    assert result["candidate_count_1"] == 1
+    assert result["unique_candidate_medium"] == 1
+    assert result["unique_candidate_strong"] == 0
+
+
+def test_order_matching_unique_candidate_weak_for_date_only():
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル", "キャンセル",
+    )
+    db = MatchingDB(orders=[_order(
+        "123-1234567-1234567", product="Different Product",
+    )])
+
+    result = _preview([cancellation], db=db)
+
+    assert result["candidate_count_1"] == 1
+    assert result["date_window_match_present"] == 1
+    assert result["unique_candidate_weak"] == 1
+    assert result["unique_candidate_strong"] == 0
+
+
+def test_order_matching_two_candidates_are_not_unique():
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル", "キャンセル",
+    )
+    db = MatchingDB(orders=[
+        _order("123-1234567-1234567"),
+        _order("987-7654321-7654321"),
+    ])
+
+    result = _preview([cancellation], db=db)
+
+    assert result["candidate_count_2plus"] == 1
+    assert result["unique_candidate_strong"] == 0
+    assert result["unique_candidate_medium"] == 0
+    assert result["unique_candidate_weak"] == 0
+
+
+def test_amount_only_match_is_weak_and_output_is_anonymous():
+    order_id = "123-1234567-1234567"
+    product = "Private Product Name"
+    amount = 1200
+    cancellation = _thread_message(
+        "private-message", "private-thread", "注文のキャンセル",
+        f"金額: {amount}円\nキャンセル",
+    )
+    db = MatchingDB(orders=[_order(
+        order_id, order_date="", product=product, quantity=9, amount=amount,
+    )])
+
+    result = _preview([cancellation], db=db)
+    rendered = str(result)
+
+    assert result["amount_match_present"] == 1
+    assert result["unique_candidate_weak"] == 1
+    assert result["unique_candidate_strong"] == 0
+    for private_value in (order_id, product, str(amount), "private-thread", "private-message"):
+        assert private_value not in rendered
+
+
+def test_matching_read_error_never_produces_strong_or_writes():
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル",
+        "対象商品: Private Product Name\n数量: 2\n金額: 1200円\nキャンセル",
+    )
+    db = MatchingDB(fail=True)
+
+    result = _preview([cancellation], db=db)
+
+    assert result["matching_source_read_errors"] == 1
+    assert result["candidate_count_0"] == 1
+    assert result["unique_candidate_strong"] == 0
+    assert db.reads == ["Amazon注文!A2:O"]
+
+
+def test_cli_uses_readonly_gmail_and_sheets(monkeypatch, capsys):
     import sys
 
     import app.cli as cli
@@ -447,23 +604,32 @@ def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys
 
     class FakeSettings:
         gmail_token_json = "readonly-token"
+        spreadsheet_id = "private-sheet"
 
         def validate(self, **kwargs):
-            assert kwargs == {"need_gmail": True}
+            assert kwargs == {"need_gmail": True, "need_sheet": True}
 
     monkeypatch.setattr(cli, "Settings", FakeSettings)
     monkeypatch.setattr(
         cli, "gmail_readonly_service",
         lambda token: gmail_service if token == "readonly-token" else None,
     )
+    sheets_service = object()
+    expected_db = object()
+    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: sheets_service)
     monkeypatch.setattr(
-        cli, "preview_amazon_cancellation_returns",
-        lambda service: {"read_only": service is gmail_service},
+        cli, "SheetsDB",
+        lambda spreadsheet_id, service: (
+            expected_db if (spreadsheet_id, service) == ("private-sheet", sheets_service)
+            else None
+        ),
     )
     monkeypatch.setattr(
-        cli, "SheetsDB", lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("Sheets must not be constructed")
-        ),
+        cli, "preview_amazon_cancellation_returns",
+        lambda service, db=None: {
+            "gmail_read_only": service is gmail_service,
+            "sheets_read_only": db is expected_db,
+        },
     )
     monkeypatch.setattr(
         sys, "argv", ["kakeibo", "amazon-cancellation-return-preview"],
@@ -471,4 +637,6 @@ def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys
 
     cli.main()
 
-    assert capsys.readouterr().out.strip() == "{'read_only': True}"
+    assert capsys.readouterr().out.strip() == (
+        "{'gmail_read_only': True, 'sheets_read_only': True}"
+    )

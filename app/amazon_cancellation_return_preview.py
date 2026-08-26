@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
@@ -396,6 +398,237 @@ _THREAD_DIAGNOSTIC_FIELDS = (
     "thread_unique_order_id_candidate_present",
 )
 
+_MATCH_DIAGNOSTIC_FIELDS = (
+    "cancellation_without_order_id_count",
+    "candidate_count_0",
+    "candidate_count_1",
+    "candidate_count_2plus",
+    "unique_candidate_strong",
+    "unique_candidate_medium",
+    "unique_candidate_weak",
+    "date_window_clue_present",
+    "product_clue_present",
+    "quantity_clue_present",
+    "amount_clue_present",
+    "date_window_match_present",
+    "product_match_present",
+    "quantity_match_present",
+    "amount_match_present",
+    "existing_cancellation_excluded_present",
+    "matching_source_read_errors",
+    "matching_parser_errors",
+)
+_PRODUCT_LABEL_RE = re.compile(
+    r"(?im)^\s*(?:キャンセルされた商品|キャンセル商品|対象商品|商品名)\s*[：:]?\s*(.*)$"
+)
+_QUANTITY_CLUE_RE = re.compile(r"数量\s*[：:]?\s*(\d+)")
+_AMOUNT_CLUE_RE = re.compile(
+    r"(?:キャンセル金額|返金(?:予定)?額|商品金額|金額)\s*[：:]?\s*[￥¥]?\s*([0-9][0-9,]*)\s*円?"
+)
+
+
+@dataclass
+class _OrderMatchCandidate:
+    order_id: str
+    order_dates: set[date] = field(default_factory=set)
+    shipment_dates: set[date] = field(default_factory=set)
+    event_dates: set[date] = field(default_factory=set)
+    products: set[str] = field(default_factory=set)
+    quantities: set[int] = field(default_factory=set)
+    amounts: set[int] = field(default_factory=set)
+    existing_cancellation: bool = False
+
+
+def _cell(row: list, index: int) -> str:
+    return str(row[index]).strip() if len(row) > index else ""
+
+
+def _date(value: str) -> date | None:
+    normalized = value.strip().replace("/", "-")
+    if not normalized:
+        return None
+    try:
+        return datetime.fromisoformat(normalized.replace("Z", "+00:00")).date()
+    except ValueError:
+        try:
+            return date.fromisoformat(normalized[:10])
+        except ValueError:
+            return None
+
+
+def _integer(value: str) -> int | None:
+    try:
+        return int(float(value.replace(",", ""))) if value else None
+    except ValueError:
+        return None
+
+
+def _normalized_product(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value).lower())
+
+
+def _load_matching_candidates(db) -> dict[str, _OrderMatchCandidate]:
+    candidates: dict[str, _OrderMatchCandidate] = {}
+
+    def candidate(order_id: str) -> _OrderMatchCandidate:
+        return candidates.setdefault(order_id, _OrderMatchCandidate(order_id))
+
+    for raw in db.get("Amazon注文!A2:O"):
+        row = list(raw)
+        order_id = _cell(row, 1)
+        if not order_id:
+            continue
+        current = candidate(order_id)
+        order_date = _date(_cell(row, 3))
+        shipment_date = _date(_cell(row, 13))
+        quantity = _integer(_cell(row, 5))
+        amount = _integer(_cell(row, 6))
+        product = _normalized_product(_cell(row, 4))
+        if order_date:
+            current.order_dates.add(order_date)
+        if shipment_date:
+            current.shipment_dates.add(shipment_date)
+        if quantity is not None:
+            current.quantities.add(quantity)
+        if amount is not None:
+            current.amounts.add(amount)
+        if product:
+            current.products.add(product)
+
+    for raw in db.get("Amazon注文ヘッダ!A2:O"):
+        row = list(raw)
+        order_id = _cell(row, 0)
+        if not order_id:
+            continue
+        current = candidate(order_id)
+        order_date = _date(_cell(row, 1))
+        amount = _integer(_cell(row, 2))
+        quantity = _integer(_cell(row, 4))
+        if order_date:
+            current.order_dates.add(order_date)
+        if amount is not None:
+            current.amounts.add(amount)
+        if quantity is not None:
+            current.quantities.add(quantity)
+
+    for raw in db.get("Amazonイベント!A2:X"):
+        row = list(raw)
+        order_id = _cell(row, 6)
+        if not order_id:
+            continue
+        current = candidate(order_id)
+        event_type = _cell(row, 5)
+        event_date = _date(_cell(row, 7))
+        if event_date:
+            current.event_dates.add(event_date)
+        for index in (8, 9, 10, 11):
+            amount = _integer(_cell(row, index))
+            if amount is not None:
+                current.amounts.add(amount)
+        quantity = _integer(_cell(row, 17))
+        if quantity is not None:
+            current.quantities.add(quantity)
+        if event_type == "cancellation":
+            current.existing_cancellation = True
+    return candidates
+
+
+def _product_clues(text: str) -> set[str]:
+    lines = text.splitlines()
+    clues: set[str] = set()
+    for index, line in enumerate(lines):
+        match = _PRODUCT_LABEL_RE.match(line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if not value:
+            value = next((item.strip() for item in lines[index + 1:] if item.strip()), "")
+        normalized = _normalized_product(value)
+        if len(normalized) >= 4:
+            clues.add(normalized)
+    return clues
+
+
+def _date_match(event_date: date | None, candidate: _OrderMatchCandidate) -> bool:
+    if event_date is None:
+        return False
+    order_match = any(0 <= (event_date - value).days <= 45 for value in candidate.order_dates)
+    timing_match = any(
+        abs((event_date - value).days) <= 14
+        for value in candidate.shipment_dates | candidate.event_dates
+    )
+    return order_match or timing_match
+
+
+def _diagnose_order_candidates(
+    raw_mime: bytes,
+    event: AmazonMailEvent,
+    candidates: dict[str, _OrderMatchCandidate],
+    *,
+    unsafe_due_to_error: bool,
+) -> dict[str, int]:
+    result = {field: 0 for field in _MATCH_DIAGNOSTIC_FIELDS}
+    result["cancellation_without_order_id_count"] = 1
+    text = _diagnostic_text(raw_mime)
+    event_date = _date(event.event_date or "")
+    products = _product_clues(text)
+    quantities = {
+        int(match.group(1)) for match in _QUANTITY_CLUE_RE.finditer(text)
+    }
+    amounts = {
+        int(match.group(1).replace(",", "")) for match in _AMOUNT_CLUE_RE.finditer(text)
+    }
+    result["date_window_clue_present"] = int(event_date is not None)
+    result["product_clue_present"] = int(bool(products))
+    result["quantity_clue_present"] = int(bool(quantities))
+    result["amount_clue_present"] = int(bool(amounts))
+
+    matches: list[tuple[_OrderMatchCandidate, set[str]]] = []
+    for candidate in candidates.values():
+        evidence: set[str] = set()
+        if _date_match(event_date, candidate):
+            evidence.add("date")
+        if any(
+            clue in product or product in clue
+            for clue in products for product in candidate.products
+        ):
+            evidence.add("product")
+        if quantities & candidate.quantities:
+            evidence.add("quantity")
+        if amounts & candidate.amounts:
+            evidence.add("amount")
+        if candidate.existing_cancellation:
+            if evidence:
+                result["existing_cancellation_excluded_present"] = 1
+            continue
+        if evidence:
+            matches.append((candidate, evidence))
+
+    count = len({candidate.order_id for candidate, _ in matches})
+    result["candidate_count_0"] = int(count == 0)
+    result["candidate_count_1"] = int(count == 1)
+    result["candidate_count_2plus"] = int(count >= 2)
+    all_evidence = set().union(*(evidence for _, evidence in matches)) if matches else set()
+    for name in ("date", "product", "quantity", "amount"):
+        result[f"{name}_window_match_present" if name == "date" else f"{name}_match_present"] = int(
+            name in all_evidence
+        )
+
+    if count == 1:
+        evidence = matches[0][1]
+        if (
+            not unsafe_due_to_error
+            and len(evidence) >= 3
+            and {"date", "product"} <= evidence
+        ):
+            strength = "strong"
+        elif len(evidence) >= 2 and "product" in evidence:
+            strength = "medium"
+        else:
+            strength = "weak"
+        result[f"unique_candidate_{strength}"] = 1
+    return result
+
 
 def _diagnose_cancellation_thread(
     service,
@@ -457,6 +690,7 @@ def _diagnose_cancellation_thread(
 def preview_amazon_cancellation_returns(
     service,
     *,
+    db=None,
     fetcher: Callable[[object], list[GmailRawMessage]] = fetch_amazon_gmail_messages,
     parser: Callable[[bytes], AmazonMailEvent] = parse_amazon_email,
     thread_fetcher: Callable[
@@ -467,6 +701,13 @@ def preview_amazon_cancellation_returns(
 
     messages = fetcher(service)
     counts: Counter[str] = Counter()
+    matching_read_error = False
+    matching_candidates: dict[str, _OrderMatchCandidate] = {}
+    if db is not None:
+        try:
+            matching_candidates = _load_matching_candidates(db)
+        except Exception:
+            matching_read_error = True
     for message in messages:
         text = _diagnostic_text(message.raw_mime)
         try:
@@ -475,6 +716,8 @@ def preview_amazon_cancellation_returns(
             for event_type in ("cancellation", "return"):
                 if _looks_like(text, event_type):
                     counts[f"{event_type} parser errors"] += 1
+                    if event_type == "cancellation":
+                        counts["matching_parser_errors"] += 1
             continue
 
         if event.event_type not in {"cancellation", "return"}:
@@ -490,6 +733,14 @@ def preview_amazon_cancellation_returns(
         counts[f"{event_type} event_date present"] += event.event_date is not None
         if event_type == "cancellation":
             if event.order_id is None:
+                matching = _diagnose_order_candidates(
+                    message.raw_mime,
+                    event,
+                    matching_candidates,
+                    unsafe_due_to_error=matching_read_error,
+                )
+                matching["matching_source_read_errors"] = int(matching_read_error)
+                counts.update(matching)
                 counts.update(_diagnose_cancellation_thread(
                     service, message, parser=parser, thread_fetcher=thread_fetcher,
                 ))
@@ -525,6 +776,7 @@ def preview_amazon_cancellation_returns(
         *ORDER_ID_DIAGNOSTIC_FIELDS,
         *FORWARDED_DIAGNOSTIC_FIELDS,
         *_THREAD_DIAGNOSTIC_FIELDS,
+        *_MATCH_DIAGNOSTIC_FIELDS,
     )
     result = {"fetched Amazon messages": len(messages), **{
         field: counts[field] for field in fields
