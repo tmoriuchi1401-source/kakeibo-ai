@@ -7,6 +7,7 @@ from datetime import date, datetime
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
+import hashlib
 import html
 from html.parser import HTMLParser
 import re
@@ -418,6 +419,25 @@ _MATCH_DIAGNOSTIC_FIELDS = (
     "matching_source_read_errors",
     "matching_parser_errors",
 )
+_REVIEW_REASONS = (
+    "missing_order_id",
+    "no_candidate",
+    "multiple_candidates",
+    "unique_but_not_strong",
+    "parser_error",
+    "source_read_error",
+)
+_REVIEW_FIELDS = (
+    "cancellation_review_required_count",
+    "cancellation_review_not_required_strong_count",
+    *tuple(f"review_{reason}" for reason in _REVIEW_REASONS),
+    "review_partial_likely",
+    "review_full_likely",
+    "review_ambiguous",
+    "review_duplicate_key_available",
+    "review_existing_duplicate_detected",
+    "review_planned_new_count",
+)
 _PRODUCT_LABEL_RE = re.compile(
     r"(?im)^\s*(?:キャンセルされた商品|キャンセル商品|対象商品|商品名)\s*[：:]?\s*(.*)$"
 )
@@ -437,6 +457,96 @@ class _OrderMatchCandidate:
     quantities: set[int] = field(default_factory=set)
     amounts: set[int] = field(default_factory=set)
     existing_cancellation: bool = False
+
+
+@dataclass(frozen=True)
+class _CancellationReviewPlan:
+    review_id: str
+    source_type: str
+    status: str
+    reasons: tuple[str, ...]
+    event_date: str | None
+    candidate_count: str | None
+    cancellation_scope: str
+    source_event_key: str
+
+
+def _review_key(raw_mime: bytes, source_hash: str | None = None) -> str:
+    digest = source_hash or hashlib.sha256(raw_mime).hexdigest()
+    return f"amazon-cancellation:{digest[:24]}"
+
+
+def _candidate_count(matching: dict[str, int]) -> str | None:
+    if matching.get("candidate_count_0"):
+        return "0"
+    if matching.get("candidate_count_1"):
+        return "1"
+    if matching.get("candidate_count_2plus"):
+        return "2plus"
+    return None
+
+
+def _build_review_plan(
+    raw_mime: bytes,
+    *,
+    source_hash: str | None,
+    event_date: str | None,
+    matching: dict[str, int],
+    cancellation_scope: str,
+    parser_error: bool = False,
+    source_read_error: bool = False,
+) -> _CancellationReviewPlan | None:
+    count = _candidate_count(matching)
+    strong = bool(matching.get("unique_candidate_strong"))
+    if count == "1" and strong and not parser_error and not source_read_error:
+        return None
+
+    reasons: list[str] = []
+    if not parser_error:
+        reasons.append("missing_order_id")
+    if parser_error:
+        reasons.append("parser_error")
+    if source_read_error:
+        reasons.append("source_read_error")
+    elif count == "0":
+        reasons.append("no_candidate")
+    elif count == "1" and not strong:
+        reasons.append("unique_but_not_strong")
+    elif count == "2plus":
+        reasons.append("multiple_candidates")
+
+    key = _review_key(raw_mime, source_hash)
+    # The current 要確認 schema is transaction-oriented. Keep a logical future
+    # row here until an apply design can map it without inventing amount/merchant.
+    return _CancellationReviewPlan(
+        review_id=key,
+        source_type="amazon_cancellation",
+        status="要確認",
+        reasons=tuple(reasons),
+        event_date=event_date,
+        candidate_count=count,
+        cancellation_scope=cancellation_scope,
+        source_event_key=key,
+    )
+
+
+def _count_review_plan(
+    counts: Counter[str],
+    plan: _CancellationReviewPlan | None,
+    existing_review_ids: set[str],
+) -> None:
+    if plan is None:
+        counts["cancellation_review_not_required_strong_count"] += 1
+        return
+    counts["cancellation_review_required_count"] += 1
+    for reason in plan.reasons:
+        counts[f"review_{reason}"] += 1
+    counts[f"review_{plan.cancellation_scope}"] += 1
+    counts["review_duplicate_key_available"] += 1
+    if plan.review_id in existing_review_ids:
+        counts["review_existing_duplicate_detected"] += 1
+    else:
+        counts["review_planned_new_count"] += 1
 
 
 def _cell(row: list, index: int) -> str:
@@ -703,9 +813,16 @@ def preview_amazon_cancellation_returns(
     counts: Counter[str] = Counter()
     matching_read_error = False
     matching_candidates: dict[str, _OrderMatchCandidate] = {}
+    existing_review_ids: set[str] = set()
     if db is not None:
         try:
             matching_candidates = _load_matching_candidates(db)
+        except Exception:
+            matching_read_error = True
+        try:
+            existing_review_ids = {
+                _cell(list(row), 0) for row in db.get("要確認!A2:A") if row
+            }
         except Exception:
             matching_read_error = True
     for message in messages:
@@ -718,6 +835,17 @@ def preview_amazon_cancellation_returns(
                     counts[f"{event_type} parser errors"] += 1
                     if event_type == "cancellation":
                         counts["matching_parser_errors"] += 1
+                        scope = classify_cancellation_clues(text)
+                        plan = _build_review_plan(
+                            message.raw_mime,
+                            source_hash=None,
+                            event_date=None,
+                            matching={},
+                            cancellation_scope=scope,
+                            parser_error=True,
+                            source_read_error=matching_read_error,
+                        )
+                        _count_review_plan(counts, plan, existing_review_ids)
             continue
 
         if event.event_type not in {"cancellation", "return"}:
@@ -741,6 +869,16 @@ def preview_amazon_cancellation_returns(
                 )
                 matching["matching_source_read_errors"] = int(matching_read_error)
                 counts.update(matching)
+                scope = classify_cancellation_clues(text)
+                plan = _build_review_plan(
+                    message.raw_mime,
+                    source_hash=event.source_hash,
+                    event_date=event.event_date,
+                    matching=matching,
+                    cancellation_scope=scope,
+                    source_read_error=matching_read_error,
+                )
+                _count_review_plan(counts, plan, existing_review_ids)
                 counts.update(_diagnose_cancellation_thread(
                     service, message, parser=parser, thread_fetcher=thread_fetcher,
                 ))
@@ -777,9 +915,12 @@ def preview_amazon_cancellation_returns(
         *FORWARDED_DIAGNOSTIC_FIELDS,
         *_THREAD_DIAGNOSTIC_FIELDS,
         *_MATCH_DIAGNOSTIC_FIELDS,
+        *_REVIEW_FIELDS,
     )
     result = {"fetched Amazon messages": len(messages), **{
         field: counts[field] for field in fields
     }}
     result["ambiguous cancellation"] = counts["cancellation ambiguous"]
+    result["review_existing_schema_reusable"] = 0
+    result["review_schema_gap_present"] = 1
     return result

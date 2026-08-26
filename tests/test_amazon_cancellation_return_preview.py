@@ -3,6 +3,8 @@ from __future__ import annotations
 from email.message import EmailMessage
 
 from app.amazon_cancellation_return_preview import (
+    _build_review_plan,
+    _review_key,
     diagnose_cancellation_order_id,
     diagnose_forwarded_cancellation_order_id,
     fetch_gmail_thread_messages,
@@ -61,11 +63,15 @@ def _preview(messages, *, thread_fetcher=None, parser=None, db=None):
 
 
 class MatchingDB:
-    def __init__(self, *, orders=None, headers=None, events=None, fail=False):
+    def __init__(
+        self, *, orders=None, headers=None, events=None, existing_reviews=None,
+        fail=False,
+    ):
         self.rows = {
             "Amazon注文!A2:O": list(orders or []),
             "Amazon注文ヘッダ!A2:O": list(headers or []),
             "Amazonイベント!A2:X": list(events or []),
+            "要確認!A2:A": list(existing_reviews or []),
         }
         self.fail = fail
         self.reads = []
@@ -149,6 +155,8 @@ def test_parser_errors_are_anonymously_attributed_by_clue():
     )
 
     assert result["cancellation parser errors"] == 1
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_parser_error"] == 1
     assert "private" not in str(result)
 
 
@@ -485,6 +493,9 @@ def test_order_matching_candidate_count_zero():
     assert result["cancellation_without_order_id_count"] == 1
     assert result["candidate_count_0"] == 1
     assert result["unique_candidate_strong"] == 0
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_missing_order_id"] == 1
+    assert result["review_no_candidate"] == 1
 
 
 def test_order_matching_unique_candidate_strong():
@@ -506,6 +517,9 @@ def test_order_matching_unique_candidate_strong():
     assert result["quantity_match_present"] == 1
     assert result["amount_match_present"] == 1
     assert result["unique_candidate_strong"] == 1
+    assert result["cancellation_review_required_count"] == 0
+    assert result["cancellation_review_not_required_strong_count"] == 1
+    assert result["review_planned_new_count"] == 0
 
 
 def test_order_matching_unique_candidate_medium_for_product_and_date():
@@ -523,6 +537,8 @@ def test_order_matching_unique_candidate_medium_for_product_and_date():
     assert result["candidate_count_1"] == 1
     assert result["unique_candidate_medium"] == 1
     assert result["unique_candidate_strong"] == 0
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_unique_but_not_strong"] == 1
 
 
 def test_order_matching_unique_candidate_weak_for_date_only():
@@ -539,6 +555,8 @@ def test_order_matching_unique_candidate_weak_for_date_only():
     assert result["date_window_match_present"] == 1
     assert result["unique_candidate_weak"] == 1
     assert result["unique_candidate_strong"] == 0
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_unique_but_not_strong"] == 1
 
 
 def test_order_matching_two_candidates_are_not_unique():
@@ -556,6 +574,8 @@ def test_order_matching_two_candidates_are_not_unique():
     assert result["unique_candidate_strong"] == 0
     assert result["unique_candidate_medium"] == 0
     assert result["unique_candidate_weak"] == 0
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_multiple_candidates"] == 1
 
 
 def test_amount_only_match_is_weak_and_output_is_anonymous():
@@ -592,7 +612,49 @@ def test_matching_read_error_never_produces_strong_or_writes():
     assert result["matching_source_read_errors"] == 1
     assert result["candidate_count_0"] == 1
     assert result["unique_candidate_strong"] == 0
-    assert db.reads == ["Amazon注文!A2:O"]
+    assert result["cancellation_review_required_count"] == 1
+    assert result["review_source_read_error"] == 1
+    assert db.reads == ["Amazon注文!A2:O", "要確認!A2:A"]
+
+
+def test_review_duplicate_key_is_stable_and_existing_row_is_not_planned_again():
+    cancellation = _thread_message(
+        "private-message", "private-thread", "注文のキャンセル", "キャンセル",
+    )
+    first_key = _review_key(cancellation.raw_mime)
+    second_key = _review_key(cancellation.raw_mime)
+    db = MatchingDB(existing_reviews=[[first_key]])
+
+    result = _preview([cancellation], db=db)
+    rendered = str(result)
+
+    assert first_key == second_key
+    assert result["review_duplicate_key_available"] == 1
+    assert result["review_existing_duplicate_detected"] == 1
+    assert result["review_planned_new_count"] == 0
+    assert first_key not in rendered
+    assert "private-message" not in rendered
+    assert "private-thread" not in rendered
+
+
+def test_review_plan_has_future_logical_row_without_exposing_it_in_summary():
+    raw = _raw("注文のキャンセル", "キャンセル")
+    plan = _build_review_plan(
+        raw,
+        source_hash="a" * 64,
+        event_date="2026-08-24",
+        matching={"candidate_count_2plus": 1},
+        cancellation_scope="partial_likely",
+    )
+
+    assert plan is not None
+    assert plan.source_type == "amazon_cancellation"
+    assert plan.status == "要確認"
+    assert plan.reasons == ("missing_order_id", "multiple_candidates")
+    assert plan.event_date == "2026-08-24"
+    assert plan.candidate_count == "2plus"
+    assert plan.cancellation_scope == "partial_likely"
+    assert plan.review_id == plan.source_event_key
 
 
 def test_cli_uses_readonly_gmail_and_sheets(monkeypatch, capsys):
