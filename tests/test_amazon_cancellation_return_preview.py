@@ -5,9 +5,11 @@ from email.message import EmailMessage
 from app.amazon_cancellation_return_preview import (
     diagnose_cancellation_order_id,
     diagnose_forwarded_cancellation_order_id,
+    fetch_gmail_thread_messages,
     preview_amazon_cancellation_returns,
 )
 from app.amazon_gmail_storage import GmailRawMessage
+from app.amazon_email import parse_amazon_email
 
 
 def _raw(subject: str, body: str) -> bytes:
@@ -25,6 +27,10 @@ def _message(name: str, subject: str, body: str) -> GmailRawMessage:
     return GmailRawMessage(name, f"thread-{name}", _raw(subject, body))
 
 
+def _thread_message(name: str, thread_id: str, subject: str, body: str) -> GmailRawMessage:
+    return GmailRawMessage(name, thread_id, _raw(subject, body))
+
+
 def _html_raw(subject: str, html: str) -> bytes:
     message = EmailMessage()
     message["Subject"] = subject
@@ -35,9 +41,21 @@ def _html_raw(subject: str, html: str) -> bytes:
     return message.as_bytes()
 
 
-def _preview(messages):
+def _preview(messages, *, thread_fetcher=None, parser=None):
+    by_thread = {
+        message.thread_id: [
+            candidate for candidate in messages
+            if candidate.thread_id == message.thread_id
+        ]
+        for message in messages
+    }
     return preview_amazon_cancellation_returns(
-        object(), fetcher=lambda service: messages,
+        object(),
+        fetcher=lambda service: messages,
+        thread_fetcher=(
+            thread_fetcher or (lambda service, thread_id: by_thread[thread_id])
+        ),
+        **({"parser": parser} if parser else {}),
     )
 
 
@@ -256,6 +274,168 @@ Subject: Order {order_id}
     assert result["forwarded_order_id_candidate_count_1"]
     assert order_id not in rendered
     assert "Private original body" not in rendered
+
+
+def test_thread_diagnostic_finds_one_unique_order_id_from_other_message():
+    cancellation = _thread_message(
+        "cancel-private", "thread-private", "注文のキャンセル",
+        "この商品をキャンセルしました",
+    )
+    order = _thread_message(
+        "order-private", "thread-private", "注文確認",
+        "注文番号: 123-1234567-1234567",
+    )
+
+    result = _preview([cancellation, order])
+
+    assert result["cancellation_thread_id_present"] == 1
+    assert result["cancellation_thread_fetched"] == 1
+    assert result["cancellation_thread_message_count_2plus"] == 1
+    assert result["thread_other_message_count"] == 1
+    assert result["thread_order_event_present"] == 1
+    assert result["thread_other_order_id_present"] == 1
+    assert result["thread_order_id_candidate_count_1"] == 1
+    assert result["thread_unique_order_id_candidate_present"] == 1
+
+
+def test_thread_diagnostic_deduplicates_same_order_id_across_messages():
+    order_id = "123-1234567-1234567"
+    messages = [
+        _thread_message("cancel", "thread", "注文のキャンセル", "キャンセル"),
+        _thread_message("order", "thread", "注文確認", f"注文番号: {order_id}"),
+        _thread_message("delivery", "thread", "お届け済み", f"注文番号: {order_id}"),
+    ]
+
+    result = _preview(messages)
+
+    assert result["thread_order_event_present"] == 1
+    assert result["thread_delivery_event_present"] == 1
+    assert result["thread_order_id_candidate_count_1"] == 1
+    assert result["thread_unique_order_id_candidate_present"] == 1
+
+
+def test_thread_diagnostic_rejects_two_distinct_order_ids_as_unique():
+    messages = [
+        _thread_message("cancel", "thread", "注文のキャンセル", "キャンセル"),
+        _thread_message(
+            "order-1", "thread", "注文確認", "注文番号: 123-1234567-1234567",
+        ),
+        _thread_message(
+            "order-2", "thread", "注文確認", "注文番号: 987-7654321-7654321",
+        ),
+    ]
+
+    result = _preview(messages)
+
+    assert result["thread_order_id_candidate_count_2plus"] == 1
+    assert result["thread_unique_order_id_candidate_present"] == 0
+
+
+def test_thread_diagnostic_handles_single_message_and_missing_thread_id():
+    single = _thread_message(
+        "cancel", "thread", "注文のキャンセル", "キャンセル",
+    )
+    missing = GmailRawMessage(
+        "cancel-no-thread", "", _raw("注文のキャンセル", "キャンセル"),
+    )
+
+    single_result = _preview([single])
+    missing_result = _preview([missing])
+
+    assert single_result["cancellation_thread_message_count_1"] == 1
+    assert single_result["thread_other_message_count"] == 0
+    assert single_result["thread_order_id_candidate_count_0"] == 1
+    assert missing_result["cancellation_thread_id_present"] == 0
+    assert missing_result["cancellation_thread_fetched"] == 0
+    assert missing_result["thread_order_id_candidate_count_0"] == 1
+
+
+def test_thread_fetch_failure_is_anonymous_and_does_not_stop_preview():
+    cancellation = _thread_message(
+        "private-message", "private-thread", "注文のキャンセル", "private body キャンセル",
+    )
+
+    result = _preview(
+        [cancellation],
+        thread_fetcher=lambda service, thread_id: (_ for _ in ()).throw(
+            RuntimeError(f"failed {thread_id} private body")
+        ),
+    )
+
+    assert result["cancellation count"] == 1
+    assert result["cancellation_thread_fetch_errors"] == 1
+    assert result["thread_unique_order_id_candidate_present"] == 0
+    assert "private-thread" not in str(result)
+    assert "private body" not in str(result)
+
+
+def test_thread_parser_error_prevents_unique_candidate():
+    cancellation = _thread_message(
+        "cancel", "thread", "注文のキャンセル", "キャンセル",
+    )
+    good = _thread_message(
+        "good", "thread", "注文確認", "注文番号: 123-1234567-1234567",
+    )
+    broken = _thread_message("broken", "thread", "broken", "broken private body")
+
+    def parser(raw):
+        if b"broken private body" in raw:
+            raise ValueError("private parser error")
+        return parse_amazon_email(raw)
+
+    result = _preview([cancellation, good, broken], parser=parser)
+
+    assert result["thread_other_parser_errors"] == 1
+    assert result["thread_order_id_candidate_count_1"] == 1
+    assert result["thread_unique_order_id_candidate_present"] == 0
+
+
+def test_thread_fetcher_uses_threads_and_raw_message_gets():
+    import base64
+
+    raw = _raw("注文確認", "注文番号: 123-1234567-1234567")
+    calls = []
+
+    class Request:
+        def __init__(self, response):
+            self.response = response
+
+        def execute(self):
+            return self.response
+
+    class Threads:
+        def get(self, **kwargs):
+            calls.append(("thread", kwargs))
+            return Request({"messages": [{"id": "message-private"}]})
+
+    class Messages:
+        def get(self, **kwargs):
+            calls.append(("message", kwargs))
+            encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+            return Request({"threadId": "thread-private", "raw": encoded})
+
+    class Users:
+        def threads(self):
+            return Threads()
+
+        def messages(self):
+            return Messages()
+
+    class Service:
+        def users(self):
+            return Users()
+
+    messages = fetch_gmail_thread_messages(Service(), "thread-private")
+
+    assert len(messages) == 1
+    assert calls == [
+        ("thread", {
+            "userId": "me", "id": "thread-private", "format": "minimal",
+        }),
+        ("message", {
+            "userId": "me", "id": "message-private", "format": "raw",
+        }),
+    ]
 
 
 def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys):

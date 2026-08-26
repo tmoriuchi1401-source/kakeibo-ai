@@ -11,6 +11,7 @@ import re
 import unicodedata
 
 from .amazon_email import AmazonMailEvent, ORDER_ID_RE, parse_amazon_email
+from .amazon_gmail_preview import _raw_bytes
 from .amazon_gmail_storage import GmailRawMessage, fetch_amazon_gmail_messages
 
 
@@ -354,11 +355,113 @@ def _looks_like(text: str, event_type: str) -> bool:
     return any(term in lowered for term in terms)
 
 
+def fetch_gmail_thread_messages(service, thread_id: str) -> list[GmailRawMessage]:
+    """Fetch one Gmail thread as raw messages through a read-only service."""
+
+    users = service.users()
+    thread = users.threads().get(
+        userId="me", id=thread_id, format="minimal",
+    ).execute()
+    messages_api = users.messages()
+    messages: list[GmailRawMessage] = []
+    for item in thread.get("messages", []):
+        message_id = item.get("id")
+        if not message_id:
+            continue
+        raw = messages_api.get(
+            userId="me", id=message_id, format="raw",
+        ).execute()
+        messages.append(GmailRawMessage(
+            gmail_message_id=str(message_id),
+            thread_id=str(raw.get("threadId") or thread_id),
+            raw_mime=_raw_bytes(raw.get("raw", "")),
+        ))
+    return messages
+
+
+_THREAD_EVENT_TYPES = ("order", "delivery", "cancellation", "return", "unknown")
+_THREAD_DIAGNOSTIC_FIELDS = (
+    "cancellation_thread_id_present",
+    "cancellation_thread_fetched",
+    "cancellation_thread_fetch_errors",
+    "cancellation_thread_message_count_1",
+    "cancellation_thread_message_count_2plus",
+    "thread_other_message_count",
+    *tuple(f"thread_{event_type}_event_present" for event_type in _THREAD_EVENT_TYPES),
+    "thread_other_parser_errors",
+    "thread_other_order_id_present",
+    "thread_order_id_candidate_count_0",
+    "thread_order_id_candidate_count_1",
+    "thread_order_id_candidate_count_2plus",
+    "thread_unique_order_id_candidate_present",
+)
+
+
+def _diagnose_cancellation_thread(
+    service,
+    message: GmailRawMessage,
+    *,
+    parser: Callable[[bytes], AmazonMailEvent],
+    thread_fetcher: Callable[[object, str], list[GmailRawMessage]],
+) -> dict[str, int]:
+    result = {field: 0 for field in _THREAD_DIAGNOSTIC_FIELDS}
+    if not message.thread_id:
+        result["thread_order_id_candidate_count_0"] = 1
+        return result
+
+    result["cancellation_thread_id_present"] = 1
+    try:
+        thread_messages = thread_fetcher(service, message.thread_id)
+    except Exception:
+        result["cancellation_thread_fetch_errors"] = 1
+        result["thread_order_id_candidate_count_0"] = 1
+        return result
+
+    result["cancellation_thread_fetched"] = 1
+    result["cancellation_thread_message_count_1"] = int(len(thread_messages) == 1)
+    result["cancellation_thread_message_count_2plus"] = int(len(thread_messages) >= 2)
+    other_messages = [
+        candidate for candidate in thread_messages
+        if candidate.gmail_message_id != message.gmail_message_id
+    ]
+    result["thread_other_message_count"] = len(other_messages)
+
+    candidates: set[str] = set()
+    parser_error = False
+    event_types: set[str] = set()
+    for other in other_messages:
+        try:
+            event = parser(other.raw_mime)
+        except Exception:
+            parser_error = True
+            result["thread_other_parser_errors"] += 1
+            continue
+        event_type = event.event_type if event.event_type in _THREAD_EVENT_TYPES else "unknown"
+        event_types.add(event_type)
+        if event.order_id:
+            candidates.add(event.order_id)
+
+    for event_type in _THREAD_EVENT_TYPES:
+        result[f"thread_{event_type}_event_present"] = int(event_type in event_types)
+    count = len(candidates)
+    result["thread_other_order_id_present"] = int(count > 0)
+    result["thread_order_id_candidate_count_0"] = int(count == 0)
+    result["thread_order_id_candidate_count_1"] = int(count == 1)
+    result["thread_order_id_candidate_count_2plus"] = int(count >= 2)
+    result["thread_unique_order_id_candidate_present"] = int(
+        count == 1 and not parser_error
+    )
+    return result
+
+
 def preview_amazon_cancellation_returns(
     service,
     *,
     fetcher: Callable[[object], list[GmailRawMessage]] = fetch_amazon_gmail_messages,
     parser: Callable[[bytes], AmazonMailEvent] = parse_amazon_email,
+    thread_fetcher: Callable[
+        [object, str], list[GmailRawMessage]
+    ] = fetch_gmail_thread_messages,
 ) -> dict[str, int]:
     """Diagnose cancellation/return Gmail messages without persisting anything."""
 
@@ -386,6 +489,10 @@ def preview_amazon_cancellation_returns(
         counts[f"{event_type} order_id present"] += event.order_id is not None
         counts[f"{event_type} event_date present"] += event.event_date is not None
         if event_type == "cancellation":
+            if event.order_id is None:
+                counts.update(_diagnose_cancellation_thread(
+                    service, message, parser=parser, thread_fetcher=thread_fetcher,
+                ))
             for field, present in diagnose_cancellation_order_id(message.raw_mime).items():
                 counts[field] += present
             for field, present in diagnose_forwarded_cancellation_order_id(
@@ -417,6 +524,7 @@ def preview_amazon_cancellation_returns(
         "unknown cancellation candidates", "unknown return candidates",
         *ORDER_ID_DIAGNOSTIC_FIELDS,
         *FORWARDED_DIAGNOSTIC_FIELDS,
+        *_THREAD_DIAGNOSTIC_FIELDS,
     )
     result = {"fetched Amazon messages": len(messages), **{
         field: counts[field] for field in fields
