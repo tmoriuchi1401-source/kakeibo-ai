@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import EmailMessage
 
 from app.amazon_cancellation_return_preview import (
+    diagnose_cancellation_order_id,
     preview_amazon_cancellation_returns,
 )
 from app.amazon_gmail_storage import GmailRawMessage
@@ -21,6 +22,16 @@ def _raw(subject: str, body: str) -> bytes:
 
 def _message(name: str, subject: str, body: str) -> GmailRawMessage:
     return GmailRawMessage(name, f"thread-{name}", _raw(subject, body))
+
+
+def _html_raw(subject: str, html: str) -> bytes:
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = "Amazon.co.jp <no-reply@amazon.co.jp>"
+    message["To"] = "private@example.invalid"
+    message.set_content("HTML message")
+    message.add_alternative(html, subtype="html")
+    return message.as_bytes()
 
 
 def _preview(messages):
@@ -88,6 +99,67 @@ def test_parser_errors_are_anonymously_attributed_by_clue():
 
     assert result["cancellation parser errors"] == 1
     assert "private" not in str(result)
+
+
+def test_order_id_diagnostic_finds_normal_patterns_by_source():
+    order_id = "123-1234567-1234567"
+
+    subject = diagnose_cancellation_order_id(_raw(f"キャンセル {order_id}", "none"))
+    plain = diagnose_cancellation_order_id(_raw("キャンセル", order_id))
+    html = diagnose_cancellation_order_id(_html_raw(
+        "キャンセル", f'<a href="https://example.invalid/orders/{order_id}">{order_id}</a>',
+    ))
+
+    assert subject["subject_order_id_pattern_present"]
+    assert plain["plain_order_id_pattern_present"]
+    assert html["html_visible_order_id_pattern_present"]
+    assert html["html_raw_order_id_pattern_present"]
+    assert html["href_order_id_pattern_present"]
+
+
+def test_order_id_diagnostic_classifies_noncanonical_candidates():
+    unicode_dash = diagnose_cancellation_order_id(
+        _raw("キャンセル", "注文番号: 123−1234567−1234567"),
+    )
+    fullwidth = diagnose_cancellation_order_id(
+        _raw("キャンセル", "注文ID: １２３-１２３４５６７-１２３４５６７"),
+    )
+    alternate = diagnose_cancellation_order_id(
+        _raw("キャンセル", "Order #: 123 1234567 1234567"),
+    )
+
+    assert unicode_dash["unicode_dash_candidate_present"]
+    assert fullwidth["fullwidth_digit_candidate_present"]
+    assert alternate["alternate_format_candidate_present"]
+    assert alternate["label_near_numeric_candidate_present"]
+
+
+def test_order_id_diagnostic_finds_html_tag_split_candidate():
+    result = diagnose_cancellation_order_id(_html_raw(
+        "キャンセル", "注文番号: 123-<span>1234567</span>-1234567",
+    ))
+
+    assert result["split_order_id_candidate_present"]
+    assert result["html_visible_order_id_pattern_present"]
+    assert not result["html_raw_order_id_pattern_present"]
+
+    newline = diagnose_cancellation_order_id(
+        _raw("キャンセル", "注文番号: 123-1234567-\n1234567"),
+    )
+    assert newline["split_order_id_candidate_present"]
+
+
+def test_preview_order_id_diagnostics_are_anonymous():
+    order_id = "123-1234567-1234567"
+    result = _preview([_message(
+        "private-message-id", "注文のキャンセル", f"注文番号: {order_id}",
+    )])
+    rendered = str(result)
+
+    assert result["plain_order_id_pattern_present"] == 1
+    assert order_id not in rendered
+    assert "注文番号" not in rendered
+    assert "private-message-id" not in rendered
 
 
 def test_cli_uses_readonly_gmail_without_constructing_sheets(monkeypatch, capsys):

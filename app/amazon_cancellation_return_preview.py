@@ -5,11 +5,12 @@ from collections.abc import Callable
 from email import policy
 from email.message import Message
 from email.parser import BytesParser
+import html
 from html.parser import HTMLParser
 import re
 import unicodedata
 
-from .amazon_email import AmazonMailEvent, parse_amazon_email
+from .amazon_email import AmazonMailEvent, ORDER_ID_RE, parse_amazon_email
 from .amazon_gmail_storage import GmailRawMessage, fetch_amazon_gmail_messages
 
 
@@ -17,6 +18,14 @@ class _VisibleHTML(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
+        self.hrefs: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        for name, value in attrs:
+            if name.lower() == "href" and value is not None:
+                self.hrefs.append(value)
 
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
@@ -43,6 +52,108 @@ def _diagnostic_text(raw_mime: bytes) -> str:
             parser.feed(_part_text(part))
             parts.append(" ".join(parser.parts))
     return unicodedata.normalize("NFKC", "\n".join(parts))
+
+
+_UNICODE_DASH_RE = re.compile(
+    r"(?<!\d)\d{3}[\u2010-\u2015\u2212\uff0d]\d{7}"
+    r"[\u2010-\u2015\u2212\uff0d]\d{7}(?!\d)"
+)
+_FULLWIDTH_DIGITS = frozenset("０１２３４５６７８９")
+_MIXED_DIGIT_ORDER_RE = re.compile(
+    r"(?<![0-9０-９])[0-9０-９]{3}-[0-9０-９]{7}-[0-9０-９]{7}(?![0-9０-９])"
+)
+_LABEL_RE = re.compile(r"(?:注文番号|注文\s*ID|order\s*(?:#|id))", re.IGNORECASE)
+_NEARBY_NUMERIC_RE = re.compile(r"[0-9０-９][0-9０-９\s\-‐-―−－]{8,}")
+_ALT_ORDER_RE = re.compile(
+    r"(?<![0-9０-９])[0-9０-９]{3}(?:[\s_./:‐-―−－]+)"
+    r"[0-9０-９]{7}(?:[\s_./:‐-―−－]+)[0-9０-９]{7}(?![0-9０-９])"
+    r"|(?<![0-9０-９])[0-9０-９]{17}(?![0-9０-９])"
+)
+
+
+def _mime_diagnostic_sources(raw_mime: bytes) -> tuple[str, str, str, str, str]:
+    """Return subject/plain/visible HTML/raw HTML/hrefs for in-memory checks only."""
+
+    message = BytesParser(policy=policy.default).parsebytes(raw_mime)
+    subject = str(message.get("Subject", ""))
+    plain_parts: list[str] = []
+    visible_parts: list[str] = []
+    raw_html_parts: list[str] = []
+    hrefs: list[str] = []
+    candidates = message.walk() if message.is_multipart() else (message,)
+    for part in candidates:
+        if part.get_content_type() == "text/plain":
+            plain_parts.append(_part_text(part))
+        elif part.get_content_type() == "text/html":
+            raw_html = _part_text(part)
+            parser = _VisibleHTML()
+            parser.feed(raw_html)
+            raw_html_parts.append(raw_html)
+            visible_parts.append("".join(parser.parts))
+            hrefs.extend(parser.hrefs)
+    return (
+        subject,
+        "\n".join(plain_parts),
+        "\n".join(visible_parts),
+        "\n".join(raw_html_parts),
+        "\n".join(hrefs),
+    )
+
+
+def diagnose_cancellation_order_id(raw_mime: bytes) -> dict[str, bool]:
+    """Classify Order ID evidence without returning any source text or identifier."""
+
+    subject, plain, visible, raw_html, hrefs = _mime_diagnostic_sources(raw_mime)
+    all_text = "\n".join((subject, plain, visible, raw_html, hrefs))
+    labels = list(_LABEL_RE.finditer(all_text))
+    label_near = any(
+        _NEARBY_NUMERIC_RE.search(all_text[match.end():match.end() + 160])
+        for match in labels
+    )
+
+    # Removing markup and whitespace models an ID whose characters are separated
+    # by formatting tags. The raw source itself must not already contain the ID.
+    without_tags = html.unescape(re.sub(r"<[^>]+>", "", raw_html))
+    compact_html = re.sub(r"\s+", "", without_tags)
+    tag_between_order_chars = bool(re.search(
+        r"[0-9０-９-]\s*<[^>]+>\s*[0-9０-９-]", raw_html,
+    ))
+    html_tag_split = (
+        tag_between_order_chars
+        and ORDER_ID_RE.search(raw_html) is None
+        and ORDER_ID_RE.search(unicodedata.normalize("NFKC", compact_html)) is not None
+    )
+    whitespace_split = any(
+        ORDER_ID_RE.search(source) is None
+        and re.search(r"[0-9０-９-]\s+[0-9０-９-]", source) is not None
+        and ORDER_ID_RE.search(unicodedata.normalize(
+            "NFKC", re.sub(r"\s+", "", source),
+        )) is not None
+        for source in (subject, plain, visible)
+    )
+    fullwidth_matches = _MIXED_DIGIT_ORDER_RE.finditer(all_text)
+
+    return {
+        "subject_order_id_pattern_present": ORDER_ID_RE.search(subject) is not None,
+        "plain_order_id_pattern_present": ORDER_ID_RE.search(plain) is not None,
+        "html_visible_order_id_pattern_present": ORDER_ID_RE.search(visible) is not None,
+        "html_raw_order_id_pattern_present": ORDER_ID_RE.search(raw_html) is not None,
+        "href_order_id_pattern_present": ORDER_ID_RE.search(hrefs) is not None,
+        "unicode_dash_candidate_present": _UNICODE_DASH_RE.search(all_text) is not None,
+        "fullwidth_digit_candidate_present": any(
+            any(char in _FULLWIDTH_DIGITS for char in match.group())
+            for match in fullwidth_matches
+        ),
+        "split_order_id_candidate_present": html_tag_split or whitespace_split,
+        "label_near_numeric_candidate_present": label_near,
+        "alternate_format_candidate_present": (
+            _ALT_ORDER_RE.search(all_text) is not None
+            and ORDER_ID_RE.search(all_text) is None
+        ),
+    }
+
+
+ORDER_ID_DIAGNOSTIC_FIELDS = tuple(diagnose_cancellation_order_id(b"").keys())
 
 
 def cancellation_clues(text: str) -> dict[str, bool | str]:
@@ -127,6 +238,8 @@ def preview_amazon_cancellation_returns(
         counts[f"{event_type} order_id present"] += event.order_id is not None
         counts[f"{event_type} event_date present"] += event.event_date is not None
         if event_type == "cancellation":
+            for field, present in diagnose_cancellation_order_id(message.raw_mime).items():
+                counts[field] += present
             clues = cancellation_clues(text)
             counts["full cancellation clue present"] += bool(clues["full"])
             counts["partial cancellation clue present"] += bool(clues["partial"])
@@ -150,6 +263,7 @@ def preview_amazon_cancellation_returns(
         "return amount clue present", "return item_specific",
         "return order_level", "return ambiguous",
         "unknown cancellation candidates", "unknown return candidates",
+        *ORDER_ID_DIAGNOSTIC_FIELDS,
     )
     result = {"fetched Amazon messages": len(messages), **{
         field: counts[field] for field in fields
