@@ -58,6 +58,7 @@ from .drive_payroll import DrivePayrollPreview
 from .payroll_sheets import PayrollSheetsReadRepository
 from .payroll_storage_preview import (
     build_append_plan,
+    drive_save_preview,
     drive_storage_candidates,
     preview_summary,
 )
@@ -145,6 +146,7 @@ def main():
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-drive-preview")
     sub.add_parser("payroll-storage-preview")
+    sub.add_parser("payroll-save-preview")
     sub.add_parser("payroll-schema-preview")
     payroll_schema_apply=sub.add_parser("payroll-schema-apply")
     payroll_schema_apply.add_argument("--apply",action="store_true")
@@ -176,6 +178,14 @@ def main():
         candidates=drive_storage_candidates(s.payroll_drive_folder_id,snapshot)
         plans=build_append_plan(candidates,snapshot)
         print(json.dumps(preview_summary(plans,snapshot),ensure_ascii=False))
+    elif args.cmd=="payroll-save-preview":
+        import json
+        s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
+        snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        print(json.dumps(
+            drive_save_preview(s.payroll_drive_folder_id,snapshot),
+            ensure_ascii=False,
+        ))
     elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
         import json
         s=Settings(); s.validate(need_sheet=True)

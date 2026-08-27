@@ -60,3 +60,62 @@ def test_unknown_payroll_item_is_retained_with_geometry():
     assert item.raw_item_name == "独自手当"
     assert item.standard_item_candidate is None
     assert (item.page, item.row, item.column) == (1, 0, 0)
+
+
+def test_non_item_headings_are_not_parsed_as_items():
+    items = parse_positioned_items((
+        token("給与支給明細書", 10, 10), token("支給日：", 10, 30),
+        token("課税処理", 10, 50), token("＜年次有給休暇＞", 10, 70),
+        token("基本給", 10, 90), token("300,000", 100, 90),
+    ))
+    assert [item.raw_item_name for item in items] == ["基本給"]
+
+
+def test_positioned_value_immediately_above_same_column_is_paired():
+    items = parse_positioned_items((
+        token("12,000", 110, 10), token("独自手当", 100, 23),
+    ))
+    assert len(items) == 1
+    assert items[0].value == 12000
+    assert not items[0].needs_review
+
+
+def test_ambiguous_values_above_are_not_confirmed():
+    items = parse_positioned_items((
+        token("10,000", 100, 10), token("12,000", 108, 10),
+        token("独自手当", 100, 23),
+    ))
+    assert len(items) == 1
+    assert items[0].value is None
+    assert items[0].needs_review
+
+
+def test_nearby_ocr_tokens_restore_complete_item_name():
+    items = parse_positioned_items((
+        token("健康", 10, 10), token("保険", 62, 10),
+        token("15,000", 120, 10),
+    ), ocr=True)
+    assert len(items) == 1
+    assert items[0].raw_item_name == "健康保険"
+    assert items[0].standard_item_candidate == "health_insurance"
+    assert items[0].value == 15000
+
+
+def test_short_ocr_fragments_and_near_duplicate_are_suppressed():
+    items = parse_positioned_items((
+        token("支給", 10, 10), token("支給", 200, 10),
+        token("所得税", 10, 40), token("所得税", 15, 45),
+        token("5,000", 100, 40),
+    ), ocr=True)
+    assert [item.raw_item_name for item in items] == ["所得税"]
+
+
+def test_existing_standard_items_still_resolve_after_ocr_joining():
+    items = parse_positioned_items((
+        token("基本給", 10, 10), token("300,000", 100, 10),
+        token("健康", 10, 40), token("保険", 62, 40), token("15,000", 120, 40),
+        token("所得税", 10, 70), token("8,000", 100, 70),
+    ), ocr=True)
+    assert [item.standard_item_candidate for item in items] == [
+        "basic_pay", "health_insurance", "income_tax",
+    ]
