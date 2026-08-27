@@ -38,6 +38,7 @@ from .amazon_gmail_preview import gmail_readonly_service
 from .amazon_gmail_storage import import_amazon_gmail_events
 from .amazon_daily_import import run_amazon_daily_import
 from .amazon_cancellation_return_preview import preview_amazon_cancellation_returns
+from .amazon_cancellation_order_id_diagnose import diagnose_amazon_cancellation_order_ids
 from .amazon_review_preview import preview_amazon_reviews
 from .amazon_review_schema_install import install_amazon_review_schema
 from .amazon_status_sync_preview import preview_amazon_status_sync
@@ -112,6 +113,7 @@ def main():
     sub.add_parser("amazon-gmail-import")
     sub.add_parser("amazon-daily-import")
     sub.add_parser("amazon-cancellation-return-preview")
+    sub.add_parser("amazon-cancellation-order-id-diagnose")
     sub.add_parser("amazon-review-preview")
     sub.add_parser("amazon-review-schema-install")
     sub.add_parser("amazon-status-sync-preview")
@@ -274,6 +276,11 @@ def main():
         service=gmail_readonly_service(s.gmail_token_json)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_amazon_cancellation_returns(service,db=db))
+    elif args.cmd=="amazon-cancellation-order-id-diagnose":
+        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
+        service=gmail_readonly_service(s.gmail_token_json)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(diagnose_amazon_cancellation_order_ids(service,db))
     elif args.cmd=="amazon-review-preview":
         s=Settings(); s.validate(need_gmail=True,need_sheet=True)
         service=gmail_readonly_service(s.gmail_token_json)
