@@ -662,7 +662,7 @@ _CANCELLATION_QUANTITY_PATTERNS = (
 
 
 def _cancellation_quantity(text: str) -> tuple[int | None, str]:
-    """Return one explicit cancellation quantity and a privacy-safe status."""
+    """Return one distinct positive explicit quantity and a safe status."""
 
     candidates = [
         int(match.group(1))
@@ -671,9 +671,10 @@ def _cancellation_quantity(text: str) -> tuple[int | None, str]:
     ]
     if not candidates:
         return None, "missing"
-    if len(candidates) != 1 or candidates[0] <= 0:
+    values = set(candidates)
+    if any(value <= 0 for value in values) or len(values) != 1:
         return None, "invalid_or_ambiguous"
-    return candidates[0], "found"
+    return values.pop(), "found"
 
 
 def diagnose_cancellation_quantity(raw_email: bytes | Message) -> str:

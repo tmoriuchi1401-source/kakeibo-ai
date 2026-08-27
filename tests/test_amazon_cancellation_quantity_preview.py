@@ -142,6 +142,14 @@ def test_less_quantity_would_resolve_item_or_partial():
     assert result["would_resolve_item_or_partial"] == 1
 
 
+def test_repeated_same_quantity_would_resolve_scope():
+    result = _preview(quantity_line="数量: 2\n数量: 2", order_total=2)
+
+    assert result["quantity_found"] == 1
+    assert result["quantity_invalid_or_ambiguous"] == 0
+    assert result["would_resolve_full_order"] == 1
+
+
 def test_quantity_above_order_total_is_invalid():
     result = _preview(quantity_line="数量: 3", order_total=2)
 

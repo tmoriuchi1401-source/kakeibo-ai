@@ -146,18 +146,35 @@ def test_cancellation_does_not_guess_quantity_from_other_numbers(noise):
     assert event.item_count is None
 
 
-@pytest.mark.parametrize("body", [
-    "数量: 1\n数量: 2",
-    "数量: 1\n数量: 1",
-    "数量: 0",
-    "数量: -1",
-])
+@pytest.mark.parametrize("body", ["数量: 1\n数量: 2", "数量: 0", "数量: -1"])
 def test_cancellation_rejects_ambiguous_or_nonpositive_quantities(body):
     event = parse_amazon_email(mail(
         "商品が正常にキャンセルされました", body,
     ))
 
     assert event.item_count is None
+
+
+@pytest.mark.parametrize("body", [
+    "数量: 2\n数量: 2",
+    "数量: 2\nキャンセル数量: 2",
+    "キャンセルされた数量: 2\nキャンセル対象数量: 2",
+])
+def test_cancellation_accepts_repeated_same_distinct_positive_quantity(body):
+    event = parse_amazon_email(mail(
+        "商品が正常にキャンセルされました", body,
+    ))
+
+    assert event.item_count == 2
+
+
+def test_cancellation_accepts_same_quantity_in_plain_and_html():
+    message = EmailMessage()
+    message["Subject"] = "商品が正常にキャンセルされました"
+    message.set_content("数量: 2")
+    message.add_alternative("<div>数量: 2</div>", subtype="html")
+
+    assert parse_amazon_email(message).item_count == 2
 
 
 def test_return_email_is_recognized():

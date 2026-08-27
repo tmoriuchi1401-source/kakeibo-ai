@@ -136,22 +136,17 @@ def test_candidate_zero_and_one_are_classified():
     assert one["would_still_be_ambiguous_with_unique_distinct_value_rule"] == 1
 
 
-def test_same_label_same_value_duplicate_is_safe_rule_candidate():
+def test_same_label_same_value_duplicate_is_no_longer_ambiguous():
     result = _diagnose(_raw("数量: 1\n数量: 1"))
 
-    assert result["candidate_occurrences_multiple"] == 1
-    assert result["distinct_quantity_values_one"] == 1
-    assert result["duplicate_same_label_same_value"] == 1
-    assert result["ambiguity_same_value_duplicate"] == 1
-    assert result["would_be_safe_with_unique_distinct_value_rule"] == 1
+    assert result["target_events"] == 0
+    assert result["ambiguous_quantity_events"] == 0
 
 
-def test_different_labels_same_value_is_safe_rule_candidate():
+def test_different_labels_same_value_is_no_longer_ambiguous():
     result = _diagnose(_raw("数量: 1\nキャンセル数量: 1"))
 
-    assert result["duplicate_different_label_same_value"] == 1
-    assert result["distinct_quantity_values_one"] == 1
-    assert result["would_be_safe_with_unique_distinct_value_rule"] == 1
+    assert result["target_events"] == 0
 
 
 def test_conflicting_values_remain_ambiguous():
@@ -163,14 +158,10 @@ def test_conflicting_values_remain_ambiguous():
     assert result["would_still_be_ambiguous_with_unique_distinct_value_rule"] == 1
 
 
-def test_plain_html_duplicate_and_source_format_are_counted():
+def test_plain_html_same_value_duplicate_is_no_longer_ambiguous():
     result = _diagnose(_raw("数量: 1", html="<div>数量: 1</div>"))
 
-    assert result["source_has_plain_text"] == 1
-    assert result["source_has_html"] == 1
-    assert result["source_has_both"] == 1
-    assert result["html_plaintext_duplicate"] == 1
-    assert result["would_be_safe_with_unique_distinct_value_rule"] == 1
+    assert result["target_events"] == 0
 
 
 def test_nonpositive_value_remains_ambiguous():
@@ -181,7 +172,7 @@ def test_nonpositive_value_remains_ambiguous():
 
 
 def test_final_reason_is_exactly_one_per_event():
-    result = _diagnose(_raw("数量: 1\n数量: 1"))
+    result = _diagnose(_raw("数量: 1\n数量: 2"))
     reason_total = sum(
         value for key, value in result.items()
         if key.startswith("ambiguity_")
@@ -191,7 +182,7 @@ def test_final_reason_is_exactly_one_per_event():
 
 
 def test_output_has_counts_only_and_no_private_data():
-    result = _diagnose(_raw("数量: 1\n数量: 1"))
+    result = _diagnose(_raw("数量: 1\n数量: 2"))
     rendered = str(result)
 
     for private in (
