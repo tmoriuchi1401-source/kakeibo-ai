@@ -122,6 +122,44 @@ def test_cancellation_email_is_recognized():
     assert event.event_type == "cancellation"
 
 
+def test_cancellation_extracts_one_explicit_quantity():
+    event = parse_amazon_email(mail(
+        "商品が正常にキャンセルされました",
+        f"注文番号: {ORDER_ID}\nキャンセルされた商品\n数量: 2",
+    ))
+
+    assert event.item_count == 2
+
+
+@pytest.mark.parametrize("noise", [
+    "金額: 1200円",
+    f"注文番号: {ORDER_ID}",
+    "キャンセル日: 2026年8月24日",
+    "https://example.invalid/items/987654",
+    "商品名: MODEL-2026-42",
+])
+def test_cancellation_does_not_guess_quantity_from_other_numbers(noise):
+    event = parse_amazon_email(mail(
+        "商品が正常にキャンセルされました", noise,
+    ))
+
+    assert event.item_count is None
+
+
+@pytest.mark.parametrize("body", [
+    "数量: 1\n数量: 2",
+    "数量: 1\n数量: 1",
+    "数量: 0",
+    "数量: -1",
+])
+def test_cancellation_rejects_ambiguous_or_nonpositive_quantities(body):
+    event = parse_amazon_email(mail(
+        "商品が正常にキャンセルされました", body,
+    ))
+
+    assert event.item_count is None
+
+
 def test_return_email_is_recognized():
     event = parse_amazon_email(mail("返品リクエストを受け付けました", f"注文番号: {ORDER_ID}"))
     assert event.event_type == "return"

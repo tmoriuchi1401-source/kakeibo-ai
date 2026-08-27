@@ -653,6 +653,40 @@ def _order_item_count(text: str, total_match: re.Match | None) -> int | None:
     return sum(int(value) for value in quantities) if quantities else None
 
 
+_CANCELLATION_QUANTITY_PATTERNS = (
+    re.compile(
+        r"(?m)^\s*(?:キャンセル(?:された)?数量|キャンセル対象数量)\s*[：:]\s*([+-]?\d+)\s*(?:個|点)?\s*$"
+    ),
+    re.compile(r"(?m)^\s*数量\s*[：:]\s*([+-]?\d+)\s*(?:個|点)?\s*$"),
+)
+
+
+def _cancellation_quantity(text: str) -> tuple[int | None, str]:
+    """Return one explicit cancellation quantity and a privacy-safe status."""
+
+    candidates = [
+        int(match.group(1))
+        for pattern in _CANCELLATION_QUANTITY_PATTERNS
+        for match in pattern.finditer(text)
+    ]
+    if not candidates:
+        return None, "missing"
+    if len(candidates) != 1 or candidates[0] <= 0:
+        return None, "invalid_or_ambiguous"
+    return candidates[0], "found"
+
+
+def diagnose_cancellation_quantity(raw_email: bytes | Message) -> str:
+    """Classify explicit quantity extraction without exposing source content."""
+
+    message, _raw = _message(raw_email)
+    subject = _normalize(str(message.get("Subject", "")))
+    text = _body(message)
+    if _event_type(subject, text) != "cancellation":
+        return "not_cancellation"
+    return _cancellation_quantity(text)[1]
+
+
 def _label(text: str, labels: tuple[str, ...]) -> str | None:
     names = "|".join(re.escape(label) for label in labels)
     match = re.search(rf"(?:{names})\s*[：:]?\s*([^\n]+)", text, re.I)
@@ -711,6 +745,9 @@ def parse_amazon_email(raw_email: bytes | Message) -> AmazonMailEvent:
     standalone_total, standalone_total_match = _standalone_total(text)
     gift_amount = _amount(text, ("ギフトカード利用額", "Amazonギフトカード利用額"))
     points_amount = _amount(text, ("Amazonポイント利用額", "ポイント利用額"))
+    cancellation_quantity = (
+        _cancellation_quantity(text)[0] if event_type == "cancellation" else None
+    )
     return AmazonMailEvent(
         event_type=event_type,
         order_id=order_match.group(0) if order_match else None,
@@ -727,7 +764,8 @@ def parse_amazon_email(raw_email: bytes | Message) -> AmazonMailEvent:
         payment_method=payment_method,
         shipment_amount=_amount(text, ("発送分合計", "今回発送分の合計", "発送商品合計")),
         item_count=(
-            int(item_count_match.group(0)) if item_count_match
+            cancellation_quantity if event_type == "cancellation"
+            else int(item_count_match.group(0)) if item_count_match
             else _order_item_count(text, standalone_total_match)
         ),
         message_id=str(message.get("Message-ID")).strip() if message.get("Message-ID") else None,
