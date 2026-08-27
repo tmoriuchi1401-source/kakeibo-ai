@@ -41,6 +41,9 @@ from .amazon_cancellation_return_preview import preview_amazon_cancellation_retu
 from .amazon_cancellation_order_id_diagnose import diagnose_amazon_cancellation_order_ids
 from .amazon_cancellation_scope_diagnose import diagnose_amazon_cancellation_scopes
 from .amazon_cancellation_quantity_preview import preview_amazon_cancellation_quantities
+from .amazon_cancellation_quantity_ambiguity_diagnose import (
+    diagnose_amazon_cancellation_quantity_ambiguity,
+)
 from .amazon_review_preview import preview_amazon_reviews
 from .amazon_review_schema_install import install_amazon_review_schema
 from .amazon_status_sync_preview import preview_amazon_status_sync
@@ -118,6 +121,7 @@ def main():
     sub.add_parser("amazon-cancellation-order-id-diagnose")
     sub.add_parser("amazon-cancellation-scope-diagnose")
     sub.add_parser("amazon-cancellation-quantity-preview")
+    sub.add_parser("amazon-cancellation-quantity-ambiguity-diagnose")
     sub.add_parser("amazon-review-preview")
     sub.add_parser("amazon-review-schema-install")
     sub.add_parser("amazon-status-sync-preview")
@@ -295,6 +299,11 @@ def main():
         service=gmail_readonly_service(s.gmail_token_json)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_amazon_cancellation_quantities(service,db))
+    elif args.cmd=="amazon-cancellation-quantity-ambiguity-diagnose":
+        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
+        service=gmail_readonly_service(s.gmail_token_json)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(diagnose_amazon_cancellation_quantity_ambiguity(service,db))
     elif args.cmd=="amazon-review-preview":
         s=Settings(); s.validate(need_gmail=True,need_sheet=True)
         service=gmail_readonly_service(s.gmail_token_json)
