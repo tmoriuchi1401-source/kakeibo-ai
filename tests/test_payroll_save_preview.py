@@ -235,6 +235,41 @@ def test_items_without_raw_value_are_diagnostic_only_but_zero_is_kept():
                 if item.raw_item_name == "出勤日数").value == 0
 
 
+def test_union_dues_resolves_without_promoting_other_unknown_items():
+    source = parsed_statement().model_copy(deep=True)
+    source.items.extend([
+        PayrollItem(raw_item_name="組合費", section="unknown", raw_value="7,100",
+                    value=7100),
+        PayrollItem(raw_item_name="一斉預金", section="unknown", raw_value="2,000",
+                    value=2000),
+        PayrollItem(raw_item_name="深夜勤務", section="unknown", raw_value="2,461",
+                    value=2461),
+        PayrollItem(raw_item_name="支給合計", section="summary", raw_value="320,000",
+                    value=320000, standard_item_candidate="gross_pay"),
+    ])
+    target = snapshot()
+    target.standard_items.append(PayrollStandardItemRecord(
+        standard_item_id="union_dues", standard_name="組合費",
+        section="deduction", value_type="money",
+    ))
+    target.aliases.append(PayrollItemAliasRecord(
+        raw_item_name="組合費", standard_item_id="union_dues",
+    ))
+    storage = phase_a_to_storage_candidate(source, aliases=target.aliases)
+
+    plan = build_save_plan([storage], target)[0]
+    by_name = {item.raw_item_name: item for item in plan.items}
+    dues = by_name["組合費"]
+    assert dues.standard_item_name == "組合費"
+    assert dues.section == "deduction"
+    assert dues.value == 7100
+    assert dues.planned_row["standard_item_id"] == "union_dues"
+    assert not dues.needs_review
+    for raw_name in ("一斉預金", "深夜勤務", "支給合計"):
+        assert by_name[raw_name].standard_item_name is None
+        assert by_name[raw_name].needs_review
+
+
 def test_drive_preview_never_calls_drive_write_methods():
     service = DriveService([
         {"id": "file-1", "name": "salary.pdf", "mimeType": "application/pdf"},

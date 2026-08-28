@@ -118,6 +118,27 @@ def test_common_and_employer_specific_aliases():
     assert resolve_alias("特別手当", aliases, "employer-2") == "commuting_allowance"
 
 
+def test_union_dues_initial_master_and_confirmed_value():
+    standard = next(item for item in INITIAL_STANDARD_ITEMS
+                    if item.standard_item_id == "union_dues")
+    assert standard.standard_name == "組合費"
+    assert standard.section == "deduction"
+    assert standard.value_type == "money"
+    assert standard.active
+    assert resolve_alias("組合費", INITIAL_ALIASES) == "union_dues"
+    assert resolve_alias("一斉預金", INITIAL_ALIASES) is None
+
+    source = preview().model_copy(update={"items": [PayrollItem(
+        raw_item_name="組合費", section="deductions", raw_value="7,100",
+        value=7100,
+    )]})
+    item = phase_a_to_storage_candidate(source, aliases=INITIAL_ALIASES).items[0]
+    assert item.standard_item_id == "union_dues"
+    assert item.section == "deduction"
+    assert item.value == 7100
+    assert not item.needs_review
+
+
 def test_inactive_alias_is_not_used():
     alias = PayrollItemAliasRecord(raw_item_name="旧名称", standard_item_id="basic_pay",
                                    active=False)

@@ -68,15 +68,19 @@ def enforce_active_standard_items(
     standard_items: Iterable[PayrollStandardItemRecord],
 ) -> PayrollStorageCandidate:
     """Return a copy where inactive or unknown standard IDs cannot be confirmed."""
-    active_ids = {item.standard_item_id for item in standard_items if item.active}
+    active_items = {
+        item.standard_item_id: item for item in standard_items if item.active
+    }
     result = candidate.model_copy(deep=True)
     for item in result.items:
-        if item.standard_item_id is not None and item.standard_item_id not in active_ids:
+        if item.standard_item_id is not None and item.standard_item_id not in active_items:
             item.standard_item_id = None
             item.value = None
             item.needs_review = True
             item.review_status = "pending"
             result.statement.needs_review = True
+        elif item.standard_item_id is not None:
+            item.section = active_items[item.standard_item_id].section
     return result
 
 

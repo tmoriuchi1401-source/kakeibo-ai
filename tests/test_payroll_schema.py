@@ -95,14 +95,14 @@ def test_apply_creates_five_sheets_headers_and_only_initial_master_rows():
     reader, writer = repositories(service)
     plan = build_schema_initialization_plan(reader)
     assert set(plan.sheets_to_create) == set(SHEET_TITLES.values())
-    assert len(plan.initial_standard_item_ids) == len(INITIAL_STANDARD_ITEMS) == 11
-    assert len(plan.initial_alias_ids) == len(INITIAL_ALIASES) == 6
+    assert len(plan.initial_standard_item_ids) == len(INITIAL_STANDARD_ITEMS) == 12
+    assert len(plan.initial_alias_ids) == len(INITIAL_ALIASES) == 7
 
     result = apply_schema_initialization(plan, writer, confirmed=True)
     assert result["created_sheet_count"] == 5
     assert result["written_header_count"] == 5
-    assert result["inserted_standard_item_count"] == 11
-    assert result["inserted_alias_count"] == 6
+    assert result["inserted_standard_item_count"] == 12
+    assert result["inserted_alias_count"] == 7
     assert result["statement_rows_written"] == 0
     assert result["statement_item_rows_written"] == 0
     assert "支出明細" in service.state["titles"]
@@ -165,8 +165,8 @@ def test_apply_requires_explicit_confirmation_and_preview_never_writes():
     reader, writer = repositories(service)
     plan = build_schema_initialization_plan(reader)
     output = schema_plan_preview(plan)
-    assert output["initial_standard_item_count"] == 11
-    assert output["initial_alias_count"] == 6
+    assert output["initial_standard_item_count"] == 12
+    assert output["initial_alias_count"] == 7
     assert service.state["operations"] == []
     with pytest.raises(RuntimeError, match="--apply"):
         apply_schema_initialization(plan, writer, confirmed=False)

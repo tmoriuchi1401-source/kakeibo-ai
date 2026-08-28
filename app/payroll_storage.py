@@ -157,6 +157,8 @@ INITIAL_STANDARD_ITEMS = (
                               section="deduction", value_type="money"),
     PayrollStandardItemRecord(standard_item_id="resident_tax", standard_name="住民税",
                               section="deduction", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="union_dues", standard_name="組合費",
+                              section="deduction", value_type="money"),
     PayrollStandardItemRecord(standard_item_id="attendance_days", standard_name="出勤日数",
                               section="attendance", value_type="days"),
     PayrollStandardItemRecord(standard_item_id="paid_leave_days", standard_name="有給日数",
@@ -178,6 +180,8 @@ INITIAL_ALIASES = (
                            raw_item_name="時間外勤務手当", standard_item_id="overtime_pay"),
     PayrollItemAliasRecord(alias_id="alias-overtime-allowance",
                            raw_item_name="残業手当", standard_item_id="overtime_pay"),
+    PayrollItemAliasRecord(alias_id="alias-union-dues",
+                           raw_item_name="組合費", standard_item_id="union_dues"),
 )
 
 
