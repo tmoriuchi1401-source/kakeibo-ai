@@ -35,8 +35,10 @@ def candidate(name: str) -> str | None:
         if compact(label) == normalized:
             return standard
     # OCR/PDF cells may truncate the suffix while retaining an unambiguous label.
+    reference_suffixes = ("対象額", "対象支給額", "累計", "月額")
     for label in ("通勤手当", "健康保険", "厚生年金", "雇用保険"):
-        if normalized.startswith(compact(label)):
+        if (normalized.startswith(compact(label))
+                and not normalized.endswith(reference_suffixes)):
             return STANDARD_NAMES[label]
     return None
 
@@ -189,7 +191,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                  and label.x - label.width * .35 <= number.x <= label.x + label.width * 1.35]
         candidates = (sorted(horizontal, key=lambda item: item[2])
                       or sorted(below, key=lambda item: item[2])
-                      or sorted(above, key=lambda item: item[2]))
+                      or (sorted(above, key=lambda item: item[2]) if ocr else []))
         chosen = candidates[0] if candidates else None
         plausible_name = candidate(name) or section_for(name) == "attendance" or any(term in name for term in item_terms)
         if not plausible_name: continue

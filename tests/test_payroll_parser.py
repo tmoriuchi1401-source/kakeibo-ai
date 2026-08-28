@@ -23,6 +23,12 @@ def test_standard_candidates_do_not_replace_raw_name():
     assert candidate("健康保険料") == "health_insurance"
 
 
+def test_employment_insurance_reference_amount_is_not_insurance_fee():
+    assert candidate("雇用保険") == "employment_insurance"
+    assert candidate("雇用保険料") == "employment_insurance"
+    assert candidate("雇用保険対象額") is None
+
+
 def token(text, x, y, confidence=100):
     return PositionedText(text, 1, x, y, 50, 10, confidence)
 
@@ -71,23 +77,48 @@ def test_non_item_headings_are_not_parsed_as_items():
     assert [item.raw_item_name for item in items] == ["基本給"]
 
 
-def test_positioned_value_immediately_above_same_column_is_paired():
+def test_pdf_value_above_next_label_is_not_reused():
     items = parse_positioned_items((
         token("12,000", 110, 10), token("独自手当", 100, 23),
     ))
     assert len(items) == 1
+    assert items[0].value is None
+    assert items[0].raw_value is None
+    assert items[0].needs_review
+
+
+def test_ambiguous_ocr_values_above_are_not_confirmed():
+    items = parse_positioned_items((
+        token("10,000", 100, 10), token("12,000", 108, 10),
+        token("独自手当", 100, 23),
+    ), ocr=True)
+    assert len(items) == 1
+    assert items[0].value is None
+    assert items[0].needs_review
+
+
+def test_ocr_value_immediately_above_same_column_is_still_paired():
+    items = parse_positioned_items((
+        token("12,000", 110, 10), token("独自手当", 100, 23),
+    ), ocr=True)
     assert items[0].value == 12000
     assert not items[0].needs_review
 
 
-def test_ambiguous_values_above_are_not_confirmed():
+def test_pdf_value_immediately_below_same_column_is_paired():
     items = parse_positioned_items((
-        token("10,000", 100, 10), token("12,000", 108, 10),
-        token("独自手当", 100, 23),
+        token("独自手当", 100, 10), token("12,000", 110, 25),
     ))
-    assert len(items) == 1
-    assert items[0].value is None
-    assert items[0].needs_review
+    assert items[0].value == 12000
+    assert not items[0].needs_review
+
+
+def test_blank_commuting_allowance_total_stays_without_value():
+    item = parse_positioned_items((token("通勤手当計", 100, 10),))[0]
+    assert item.standard_item_candidate == "commuting_allowance"
+    assert item.raw_value is None
+    assert item.value is None
+    assert item.needs_review
 
 
 def test_nearby_ocr_tokens_restore_complete_item_name():
