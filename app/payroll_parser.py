@@ -20,6 +20,18 @@ STANDARD_NAMES = {
     "差引支給額": "net_pay", "差引不足額": "net_pay",
 }
 
+ITEM_TERMS = (
+    "給", "手当", "保険", "年金", "税", "控除", "日数", "時間", "残業", "勤務",
+    "休", "積立", "貯蓄", "費", "合計", "対象", "月額", "累計", "調整", "販売",
+    "教育", "組合", "送金", "課税", "基準", "持株", "財形", "社宅", "預金",
+    "出勤", "欠勤", "支給", "報酬",
+)
+
+LOGICAL_ROW_MIN_Y_GAP = 10
+LOGICAL_ROW_MAX_Y_GAP = 15
+LOGICAL_ROW_MAX_X_GAP = 25
+LOGICAL_ROW_MIN_X_MARGIN = 8
+
 
 def compact(value: str) -> str:
     return re.sub(r"[\s　]+", "", value).replace("，", ",")
@@ -155,20 +167,84 @@ def parse_items(text: str) -> list[PayrollItem]:
     return list(unique.values())
 
 
+def _logical_pdf_value_pairs(
+    tokens: tuple[PositionedText, ...],
+) -> dict[tuple[int, str, float, float], PositionedText]:
+    """Pair sparse PDF value rows only after repeated legacy-table detection."""
+    rows: list[list[PositionedText]] = []
+    for token in sorted(tokens, key=lambda item: (item.page, item.y, item.x)):
+        if (rows and token.page == rows[-1][0].page
+                and abs(token.y - rows[-1][0].y) <= 1.5):
+            rows[-1].append(token)
+        else:
+            rows.append([token])
+
+    page_pairs: dict[int, list[tuple[list[PositionedText], list[PositionedText]]]] = {}
+    page_evidence: dict[int, int] = {}
+    for index, row in enumerate(rows[:-1]):
+        labels = [token for token in row if not amounts(token.text)
+                  and (candidate(token.text)
+                       or section_for(token.text) == "attendance"
+                       or any(term in token.text for term in ITEM_TERMS))]
+        if not labels or any(amounts(token.text) for token in row):
+            continue
+        following = rows[index + 1]
+        if following[0].page != row[0].page:
+            continue
+        gap = following[0].y - row[0].y
+        values = [token for token in following if amounts(token.text)]
+        if not (LOGICAL_ROW_MIN_Y_GAP <= gap <= LOGICAL_ROW_MAX_Y_GAP and values):
+            continue
+        near_column = any(
+            min(abs(value.x - label.x) for label in labels) <= LOGICAL_ROW_MAX_X_GAP
+            for value in values
+        )
+        if near_column:
+            page_pairs.setdefault(row[0].page, []).append((labels, values))
+            ordered_x = sorted(label.x for label in labels)
+            gaps = [right - left for left, right in zip(ordered_x, ordered_x[1:])]
+            regular_columns = sum(35 <= gap <= 70 for gap in gaps)
+            if (len(labels) >= 4
+                    and regular_columns >= max(2, len(gaps) // 2)):
+                page_evidence[row[0].page] = page_evidence.get(row[0].page, 0) + 1
+
+    result: dict[tuple[int, str, float, float], PositionedText] = {}
+    for page, pairs in page_pairs.items():
+        # One matching row can be accidental. Require a repeated page structure.
+        if page_evidence.get(page, 0) < 2:
+            continue
+        for labels, values in pairs:
+            proposed: dict[int, list[PositionedText]] = {}
+            for value in values:
+                ranked = sorted(
+                    ((abs(value.x - label.x), index) for index, label in enumerate(labels)),
+                    key=lambda item: item[0],
+                )
+                distance, label_index = ranked[0]
+                margin = ranked[1][0] - distance if len(ranked) > 1 else float("inf")
+                if (distance <= LOGICAL_ROW_MAX_X_GAP
+                        and margin >= LOGICAL_ROW_MIN_X_MARGIN):
+                    proposed.setdefault(label_index, []).append(value)
+            for label_index, matched_values in proposed.items():
+                # A label and a value may each participate in at most one pairing.
+                if len(matched_values) != 1:
+                    continue
+                label = labels[label_index]
+                result[(label.page, label.text.strip(), label.x, label.y)] = matched_values[0]
+    return result
+
+
 def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = False) -> list[PayrollItem]:
     """Pair labels only with geometrically adjacent values; ambiguity becomes review."""
     money = [(token, amounts(token.text)) for token in tokens if amounts(token.text)]
     labels = _ocr_label_tokens(tokens) if ocr else [
         token for token in tokens if not amounts(token.text)
     ]
+    logical_values = {} if ocr else _logical_pdf_value_pairs(tokens)
     result = []
     sensitive = ("殿", "社員番号", "株式会社", "銀行", "支店", "本部", "センタ")
     ignored = ("お知らせ", "年月分")
     short_ocr_fragments = {"給与", "出勤", "手当", "保険", "控除", "支給"}
-    item_terms = ("給", "手当", "保険", "年金", "税", "控除", "日数", "時間", "残業", "勤務",
-                  "休", "積立", "貯蓄", "費", "合計", "対象", "月額", "累計", "調整", "販売",
-                  "教育", "組合", "送金", "課税", "基準", "持株", "財形", "社宅", "預金",
-                  "出勤", "欠勤", "支給", "報酬")
     for label in labels:
         name = label.text.strip()
         if (len(name) < 2 or re.fullmatch(r"[\d\W]+", name) or
@@ -189,11 +265,14 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                  for number, vals in same_page
                  if 0 <= label.y - (number.y + number.height) <= label.height * 1.2
                  and label.x - label.width * .35 <= number.x <= label.x + label.width * 1.35]
+        logical = logical_values.get((label.page, name, label.x, label.y))
+        logical_candidate = ((logical, amounts(logical.text), 0),) if logical else ()
         candidates = (sorted(horizontal, key=lambda item: item[2])
-                      or sorted(below, key=lambda item: item[2])
-                      or (sorted(above, key=lambda item: item[2]) if ocr else []))
+                      or (sorted(below, key=lambda item: item[2]) if ocr else [])
+                      or (sorted(above, key=lambda item: item[2]) if ocr else [])
+                      or logical_candidate)
         chosen = candidates[0] if candidates else None
-        plausible_name = candidate(name) or section_for(name) == "attendance" or any(term in name for term in item_terms)
+        plausible_name = candidate(name) or section_for(name) == "attendance" or any(term in name for term in ITEM_TERMS)
         if not plausible_name: continue
         ambiguous = len(candidates) > 1 and abs(candidates[1][2] - candidates[0][2]) < max(label.width, 12)
         low_confidence = ocr and (label.confidence < 60 or

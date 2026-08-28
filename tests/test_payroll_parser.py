@@ -33,16 +33,58 @@ def token(text, x, y, confidence=100):
     return PositionedText(text, 1, x, y, 50, 10, confidence)
 
 
-def test_positioned_horizontal_table_preserves_blank_cell():
-    items = parse_positioned_items((
-        token("基本給", 10, 10), token("独自手当", 100, 10), token("支給合計", 190, 10),
-        token("300,000", 10, 25), token("320,000", 190, 25),
-    ))
+def legacy_table_tokens():
+    return (
+        token("基本給", 10, 10), token("独自手当", 70, 10),
+        token("支給合計", 130, 10), token("深夜勤務", 190, 10),
+        token("300,000", 10, 23), token("320,000", 130, 23),
+        token("財形貯蓄", 10, 40), token("持株積立他", 70, 40),
+        token("一斉預金", 130, 40), token("組合費", 190, 40),
+        token("社宅使用料", 250, 40),
+        token("2,000", 150, 53), token("7,100", 207, 53),
+    )
+
+
+def test_positioned_legacy_table_preserves_blank_cell():
+    items = parse_positioned_items(legacy_table_tokens())
     by_name = {item.raw_item_name: item for item in items}
     assert by_name["基本給"].value == 300000
     assert by_name["独自手当"].value is None
     assert by_name["独自手当"].needs_review
     assert by_name["支給合計"].value == 320000
+
+
+def test_legacy_sparse_value_row_uses_unique_nearest_columns():
+    by_name = {item.raw_item_name: item
+               for item in parse_positioned_items(legacy_table_tokens())}
+    assert by_name["一斉預金"].value == 2000
+    assert by_name["組合費"].value == 7100
+    assert by_name["財形貯蓄"].value is None
+    assert by_name["持株積立他"].value is None
+    assert by_name["社宅使用料"].value is None
+
+
+def test_detected_legacy_page_also_pairs_short_summary_row():
+    items = parse_positioned_items((
+        *legacy_table_tokens(),
+        token("総支給額", 10, 70), token("差引支給額", 70, 70),
+        token("320,000", 10, 83), token("270,000", 70, 83),
+    ))
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["総支給額"].value == 320000
+    assert by_name["差引支給額"].value == 270000
+
+
+def test_legacy_value_is_not_reused_by_multiple_labels():
+    items = parse_positioned_items((
+        *legacy_table_tokens(),
+        token("一斉預金調整", 151, 70), token("組合費調整", 170, 70),
+        token("社宅調整", 230, 70), token("支給調整", 290, 70),
+        token("3,000", 160, 83),
+    ))
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["一斉預金調整"].value is None
+    assert by_name["組合費調整"].value is None
 
 
 def test_positioned_multiple_columns_pair_on_same_row():
@@ -105,12 +147,36 @@ def test_ocr_value_immediately_above_same_column_is_still_paired():
     assert not items[0].needs_review
 
 
-def test_pdf_value_immediately_below_same_column_is_paired():
+def test_pdf_single_below_row_does_not_trigger_legacy_layout():
     items = parse_positioned_items((
         token("独自手当", 100, 10), token("12,000", 110, 25),
     ))
-    assert items[0].value == 12000
-    assert not items[0].needs_review
+    assert items[0].value is None
+    assert items[0].needs_review
+
+
+def test_legacy_value_beyond_x_threshold_is_not_paired():
+    items = parse_positioned_items((
+        *legacy_table_tokens(),
+        token("手当A", 10, 70), token("手当B", 70, 70),
+        token("手当C", 130, 70), token("手当D", 190, 70),
+        token("1,000", 10, 83), token("9,000", 400, 83),
+    ))
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["手当A"].value == 1000
+    assert by_name["手当D"].value is None
+
+
+def test_legacy_value_with_ambiguous_nearest_column_is_not_paired():
+    items = parse_positioned_items((
+        *legacy_table_tokens(),
+        token("手当A", 100, 70), token("手当B", 140, 70),
+        token("手当C", 220, 70), token("手当D", 280, 70),
+        token("3,000", 120, 83),
+    ))
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["手当A"].value is None
+    assert by_name["手当B"].value is None
 
 
 def test_blank_commuting_allowance_total_stays_without_value():
