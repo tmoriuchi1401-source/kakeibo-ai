@@ -179,6 +179,12 @@ class SheetsDB:
             spreadsheetId=self.sid,
             body={"valueInputOption":"USER_ENTERED","data":data}
         ).execute()
+    def update_amazon_event_item_count(self,row_num:int,value:int):
+        """Update only the Item Count cell of one Amazon event row."""
+        self.svc.spreadsheets().values().update(
+            spreadsheetId=self.sid,range=f"Amazonイベント!R{row_num}",
+            valueInputOption="RAW",body={"values":[[value]]},
+        ).execute()
     def amazon_order_header_ids(self)->set[str]:
         return {str(r[0]).strip() for r in self.get("Amazon注文ヘッダ!A2:A")
                 if r and str(r[0]).strip()}
@@ -190,6 +196,12 @@ class SheetsDB:
         ) if r and str(r[0]).strip()]
     def update_amazon_order_headers(self,rows:list[tuple[int,list]]):
         self.update_rows("Amazon注文ヘッダ",rows)
+    def cancel_amazon_order_header(self,row_num:int):
+        """Set only one Amazon order header Order Status cell to cancelled."""
+        self.svc.spreadsheets().values().update(
+            spreadsheetId=self.sid,range=f"Amazon注文ヘッダ!F{row_num}",
+            valueInputOption="RAW",body={"values":[["cancelled"]]},
+        ).execute()
     def import_ids(self)->set[str]:
         return {r[0] for r in self.get("取込データ!A2:A") if r}
     def import_index(self)->dict[str,tuple[int,str]]:

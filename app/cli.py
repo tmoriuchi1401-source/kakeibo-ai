@@ -47,6 +47,14 @@ from .amazon_cancellation_quantity_ambiguity_diagnose import (
 from .amazon_review_preview import preview_amazon_reviews
 from .amazon_review_schema_install import install_amazon_review_schema
 from .amazon_status_sync_preview import preview_amazon_status_sync
+from .amazon_cancellation_apply_preview import (
+    apply_amazon_cancellation_order_statuses,
+    preview_amazon_cancellation_apply,
+)
+from .amazon_cancellation_item_count_fill_preview import (
+    apply_amazon_cancellation_item_count_fills,
+    preview_amazon_cancellation_item_count_fills,
+)
 from .amazon_event_reparse_preview import (
     apply_amazon_event_reparse,
     preview_amazon_event_reparse,
@@ -125,6 +133,12 @@ def main():
     sub.add_parser("amazon-review-preview")
     sub.add_parser("amazon-review-schema-install")
     sub.add_parser("amazon-status-sync-preview")
+    sub.add_parser("amazon-cancellation-apply-preview")
+    acosa=sub.add_parser("amazon-cancellation-order-status-apply")
+    acosa.add_argument("--apply",action="store_true")
+    sub.add_parser("amazon-cancellation-item-count-fill-preview")
+    acicfa=sub.add_parser("amazon-cancellation-item-count-fill-apply")
+    acicfa.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-event-reparse-preview")
     aera=sub.add_parser("amazon-event-reparse-apply")
     aera.add_argument("--apply",action="store_true")
@@ -315,6 +329,28 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_amazon_status_sync(db))
+    elif args.cmd=="amazon-cancellation-apply-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(preview_amazon_cancellation_apply(db))
+    elif args.cmd=="amazon-cancellation-order-status-apply":
+        if not args.apply:
+            p.error("amazon-cancellation-order-status-apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(apply_amazon_cancellation_order_statuses(db))
+    elif args.cmd=="amazon-cancellation-item-count-fill-preview":
+        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        service=gmail_readonly_service(s.gmail_token_json)
+        print(preview_amazon_cancellation_item_count_fills(service,db))
+    elif args.cmd=="amazon-cancellation-item-count-fill-apply":
+        if not args.apply:
+            p.error("amazon-cancellation-item-count-fill-apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
+        db=SheetsDB(s.spreadsheet_id)
+        service=gmail_readonly_service(s.gmail_token_json)
+        print(apply_amazon_cancellation_item_count_fills(service,db))
     elif args.cmd=="amazon-event-reparse-preview":
         s=Settings(); s.validate(need_sheet=True,need_gmail=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
