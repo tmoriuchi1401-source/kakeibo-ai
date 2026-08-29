@@ -293,6 +293,7 @@ def drive_storage_candidates(
                 source_file_id=file["id"],
                 content_hash=hashlib.sha256(data).hexdigest(),
                 aliases=aliases,
+                standard_items=snapshot.standard_items,
                 file_name=file.get("name"),
             ))
         except Exception:
@@ -333,6 +334,7 @@ def drive_save_preview(
                 source_file_id=file["id"],
                 content_hash=hashlib.sha256(data).hexdigest(),
                 aliases=aliases,
+                standard_items=snapshot.standard_items,
                 file_name=file.get("name"),
             ))
         except Exception:

@@ -139,6 +139,69 @@ def test_union_dues_initial_master_and_confirmed_value():
     assert not item.needs_review
 
 
+def test_reference_initial_masters_and_aliases():
+    expected = {
+        "taxable_earnings": "課税対象支給額",
+        "taxable_amount": "課税対象額",
+        "social_insurance_total": "社会保険控除",
+        "non_taxable_total": "非課税合計",
+        "remuneration_amount": "報酬月額",
+        "employment_insurance_base": "雇用保険対象額",
+        "ytd_gross_pay": "総支給額累計",
+        "ytd_taxable_amount": "累積課税合計",
+        "ytd_social_insurance": "社会保険料累計",
+        "ytd_income_tax": "所得税累計",
+    }
+    standards = {item.standard_item_id: item for item in INITIAL_STANDARD_ITEMS}
+
+    for standard_item_id, label in expected.items():
+        standard = standards[standard_item_id]
+        assert standard.standard_name == label
+        assert standard.section == "reference"
+        assert standard.value_type == "money"
+        assert resolve_alias(label, INITIAL_ALIASES) == standard_item_id
+
+    assert resolve_alias("課税処理計", INITIAL_ALIASES) is None
+    assert resolve_alias("課税", INITIAL_ALIASES) is None
+
+
+def test_ocr_reference_is_recognized_but_requires_review():
+    source = preview().model_copy(update={"items": [PayrollItem(
+        raw_item_name="非課税合計", section="unknown", raw_value="7,087,172",
+        value=7087172, needs_review=False,
+    )]})
+
+    result = phase_a_to_storage_candidate(source)
+    item = result.items[0]
+
+    assert item.standard_item_id == "non_taxable_total"
+    assert item.section == "reference"
+    assert item.raw_value == "7,087,172"
+    assert item.value is None
+    assert item.needs_review
+    assert item.review_status == "pending"
+
+
+def test_pdf_text_reference_is_recognized_without_review():
+    source = preview().model_copy(update={
+        "file_type": "pdf",
+        "extraction_method": "pdf_text",
+        "items": [PayrollItem(
+            raw_item_name="課税対象額", section="unknown", raw_value="624,698",
+            value=624698, needs_review=False,
+        )],
+    })
+
+    result = phase_a_to_storage_candidate(source)
+    item = result.items[0]
+
+    assert item.standard_item_id == "taxable_amount"
+    assert item.section == "reference"
+    assert item.value == 624698
+    assert not item.needs_review
+    assert item.review_status == "not_required"
+
+
 def test_inactive_alias_is_not_used():
     alias = PayrollItemAliasRecord(raw_item_name="旧名称", standard_item_id="basic_pay",
                                    active=False)

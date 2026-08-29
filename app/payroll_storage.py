@@ -159,6 +159,36 @@ INITIAL_STANDARD_ITEMS = (
                               section="deduction", value_type="money"),
     PayrollStandardItemRecord(standard_item_id="union_dues", standard_name="組合費",
                               section="deduction", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="taxable_earnings",
+                              standard_name="課税対象支給額",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="taxable_amount",
+                              standard_name="課税対象額",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="social_insurance_total",
+                              standard_name="社会保険控除",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="non_taxable_total",
+                              standard_name="非課税合計",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="remuneration_amount",
+                              standard_name="報酬月額",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="employment_insurance_base",
+                              standard_name="雇用保険対象額",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="ytd_gross_pay",
+                              standard_name="総支給額累計",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="ytd_taxable_amount",
+                              standard_name="累積課税合計",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="ytd_social_insurance",
+                              standard_name="社会保険料累計",
+                              section="reference", value_type="money"),
+    PayrollStandardItemRecord(standard_item_id="ytd_income_tax",
+                              standard_name="所得税累計",
+                              section="reference", value_type="money"),
     PayrollStandardItemRecord(standard_item_id="attendance_days", standard_name="出勤日数",
                               section="attendance", value_type="days"),
     PayrollStandardItemRecord(standard_item_id="paid_leave_days", standard_name="有給日数",
@@ -182,6 +212,36 @@ INITIAL_ALIASES = (
                            raw_item_name="残業手当", standard_item_id="overtime_pay"),
     PayrollItemAliasRecord(alias_id="alias-union-dues",
                            raw_item_name="組合費", standard_item_id="union_dues"),
+    PayrollItemAliasRecord(alias_id="alias-taxable-earnings",
+                           raw_item_name="課税対象支給額",
+                           standard_item_id="taxable_earnings"),
+    PayrollItemAliasRecord(alias_id="alias-taxable-amount",
+                           raw_item_name="課税対象額",
+                           standard_item_id="taxable_amount"),
+    PayrollItemAliasRecord(alias_id="alias-social-insurance-total",
+                           raw_item_name="社会保険控除",
+                           standard_item_id="social_insurance_total"),
+    PayrollItemAliasRecord(alias_id="alias-non-taxable-total",
+                           raw_item_name="非課税合計",
+                           standard_item_id="non_taxable_total"),
+    PayrollItemAliasRecord(alias_id="alias-remuneration-amount",
+                           raw_item_name="報酬月額",
+                           standard_item_id="remuneration_amount"),
+    PayrollItemAliasRecord(alias_id="alias-employment-insurance-base",
+                           raw_item_name="雇用保険対象額",
+                           standard_item_id="employment_insurance_base"),
+    PayrollItemAliasRecord(alias_id="alias-ytd-gross-pay",
+                           raw_item_name="総支給額累計",
+                           standard_item_id="ytd_gross_pay"),
+    PayrollItemAliasRecord(alias_id="alias-ytd-taxable-amount",
+                           raw_item_name="累積課税合計",
+                           standard_item_id="ytd_taxable_amount"),
+    PayrollItemAliasRecord(alias_id="alias-ytd-social-insurance",
+                           raw_item_name="社会保険料累計",
+                           standard_item_id="ytd_social_insurance"),
+    PayrollItemAliasRecord(alias_id="alias-ytd-income-tax",
+                           raw_item_name="所得税累計",
+                           standard_item_id="ytd_income_tax"),
 )
 
 
@@ -256,18 +316,30 @@ def _convert_item(
     statement_id: str,
     display_order: int,
     aliases: Iterable[PayrollItemAliasRecord],
+    standard_items: Iterable[PayrollStandardItemRecord],
     employer_id: str | None,
+    extraction_method: Literal["pdf_text", "ocr"],
 ) -> PayrollStatementItemRecord:
     standard_item_id = (
         resolve_alias(item.raw_item_name, aliases, employer_id)
         or item.standard_item_candidate
     )
-    uncertain = item.needs_review or standard_item_id is None
+    standard = next(
+        (record for record in standard_items
+         if record.active and record.standard_item_id == standard_item_id),
+        None,
+    )
+    section = standard.section if standard else _SECTION_MAP.get(item.section, "unknown")
+    uncertain = (
+        item.needs_review
+        or standard_item_id is None
+        or (extraction_method == "ocr" and section == "reference")
+    )
     return PayrollStatementItemRecord(
         statement_id=statement_id,
         raw_item_name=item.raw_item_name,
         standard_item_id=standard_item_id,
-        section=_SECTION_MAP.get(item.section, "unknown"),
+        section=section,
         raw_value=item.raw_value,
         value=None if uncertain else item.value,
         confidence=item.confidence,
@@ -286,6 +358,7 @@ def phase_a_to_storage_candidate(
     source_file_id: str | None = None,
     content_hash: str | None = None,
     aliases: Iterable[PayrollItemAliasRecord] = INITIAL_ALIASES,
+    standard_items: Iterable[PayrollStandardItemRecord] = INITIAL_STANDARD_ITEMS,
     parser_version: str = PARSER_VERSION,
     file_name: str | None = None,
     employee: str | None = None,
@@ -306,7 +379,10 @@ def phase_a_to_storage_candidate(
         content_hash=content_hash,
         parser_version=parser_version,
     )
-    items = [_convert_item(item, statement.statement_id, index, aliases, employer_id)
+    items = [_convert_item(
+        item, statement.statement_id, index, aliases, standard_items, employer_id,
+        preview.extraction_method,
+    )
              for index, item in enumerate(preview.items)]
     statement.needs_review = (
         preview.parse_status != "success"
