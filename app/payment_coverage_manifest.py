@@ -15,6 +15,11 @@ from .paypay_evidence_bundle import (
     load_evidence_bundle,
     verify_evidence_bundle,
 )
+from .paypay_operational_coverage import (
+    PayPayOperationalEvidence,
+    classify_operational_evidence,
+    preview_operational_evidence,
+)
 from .paypay_pipeline import inspect_paypay_csv
 
 
@@ -45,6 +50,8 @@ class CoverageManifest:
     manifest_id: str = ""
     parse_error: str | None = None
     candidate_complete: bool = False
+    operational_coverage: str | None = None
+    operational_reason: str | None = None
 
     def __post_init__(self) -> None:
         if self.completion_status == "complete" and not self.completeness_proven:
@@ -82,6 +89,7 @@ def _filename_period(path: Path) -> str | None:
 
 def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = None,
                  paypay_evidence_verification: EvidenceVerificationResult | None = None,
+                 paypay_operational_evidence: PayPayOperationalEvidence | None = None,
                  coverage_basis: CoverageBasis | None = None,
                  period_type: PeriodType = "file_defined_range",
                  imported_at: str | None = None) -> CoverageManifest:
@@ -146,6 +154,10 @@ def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = Non
         row_count=row_count, content_hash=content_hash,
         completeness_reason=reason,
         completeness_proven=proven, candidate_complete=candidate,
+        operational_coverage=(paypay_operational_evidence.operational_coverage
+                              if paypay_operational_evidence else None),
+        operational_reason=(paypay_operational_evidence.reason
+                            if paypay_operational_evidence else None),
     )
 
 
@@ -209,16 +221,20 @@ def preview_payment_coverage_manifests(
     *, paypay_csvs: list[str] | None = None,
     paypay_export_evidence_files: list[str] | None = None,
     paypay_status_image_files: list[str] | None = None,
+    paypay_confirmed_ranges: list[str] | None = None,
     au_pay_card_csvs: list[str] | None = None,
     signature_verifier: SignatureVerifier | None = None,
 ) -> dict:
     paypay_paths = paypay_csvs or []
     evidence_paths = paypay_export_evidence_files or []
     image_paths = paypay_status_image_files or []
+    confirmed_ranges = paypay_confirmed_ranges or []
     if evidence_paths and (
         len(evidence_paths) != len(paypay_paths) or len(image_paths) != len(paypay_paths)
     ):
         raise ValueError("PayPay CSV、export evidence、status imageは同じ件数で指定してください")
+    if confirmed_ranges and len(confirmed_ranges) != len(paypay_paths):
+        raise ValueError("PayPay CSVとconfirmed rangeは同じ件数で指定してください")
     verifications: list[EvidenceVerificationResult | None] = []
     if evidence_paths:
         for csv_path, evidence_path, image_path in zip(
@@ -235,8 +251,28 @@ def preview_payment_coverage_manifests(
             verifications.append(result)
     else:
         verifications = [None] * len(paypay_paths)
-    manifests = [csv_manifest(path, "paypay", paypay_evidence_verification=verification)
-                 for path, verification in zip(paypay_paths, verifications)]
+    operational_evidences = []
+    for index, path in enumerate(paypay_paths):
+        start = end = None
+        if confirmed_ranges:
+            parts = confirmed_ranges[index].split(":", 1)
+            if len(parts) != 2:
+                raise ValueError("confirmed rangeはSTART:END形式で指定してください")
+            start, end = parts
+        operational_evidences.append(preview_operational_evidence(
+            path, requested_start=start, requested_end=end,
+            range_source="user_confirmed" if confirmed_ranges else None,
+            range_confirmed=bool(confirmed_ranges),
+        ))
+    operational_evidences, operational_duplicates, operational_conflicts = (
+        classify_operational_evidence(operational_evidences)
+    )
+    manifests = [csv_manifest(
+        path, "paypay", paypay_evidence_verification=verification,
+        paypay_operational_evidence=operational,
+    ) for path, verification, operational in zip(
+        paypay_paths, verifications, operational_evidences,
+    )]
     manifests += [csv_manifest(path, "au_pay_card") for path in (au_pay_card_csvs or [])]
     present = {item.source for item in manifests}
     manifests += [CoverageManifest(source=source,
@@ -256,6 +292,21 @@ def preview_payment_coverage_manifests(
         "unknown_count": counts["unknown"],
         "duplicate_evidence_count": duplicates,
         "conflicting_evidence_count": conflicts,
+        "operational_usable_count": sum(
+            item.operational_coverage == "usable" for item in operational_evidences
+        ),
+        "operational_needs_confirmation_count": sum(
+            item.operational_coverage == "needs_confirmation"
+            for item in operational_evidences
+        ),
+        "operational_rejected_count": sum(
+            item.operational_coverage == "rejected" for item in operational_evidences
+        ),
+        "operational_duplicate_count": operational_duplicates,
+        "operational_conflict_count": operational_conflicts,
+        "paypay_operational_evidence": [
+            asdict(item) for item in operational_evidences
+        ],
         "paypay_evidence_verifications": [
             asdict(item) for item in verifications if item is not None
         ],

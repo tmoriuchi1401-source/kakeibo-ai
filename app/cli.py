@@ -147,6 +147,7 @@ def main():
     pcm.add_argument("--paypay-csv",action="append",default=[])
     pcm.add_argument("--paypay-export-evidence",action="append",default=[])
     pcm.add_argument("--paypay-status-image",action="append",default=[])
+    pcm.add_argument("--paypay-confirmed-range",action="append",default=[])
     pcm.add_argument("--au-pay-card-csv",action="append",default=[])
     acosa=sub.add_parser("amazon-cancellation-order-status-apply")
     acosa.add_argument("--apply",action="store_true")
@@ -365,6 +366,7 @@ def main():
             paypay_csvs=args.paypay_csv,
             paypay_export_evidence_files=args.paypay_export_evidence,
             paypay_status_image_files=args.paypay_status_image,
+            paypay_confirmed_ranges=args.paypay_confirmed_range,
             au_pay_card_csvs=args.au_pay_card_csv,
         ))
     elif args.cmd=="amazon-cancellation-order-status-apply":
