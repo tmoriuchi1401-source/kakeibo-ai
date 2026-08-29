@@ -229,7 +229,11 @@ def extract_positioned_payment_amount(tokens: Iterable[PositionedToken]) -> Amou
             relation = _paired(label_token, number)
             if relation is None:
                 continue
-            conflicts = [excluded for excluded in exclusion_labels if _paired(excluded, number) is not None]
+            conflicts = [
+                excluded for excluded in exclusion_labels
+                if (excluded_relation := _paired(excluded, number)) is not None
+                and excluded_relation[0] == relation[0]
+            ]
             if conflicts:
                 continue
             candidates.append((number, amount, relation))

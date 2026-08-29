@@ -122,7 +122,7 @@ def _pdf(*, encrypted=False):
 
 @pytest.mark.parametrize(
     ("payload", "reason"),
-    [(_pdf(encrypted=True), "encrypted_pdf"), (_pdf(), "empty_pdf_text"),
+    [(_pdf(encrypted=True), "encrypted_pdf"), (_pdf(), "ocr_empty"),
      (b"not-a-pdf", "pdf_text_extraction_failed")],
 )
 def test_unreadable_pdfs_are_unknown_and_never_sent_to_gemini(payload, reason):

@@ -34,7 +34,7 @@ class ReceiptPipeline:
     def _medical_note(screening:MedicalReceiptScreening)->str:
         analysis=screening.analysis
         parts=["medical_local",f"classification={analysis.classification}",
-               f"reason={screening.reason_code}"]
+               f"source_method={screening.extraction}",f"reason={screening.reason_code}"]
         if analysis.amount_label: parts.append(f"amount_label={analysis.amount_label}")
         return "; ".join(parts)
 
