@@ -56,6 +56,7 @@ from .amazon_cancellation_reconciliation_preview import (
 )
 from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
 from .payment_coverage_status_preview import preview_payment_coverage_status
+from .payment_coverage_manifest import preview_payment_coverage_manifests
 from .amazon_cancellation_item_count_fill_preview import (
     apply_amazon_cancellation_item_count_fills,
     preview_amazon_cancellation_item_count_fills,
@@ -142,6 +143,9 @@ def main():
     sub.add_parser("amazon-cancellation-reconciliation-preview")
     sub.add_parser("amazon-payment-coverage-preview")
     sub.add_parser("payment-coverage-status-preview")
+    pcm=sub.add_parser("payment-coverage-manifest-preview")
+    pcm.add_argument("--paypay-csv",action="append",default=[])
+    pcm.add_argument("--au-pay-card-csv",action="append",default=[])
     acosa=sub.add_parser("amazon-cancellation-order-status-apply")
     acosa.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-cancellation-item-count-fill-preview")
@@ -354,6 +358,10 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_payment_coverage_status(db))
+    elif args.cmd=="payment-coverage-manifest-preview":
+        print(preview_payment_coverage_manifests(
+            paypay_csvs=args.paypay_csv, au_pay_card_csvs=args.au_pay_card_csv,
+        ))
     elif args.cmd=="amazon-cancellation-order-status-apply":
         if not args.apply:
             p.error("amazon-cancellation-order-status-apply requires --apply")
