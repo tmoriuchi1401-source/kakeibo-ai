@@ -18,6 +18,8 @@ from .payroll_storage import (
 PlanAction = Literal["append", "skip_duplicate", "needs_review", "blocked_schema"]
 DuplicatePreviewStatus = Literal["new", "existing", "needs_review"]
 
+_HEADER_SUMMARY_FIELDS = ("gross_pay", "total_deductions", "net_pay")
+
 
 class PayrollItemSavePreview(BaseModel):
     section: str
@@ -84,6 +86,23 @@ def enforce_active_standard_items(
     return result
 
 
+def exclude_header_duplicate_summary_items(
+    candidate: PayrollStorageCandidate,
+) -> PayrollStorageCandidate:
+    """Exclude confirmed summary items that exactly duplicate header values."""
+    result = candidate.model_copy(deep=True)
+    result.items = [
+        item for item in result.items
+        if not (
+            item.standard_item_id in _HEADER_SUMMARY_FIELDS
+            and item.value is not None
+            and getattr(result.statement, item.standard_item_id) is not None
+            and item.value == getattr(result.statement, item.standard_item_id)
+        )
+    ]
+    return result
+
+
 def build_append_plan(
     candidates: Iterable[PayrollStorageCandidate],
     snapshot: PayrollSheetsSnapshot,
@@ -93,7 +112,8 @@ def build_append_plan(
     schema_ok = snapshot.schema_ok
     plans = []
     for raw_candidate in candidates:
-        candidate = enforce_active_standard_items(raw_candidate, snapshot.standard_items)
+        candidate = exclude_header_duplicate_summary_items(raw_candidate)
+        candidate = enforce_active_standard_items(candidate, snapshot.standard_items)
         statement = candidate.statement
         duplicate = decide_duplicate(statement, snapshot.statements)
         reasons = []
@@ -147,7 +167,8 @@ def build_save_plan(
     }
     plans: list[PayrollSavePlan] = []
     for raw_candidate in candidates:
-        candidate = enforce_active_standard_items(raw_candidate, snapshot.standard_items)
+        candidate = exclude_header_duplicate_summary_items(raw_candidate)
+        candidate = enforce_active_standard_items(candidate, snapshot.standard_items)
         legacy = build_append_plan(
             [candidate], snapshot, employer_required=employer_required,
         )[0]

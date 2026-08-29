@@ -270,6 +270,78 @@ def test_union_dues_resolves_without_promoting_other_unknown_items():
         assert by_name[raw_name].needs_review
 
 
+def test_matching_header_summary_items_are_excluded_from_save_candidates():
+    source = parsed_statement().model_copy(deep=True)
+    source.gross_pay = 320000
+    source.total_deductions = 50000
+    source.net_pay = 270000
+    source.items.extend([
+        PayrollItem(raw_item_name="支給合計", section="summary", raw_value="320,000",
+                    value=320000, standard_item_candidate="gross_pay"),
+        PayrollItem(raw_item_name="控除合計", section="summary", raw_value="50,000",
+                    value=50000, standard_item_candidate="total_deductions"),
+        PayrollItem(raw_item_name="差引支給額", section="summary", raw_value="270,000",
+                    value=270000, standard_item_candidate="net_pay"),
+    ])
+
+    plan = build_save_plan([phase_a_to_storage_candidate(source)], snapshot())[0]
+
+    assert [item.raw_item_name for item in plan.items] == [
+        "基本給", "健康保険料", "調整手当A",
+    ]
+    assert plan.item_count == plan.would_create_items == 3
+    assert plan.unknown_item_count == plan.needs_review_count == 1
+
+
+def test_header_summary_item_is_not_excluded_without_header_value():
+    source = parsed_statement().model_copy(deep=True)
+    source.gross_pay = None
+    source.items.append(PayrollItem(
+        raw_item_name="支給合計", section="summary", raw_value="320,000",
+        value=320000, standard_item_candidate="gross_pay",
+    ))
+
+    plan = build_save_plan([phase_a_to_storage_candidate(source)], snapshot())[0]
+
+    assert "支給合計" in {item.raw_item_name for item in plan.items}
+
+
+def test_header_summary_item_is_not_excluded_without_confirmed_item_value():
+    source = parsed_statement().model_copy(deep=True)
+    source.gross_pay = 320000
+    source.items.append(PayrollItem(
+        raw_item_name="支給合計", section="summary", raw_value="320,000",
+        value=None, standard_item_candidate="gross_pay", needs_review=True,
+    ))
+
+    plan = build_save_plan([phase_a_to_storage_candidate(source)], snapshot())[0]
+
+    assert "支給合計" in {item.raw_item_name for item in plan.items}
+
+
+def test_header_summary_item_is_not_excluded_when_value_differs():
+    source = parsed_statement().model_copy(deep=True)
+    source.gross_pay = 320000
+    source.items.append(PayrollItem(
+        raw_item_name="支給合計", section="summary", raw_value="319,999",
+        value=319999, standard_item_candidate="gross_pay",
+    ))
+
+    plan = build_save_plan([phase_a_to_storage_candidate(source)], snapshot())[0]
+
+    assert "支給合計" in {item.raw_item_name for item in plan.items}
+
+
+def test_non_summary_item_matching_header_value_is_not_excluded():
+    source = parsed_statement().model_copy(deep=True)
+    source.gross_pay = 300000
+
+    plan = build_save_plan([phase_a_to_storage_candidate(source)], snapshot())[0]
+
+    assert "基本給" in {item.raw_item_name for item in plan.items}
+    assert plan.unknown_item_count == plan.needs_review_count == 1
+
+
 def test_drive_preview_never_calls_drive_write_methods():
     service = DriveService([
         {"id": "file-1", "name": "salary.pdf", "mimeType": "application/pdf"},
