@@ -25,6 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y tesseract-ocr tesseract-ocr-jpn
+          tesseract --list-langs 2>/dev/null | grep -qx jpn
       - run: pip install -r requirements.txt
       - name: Show configured integrations
         run: |

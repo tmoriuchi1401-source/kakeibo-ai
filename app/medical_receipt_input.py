@@ -15,8 +15,20 @@ MAX_PDF_OCR_PAGES = 5
 MIN_MEANINGFUL_TEXT_CHARS = 30
 MIN_OCR_TOKEN_CONFIDENCE = 60.0
 MIN_OCR_AMOUNT_CONFIDENCE = 70.0
+PRIVACY_SUSPICION_CONFIDENCE = 25.0
+MIN_OCR_CLASSIFICATION_TOKENS = 3
 OCR_RENDER_SCALE = 3
 OCR_UPSCALE_MIN_WIDTH = 1800
+
+STRONG_PRIVACY_MEDICAL_TERMS = {
+    "診療報酬", "一部負担金", "自己負担額", "自己負担", "処方箋", "調剤",
+    "公費負担", "保険点数", "診療点数",
+}
+WEAK_PRIVACY_MEDICAL_GROUPS = {
+    "clinical": {"患者", "医療費"},
+    "institution": {"病院", "クリニック", "医院", "診療所", "薬局"},
+    "insurance": {"保険"},
+}
 
 
 @dataclass(frozen=True)
@@ -35,6 +47,7 @@ class OCRToken:
 class OCRExtraction:
     text: str
     tokens: tuple[OCRToken, ...]
+    privacy_tokens: tuple[OCRToken, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,10 @@ class TesseractUnavailable(RuntimeError):
 
 
 class LocalOCRFailed(RuntimeError):
+    pass
+
+
+class PartialOCRFailure(LocalOCRFailed):
     pass
 
 
@@ -101,6 +118,7 @@ def _ocr_image(image, page: int = 1) -> OCRExtraction:
     except Exception as exc:
         raise LocalOCRFailed from exc
     tokens = []
+    privacy_tokens = []
     for index, raw_word in enumerate(data.get("text", [])):
         word = normalize_text(str(raw_word)).strip()
         if not word:
@@ -109,18 +127,21 @@ def _ocr_image(image, page: int = 1) -> OCRExtraction:
             confidence = float(data["conf"][index])
         except (KeyError, TypeError, ValueError, IndexError):
             continue
-        if confidence < MIN_OCR_TOKEN_CONFIDENCE:
+        if confidence < PRIVACY_SUSPICION_CONFIDENCE:
             continue
         line_key = (
             page, int(data.get("block_num", [0] * (index + 1))[index]),
             int(data.get("par_num", [0] * (index + 1))[index]),
             int(data.get("line_num", [0] * (index + 1))[index]),
         )
-        tokens.append(OCRToken(
+        token = OCRToken(
             word, page, float(data["left"][index]), float(data["top"][index]),
             float(data["width"][index]), float(data["height"][index]), confidence,
             line_key,
-        ))
+        )
+        privacy_tokens.append(token)
+        if confidence >= MIN_OCR_TOKEN_CONFIDENCE:
+            tokens.append(token)
     lines: dict[tuple[int, int, int, int], list[OCRToken]] = {}
     for token in tokens:
         lines.setdefault(token.line_key, []).append(token)
@@ -128,7 +149,7 @@ def _ocr_image(image, page: int = 1) -> OCRExtraction:
         " ".join(token.text for token in sorted(line, key=lambda item: item.x))
         for _, line in sorted(lines.items())
     )
-    return OCRExtraction(text, tuple(tokens))
+    return OCRExtraction(text, tuple(tokens), tuple(privacy_tokens))
 
 
 def _ocr_pdf(data: bytes, page_count: int) -> OCRExtraction:
@@ -137,8 +158,18 @@ def _ocr_pdf(data: bytes, page_count: int) -> OCRExtraction:
         document = pdfium.PdfDocument(data)
         if len(document) != page_count:
             raise LocalOCRFailed("PDF page count changed while rendering")
-        results = [_ocr_image(page.render(scale=OCR_RENDER_SCALE).to_pil(), index + 1)
-                   for index, page in enumerate(document)]
+        results = []
+        for index, page in enumerate(document):
+            try:
+                results.append(_ocr_image(
+                    page.render(scale=OCR_RENDER_SCALE).to_pil(), index + 1,
+                ))
+            except TesseractUnavailable:
+                raise
+            except Exception as exc:
+                if page_count > 1:
+                    raise PartialOCRFailure from exc
+                raise LocalOCRFailed from exc
     except (TesseractUnavailable, LocalOCRFailed):
         raise
     except Exception as exc:
@@ -146,15 +177,53 @@ def _ocr_pdf(data: bytes, page_count: int) -> OCRExtraction:
     return OCRExtraction(
         "\n".join(result.text for result in results),
         tuple(token for result in results for token in result.tokens),
+        tuple(token for result in results for token in result.privacy_tokens),
     )
+
+
+def _normalized_ocr_word(value: str) -> str:
+    value = re.sub(r"[\s　]+", "", normalize_text(value))
+    return value.strip(".,:;!?()[]{}<>「」『』【】、。・:;")
+
+
+def _privacy_suspicion(extracted: OCRExtraction) -> tuple[bool, tuple[str, ...]]:
+    candidates = extracted.privacy_tokens or extracted.tokens
+    words = {
+        _normalized_ocr_word(token.text)
+        for token in candidates if token.confidence >= PRIVACY_SUSPICION_CONFIDENCE
+    }
+    words.discard("")
+    strong = sorted(words & STRONG_PRIVACY_MEDICAL_TERMS)
+    if strong:
+        return True, tuple(f"privacy_strong:{word}" for word in strong)
+    weak_groups = {
+        group for group, terms in WEAK_PRIVACY_MEDICAL_GROUPS.items() if words & terms
+    }
+    if len(weak_groups) >= 2:
+        return True, tuple(f"privacy_weak_group:{group}" for group in sorted(weak_groups))
+    has_receipt = bool(words & set(RECEIPT_TERMS))
+    has_money = any(yen_amount_tokens(word) for word in words)
+    if weak_groups and has_receipt and has_money:
+        return True, tuple(f"privacy_weak_group:{group}" for group in sorted(weak_groups))
+    return False, ()
 
 
 def _analyze_ocr(extracted: OCRExtraction, method: str) -> MedicalReceiptScreening:
     if not extracted.text.strip():
         return _unknown(method, "ocr_empty")
+    if len(extracted.tokens) < MIN_OCR_CLASSIFICATION_TOKENS:
+        return _unknown(method, "insufficient_ocr_quality")
     amount_tokens = tuple(token for token in extracted.tokens
                           if token.confidence >= MIN_OCR_AMOUNT_CONFIDENCE)
     analysis = analyze_medical_receipt(extracted.text, amount_tokens)
+    if analysis.classification == "non_medical":
+        suspected, privacy_evidence = _privacy_suspicion(extracted)
+        if suspected:
+            analysis = replace(
+                analysis, classification="suspected_medical", certainty="low",
+                evidence=analysis.evidence + privacy_evidence,
+                reason=analysis.reason + "; low-confidence medical privacy evidence",
+            )
     positioned_amount = extract_positioned_payment_amount(amount_tokens)
     if analysis.amount is not None and positioned_amount.amount != analysis.amount:
         analysis = replace(
@@ -200,12 +269,16 @@ def screen_medical_receipt(data: bytes, mime_type: str) -> MedicalReceiptScreeni
         return MedicalReceiptScreening(
             analyze_medical_receipt(text), "pdf_text", "pdf_text_extracted",
         )
+    # The page limit controls local OCR cost only. Text PDFs are screened above
+    # regardless of page count.
     if page_count > MAX_PDF_OCR_PAGES:
-        return _unknown("pdf_ocr", "too_many_pages")
+        return _unknown("pdf_ocr", "too_many_pages_for_ocr")
     try:
         extracted = _ocr_pdf(data, page_count)
     except TesseractUnavailable:
         return _unknown("pdf_ocr", "tesseract_unavailable")
+    except PartialOCRFailure:
+        return _unknown("pdf_ocr", "partial_ocr_failure")
     except LocalOCRFailed:
         return _unknown("pdf_ocr", "ocr_failed")
     return _analyze_ocr(extracted, "pdf_ocr")

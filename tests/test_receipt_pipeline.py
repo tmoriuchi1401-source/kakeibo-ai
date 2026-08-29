@@ -176,3 +176,23 @@ def test_medical_missing_date_and_merchant_never_auto_posts():
     assert result["receipt"]["merchant"] == ""
     assert {"日付不明", "店舗不明"}.issubset(result["issues"])
     assert "支出明細" not in db.rows
+
+
+def test_non_medical_missing_merchant_is_reviewed():
+    class MissingMerchantAI(FakeAI):
+        def analyze_receipt(self, data, mime, categories):
+            self.calls.append((data, mime, categories))
+            return ReceiptResult(
+                merchant="", date="2026-08-01", total=500,
+                items=[ReceiptItem(name="商品", amount=500,
+                                   major_category="食費", minor_category="食品")],
+            )
+
+    db, ai = FakeDB(), MissingMerchantAI()
+    screener = Screener(analysis("non_medical"))
+    result = ReceiptPipeline(db, ai, screener).process_bytes(
+        b"ordinary", "application/pdf", "new",
+    )
+    assert result["status"] == "needs_review"
+    assert "店舗不明" in result["issues"]
+    assert "支出明細" not in db.rows
