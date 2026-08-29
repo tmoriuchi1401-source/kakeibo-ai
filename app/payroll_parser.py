@@ -39,6 +39,10 @@ YTD_ITEM_CANDIDATES = {
     "所得税": "ytd_income_tax",
 }
 
+SUMMARY_LABELS = {
+    "支給合計", "総支給額", "支給額計", "控除合計", "控除額計", "差引支給額",
+}
+
 
 def compact(value: str) -> str:
     return re.sub(r"[\s　]+", "", value).replace("，", ",")
@@ -208,6 +212,67 @@ def _deduplicate_pdf_labels(entries):
         if duplicate is None:
             deduplicated.append((item, label, number, ambiguous))
     return deduplicated
+
+
+def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
+    """Recover only unique, column-aligned PDF summary values below labels."""
+    used_numbers = {id(number) for item, _label, number, _ambiguous in entries
+                    if number is not None and item.value is not None}
+    proposals = []
+    labels = [entry[1] for entry in entries]
+    for entry in entries:
+        item, label, _number, _ambiguous = entry
+        if compact(item.raw_item_name) not in SUMMARY_LABELS or item.value is not None:
+            continue
+        matches = []
+        for number in tokens:
+            values = amounts(number.text)
+            vertical_gap = number.y - (label.y + label.height)
+            overlap = max(0.0, min(label.x + label.width, number.x + number.width)
+                          - max(label.x, number.x))
+            if (number.page == label.page and len(values) == 1
+                    and id(number) not in used_numbers
+                    and 0 <= vertical_gap <= label.height * 1.5
+                    and overlap >= min(label.width, number.width) * .5):
+                # A value is unsafe when another label in its column is at least as close.
+                competing = any(
+                    other is not label and other.page == label.page
+                    and 0 <= number.y - (other.y + other.height) <= vertical_gap
+                    and max(0.0, min(other.x + other.width, number.x + number.width)
+                            - max(other.x, number.x)) >= min(other.width, number.width) * .5
+                    for other in labels
+                )
+                if not competing:
+                    matches.append((number, values[0]))
+        if len(matches) == 1:
+            proposals.append((entry, matches[0][0], matches[0][1]))
+
+    # Neither a value token nor one summary label may resolve to conflicting values.
+    value_counts = {id(number): sum(candidate is number for _entry, candidate, _value in proposals)
+                    for _entry, number, _value in proposals}
+    summary_values = {}
+    for entry, _number, value in proposals:
+        summary_values.setdefault(entry[0].standard_item_candidate, set()).add(value)
+    accepted = [(entry, number, value) for entry, number, value in proposals
+                if value_counts[id(number)] == 1
+                and len(summary_values[entry[0].standard_item_candidate]) == 1]
+
+    by_standard = {}
+    for entry, number, value in accepted:
+        by_standard.setdefault(entry[0].standard_item_candidate, []).append((entry, number, value))
+    totals = {standard: matches[0][2] for standard, matches in by_standard.items()
+              if len(matches) == 1}
+    if set(totals) == {"gross_pay", "total_deductions", "net_pay"}:
+        if totals["gross_pay"] - totals["total_deductions"] != totals["net_pay"]:
+            return entries
+
+    for entry, number, value in accepted:
+        item = entry[0]
+        item.value = value
+        item.raw_value = number.text
+        item.confidence = min(item.confidence, number.confidence)
+        item.needs_review = False
+    return entries
 
 
 def _ocr_label_tokens(tokens: tuple[PositionedText, ...]) -> list[PositionedText]:
@@ -437,6 +502,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         entries.append((item, label, number, ambiguous))
     if not ocr:
         entries = _deduplicate_pdf_labels(entries)
+        entries = _pair_pdf_summary_values_below(entries, tokens)
     result = [entry[0] for entry in entries]
     # Stable row/column indexes are derived per page, without template coordinates.
     for page in {item.page for item in result}:

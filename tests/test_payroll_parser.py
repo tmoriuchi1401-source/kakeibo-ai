@@ -230,6 +230,72 @@ def test_pdf_single_below_row_does_not_trigger_legacy_layout():
     assert items[0].needs_review
 
 
+def test_pdf_summary_values_directly_below_are_recovered_when_consistent():
+    items = parse_positioned_items((
+        token("総支給額", 10, 10), token("控除合計", 80, 10), token("差引支給額", 150, 10),
+        token("530,865", 10, 22), token("94,185", 80, 22), token("436,680", 150, 22),
+    ))
+    assert {item.standard_item_candidate: item.value for item in items} == {
+        "gross_pay": 530865, "total_deductions": 94185, "net_pay": 436680,
+    }
+
+
+def test_pdf_summary_below_rejects_multiple_candidates():
+    item = parse_positioned_items((
+        token("総支給額", 10, 10), token("530,865", 10, 21), token("531,000", 10, 24),
+    ))[0]
+    assert item.value is None and item.needs_review
+
+
+def test_pdf_summary_below_does_not_reuse_one_value():
+    items = parse_positioned_items((
+        token("総支給額", 10, 10), token("支給額計", 12, 10), token("530,865", 11, 22),
+    ))
+    assert all(item.value is None for item in items)
+
+
+def test_pdf_summary_below_rejects_distant_value():
+    item = parse_positioned_items((token("総支給額", 10, 10), token("530,865", 10, 36)))[0]
+    assert item.value is None
+
+
+def test_pdf_summary_below_rejects_value_outside_column():
+    item = parse_positioned_items((token("総支給額", 10, 10), token("530,865", 55, 22)))[0]
+    assert item.value is None
+
+
+def test_pdf_summary_below_rejects_value_on_other_page():
+    value = PositionedText("530,865", 2, 10, 22, 50, 10, 100)
+    item = parse_positioned_items((token("総支給額", 10, 10), value))[0]
+    assert item.value is None
+
+
+def test_pdf_summary_below_keeps_one_safe_value():
+    item = parse_positioned_items((token("総支給額", 10, 10), token("530,865", 10, 22)))[0]
+    assert item.value == 530865 and not item.needs_review
+
+
+def test_pdf_summary_below_does_not_apply_to_excluded_alias():
+    item = parse_positioned_items((token("差引不足額", 10, 10), token("10,000", 10, 22)))[0]
+    assert item.value is None
+
+
+def test_pdf_summary_below_rejects_inconsistent_complete_totals():
+    items = parse_positioned_items((
+        token("総支給額", 10, 10), token("控除合計", 80, 10), token("差引支給額", 150, 10),
+        token("530,865", 10, 22), token("94,185", 80, 22), token("400,000", 150, 22),
+    ))
+    assert all(item.value is None for item in items)
+
+
+def test_pdf_summary_below_yields_to_closer_other_label():
+    items = parse_positioned_items((
+        token("総支給額", 10, 10), token("課税支給額", 10, 13), token("530,865", 10, 25),
+    ))
+    summary = next(item for item in items if item.raw_item_name == "総支給額")
+    assert summary.value is None
+
+
 def test_legacy_value_beyond_x_threshold_is_not_paired():
     items = parse_positioned_items((
         *legacy_table_tokens(),
