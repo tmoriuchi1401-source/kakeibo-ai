@@ -144,6 +144,7 @@ def main():
     sub.add_parser("doctor")
     payroll_preview=sub.add_parser("payroll-file-preview")
     payroll_preview.add_argument("file")
+    sub.add_parser("payroll-import-preview")
     sub.add_parser("payroll-drive-preview")
     sub.add_parser("payroll-storage-preview")
     sub.add_parser("payroll-save-preview")
@@ -167,7 +168,7 @@ def main():
     elif args.cmd=="payroll-file-preview":
         import json
         print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
-    elif args.cmd=="payroll-drive-preview":
+    elif args.cmd in {"payroll-import-preview", "payroll-drive-preview"}:
         import json
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))

@@ -7,7 +7,8 @@ from app.payroll_statement_parser import preview_payroll_file
 
 
 def test_preview_uses_extracted_text_and_calculates_summary(monkeypatch):
-    text = """2024年11月分 給与明細書
+    text = """秘密サンプル株式会社
+2024年11月分 給与明細書
 基本給 独自手当 支給合計
 300,000 20,000 320,000
 控除合計
@@ -21,6 +22,10 @@ def test_preview_uses_extracted_text_and_calculates_summary(monkeypatch):
     result = preview_payroll_file("statement.pdf")
     assert (result.gross_pay, result.total_deductions, result.net_pay) == (320000, 50000, 270000)
     assert result.parse_status == "success"
+    assert result.company_name == "秘密サンプル株式会社"
+    assert result.company_present
+    assert "秘密サンプル株式会社" not in result.model_dump()
+    assert "秘密サンプル株式会社" not in result.model_dump_json()
 
 
 def test_encrypted_pdf_stops_safely(monkeypatch):

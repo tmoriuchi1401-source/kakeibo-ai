@@ -18,6 +18,7 @@ STANDARD_NAMES = {
     "支給合計": "gross_pay", "総支給額": "gross_pay", "支給額計": "gross_pay",
     "控除合計": "total_deductions", "控除額計": "total_deductions",
     "差引支給額": "net_pay", "差引不足額": "net_pay",
+    "一斉預金": "collective_savings", "深夜勤務": "night_work_pay",
 }
 
 ITEM_TERMS = (
@@ -57,10 +58,12 @@ def candidate(name: str) -> str | None:
 
 def section_for(name: str, current: str = "unknown") -> str:
     c = candidate(name)
-    if c in {"gross_pay", "total_deductions", "net_pay"}: return "summary"
+    if c in {"gross_pay", "total_deductions", "net_pay"}: return "reference"
     if c in {"health_insurance", "nursing_care_insurance", "employees_pension",
-             "employment_insurance", "income_tax", "resident_tax"}: return "deductions"
-    if c in {"basic_pay", "overtime_pay", "commuting_allowance"}: return "earnings"
+             "employment_insurance", "income_tax", "resident_tax",
+             "collective_savings"}: return "deduction"
+    if c in {"basic_pay", "overtime_pay", "commuting_allowance",
+             "night_work_pay"}: return "earning"
     if any(k in name for k in ("日数", "時間", "残業ｈ", "勤務ｈ")): return "attendance"
     return current
 

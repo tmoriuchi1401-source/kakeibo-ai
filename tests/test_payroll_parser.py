@@ -1,5 +1,11 @@
 from app.payroll_ocr import PositionedText
-from app.payroll_parser import candidate, parse_items, parse_period_and_date, parse_positioned_items
+from app.payroll_parser import (
+    candidate,
+    parse_items,
+    parse_period_and_date,
+    parse_positioned_items,
+    section_for,
+)
 
 
 def test_period_and_date_support_spaced_and_classic_formats():
@@ -11,7 +17,7 @@ def test_period_and_date_support_spaced_and_classic_formats():
 def test_raw_unknown_item_is_preserved():
     items = parse_items("基本給 独自手当 支給合計\n300,000 12,000 312,000")
     unknown = next(item for item in items if item.raw_item_name == "独自手当")
-    assert unknown.section == "earnings"
+    assert unknown.section == "earning"
     assert unknown.value == 12000
     assert unknown.standard_item_candidate is None
 
@@ -21,6 +27,28 @@ def test_standard_candidates_do_not_replace_raw_name():
     assert items[0].raw_item_name == "基本給"
     assert items[0].standard_item_candidate == "basic_pay"
     assert candidate("健康保険料") == "health_insurance"
+
+
+def test_collective_savings_uses_exact_deduction_mapping():
+    assert candidate("一斉預金") == "collective_savings"
+    assert section_for("一斉預金") == "deduction"
+    assert candidate("一斉預金調整") is None
+    assert candidate("財形貯蓄") is None
+
+
+def test_night_work_pay_does_not_collide_with_attendance_hours():
+    assert candidate("深夜勤務") == "night_work_pay"
+    assert section_for("深夜勤務") == "earning"
+    assert candidate("深夜勤務ｈ") is None
+    assert section_for("深夜勤務ｈ") == "attendance"
+
+    item = parse_positioned_items((
+        token("深夜勤務", 10, 10), token("2,461", 100, 10),
+    ))[0]
+    assert item.raw_item_name == "深夜勤務"
+    assert item.value == 2461
+    assert item.section == "earning"
+    assert item.standard_item_candidate == "night_work_pay"
 
 
 def test_employment_insurance_reference_amount_is_not_insurance_fee():
@@ -62,6 +90,9 @@ def test_legacy_sparse_value_row_uses_unique_nearest_columns():
     assert by_name["財形貯蓄"].value is None
     assert by_name["持株積立他"].value is None
     assert by_name["社宅使用料"].value is None
+    assert by_name["一斉預金"].section == "deduction"
+    assert by_name["一斉預金"].standard_item_candidate == "collective_savings"
+    assert by_name["一斉預金"].raw_item_name == "一斉預金"
 
 
 def test_detected_legacy_page_also_pairs_short_summary_row():

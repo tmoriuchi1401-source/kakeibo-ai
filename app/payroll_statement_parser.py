@@ -8,6 +8,19 @@ from .payroll_ocr import extract_payroll_text
 from .payroll_parser import amounts, compact, parse_positioned_items, parse_period_and_date
 
 
+_COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
+_SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
+
+
+def _company_name(text: str) -> str | None:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if (line and any(marker in line for marker in _COMPANY_MARKERS)
+                and not any(marker in line for marker in _SENSITIVE_MARKERS)):
+            return line
+    return None
+
+
 def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None, int | None]:
     normalized = compact(text)
     gross = deductions = net = None
@@ -60,6 +73,7 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
 
 def preview_payroll_file(path: str | Path) -> PayrollPreview:
     extracted = extract_payroll_text(path)
+    company_name = _company_name(extracted.text)
     period, pay_date = parse_period_and_date(extracted.text)
     items = parse_positioned_items(extracted.tokens, ocr=extracted.extraction_method == "ocr")
     if extracted.extraction_method == "ocr":
@@ -70,6 +84,8 @@ def preview_payroll_file(path: str | Path) -> PayrollPreview:
     status = "success" if period and gross is not None and deductions is not None and net is not None else "partial"
     return PayrollPreview(file_type=extracted.file_type,
                           extraction_method=extracted.extraction_method,
+                          company_name=company_name,
+                          company_present=bool(company_name),
                           pay_period=period, pay_date=pay_date, gross_pay=gross,
                           total_deductions=deductions, net_pay=net, items=items,
                           parse_status=status)

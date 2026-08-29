@@ -308,6 +308,9 @@ _SECTION_MAP: dict[str, ItemSection] = {
     "attendance": "attendance",
     "summary": "reference",
     "unknown": "unknown",
+    "earning": "earning",
+    "deduction": "deduction",
+    "reference": "reference",
 }
 
 

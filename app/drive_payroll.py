@@ -71,7 +71,8 @@ class DrivePayrollPreview:
                       content_hash: bool) -> dict:
         return {
             "source_id_present": source_id, "content_hash_present": content_hash,
-            "file_type": file_type, "pay_period": None, "pay_date": None,
+            "file_type": file_type, "company_present": False,
+            "pay_period": None, "pay_date": None,
             "gross_pay": None, "total_deductions": None, "net_pay": None,
             "item_count": 0, "value_resolved_count": 0, "value_none_count": 0,
             "unknown_count": 0, "needs_review_count": 0, "parse_status": status,
@@ -84,6 +85,7 @@ class DrivePayrollPreview:
             "source_id_present": bool(source.drive_file_id),
             "content_hash_present": bool(source.content_sha256),
             "file_type": result.file_type,
+            "company_present": result.company_present,
             "pay_period": result.pay_period,
             "pay_date": result.pay_date,
             "gross_pay": result.gross_pay,
@@ -133,6 +135,7 @@ class DrivePayrollPreview:
                 ))
         return {
             "files_found": len(files), "parsed": parsed,
+            "payroll_detected": parsed,
             "success": sum(item.get("parse_status") == "success" for item in details),
             "needs_review": sum(item.get("needs_review_count", 0) > 0 or
                                 item.get("parse_status") == "partial" for item in details),

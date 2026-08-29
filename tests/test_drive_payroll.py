@@ -46,6 +46,7 @@ def file(file_id, name, mime):
 def parsed(file_type="pdf", review=False):
     return PayrollPreview(
         file_type=file_type, extraction_method="pdf_text" if file_type == "pdf" else "ocr",
+        company_name="秘密サンプル株式会社", company_present=True,
         pay_period="2026-08", pay_date=None, gross_pay=300000,
         total_deductions=50000, net_pay=250000, parse_status="success",
         items=[PayrollItem(raw_item_name="独自手当", section="earnings",
@@ -73,7 +74,8 @@ def test_multiple_drive_files_preview_is_read_only_and_anonymous(tmp_path):
     result = pipeline.preview()
 
     assert result == {
-        "files_found": 4, "parsed": 3, "success": 3, "needs_review": 1,
+        "files_found": 4, "parsed": 3, "payroll_detected": 3,
+        "success": 3, "needs_review": 1,
         "unsupported": 1, "errors": 0, "files": result["files"],
     }
     assert {detail["file_type"] for detail in result["files"]} == {"pdf", "image", "unsupported"}
@@ -84,6 +86,8 @@ def test_multiple_drive_files_preview_is_read_only_and_anonymous(tmp_path):
     assert "secret-id" not in public
     assert "personal-payroll" not in public
     assert "private-name" not in public
+    assert "秘密サンプル株式会社" not in public
+    assert all(detail["company_present"] for detail in result["files"][:3])
     assert all(detail["source_id_present"] for detail in result["files"])
     assert drive.resource.write_calls == []
     assert "parents" in drive.resource.list_calls[0]["q"]
