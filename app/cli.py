@@ -68,6 +68,7 @@ from .payroll_schema import (
     build_schema_initialization_plan,
     schema_plan_preview,
 )
+from .payroll_master_sync import build_master_sync_plan, master_sync_preview
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -149,6 +150,7 @@ def main():
     sub.add_parser("payroll-storage-preview")
     sub.add_parser("payroll-save-preview")
     sub.add_parser("payroll-schema-preview")
+    sub.add_parser("payroll-master-sync-preview")
     payroll_schema_apply=sub.add_parser("payroll-schema-apply")
     payroll_schema_apply.add_argument("--apply",action="store_true")
     args=p.parse_args()
@@ -201,6 +203,14 @@ def main():
             output=schema_plan_preview(plan)
             output["applied"]=False
             print(json.dumps(output,ensure_ascii=False))
+    elif args.cmd=="payroll-master-sync-preview":
+        import json
+        s=Settings(); s.validate(need_sheet=True)
+        snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        print(json.dumps(
+            master_sync_preview(build_master_sync_plan(snapshot)),
+            ensure_ascii=False,
+        ))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="receipt":
