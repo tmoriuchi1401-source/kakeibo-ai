@@ -134,12 +134,13 @@ def aggregate_amazon_order_events(events: list[list], base_row=None) -> dict:
         new[3] = payment_method
 
     event_types = {_text(row[0]) for row in events}
-    if "delivery" in event_types:
-        new[5] = "delivered"
-    elif "shipment" in event_types:
-        new[5] = "partially_shipped"
-    elif "order" in event_types:
-        new[5] = "ordered"
+    if _text(new[5]) != "cancelled":
+        if "delivery" in event_types:
+            new[5] = "delivered"
+        elif "shipment" in event_types:
+            new[5] = "partially_shipped"
+        elif "order" in event_types:
+            new[5] = "ordered"
 
     charged_amount = _sum(events, "payment", 3)
     refund_amount = _sum(events, "refund", 5)

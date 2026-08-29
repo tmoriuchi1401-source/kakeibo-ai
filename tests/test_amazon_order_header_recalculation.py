@@ -68,12 +68,50 @@ def test_status_uses_highest_state_regardless_of_event_order():
 
 
 def test_order_only_and_shipment_statuses():
-    ordered = FakeDB([_event("order")], [_header(order_status="cancelled")])
+    ordered = FakeDB([_event("order")], [_header(order_status="ordered")])
     shipped = FakeDB([_event("order"), _event("shipment")])
     _run(ordered)
     _run(shipped)
     assert ordered.headers[0][5] == "ordered"
     assert shipped.headers[0][5] == "partially_shipped"
+
+
+def test_cancelled_status_does_not_regress_to_ordered():
+    db = FakeDB([_event("order")], [_header(order_status="cancelled")])
+
+    summary = _run(db)
+
+    assert db.headers[0][5] == "cancelled"
+    assert summary["updated"] == 0
+
+
+def test_non_cancelled_status_precedence_is_unchanged():
+    cases = (
+        ([_event("order")], "ordered"),
+        ([_event("order"), _event("shipment")], "partially_shipped"),
+        ([_event("order"), _event("shipment"), _event("delivery")], "delivered"),
+    )
+
+    for events, expected in cases:
+        db = FakeDB(events, [_header(order_status="ordered")])
+        _run(db)
+        assert db.headers[0][5] == expected
+
+
+def test_single_item_cancelled_order_like_current_data_stays_cancelled():
+    order_id = "249-4045234-9353402"
+    db = FakeDB(
+        [_event("order", order_id=order_id, order_amount=1499, item_count=1)],
+        [_header(
+            order_id=order_id, order_amount=1499, item_count=1,
+            order_status="cancelled",
+        )],
+    )
+
+    _run(db)
+
+    assert db.headers[0][0] == order_id
+    assert db.headers[0][4:6] == [1, "cancelled"]
 
 
 def test_old_shipment_added_after_delivery_does_not_regress():

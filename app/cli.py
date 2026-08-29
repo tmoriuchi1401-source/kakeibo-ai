@@ -51,6 +51,9 @@ from .amazon_cancellation_apply_preview import (
     apply_amazon_cancellation_order_statuses,
     preview_amazon_cancellation_apply,
 )
+from .amazon_cancellation_reconciliation_preview import (
+    preview_amazon_cancellation_reconciliation,
+)
 from .amazon_cancellation_item_count_fill_preview import (
     apply_amazon_cancellation_item_count_fills,
     preview_amazon_cancellation_item_count_fills,
@@ -134,6 +137,7 @@ def main():
     sub.add_parser("amazon-review-schema-install")
     sub.add_parser("amazon-status-sync-preview")
     sub.add_parser("amazon-cancellation-apply-preview")
+    sub.add_parser("amazon-cancellation-reconciliation-preview")
     acosa=sub.add_parser("amazon-cancellation-order-status-apply")
     acosa.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-cancellation-item-count-fill-preview")
@@ -333,6 +337,10 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_amazon_cancellation_apply(db))
+    elif args.cmd=="amazon-cancellation-reconciliation-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(preview_amazon_cancellation_reconciliation(db))
     elif args.cmd=="amazon-cancellation-order-status-apply":
         if not args.apply:
             p.error("amazon-cancellation-order-status-apply requires --apply")
