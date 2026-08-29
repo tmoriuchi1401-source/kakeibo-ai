@@ -9,9 +9,11 @@ from .payroll_ocr import PositionedText
 
 STANDARD_NAMES = {
     "基本給": "basic_pay", "早出残業": "overtime_pay", "時間外労働": "overtime_pay",
-    "時間外手当": "overtime_pay", "通勤手当": "commuting_allowance",
+    "時間外手当": "overtime_pay", "法定内残業手当": "overtime_pay",
+    "通勤手当": "commuting_allowance",
     "健康保険": "health_insurance", "健康保険料": "health_insurance",
-    "介護保険": "nursing_care_insurance", "厚生年金": "employees_pension",
+    "介護保険": "nursing_care_insurance", "介護保険料": "nursing_care_insurance",
+    "厚生年金": "employees_pension",
     "厚生年金保険": "employees_pension", "雇用保険": "employment_insurance",
     "雇用保険料": "employment_insurance", "所得税": "income_tax",
     "源泉所得額": "income_tax", "住民税": "resident_tax",
@@ -19,6 +21,7 @@ STANDARD_NAMES = {
     "控除合計": "total_deductions", "控除額計": "total_deductions",
     "差引支給額": "net_pay", "差引不足額": "net_pay",
     "一斉預金": "collective_savings", "深夜勤務": "night_work_pay",
+    "標準報酬月額": "standard_monthly_remuneration",
 }
 
 ITEM_TERMS = (
@@ -68,7 +71,8 @@ def candidate(name: str) -> str | None:
 
 def section_for(name: str, current: str = "unknown") -> str:
     c = candidate(name)
-    if c in {"gross_pay", "total_deductions", "net_pay"}: return "reference"
+    if c in {"gross_pay", "total_deductions", "net_pay",
+             "standard_monthly_remuneration"}: return "reference"
     if c in {"health_insurance", "nursing_care_insurance", "employees_pension",
              "employment_insurance", "income_tax", "resident_tax",
              "collective_savings"}: return "deduction"

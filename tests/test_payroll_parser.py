@@ -57,6 +57,17 @@ def test_employment_insurance_reference_amount_is_not_insurance_fee():
     assert candidate("雇用保険対象額") is None
 
 
+def test_safe_public_sample_labels_use_distinct_existing_meanings():
+    assert (candidate("法定内残業手当"), section_for("法定内残業手当")) == (
+        "overtime_pay", "earning")
+    assert (candidate("介護保険料"), section_for("介護保険料")) == (
+        "nursing_care_insurance", "deduction")
+    assert (candidate("標準報酬月額"), section_for("標準報酬月額")) == (
+        "standard_monthly_remuneration", "reference")
+    assert candidate("課税支給額") is None
+    assert candidate("振込支給額") is None
+
+
 def token(text, x, y, confidence=100):
     return PositionedText(text, 1, x, y, 50, 10, confidence)
 

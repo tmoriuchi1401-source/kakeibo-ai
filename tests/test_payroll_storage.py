@@ -146,6 +146,7 @@ def test_reference_initial_masters_and_aliases():
         "social_insurance_total": "社会保険控除",
         "non_taxable_total": "非課税合計",
         "remuneration_amount": "報酬月額",
+        "standard_monthly_remuneration": "標準報酬月額",
         "employment_insurance_base": "雇用保険対象額",
         "ytd_gross_pay": "総支給額累計",
         "ytd_taxable_amount": "累積課税合計",
@@ -163,6 +164,24 @@ def test_reference_initial_masters_and_aliases():
 
     assert resolve_alias("課税処理計", INITIAL_ALIASES) is None
     assert resolve_alias("課税", INITIAL_ALIASES) is None
+
+
+def test_safe_public_sample_aliases_preserve_sections_and_meanings():
+    standards = {item.standard_item_id: item for item in INITIAL_STANDARD_ITEMS}
+    expected = {
+        "法定内残業手当": ("overtime_pay", "earning"),
+        "介護保険料": ("nursing_care_insurance", "deduction"),
+        "標準報酬月額": ("standard_monthly_remuneration", "reference"),
+    }
+    for label, (standard_item_id, section) in expected.items():
+        assert resolve_alias(label, INITIAL_ALIASES) == standard_item_id
+        assert standards[standard_item_id].section == section
+        assert standards[standard_item_id].value_type == "money"
+
+    assert standards["remuneration_amount"].standard_item_id != (
+        standards["standard_monthly_remuneration"].standard_item_id)
+    assert resolve_alias("課税支給額", INITIAL_ALIASES) is None
+    assert resolve_alias("振込支給額", INITIAL_ALIASES) is None
 
 
 def test_ocr_reference_is_recognized_but_requires_review():
