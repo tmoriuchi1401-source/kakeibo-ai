@@ -68,6 +68,39 @@ def section_for(name: str, current: str = "unknown") -> str:
     return current
 
 
+def _attendance_value_type(name: str) -> str | None:
+    normalized = compact(name).lower()
+    if "日数" in normalized:
+        return "days"
+    if "時間" in normalized or any(term in normalized for term in ("残業h", "勤務h", "残業ｈ", "勤務ｈ")):
+        return "hours"
+    return None
+
+
+def _explicit_attendance_value(value: str, value_type: str | None) -> int | float | None:
+    unit = "日" if value_type == "days" else "時間" if value_type == "hours" else None
+    if unit is None:
+        return None
+    match = re.fullmatch(rf"\s*([+-]?\d+(?:\.\d+)?)\s*{unit}\s*", value)
+    if not match:
+        return None
+    number = float(match.group(1))
+    return int(number) if number.is_integer() else number
+
+
+def _attendance_value_conflicts(name: str, raw_value: str) -> bool:
+    """Reject an untyped money cell for a label that expects days or hours."""
+    value_type = _attendance_value_type(name)
+    if value_type is None or _explicit_attendance_value(raw_value, value_type) is not None:
+        return False
+    return re.fullmatch(r"\s*[+-]?\d{1,3}(?:,\d{3})+(?:円)?\s*", raw_value) is not None
+
+
+def _is_explicit_attendance_quantity(value: str) -> bool:
+    return any(_explicit_attendance_value(value, value_type) is not None
+               for value_type in ("days", "hours"))
+
+
 def _is_non_item_heading(name: str) -> bool:
     normalized = compact(name).strip("()（）:：<>＜＞")
     return (
@@ -241,7 +274,8 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
     """Pair labels only with geometrically adjacent values; ambiguity becomes review."""
     money = [(token, amounts(token.text)) for token in tokens if amounts(token.text)]
     labels = _ocr_label_tokens(tokens) if ocr else [
-        token for token in tokens if not amounts(token.text)
+        token for token in tokens
+        if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
     ]
     logical_values = {} if ocr else _logical_pdf_value_pairs(tokens)
     result = []
@@ -255,7 +289,14 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                 _is_non_item_heading(name) or
                 (ocr and compact(name) in short_ocr_fragments and candidate(name) is None)):
             continue
+        attendance_type = _attendance_value_type(name) if section_for(name) == "attendance" else None
         same_page = [(number, vals) for number, vals in money if number.page == label.page]
+        if attendance_type is not None:
+            same_page.extend(
+                (number, [value]) for number in tokens
+                if number.page == label.page
+                and (value := _explicit_attendance_value(number.text, attendance_type)) is not None
+            )
         horizontal = [(number, vals, number.x - (label.x + label.width))
                       for number, vals in same_page
                       if abs(number.y - label.y) <= max(label.height, number.height) * .65
@@ -282,6 +323,8 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                                   (chosen is not None and chosen[0].confidence < 60))
         confirmed = chosen is not None and not ambiguous and not low_confidence
         number = chosen[0] if chosen else None
+        if confirmed and number is not None and _attendance_value_conflicts(name, number.text):
+            confirmed = False
         raw_value = number.text if confirmed else None
         value = chosen[1][0] if confirmed and len(chosen[1]) == 1 else None
         result.append(PayrollItem(

@@ -127,6 +127,50 @@ def test_positioned_multiple_columns_pair_on_same_row():
         ("基本給", 300000), ("健康保険料", 15000)]
 
 
+def test_attendance_days_does_not_confirm_adjacent_money_value():
+    item = parse_positioned_items((
+        token("出勤日数（平日）", 10, 10), token("500,000", 120, 10),
+    ))[0]
+    assert item.section == "attendance"
+    assert item.value is None
+    assert item.raw_value is None
+    assert item.needs_review
+
+
+def test_attendance_hours_does_not_confirm_adjacent_money_value():
+    items = parse_positioned_items((
+        token("所定時間（平日）", 10, 10), token("30,865", 120, 10),
+        token("所定外時間（平日）", 10, 30), token("45,750", 120, 30),
+    ))
+    assert all(item.section == "attendance" for item in items)
+    assert all(item.value is None and item.raw_value is None for item in items)
+    assert all(item.needs_review for item in items)
+
+
+def test_explicit_attendance_units_remain_confirmed():
+    items = parse_positioned_items((
+        token("出勤日数（平日）", 10, 10), token("20.0日", 120, 10),
+        token("所定時間（平日）", 10, 30), token("160.00時間", 120, 30),
+        token("所定外時間（平日）", 10, 50), token("10.00時間", 120, 50),
+    ))
+    assert [(item.value, item.raw_value, item.needs_review) for item in items] == [
+        (20, "20.0日", False),
+        (160, "160.00時間", False),
+        (10, "10.00時間", False),
+    ]
+
+
+def test_money_sections_keep_confirming_money_values():
+    items = parse_positioned_items((
+        token("基本給", 10, 10), token("500,000", 120, 10),
+        token("健康保険料", 10, 30), token("30,865", 120, 30),
+    ))
+    assert [(item.section, item.value, item.needs_review) for item in items] == [
+        ("earning", 500000, False),
+        ("deduction", 30865, False),
+    ]
+
+
 def test_low_ocr_confidence_is_reviewed_without_value():
     item = parse_positioned_items((token("基本給", 10, 10, 45), token("300,000", 100, 10, 90)),
                                   ocr=True)[0]
