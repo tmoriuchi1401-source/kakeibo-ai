@@ -10,6 +10,7 @@ from .payroll_parser import amounts, compact, parse_positioned_items, parse_peri
 
 _COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
 _SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
+_SUMMARY_CANDIDATES = ("gross_pay", "total_deductions", "net_pay")
 
 
 def _company_name(text: str) -> str | None:
@@ -19,6 +20,51 @@ def _company_name(text: str) -> str | None:
                 and not any(marker in line for marker in _SENSITIVE_MARKERS)):
             return line
     return None
+
+
+def _confirmed_summary_values(items: list[PayrollItem]) -> dict[str, int]:
+    grouped = {
+        candidate: {
+            item.value for item in items
+            if item.standard_item_candidate == candidate
+            and item.section == "reference"
+            and isinstance(item.value, int)
+            and not isinstance(item.value, bool)
+            and not item.needs_review
+        }
+        for candidate in _SUMMARY_CANDIDATES
+    }
+    return {
+        candidate: next(iter(values))
+        for candidate, values in grouped.items()
+        if len(values) == 1
+    }
+
+
+def _supplement_totals_from_items(
+    gross: int | None,
+    deductions: int | None,
+    net: int | None,
+    items: list[PayrollItem],
+) -> tuple[int | None, int | None, int | None]:
+    existing = {
+        "gross_pay": gross,
+        "total_deductions": deductions,
+        "net_pay": net,
+    }
+    confirmed = _confirmed_summary_values(items)
+    supplements = {
+        candidate: value for candidate, value in confirmed.items()
+        if existing[candidate] is None
+    }
+    proposed = existing | supplements
+    if (all(isinstance(proposed[candidate], int) for candidate in _SUMMARY_CANDIDATES)
+            and proposed["gross_pay"] - proposed["total_deductions"]
+            != proposed["net_pay"]):
+        # Do not make a contradictory three-value header authoritative using items.
+        supplements = {}
+    resolved = existing | supplements
+    return (resolved["gross_pay"], resolved["total_deductions"], resolved["net_pay"])
 
 
 def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None, int | None]:
@@ -36,11 +82,9 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
         gross, net = (int(value.replace(",", "")) for value in match.groups())
     match = re.search(r"控除合計[^\n]*\n\s*([\d,]+)", text)
     if match: deductions = int(match.group(1).replace(",", ""))
-    for item in items:
-        if not isinstance(item.value, int): continue
-        if item.standard_item_candidate == "gross_pay": gross = item.value
-        elif item.standard_item_candidate == "total_deductions": deductions = item.value
-        elif item.standard_item_candidate == "net_pay": net = item.value
+    gross, deductions, net = _supplement_totals_from_items(
+        gross, deductions, net, items,
+    )
     # OCR often retains these three robust anchors even when the summary row loses
     # its labels: taxable earnings + non-taxable earnings = gross; transfer = net.
     if gross is None:

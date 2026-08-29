@@ -3,7 +3,18 @@ from types import SimpleNamespace
 import pytest
 
 from app.payroll_ocr import EncryptedPayrollPdfError
-from app.payroll_statement_parser import preview_payroll_file
+from app.payroll_models import PayrollItem
+from app.payroll_statement_parser import _totals, preview_payroll_file
+
+
+def summary_item(candidate, value, *, section="reference", needs_review=False):
+    return PayrollItem(
+        raw_item_name=candidate,
+        section=section,
+        value=value,
+        standard_item_candidate=candidate,
+        needs_review=needs_review,
+    )
 
 
 def test_preview_uses_extracted_text_and_calculates_summary(monkeypatch):
@@ -34,3 +45,58 @@ def test_encrypted_pdf_stops_safely(monkeypatch):
     monkeypatch.setattr("app.payroll_statement_parser.extract_payroll_text", stop)
     with pytest.raises(EncryptedPayrollPdfError):
         preview_payroll_file("encrypted.pdf")
+
+
+def test_duplicate_equal_gross_items_are_one_safe_header_candidate():
+    items = [summary_item("gross_pay", 320000), summary_item("gross_pay", 320000)]
+
+    assert _totals("", items) == (320000, None, None)
+
+
+def test_conflicting_gross_items_do_not_supplement_header():
+    items = [summary_item("gross_pay", 320000), summary_item("gross_pay", 330000)]
+
+    assert _totals("", items) == (None, None, None)
+
+
+def test_item_equal_to_existing_header_value_keeps_header():
+    text = "320,000 50,000 270,000"
+
+    assert _totals(text, [summary_item("gross_pay", 320000)]) == (
+        320000, 50000, 270000)
+
+
+def test_item_different_from_existing_header_value_does_not_overwrite():
+    text = "320,000 50,000 270,000"
+
+    assert _totals(text, [summary_item("gross_pay", 999999)]) == (
+        320000, 50000, 270000)
+
+
+def test_consistent_confirmed_summary_items_still_populate_header():
+    items = [
+        summary_item("gross_pay", 320000),
+        summary_item("total_deductions", 50000),
+        summary_item("net_pay", 270000),
+    ]
+
+    assert _totals("", items) == (320000, 50000, 270000)
+
+
+def test_inconsistent_items_do_not_make_three_value_header_authoritative():
+    items = [
+        summary_item("gross_pay", 320000),
+        summary_item("net_pay", 260000),
+    ]
+
+    assert _totals("控除合計\n50,000", items) == (None, 50000, None)
+
+
+def test_non_reference_reviewed_or_missing_value_items_are_not_candidates():
+    items = [
+        summary_item("gross_pay", 320000, section="earning"),
+        summary_item("total_deductions", 50000, needs_review=True),
+        summary_item("net_pay", None),
+    ]
+
+    assert _totals("", items) == (None, None, None)
