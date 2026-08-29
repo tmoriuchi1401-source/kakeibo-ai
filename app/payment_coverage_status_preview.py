@@ -184,15 +184,16 @@ def _order_windows(header_rows: list[list], event_rows: list[list], as_of: date)
     return windows
 
 
-def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
-    """Report source and order coverage using Sheets reads only."""
+def build_payment_coverage_context(
+    import_rows: list[list],
+    event_rows: list[list],
+    header_rows: list[list],
+    *,
+    as_of: date,
+) -> dict:
+    """Build the shared source and per-order coverage evaluation."""
 
-    as_of = as_of or datetime.now(timezone.utc).date()
-    import_rows = [list(row) for row in db.get("取込データ!A2:L")]
-    event_rows = [list(row) for row in db.get("Amazonイベント!A2:X")]
-    header_rows = [list(row) for row in db.get("Amazon注文ヘッダ!A2:O")]
     evidence = _source_evidence(import_rows, event_rows)
-
     source_coverage = [evaluate_coverage(evidence[source]) for source in SOURCES]
     orders = []
     for window in _order_windows(header_rows, event_rows, as_of):
@@ -218,6 +219,21 @@ def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
             },
             "overall_payment_coverage_status": overall_status(per_source),
         })
+    return {"source_coverage": source_coverage, "orders": orders}
+
+
+def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
+    """Report source and order coverage using Sheets reads only."""
+
+    as_of = as_of or datetime.now(timezone.utc).date()
+    import_rows = [list(row) for row in db.get("取込データ!A2:L")]
+    event_rows = [list(row) for row in db.get("Amazonイベント!A2:X")]
+    header_rows = [list(row) for row in db.get("Amazon注文ヘッダ!A2:O")]
+    context = build_payment_coverage_context(
+        import_rows, event_rows, header_rows, as_of=as_of,
+    )
+    source_coverage = context["source_coverage"]
+    orders = context["orders"]
 
     counts = {status: sum(row["coverage_status"] == status for row in source_coverage)
               for status in ("complete", "incomplete", "unknown")}

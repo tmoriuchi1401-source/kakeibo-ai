@@ -10,9 +10,12 @@ import re
 import unicodedata
 
 from .reconciliation import ImportTransaction, parse_import_rows
+from .payment_coverage_status_preview import (
+    SOURCES,
+    build_payment_coverage_context,
+)
 
 
-_COVERAGE_SOURCES = ("amazon", "au_pay_card", "au_pay", "paypay", "imported_data")
 _EVENT_TYPES = ("order", "cancellation", "shipment", "delivery", "payment", "return", "refund")
 _NO_CHARGE_PATTERNS = (
     "この注文の請求は行われていません",
@@ -157,9 +160,9 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
     """Diagnose cancellation/payment evidence using read-only Sheets and Gmail calls."""
 
     as_of = as_of or date.today()
+    header_rows = [list(raw) for raw in db.get("Amazon注文ヘッダ!A2:O")]
     headers_by_order: defaultdict[str, list[list]] = defaultdict(list)
-    for raw in db.get("Amazon注文ヘッダ!A2:O"):
-        row = list(raw)
+    for row in header_rows:
         if _cell(row, 0):
             headers_by_order[_cell(row, 0)].append(row)
 
@@ -170,13 +173,20 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
             details_by_order[_cell(row, 1)].append(row)
 
     events_by_order: defaultdict[str, list[list]] = defaultdict(list)
-    for raw in db.get("Amazonイベント!A2:X"):
-        row = list(raw)
+    event_rows = [list(raw) for raw in db.get("Amazonイベント!A2:X")]
+    for row in event_rows:
         if _cell(row, 6):
             events_by_order[_cell(row, 6)].append(row)
 
-    transactions = parse_import_rows(db.get("取込データ!A2:L"))
+    import_rows = [list(raw) for raw in db.get("取込データ!A2:L")]
+    transactions = parse_import_rows(import_rows)
     expense_rows = db.get("支出明細!A2:M")
+    coverage_context = build_payment_coverage_context(
+        import_rows, event_rows, header_rows, as_of=as_of,
+    )
+    coverage_by_order = {
+        row["order_id"]: row for row in coverage_context["orders"]
+    }
     rows = []
     for order_id in sorted(events_by_order):
         events = events_by_order[order_id]
@@ -198,8 +208,18 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
             except Exception:
                 assertion_read_error = True
 
-        coverage_by_source = {source: "unknown" for source in _COVERAGE_SOURCES}
-        coverage_status = "unknown"
+        order_coverage = coverage_by_order.get(order_id, {})
+        coverage_by_source = order_coverage.get("source_coverage", {
+            source: {
+                "coverage_status": "unknown",
+                "covers_required_window": None,
+                "completeness_reason": "missing_order_coverage_evaluation",
+            }
+            for source in SOURCES
+        })
+        coverage_status = order_coverage.get(
+            "overall_payment_coverage_status", "unknown",
+        )
         tx_charges, tx_refunds = _candidate_ids(transactions, order_id)
         expense_charges, expense_refunds = _expense_candidate_ids(expense_rows, order_id)
         charge_count = len(tx_charges | expense_charges)
@@ -211,22 +231,21 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
 
         if ambiguous_count:
             state = "ambiguous"
-            reason = "payment_candidate_ambiguous"
         elif refund_count:
             state = "refund_candidate_found"
-            reason = "payment_coverage_unknown"
         elif charge_count:
             state = "charge_candidate_found"
-            reason = "payment_coverage_unknown"
         elif no_charge:
             state = "amazon_declared_not_charged"
-            reason = "payment_coverage_unknown"
         elif coverage_status == "unknown":
             state = "payment_coverage_unknown"
-            reason = "insufficient_payment_data"
         else:
             state = "insufficient_evidence"
-            reason = "insufficient_payment_data"
+        reason = {
+            "incomplete": "payment_coverage_incomplete",
+            "unknown": "payment_coverage_unknown",
+            "complete": "payment_review_required",
+        }[coverage_status]
 
         basis_date = _date(cancellation_date) or _date(order_date)
         elapsed_days = (as_of - basis_date).days if basis_date else None
@@ -241,10 +260,18 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
         diagnostics = {
             "full_order_cancelled": full_order,
             "unique_cancellation_match": len(headers) == 1 and len(cancellations) == 1,
-            "shipment_absent": _absence(timeline, "shipment", coverage_by_source["amazon"]),
-            "delivery_absent": _absence(timeline, "delivery", coverage_by_source["amazon"]),
-            "return_absent": _absence(timeline, "return", coverage_by_source["amazon"]),
-            "refund_absent": _absence(timeline, "refund", coverage_by_source["amazon"]),
+            "shipment_absent": _absence(
+                timeline, "shipment", coverage_by_source["amazon_gmail"]["coverage_status"],
+            ),
+            "delivery_absent": _absence(
+                timeline, "delivery", coverage_by_source["amazon_gmail"]["coverage_status"],
+            ),
+            "return_absent": _absence(
+                timeline, "return", coverage_by_source["amazon_gmail"]["coverage_status"],
+            ),
+            "refund_absent": _absence(
+                timeline, "refund", coverage_by_source["amazon_gmail"]["coverage_status"],
+            ),
             "amazon_no_charge_assertion": no_charge,
             "payment_coverage_complete": coverage_status == "complete",
             "matching_charge_absent": False if charge_count else None,
@@ -254,6 +281,7 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
             "order_id": order_id,
             "order_date": order_date or None,
             "cancellation_date": cancellation_date or None,
+            "required_window": order_coverage.get("required_window"),
             "event_timeline": timeline,
             "amazon_no_charge_assertion": no_charge,
             "amazon_no_charge_assertion_source": "cancellation_email" if no_charge else None,
@@ -275,7 +303,15 @@ def preview_amazon_payment_coverage(db, gmail_service=None, *, as_of: date | Non
     return {
         "sampled_order_count": len(rows),
         "amazon_no_charge_assertion_count": sum(row["amazon_no_charge_assertion"] for row in rows),
-        "payment_coverage_unknown_count": sum(row["payment_coverage_status"] == "unknown" for row in rows),
+        "payment_coverage_incomplete_count": sum(
+            row["payment_coverage_status"] == "incomplete" for row in rows
+        ),
+        "payment_coverage_unknown_count": sum(
+            row["payment_coverage_status"] == "unknown" for row in rows
+        ),
+        "payment_coverage_complete_count": sum(
+            row["payment_coverage_status"] == "complete" for row in rows
+        ),
         "charge_candidate_found_count": counts["charge_candidate_found"],
         "refund_candidate_found_count": counts["refund_candidate_found"],
         "ambiguous_count": counts["ambiguous"],

@@ -4,6 +4,7 @@ from email.message import EmailMessage
 import sys
 
 from app import cli
+import app.amazon_payment_coverage_preview as coverage_preview
 from app.amazon_payment_coverage_preview import preview_amazon_payment_coverage
 
 
@@ -108,28 +109,98 @@ def _preview(*, text="", events=None, transactions=None, expenses=None, as_of=da
     return preview_amazon_payment_coverage(db, Gmail(text), as_of=as_of), db
 
 
-def test_explicit_no_charge_with_unknown_coverage_waits_for_payment():
+def test_explicit_no_charge_with_incomplete_coverage_waits_for_payment():
     result, _ = _preview(text="注文はキャンセルされました。この注文の請求は行われていません。")
     row = result["rows"][0]
 
     assert row["amazon_no_charge_assertion"] is True
     assert row["amazon_no_charge_assertion_source"] == "cancellation_email"
-    assert row["payment_coverage_status"] == "unknown"
-    assert set(row["payment_coverage_by_source"].values()) == {"unknown"}
+    assert row["payment_coverage_status"] == "incomplete"
+    assert row["payment_coverage_by_source"]["amazon_gmail"]["coverage_status"] == "incomplete"
+    assert row["payment_coverage_by_source"]["imported_data"]["coverage_status"] == "unknown"
     assert row["matching_charge_candidate_count"] == 0
     assert row["candidate_state"] == "amazon_declared_not_charged"
-    assert (row["action"], row["reason"]) == ("wait_payment", "payment_coverage_unknown")
+    assert (row["action"], row["reason"]) == ("wait_payment", "payment_coverage_incomplete")
     assert row["close_condition_diagnostics"]["payment_coverage_complete"] is False
     assert result["amazon_no_charge_assertion_count"] == 1
 
 
-def test_no_assertion_with_unknown_coverage_is_insufficient():
+def test_no_assertion_with_incomplete_coverage_waits_for_payment():
     result, _ = _preview(text="注文はキャンセルされました。")
     row = result["rows"][0]
 
     assert row["amazon_no_charge_assertion"] is False
-    assert row["candidate_state"] == "payment_coverage_unknown"
-    assert (row["action"], row["reason"]) == ("wait_payment", "insufficient_payment_data")
+    assert row["candidate_state"] == "insufficient_evidence"
+    assert (row["action"], row["reason"]) == ("wait_payment", "payment_coverage_incomplete")
+
+
+def _coverage_context(status, source_status=None):
+    source_status = source_status or status
+    per_source = {
+        source: {
+            "coverage_status": source_status,
+            "covers_required_window": source_status == "complete",
+            "completeness_reason": f"fixture_{source_status}",
+        }
+        for source in ("amazon_gmail", "au_pay", "au_pay_card", "paypay", "imported_data")
+    }
+    return {
+        "source_coverage": [],
+        "orders": [{
+            "order_id": ORDER_ID,
+            "required_window": {"start": "2026-08-27", "end": "2026-08-29"},
+            "source_coverage": per_source,
+            "overall_payment_coverage_status": status,
+        }],
+    }
+
+
+def test_unknown_overall_uses_unknown_reason(monkeypatch):
+    monkeypatch.setattr(
+        coverage_preview, "build_payment_coverage_context",
+        lambda *args, **kwargs: _coverage_context("unknown"),
+    )
+    result, _ = _preview()
+
+    assert result["rows"][0]["payment_coverage_status"] == "unknown"
+    assert result["rows"][0]["action"] == "wait_payment"
+    assert result["rows"][0]["reason"] == "payment_coverage_unknown"
+
+
+def test_complete_overall_still_requires_review_and_never_closes(monkeypatch):
+    monkeypatch.setattr(
+        coverage_preview, "build_payment_coverage_context",
+        lambda *args, **kwargs: _coverage_context("complete"),
+    )
+    result, _ = _preview(text="この注文の請求は行われていません。")
+    row = result["rows"][0]
+
+    assert row["payment_coverage_status"] == "complete"
+    assert row["action"] == "wait_payment"
+    assert row["reason"] == "payment_review_required"
+    assert "ready_to_close" not in result["action_counts"]
+
+
+def test_source_coverage_is_order_window_evaluation(monkeypatch):
+    context = _coverage_context("incomplete")
+    context["orders"][0]["source_coverage"]["imported_data"] = {
+        "coverage_status": "unknown",
+        "covers_required_window": True,
+        "completeness_reason": "no_import_completeness_record",
+    }
+    monkeypatch.setattr(
+        coverage_preview, "build_payment_coverage_context",
+        lambda *args, **kwargs: context,
+    )
+    result, _ = _preview()
+    row = result["rows"][0]
+
+    assert row["required_window"] == {"start": "2026-08-27", "end": "2026-08-29"}
+    assert row["payment_coverage_by_source"]["imported_data"] == {
+        "coverage_status": "unknown",
+        "covers_required_window": True,
+        "completeness_reason": "no_import_completeness_record",
+    }
 
 
 def test_charge_candidate_is_reported():
