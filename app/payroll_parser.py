@@ -166,6 +166,50 @@ def _mark_ytd_block(
             item.section = "reference"
 
 
+def _nearly_same_bbox(left: PositionedText, right: PositionedText) -> bool:
+    """Compare text boxes using strict, size-relative tolerances."""
+    if left.page != right.page:
+        return False
+    max_width = max(left.width, right.width)
+    max_height = max(left.height, right.height)
+    if max_width <= 0 or max_height <= 0:
+        return False
+    if (abs(left.width - right.width) > max_width * .1
+            or abs(left.height - right.height) > max_height * .1):
+        return False
+
+    overlap_width = max(0.0, min(left.x + left.width, right.x + right.width)
+                        - max(left.x, right.x))
+    overlap_height = max(0.0, min(left.y + left.height, right.y + right.height)
+                         - max(left.y, right.y))
+    intersection = overlap_width * overlap_height
+    union = left.width * left.height + right.width * right.height - intersection
+    iou = intersection / union if union > 0 else 0.0
+    center_x_gap = abs((left.x + left.width / 2) - (right.x + right.width / 2))
+    center_y_gap = abs((left.y + left.height / 2) - (right.y + right.height / 2))
+    close_centers = (
+        center_x_gap <= min(left.width, right.width) * .1
+        and center_y_gap <= min(left.height, right.height) * .1
+    )
+    return iou >= .8 or close_centers
+
+
+def _deduplicate_pdf_labels(entries):
+    """Drop only near-identical PDF labels with the same resolved value source."""
+    deduplicated = []
+    for item, label, number, ambiguous in entries:
+        duplicate = next((existing for existing in deduplicated
+                          if existing[0].page == item.page
+                          and compact(existing[0].raw_item_name) == compact(item.raw_item_name)
+                          and _nearly_same_bbox(existing[1], label)
+                          and existing[2] == number
+                          and not existing[3] and not ambiguous
+                          and existing[0].raw_value == item.raw_value), None)
+        if duplicate is None:
+            deduplicated.append((item, label, number, ambiguous))
+    return deduplicated
+
+
 def _ocr_label_tokens(tokens: tuple[PositionedText, ...]) -> list[PositionedText]:
     """Join adjacent OCR words on one line without inventing distant text."""
     # A token containing digits or table borders is a value/cell fragment, not a
@@ -335,7 +379,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
     ]
     logical_values = {} if ocr else _logical_pdf_value_pairs(tokens)
-    result = []
+    entries = []
     sensitive = ("殿", "社員番号", "株式会社", "銀行", "支店", "本部", "センタ")
     ignored = ("お知らせ", "年月分")
     short_ocr_fragments = {"給与", "出勤", "手当", "保険", "控除", "支給"}
@@ -384,12 +428,16 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             confirmed = False
         raw_value = number.text if confirmed else None
         value = chosen[1][0] if confirmed and len(chosen[1]) == 1 else None
-        result.append(PayrollItem(
+        item = PayrollItem(
             raw_item_name=name, section=section_for(name), value=value, raw_value=raw_value,
             standard_item_candidate=candidate(name), page=label.page, x=label.x, y=label.y,
             confidence=min(label.confidence, number.confidence) if number else label.confidence,
             needs_review=not confirmed,
-        ))
+        )
+        entries.append((item, label, number, ambiguous))
+    if not ocr:
+        entries = _deduplicate_pdf_labels(entries)
+    result = [entry[0] for entry in entries]
     # Stable row/column indexes are derived per page, without template coordinates.
     for page in {item.page for item in result}:
         page_items = [item for item in result if item.page == page]
@@ -399,13 +447,13 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             item.row = min(range(len(ys)), key=lambda i: abs(ys[i] - (item.y or 0)))
             item.column = min(range(len(xs)), key=lambda i: abs(xs[i] - (item.x or 0)))
     _mark_ytd_block(tokens, result)
+    if not ocr:
+        return result
     unique = {}
     for item in result:
         key = (item.page, item.raw_item_name, round(item.x or 0), round(item.y or 0))
         unique[key] = item
     items = list(unique.values())
-    if not ocr:
-        return items
     # OCR may emit the same short label twice at nearly identical coordinates.
     deduplicated = []
     for item in items:

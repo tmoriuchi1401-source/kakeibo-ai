@@ -343,3 +343,62 @@ def test_positioned_income_tax_outside_ytd_column_remains_deduction():
 
     assert (outside.standard_item_candidate, outside.section) == (
         "income_tax", "deduction")
+
+
+def test_pdf_near_identical_label_bbox_with_same_value_is_deduplicated():
+    items = parse_positioned_items((
+        token("支給合計", 10, 10), token("支給合計", 10.5, 10.2),
+        token("300,000", 100, 10),
+    ))
+
+    assert [(item.raw_item_name, item.value) for item in items] == [
+        ("支給合計", 300000),
+    ]
+
+
+def test_pdf_same_label_at_distant_bboxes_is_preserved():
+    items = parse_positioned_items((
+        token("支給合計", 10, 10), token("300,000", 100, 10),
+        token("支給合計", 250, 10), token("400,000", 340, 10),
+    ))
+
+    assert [(item.raw_item_name, item.value) for item in items] == [
+        ("支給合計", 300000), ("支給合計", 400000),
+    ]
+
+
+def test_pdf_near_identical_labels_with_different_value_regions_are_preserved():
+    labels = (
+        PositionedText("支給合計", 1, 10, 10, 50, 10, 100),
+        PositionedText("支給合計", 1, 10, 9, 50, 10, 100),
+    )
+    items = parse_positioned_items((
+        *labels,
+        PositionedText("300,000", 1, 100, 16, 50, 10, 100),
+        PositionedText("400,000", 1, 100, 3, 50, 10, 100),
+    ))
+
+    assert sorted(item.value for item in items) == [300000, 400000]
+
+
+def test_duplicate_ytd_heading_tokens_are_not_items_and_keep_ytd_detection():
+    items = parse_positioned_items((
+        token("本年累計", 300, 10), token("本年累計", 300.5, 10.2),
+        token("課税支給額", 300, 30), token("2,061,730", 390, 30),
+        token("社会保険料", 300, 50), token("234,765", 390, 50),
+        token("所得税", 300, 70), token("69,310", 390, 70),
+    ))
+
+    assert all(item.raw_item_name != "本年累計" for item in items)
+    assert {item.standard_item_candidate for item in items} == {
+        "ytd_taxable_amount", "ytd_social_insurance", "ytd_income_tax",
+    }
+
+
+def test_pdf_distant_other_tax_cells_are_both_preserved():
+    items = parse_positioned_items((
+        token("他課税", 633.69, 425.44), token("10,000", 710, 425.44),
+        token("他課税", 411.16, 553.67), token("20,000", 490, 553.67),
+    ))
+
+    assert sorted(item.value for item in items) == [10000, 20000]
