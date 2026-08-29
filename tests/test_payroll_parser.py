@@ -291,3 +291,55 @@ def test_existing_standard_items_still_resolve_after_ocr_joining():
     assert [item.standard_item_candidate for item in items] == [
         "basic_pay", "health_insurance", "income_tax",
     ]
+
+
+def test_positioned_ytd_block_is_classified_without_changing_current_income_tax():
+    items = parse_positioned_items((
+        token("所得税", 20, 40), token("16,840", 100, 40),
+        token("本年累計", 300, 10),
+        token("課税支給額", 300, 30), token("2,061,730", 390, 30),
+        token("社会保険料", 302, 50), token("234,765", 390, 50),
+        token("所得税", 301, 70), token("69,310", 390, 70),
+    ))
+
+    current_tax = next(item for item in items if item.value == 16840)
+    assert (current_tax.standard_item_candidate, current_tax.section) == (
+        "income_tax", "deduction")
+
+    expected = {
+        2061730: ("ytd_taxable_amount", "reference"),
+        234765: ("ytd_social_insurance", "reference"),
+        69310: ("ytd_income_tax", "reference"),
+    }
+    assert {
+        item.value: (item.standard_item_candidate, item.section)
+        for item in items if item.value in expected
+    } == expected
+
+
+def test_positioned_ytd_heading_without_complete_group_does_not_reclassify():
+    items = parse_positioned_items((
+        token("本年累計", 300, 10),
+        token("課税支給額", 300, 30), token("2,061,730", 390, 30),
+        token("所得税", 301, 50), token("69,310", 390, 50),
+    ))
+    by_value = {item.value: item for item in items}
+
+    assert by_value[2061730].standard_item_candidate is None
+    assert by_value[2061730].section == "unknown"
+    assert (by_value[69310].standard_item_candidate, by_value[69310].section) == (
+        "income_tax", "deduction")
+
+
+def test_positioned_income_tax_outside_ytd_column_remains_deduction():
+    items = parse_positioned_items((
+        token("本年累計", 300, 10),
+        token("課税支給額", 300, 30), token("2,061,730", 390, 30),
+        token("社会保険料", 300, 50), token("234,765", 390, 50),
+        token("所得税", 300, 70), token("69,310", 390, 70),
+        token("所得税", 20, 70), token("16,840", 100, 70),
+    ))
+    outside = next(item for item in items if item.value == 16840)
+
+    assert (outside.standard_item_candidate, outside.section) == (
+        "income_tax", "deduction")

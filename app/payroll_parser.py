@@ -33,6 +33,12 @@ LOGICAL_ROW_MAX_Y_GAP = 15
 LOGICAL_ROW_MAX_X_GAP = 25
 LOGICAL_ROW_MIN_X_MARGIN = 8
 
+YTD_ITEM_CANDIDATES = {
+    "課税支給額": "ytd_taxable_amount",
+    "社会保険料": "ytd_social_insurance",
+    "所得税": "ytd_income_tax",
+}
+
 
 def compact(value: str) -> str:
     return re.sub(r"[\s　]+", "", value).replace("，", ",")
@@ -104,9 +110,60 @@ def _is_explicit_attendance_quantity(value: str) -> bool:
 def _is_non_item_heading(name: str) -> bool:
     normalized = compact(name).strip("()（）:：<>＜＞")
     return (
-        normalized in {"給与明細書", "給与支給明細書", "課税処理", "年次有給休暇"}
+        normalized in {"給与明細書", "給与支給明細書", "課税処理", "年次有給休暇", "本年累計"}
         or normalized.startswith("支給日")
     )
+
+
+def _mark_ytd_block(
+    tokens: tuple[PositionedText, ...],
+    items: list[PayrollItem],
+) -> None:
+    """Mark only a complete, compact three-row block below an exact YTD heading."""
+    headings = [token for token in tokens if compact(token.text) == "本年累計"]
+    required_names = set(YTD_ITEM_CANDIDATES)
+    for heading in headings:
+        page_label_tokens = [
+            token for token in tokens
+            if token.page == heading.page and compact(token.text) in required_names
+        ]
+        row_scale = max(
+            [heading.height, *(token.height for token in page_label_tokens)],
+        )
+        column_scale = max(
+            [heading.width, *(token.width for token in page_label_tokens)],
+        )
+        nearby = [
+            item for item in items
+            if item.page == heading.page
+            and compact(item.raw_item_name) in required_names
+            and item.x is not None and item.y is not None
+            and heading.y <= item.y
+            and item.y - (heading.y + heading.height) <= row_scale * 8
+            and heading.x - column_scale <= item.x <= heading.x + column_scale
+        ]
+        grouped = {
+            name: [item for item in nearby if compact(item.raw_item_name) == name]
+            for name in required_names
+        }
+        # Missing or duplicate labels make the block boundary ambiguous.
+        if any(len(matches) != 1 for matches in grouped.values()):
+            continue
+        block = [grouped[name][0] for name in YTD_ITEM_CANDIDATES]
+        if any(item.needs_review or item.value is None for item in block):
+            continue
+        xs = [item.x or 0 for item in block]
+        ys = [item.y or 0 for item in block]
+        ordered_rows = ys == sorted(ys) and len(set(ys)) == len(ys)
+        same_column = max(xs) - min(xs) <= column_scale * .5
+        compact_rows = max(
+            right - left for left, right in zip(sorted(ys), sorted(ys)[1:])
+        ) <= row_scale * 3
+        if not (ordered_rows and same_column and compact_rows):
+            continue
+        for item in block:
+            item.standard_item_candidate = YTD_ITEM_CANDIDATES[compact(item.raw_item_name)]
+            item.section = "reference"
 
 
 def _ocr_label_tokens(tokens: tuple[PositionedText, ...]) -> list[PositionedText]:
@@ -341,6 +398,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         for item in page_items:
             item.row = min(range(len(ys)), key=lambda i: abs(ys[i] - (item.y or 0)))
             item.column = min(range(len(xs)), key=lambda i: abs(xs[i] - (item.x or 0)))
+    _mark_ytd_block(tokens, result)
     unique = {}
     for item in result:
         key = (item.page, item.raw_item_name, round(item.x or 0), round(item.y or 0))
