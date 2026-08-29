@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from app import cli
+from app.paypay_evidence_bundle import EvidenceVerificationResult
 from app.payment_coverage_manifest import (
     CoverageManifest,
     classify_evidence,
@@ -41,6 +42,17 @@ def _card(tmp_path, name="auPAY_Card_202608.csv", amount="1200"):
     return path
 
 
+def _captured(start="2026-08-01", end="2026-08-31"):
+    return EvidenceVerificationResult(
+        accepted=True, reason="captured_not_provider_verified",
+        trust_tier="captured", evidence_id="a" * 64,
+        requested_start=start, requested_end=end,
+        evidence_id_valid=True, csv_hash_valid=True,
+        status_image_hash_valid=True, signature_valid=True,
+        candidate_complete=True, completeness_proven=False,
+    )
+
+
 def test_no_evidence_is_unknown():
     result = preview_payment_coverage_manifests()
     assert result["unknown_count"] == 4
@@ -56,9 +68,10 @@ def test_period_without_full_export_proof_is_unknown(tmp_path):
 
 
 def test_outside_required_window_is_incomplete(tmp_path):
-    manifest = csv_manifest(_paypay(tmp_path), "paypay", export_scope_proven=True)
+    path = _paypay(tmp_path)
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
     assert manifest_for_required_window(
-        manifest, date(2026, 8, 1), date(2026, 8, 2),
+        manifest, date(2026, 7, 31), date(2026, 8, 2),
         coverage_basis="transaction_date",
     ) == "incomplete"
 
@@ -83,28 +96,90 @@ def test_same_period_with_different_hash_is_conflict(tmp_path):
 def test_parse_error_cannot_be_complete(tmp_path):
     path = tmp_path / "bad.csv"
     path.write_text("not,a,paypay,file\n", encoding="utf-8")
-    manifest = csv_manifest(path, "paypay", export_scope_proven=True)
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
     assert manifest.parse_error
     assert manifest.completion_status == "unknown"
     assert manifest.completeness_proven is False
 
 
-def test_explicit_complete_evidence_fixture(tmp_path):
-    manifest = csv_manifest(_paypay(tmp_path), "paypay", export_scope_proven=True)
-    assert manifest.completion_status == "complete"
-    assert manifest.completeness_proven is True
+def test_captured_evidence_never_completes_manifest(tmp_path):
+    path = _paypay(tmp_path)
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
+    assert manifest.completion_status == "unknown"
+    assert manifest.completeness_proven is False
+    assert manifest.candidate_complete is True
+    assert manifest.coverage_start == "2026-08-01"
+    assert manifest.coverage_end == "2026-08-31"
 
 
-def test_only_full_window_is_usable_for_future_complete(tmp_path):
-    manifest = csv_manifest(_paypay(tmp_path), "paypay", export_scope_proven=True)
+def test_captured_full_window_is_not_usable_for_complete(tmp_path):
+    path = _paypay(tmp_path)
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
     assert manifest_for_required_window(
         manifest, date(2026, 8, 1), date(2026, 8, 1),
         coverage_basis="transaction_date",
-    ) == "complete"
+    ) == "unknown"
     assert manifest_for_required_window(
-        manifest, date(2026, 8, 1), date(2026, 8, 2),
+        manifest, date(2026, 8, 1), date(2026, 9, 1),
         coverage_basis="transaction_date",
     ) == "incomplete"
+
+
+def test_transaction_rows_do_not_shrink_captured_export_scope(tmp_path):
+    path = _paypay(tmp_path)
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
+    assert (manifest.coverage_start, manifest.coverage_end) == (
+        "2026-08-01", "2026-08-31",
+    )
+    assert manifest.row_count == 1
+
+
+def test_zero_transaction_export_can_be_candidate_with_captured_evidence(tmp_path):
+    path = tmp_path / "Transactions_20260801-20260831.csv"
+    path.write_text(PAYPAY_HEADER, encoding="utf-8-sig")
+    manifest = csv_manifest(path, "paypay", paypay_evidence_verification=_captured())
+    assert manifest.row_count == 0
+    assert manifest.completion_status == "unknown"
+    assert manifest.candidate_complete is True
+
+
+def test_rejected_evidence_does_not_supply_scope(tmp_path):
+    path = _paypay(tmp_path)
+    rejected = EvidenceVerificationResult(False, "signature_invalid")
+    manifest = csv_manifest(
+        path, "paypay", paypay_evidence_verification=rejected,
+    )
+    assert manifest.completion_status == "unknown"
+    assert manifest.completeness_reason == "signature_invalid"
+    assert manifest.coverage_start == manifest.coverage_end == "2026-08-01"
+
+
+def test_observed_row_outside_claimed_scope_is_rejected(tmp_path):
+    path = _paypay(tmp_path)
+    manifest = csv_manifest(
+        path, "paypay",
+        paypay_evidence_verification=_captured("2026-08-02", "2026-08-31"),
+    )
+    assert manifest.completion_status == "unknown"
+    assert manifest.completeness_reason == "observed_transaction_outside_export_scope"
+
+
+def test_same_captured_scope_reexport_duplicate_and_conflict(tmp_path):
+    first = _paypay(tmp_path, "first.csv", "TX-1")
+    same = tmp_path / "same.csv"
+    same.write_bytes(first.read_bytes())
+    second = _paypay(tmp_path, "second.csv", "TX-2")
+    manifests, duplicates, conflicts = classify_evidence([
+        csv_manifest(first, "paypay", paypay_evidence_verification=_captured()),
+        csv_manifest(same, "paypay", paypay_evidence_verification=_captured()),
+    ])
+    assert (duplicates, conflicts) == (1, 0)
+    manifests, duplicates, conflicts = classify_evidence([
+        csv_manifest(first, "paypay", paypay_evidence_verification=_captured()),
+        csv_manifest(second, "paypay", paypay_evidence_verification=_captured()),
+    ])
+    assert (duplicates, conflicts) == (0, 1)
+    assert all(item.completion_status == "unknown" for item in manifests)
 
 
 def test_paypay_and_card_coverage_basis_are_not_interchangeable(tmp_path):

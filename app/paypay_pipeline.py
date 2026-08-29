@@ -107,6 +107,18 @@ def parse_paypay_csv(path: str | Path) -> list[dict[str, str | int]]:
     return payments
 
 
+def inspect_paypay_csv(path: str | Path) -> dict[str, object]:
+    """Inspect every exported history row without applying import filtering."""
+    rows = _read_paypay_rows(path)
+    dates = [_parse_date(row["取引日"]) for row in rows]
+    return {
+        "row_count": len(rows),
+        "observed_start": min(dates) if dates else None,
+        "observed_end": max(dates) if dates else None,
+        "transaction_kinds": sorted({row["取引内容"] for row in rows}),
+    }
+
+
 class PayPayPipeline:
     def __init__(self, db: SheetsDB | None = None):
         self.db = db

@@ -9,7 +9,13 @@ from typing import Literal, TypeAlias
 from uuid import UUID, uuid5
 
 from .aupay_card_pipeline import parse_aupay_card_csv
-from .paypay_pipeline import parse_paypay_csv
+from .paypay_evidence_bundle import (
+    EvidenceVerificationResult,
+    SignatureVerifier,
+    load_evidence_bundle,
+    verify_evidence_bundle,
+)
+from .paypay_pipeline import inspect_paypay_csv
 
 
 CompletionStatus: TypeAlias = Literal["complete", "incomplete", "unknown"]
@@ -18,8 +24,6 @@ PeriodType: TypeAlias = Literal["calendar_month", "explicit_range", "file_define
 
 _MANIFEST_NAMESPACE = UUID("46996176-9ad0-4adc-a1b8-3c5bfd01a2b6")
 _SOURCES = ("paypay", "au_pay_card", "amazon_gmail", "au_pay_gmail")
-
-
 @dataclass(frozen=True)
 class CoverageManifest:
     source: str
@@ -77,7 +81,7 @@ def _filename_period(path: Path) -> str | None:
 
 
 def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = None,
-                 export_scope_proven: bool = False,
+                 paypay_evidence_verification: EvidenceVerificationResult | None = None,
                  coverage_basis: CoverageBasis | None = None,
                  period_type: PeriodType = "file_defined_range",
                  imported_at: str | None = None) -> CoverageManifest:
@@ -88,12 +92,17 @@ def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = Non
     content_hash = _file_hash(path)
     try:
         if source == "paypay":
-            rows = parse_paypay_csv(path)
+            inspection = inspect_paypay_csv(path)
+            rows = []
+            observed_start = inspection["observed_start"]
+            observed_end = inspection["observed_end"]
+            row_count = int(inspection["row_count"])
         elif source == "au_pay_card":
             rows = parse_aupay_card_csv(str(path))
+            observed_start, observed_end = _range(rows)
+            row_count = len(rows)
         else:
             raise ValueError(f"unsupported CSV source: {source}")
-        observed_start, observed_end = _range(rows)
     except (OSError, UnicodeError, ValueError) as exc:
         return CoverageManifest(
             source=source, coverage_basis=basis, evidence_type="csv_file",
@@ -108,18 +117,34 @@ def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = Non
     filename_period = _filename_period(path)
     if source == "au_pay_card" and basis == "billing_cycle":
         start = end = None
-    candidate = bool(rows and start and end)
-    proven = candidate and export_scope_proven
+    verification = paypay_evidence_verification if source == "paypay" else None
+    scope = None
+    if verification and verification.accepted and verification.candidate_complete:
+        scope = (verification.requested_start, verification.requested_end)
+    scope_conflict = bool(
+        scope and observed_start and observed_end
+        and (observed_start < scope[0] or observed_end > scope[1])
+    )
+    if scope and not scope_conflict:
+        start, end = scope
+    candidate = bool(start and end) or bool(scope)
+    proven = False  # Provider verification and complete activation are not implemented.
+    if scope_conflict:
+        reason = "observed_transaction_outside_export_scope"
+    elif verification:
+        reason = verification.reason
+    else:
+        reason = "export_scope_not_proven"
     return CoverageManifest(
         source=source, coverage_start=start, coverage_end=end,
         coverage_basis=basis, period_type=period_type,
-        completion_status="complete" if proven else "unknown",
-        evidence_type="source_export" if export_scope_proven else "csv_file",
-        evidence_id=evidence_id or content_hash, evidence_filename=path.name,
+        completion_status="unknown",
+        evidence_type=(verification.trust_tier if verification else "csv_file"),
+        evidence_id=(verification.evidence_id if verification and verification.evidence_id
+                     else evidence_id or content_hash), evidence_filename=path.name,
         source_period_label=filename_period or _period_label(start, end), imported_at=imported_at,
-        row_count=len(rows), content_hash=content_hash,
-        completeness_reason=("explicit_full_export_scope_and_parse_success"
-                             if proven else "export_scope_not_proven"),
+        row_count=row_count, content_hash=content_hash,
+        completeness_reason=reason,
         completeness_proven=proven, candidate_complete=candidate,
     )
 
@@ -182,9 +207,36 @@ def classify_evidence(manifests: list[CoverageManifest]) -> tuple[list[CoverageM
 
 def preview_payment_coverage_manifests(
     *, paypay_csvs: list[str] | None = None,
+    paypay_export_evidence_files: list[str] | None = None,
+    paypay_status_image_files: list[str] | None = None,
     au_pay_card_csvs: list[str] | None = None,
+    signature_verifier: SignatureVerifier | None = None,
 ) -> dict:
-    manifests = [csv_manifest(path, "paypay") for path in (paypay_csvs or [])]
+    paypay_paths = paypay_csvs or []
+    evidence_paths = paypay_export_evidence_files or []
+    image_paths = paypay_status_image_files or []
+    if evidence_paths and (
+        len(evidence_paths) != len(paypay_paths) or len(image_paths) != len(paypay_paths)
+    ):
+        raise ValueError("PayPay CSV、export evidence、status imageは同じ件数で指定してください")
+    verifications: list[EvidenceVerificationResult | None] = []
+    if evidence_paths:
+        for csv_path, evidence_path, image_path in zip(
+            paypay_paths, evidence_paths, image_paths,
+        ):
+            try:
+                bundle = load_evidence_bundle(evidence_path)
+                result = verify_evidence_bundle(
+                    bundle, csv_path=csv_path, status_image_path=image_path,
+                    signature_verifier=signature_verifier,
+                )
+            except (TypeError, ValueError) as exc:
+                result = EvidenceVerificationResult(False, str(exc))
+            verifications.append(result)
+    else:
+        verifications = [None] * len(paypay_paths)
+    manifests = [csv_manifest(path, "paypay", paypay_evidence_verification=verification)
+                 for path, verification in zip(paypay_paths, verifications)]
     manifests += [csv_manifest(path, "au_pay_card") for path in (au_pay_card_csvs or [])]
     present = {item.source for item in manifests}
     manifests += [CoverageManifest(source=source,
@@ -204,6 +256,9 @@ def preview_payment_coverage_manifests(
         "unknown_count": counts["unknown"],
         "duplicate_evidence_count": duplicates,
         "conflicting_evidence_count": conflicts,
+        "paypay_evidence_verifications": [
+            asdict(item) for item in verifications if item is not None
+        ],
         "manifests": [asdict(item) for item in manifests],
         "future_coverage_bridge": (
             "completeness_proven=true AND same coverage_basis AND required_window "
