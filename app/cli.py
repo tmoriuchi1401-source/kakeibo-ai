@@ -57,6 +57,7 @@ from .amazon_cancellation_reconciliation_preview import (
 from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
 from .payment_coverage_status_preview import preview_payment_coverage_status
 from .payment_coverage_manifest import preview_payment_coverage_manifests
+from .coverage_confirmation_sheets_preview import preview_coverage_confirmation_sheet
 from .paypay_shortcut_inbox import preview_shortcut_inbox
 from .paypay_drive_inbox import PayPayDriveInboxPreview
 from .amazon_cancellation_item_count_fill_preview import (
@@ -145,6 +146,7 @@ def main():
     sub.add_parser("amazon-cancellation-reconciliation-preview")
     sub.add_parser("amazon-payment-coverage-preview")
     sub.add_parser("payment-coverage-status-preview")
+    sub.add_parser("coverage-confirmation-sheet-preview")
     pcm=sub.add_parser("payment-coverage-manifest-preview")
     pcm.add_argument("--paypay-csv",action="append",default=[])
     pcm.add_argument("--paypay-export-evidence",action="append",default=[])
@@ -366,6 +368,13 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(preview_payment_coverage_status(db))
+    elif args.cmd=="coverage-confirmation-sheet-preview":
+        import json
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            preview_coverage_confirmation_sheet(db), ensure_ascii=False,
+        ))
     elif args.cmd=="payment-coverage-manifest-preview":
         print(preview_payment_coverage_manifests(
             paypay_csvs=args.paypay_csv,

@@ -1,18 +1,27 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from app.coverage_confirmation import (
+    COVERAGE_CONFIRMATION_HEADERS,
+    COVERAGE_REASON_OPERATIONAL_ONLY,
+    COVERAGE_STATUS_USER_CONFIRMED,
     ConfirmationIdentity,
     ConfirmationValidationError,
     CoverageConfirmationRecord,
     content_sha256,
+    coverage_confirmation_id,
+    coverage_confirmation_to_sheet_row,
     evaluate_confirmation_records,
+    lookup_coverage_confirmation_rows,
+    preview_coverage_confirmation_append,
 )
 
 
 HASH = "a" * 64
 UTC_NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+CREATED_AT = datetime(2026, 8, 30, 12, 5, tzinfo=timezone.utc)
 
 
 def record(**overrides):
@@ -132,3 +141,199 @@ def test_invalid_or_mismatched_record_is_not_usable():
 def test_content_hash_depends_only_on_bytes():
     assert content_sha256(b"same csv") == content_sha256(bytearray(b"same csv"))
     assert content_sha256(b"same csv") != content_sha256(b"same Csv")
+
+
+def test_sheet_schema_has_fixed_minimal_column_order():
+    assert COVERAGE_CONFIRMATION_HEADERS == [
+        "Confirmation ID",
+        "Schema Version",
+        "Provider",
+        "Content SHA-256",
+        "Confirmed Start",
+        "Confirmed End",
+        "Range Source",
+        "Coverage Status",
+        "Coverage Reason",
+        "Confirmed At",
+        "Confirmation Version",
+        "Source Filename",
+        "Drive File ID",
+        "Created At",
+    ]
+
+
+def test_phase_one_record_converts_to_fixed_sheet_row():
+    stored = coverage_confirmation_to_sheet_row(record(), created_at=CREATED_AT)
+    row = stored.to_sheet_row()
+    mapped = dict(zip(COVERAGE_CONFIRMATION_HEADERS, row, strict=True))
+
+    assert len(row) == len(COVERAGE_CONFIRMATION_HEADERS)
+    assert mapped["Confirmation ID"] == coverage_confirmation_id(record().identity)
+    assert mapped["Provider"] == "paypay"
+    assert mapped["Content SHA-256"] == HASH
+    assert mapped["Confirmed Start"] == "2025-08-20"
+    assert mapped["Confirmed End"] == "2026-08-20"
+    assert mapped["Coverage Status"] == COVERAGE_STATUS_USER_CONFIRMED
+    assert mapped["Coverage Reason"] == COVERAGE_REASON_OPERATIONAL_ONLY
+    assert mapped["Confirmed At"] == "2026-08-30T12:00:00+00:00"
+    assert mapped["Created At"] == "2026-08-30T12:05:00+00:00"
+
+
+def test_optional_none_is_saved_as_empty_cell():
+    row = coverage_confirmation_to_sheet_row(
+        record(drive_file_id=None), created_at=CREATED_AT,
+    ).to_sheet_row()
+    mapped = dict(zip(COVERAGE_CONFIRMATION_HEADERS, row, strict=True))
+
+    assert mapped["Drive File ID"] == ""
+    assert all(value is not None for value in row)
+
+
+def test_confirmation_id_is_stable_and_uses_phase_one_identity_only():
+    expected_digest = hashlib.sha256(f"paypay\0{HASH}".encode()).hexdigest()[:24]
+    first = record(source_filename="first.csv", drive_file_id="drive-a")
+    second = record(source_filename="second.csv", drive_file_id="drive-b")
+
+    assert coverage_confirmation_id(first.identity) == f"CC-{expected_digest}"
+    assert coverage_confirmation_id(first.identity) == coverage_confirmation_id(
+        second.identity,
+    )
+
+
+def test_created_at_must_follow_phase_one_utc_timestamp_rule():
+    with pytest.raises(ConfirmationValidationError, match="created_at_must_be_utc"):
+        coverage_confirmation_to_sheet_row(
+            record(),
+            created_at=datetime(
+                2026, 8, 30, 21, 5, tzinfo=timezone(timedelta(hours=9)),
+            ),
+        )
+
+
+def test_pure_lookup_distinguishes_not_found_and_exact_duplicate():
+    item = record()
+    stored = coverage_confirmation_to_sheet_row(
+        item, created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    missing = lookup_coverage_confirmation_rows(item, [])
+    duplicate = lookup_coverage_confirmation_rows(item, [stored])
+
+    assert (missing.status, missing.diagnostic) == (
+        "not_found", "confirmation_not_found",
+    )
+    assert duplicate.status == "exact_duplicate"
+    assert duplicate.matching_row_number == 2
+
+
+def test_exact_duplicate_ignores_non_identity_confirmation_and_creation_times():
+    item = record()
+    existing = coverage_confirmation_to_sheet_row(
+        item, created_at=CREATED_AT,
+    ).to_sheet_row()
+    later = datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)
+    repeated = record(confirmed_at=later)
+
+    preview = preview_coverage_confirmation_append(
+        repeated, [existing], created_at=later,
+    )
+
+    assert preview.action == "skip"
+    assert preview.append_planned is False
+    assert preview.duplicate_skip_planned is True
+    assert preview.append_row is None
+    assert preview.lookup_status == "exact_duplicate"
+
+
+def test_empty_sheet_rows_are_ignored_consistently():
+    item = record()
+    existing = coverage_confirmation_to_sheet_row(
+        item, created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    lookup = lookup_coverage_confirmation_rows(
+        item, [[], [None] * len(COVERAGE_CONFIRMATION_HEADERS), existing],
+    )
+
+    assert lookup.status == "exact_duplicate"
+    assert lookup.matching_row_number == 4
+
+
+def test_not_found_produces_append_preview_with_target_row():
+    item = record()
+
+    preview = preview_coverage_confirmation_append(
+        item, [], created_at=CREATED_AT,
+    )
+
+    assert preview.action == "append"
+    assert preview.append_planned is True
+    assert preview.duplicate_skip_planned is False
+    assert preview.append_row == coverage_confirmation_to_sheet_row(
+        item, created_at=CREATED_AT,
+    ).to_sheet_row()
+    assert preview.diagnostic == "append_new_confirmation"
+
+
+def test_similar_dates_and_filename_are_not_an_approximate_duplicate():
+    existing = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    candidate = record(content_sha256="b" * 64)
+
+    preview = preview_coverage_confirmation_append(
+        candidate, [existing], created_at=CREATED_AT,
+    )
+
+    assert preview.action == "append"
+    assert preview.lookup_status == "not_found"
+
+
+def test_same_identity_with_different_range_is_conflict_not_duplicate_or_append():
+    existing = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    candidate = record(confirmed_start="2025-08-21")
+
+    preview = preview_coverage_confirmation_append(
+        candidate, [existing], created_at=CREATED_AT,
+    )
+
+    assert preview.action == "skip"
+    assert preview.append_planned is False
+    assert preview.duplicate_skip_planned is False
+    assert preview.lookup_status == "identity_conflict"
+    assert preview.diagnostic == "identity_range_conflict"
+
+
+def test_malformed_existing_row_blocks_append_preview_safely():
+    preview = preview_coverage_confirmation_append(
+        record(), [["unexpected"]], created_at=CREATED_AT,
+    )
+
+    assert preview.action == "skip"
+    assert preview.append_planned is False
+    assert preview.duplicate_skip_planned is False
+    assert preview.lookup_status == "invalid"
+    assert preview.diagnostic == "invalid_existing_row"
+
+
+def test_append_preview_only_iterates_rows_and_cannot_call_a_write_method():
+    class WriteGuardRows(list):
+        def append(self, value):
+            raise AssertionError(f"write attempted: {value}")
+
+        def update(self, value):
+            raise AssertionError(f"write attempted: {value}")
+
+        def clear(self):
+            raise AssertionError("write attempted")
+
+    rows = WriteGuardRows()
+
+    preview = preview_coverage_confirmation_append(
+        record(), rows, created_at=CREATED_AT,
+    )
+
+    assert preview.append_planned is True
+    assert rows == []
