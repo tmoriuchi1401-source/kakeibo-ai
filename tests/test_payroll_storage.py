@@ -148,6 +148,26 @@ def test_collective_savings_initial_master_and_exact_alias():
     assert resolve_alias("一斉預金", INITIAL_ALIASES) == "collective_savings"
 
 
+def test_night_work_pay_initial_master_and_exact_alias():
+    standard = next(item for item in INITIAL_STANDARD_ITEMS
+                    if item.standard_item_id == "night_work_pay")
+    assert standard.standard_name == "深夜勤務"
+    assert standard.section == "earning"
+    assert standard.value_type == "money"
+    assert standard.active
+    assert resolve_alias("深夜勤務", INITIAL_ALIASES) == "night_work_pay"
+
+    source = preview().model_copy(update={"items": [PayrollItem(
+        raw_item_name="深夜勤務", section="earning", raw_value="2,461",
+        value=2461,
+    )]})
+    item = phase_a_to_storage_candidate(source, aliases=INITIAL_ALIASES).items[0]
+    assert item.standard_item_id == "night_work_pay"
+    assert item.section == "earning"
+    assert item.value == 2461
+    assert not item.needs_review
+
+
 def test_reference_initial_masters_and_aliases():
     expected = {
         "taxable_earnings": "課税対象支給額",
