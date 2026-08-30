@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from .payroll_sheets import PayrollSheetsSnapshot
+from .payroll_sheets import PayrollSheetsSnapshot, SHEET_TITLES
 from .payroll_storage import (
     INITIAL_ALIASES,
     INITIAL_STANDARD_ITEMS,
@@ -145,3 +146,167 @@ def build_master_sync_plan(snapshot: PayrollSheetsSnapshot) -> PayrollMasterSync
 
 def master_sync_preview(plan: PayrollMasterSyncPlan) -> dict:
     return plan.model_dump(mode="json")
+
+
+class MasterSyncReader(Protocol):
+    def snapshot(self) -> PayrollSheetsSnapshot: ...
+
+
+class MasterSyncWriter(Protocol):
+    def append_standard_items(self, items: list[PayrollStandardItemRecord]) -> None: ...
+    def append_aliases(self, aliases: list[PayrollItemAliasRecord]) -> None: ...
+
+
+class PayrollMasterSyncWriteRepository:
+    """Append-only writer restricted to rows selected from the code masters."""
+
+    def __init__(self, spreadsheet_id: str, *, service=None):
+        from .google_clients import sheets_service
+        self.spreadsheet_id = spreadsheet_id
+        self.service = service or sheets_service()
+
+    def _append(self, sheet_key: str, records: list[BaseModel]) -> None:
+        if not records:
+            return
+        from .payroll_storage import PAYROLL_SCHEMAS
+        allowed = ({item.standard_item_id for item in INITIAL_STANDARD_ITEMS}
+                   if sheet_key == "payroll_standard_items"
+                   else {alias.alias_id for alias in INITIAL_ALIASES})
+        id_field = "standard_item_id" if sheet_key == "payroll_standard_items" else "alias_id"
+        if sheet_key not in {"payroll_standard_items", "payroll_item_aliases"} or any(
+            getattr(record, id_field) not in allowed for record in records
+        ):
+            raise ValueError("Payroll code master以外の行はappendできません")
+        columns = PAYROLL_SCHEMAS[sheet_key]
+        rows = [[record.model_dump(mode="json").get(column) for column in columns]
+                for record in records]
+        self.service.spreadsheets().values().append(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"'{SHEET_TITLES[sheet_key]}'!A:A",
+            valueInputOption="RAW", insertDataOption="INSERT_ROWS",
+            body={"values": rows},
+        ).execute()
+
+    def append_standard_items(self, items: list[PayrollStandardItemRecord]) -> None:
+        self._append("payroll_standard_items", items)
+
+    def append_aliases(self, aliases: list[PayrollItemAliasRecord]) -> None:
+        self._append("payroll_item_aliases", aliases)
+
+
+def _candidate_keys(plan: PayrollMasterSyncPlan) -> tuple[set[str], set[str]]:
+    return (
+        {item.standard_item_id for item in plan.would_add_standard_items},
+        {alias.alias_id for alias in plan.would_add_aliases},
+    )
+
+
+def _already_ids(plan: PayrollMasterSyncPlan, kind: str) -> set[str]:
+    return {entry["id"] for entry in plan.already_present
+            if entry.get("kind") == kind}
+
+
+def apply_master_sync(
+    preview_plan: PayrollMasterSyncPlan,
+    reader: MasterSyncReader,
+    writer: MasterSyncWriter,
+    *,
+    confirmed: bool,
+) -> dict:
+    """Re-read, validate and append only preview-approved code master rows."""
+    if not confirmed:
+        raise RuntimeError("--apply が必要です")
+
+    result = {
+        "applied": False,
+        "added_standard_items": [], "added_aliases": [],
+        "already_present": [], "skipped": [], "conflicts": [], "errors": [],
+        "applied_at": datetime.now(timezone.utc).isoformat(),
+    }
+    latest = build_master_sync_plan(reader.snapshot())
+    initial_standard_ids, initial_alias_ids = _candidate_keys(preview_plan)
+    latest_standard_ids, latest_alias_ids = _candidate_keys(latest)
+    unexpected = ((latest_standard_ids - initial_standard_ids)
+                  or (latest_alias_ids - initial_alias_ids))
+    if (not latest.schema_ok or latest.conflict_unsafe or unexpected):
+        result["conflicts"] = [issue.model_dump(mode="json")
+                               for issue in latest.conflict_unsafe]
+        if unexpected:
+            result["conflicts"].append({
+                "kind": "schema", "code_id": "payroll_master",
+                "reason": "unexpected_state_change_since_preview",
+            })
+        result["skipped"] = [
+            {"kind": "standard_item", "id": item.standard_item_id}
+            for item in latest.would_add_standard_items
+        ] + [{"kind": "alias", "id": alias.alias_id}
+             for alias in latest.would_add_aliases]
+        return result
+
+    result["already_present"] = latest.already_present
+    try:
+        if latest.would_add_standard_items:
+            writer.append_standard_items(latest.would_add_standard_items)
+    except Exception as exc:
+        verification = build_master_sync_plan(reader.snapshot())
+        remaining, _ = _candidate_keys(verification)
+        result["added_standard_items"] = sorted(latest_standard_ids - remaining)
+        result["errors"].append({
+            "stage": "standard_items", "error": str(exc),
+            "outcome": "read_back_reconciled",
+            "unconfirmed_ids": sorted(latest_standard_ids & remaining),
+        })
+        result["skipped"] = [{"kind": "alias", "id": alias.alias_id}
+                             for alias in latest.would_add_aliases]
+        return result
+
+    # Re-read after the first append. Aliases are never written unless every
+    # target standard is now uniquely present and active in Sheets.
+    after_standards = build_master_sync_plan(reader.snapshot())
+    result["added_standard_items"] = sorted(
+        latest_standard_ids & _already_ids(after_standards, "standard_item")
+    )
+    if (not after_standards.schema_ok or after_standards.conflict_unsafe
+            or any(item.standard_item_id in latest_standard_ids
+                   for item in after_standards.would_add_standard_items)):
+        result["errors"].append({
+            "stage": "standard_items", "error": "post_write_verification_failed",
+        })
+        result["conflicts"] = [issue.model_dump(mode="json")
+                               for issue in after_standards.conflict_unsafe]
+        result["skipped"] = [{"kind": "alias", "id": alias.alias_id}
+                             for alias in latest.would_add_aliases]
+        return result
+    safe_aliases = [alias for alias in after_standards.would_add_aliases
+                    if alias.alias_id in latest_alias_ids]
+    try:
+        if safe_aliases:
+            writer.append_aliases(safe_aliases)
+    except Exception as exc:
+        verification = build_master_sync_plan(reader.snapshot())
+        _, remaining = _candidate_keys(verification)
+        attempted = {alias.alias_id for alias in safe_aliases}
+        result["added_aliases"] = sorted(attempted - remaining)
+        result["errors"].append({
+            "stage": "aliases", "error": str(exc),
+            "outcome": "read_back_reconciled",
+            "unconfirmed_ids": sorted(attempted & remaining),
+        })
+        return result
+
+    final = build_master_sync_plan(reader.snapshot())
+    attempted = {alias.alias_id for alias in safe_aliases}
+    result["added_aliases"] = sorted(
+        attempted & _already_ids(final, "alias")
+    )
+    remaining = {alias.alias_id for alias in final.would_add_aliases}
+    failed = sorted(attempted & remaining)
+    if not final.schema_ok or final.conflict_unsafe or failed:
+        result["errors"].append({
+            "stage": "aliases", "error": "post_write_verification_failed",
+        })
+        result["conflicts"] = [issue.model_dump(mode="json")
+                               for issue in final.conflict_unsafe]
+        return result
+    result["applied"] = True
+    return result

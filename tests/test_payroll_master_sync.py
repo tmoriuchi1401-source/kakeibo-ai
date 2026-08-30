@@ -1,4 +1,11 @@
-from app.payroll_master_sync import build_master_sync_plan, master_sync_preview
+import sys
+
+import app.cli as cli
+from app.payroll_master_sync import (
+    apply_master_sync,
+    build_master_sync_plan,
+    master_sync_preview,
+)
 from app.payroll_sheets import PayrollSheetsSnapshot
 from app.payroll_storage import (
     INITIAL_ALIASES,
@@ -88,3 +95,135 @@ def test_schema_mismatch_blocks_every_candidate():
     assert plan.would_add_standard_items == []
     assert plan.would_add_aliases == []
     assert plan.conflict_unsafe[0].reason == "sheet_schema_not_safe"
+
+
+class FakeRepository:
+    def __init__(self, current=None, *, fail_stage=None):
+        self.current = current or snapshot()
+        self.fail_stage = fail_stage
+        self.writes = []
+
+    def snapshot(self):
+        return self.current.model_copy(deep=True)
+
+    def append_standard_items(self, items):
+        self.writes.append(("standards", [item.standard_item_id for item in items]))
+        if self.fail_stage == "standards":
+            raise RuntimeError("standard write failed")
+        self.current.standard_items.extend(item.model_copy(deep=True) for item in items)
+
+    def append_aliases(self, aliases):
+        self.writes.append(("aliases", [alias.alias_id for alias in aliases]))
+        if self.fail_stage == "aliases":
+            raise RuntimeError("alias write failed")
+        self.current.aliases.extend(alias.model_copy(deep=True) for alias in aliases)
+
+
+def test_safe_apply_writes_standards_before_aliases_and_is_idempotent():
+    repository = FakeRepository()
+    first = apply_master_sync(build_master_sync_plan(repository.snapshot()), repository,
+                              repository, confirmed=True)
+    assert first["applied"] is True
+    assert len(first["added_standard_items"]) == 24
+    assert len(first["added_aliases"]) == 20
+    assert [stage for stage, _ in repository.writes] == ["standards", "aliases"]
+
+    repository.writes.clear()
+    second = apply_master_sync(build_master_sync_plan(repository.snapshot()), repository,
+                               repository, confirmed=True)
+    assert second["applied"] is True
+    assert second["added_standard_items"] == []
+    assert second["added_aliases"] == []
+    assert len(second["already_present"]) == 44
+    assert repository.writes == []
+
+
+def test_apply_requires_confirmation_and_does_not_write():
+    repository = FakeRepository()
+    try:
+        apply_master_sync(build_master_sync_plan(repository.snapshot()), repository,
+                          repository, confirmed=False)
+    except RuntimeError as exc:
+        assert "--apply" in str(exc)
+    else:
+        raise AssertionError("confirmation was not required")
+    assert repository.writes == []
+
+
+def test_conflict_or_schema_mismatch_stops_all_writes():
+    inactive = next(item for item in INITIAL_STANDARD_ITEMS
+                    if item.standard_item_id == "union_dues").model_copy(
+                        update={"active": False})
+    for current in (snapshot([inactive]), PayrollSheetsSnapshot(schemas=[
+        __import__("app.payroll_sheets", fromlist=["PayrollSheetSchemaResult"])
+        .PayrollSheetSchemaResult(
+            sheet_key="payroll_standard_items", sheet_title="給与標準項目",
+            schema_ok=False, sheet_missing=True,
+        )
+    ])):
+        repository = FakeRepository(current)
+        result = apply_master_sync(build_master_sync_plan(current), repository,
+                                   repository, confirmed=True)
+        assert result["applied"] is False
+        assert repository.writes == []
+        assert result["conflicts"]
+
+
+def test_preview_candidate_expansion_during_reread_stops_all_writes():
+    repository = FakeRepository()
+    old_plan = build_master_sync_plan(snapshot(INITIAL_STANDARD_ITEMS, INITIAL_ALIASES))
+    result = apply_master_sync(old_plan, repository, repository, confirmed=True)
+    assert result["applied"] is False
+    assert repository.writes == []
+    assert result["conflicts"][-1]["reason"] == "unexpected_state_change_since_preview"
+
+
+def test_unsafe_alias_target_is_never_written():
+    conflicting = PayrollStandardItemRecord(
+        standard_item_id="union_dues", standard_name="別名", section="earning",
+        value_type="money",
+    )
+    repository = FakeRepository(snapshot([conflicting]))
+    result = apply_master_sync(build_master_sync_plan(repository.snapshot()), repository,
+                               repository, confirmed=True)
+    assert result["applied"] is False
+    assert repository.writes == []
+
+
+def test_write_failures_stop_later_stages_and_allow_safe_retry():
+    repository = FakeRepository(fail_stage="standards")
+    plan = build_master_sync_plan(repository.snapshot())
+    result = apply_master_sync(plan, repository, repository, confirmed=True)
+    assert result["errors"][0]["stage"] == "standard_items"
+    assert [stage for stage, _ in repository.writes] == ["standards"]
+    assert repository.current.aliases == []
+
+    repository.fail_stage = "aliases"
+    repository.writes.clear()
+    result = apply_master_sync(plan, repository, repository, confirmed=True)
+    assert result["errors"][0]["stage"] == "aliases"
+    assert [stage for stage, _ in repository.writes] == ["standards", "aliases"]
+    assert len(repository.current.standard_items) == 24
+    assert repository.current.aliases == []
+
+    repository.fail_stage = None
+    retry_plan = build_master_sync_plan(repository.snapshot())
+    result = apply_master_sync(retry_plan, repository, repository, confirmed=True)
+    assert result["added_standard_items"] == []
+    assert len(result["added_aliases"]) == 20
+
+
+def test_cli_without_apply_uses_read_only_preview(monkeypatch, capsys):
+    repository = FakeRepository()
+    monkeypatch.setattr(cli, "Settings", lambda: type("S", (), {
+        "spreadsheet_id": "sheet-id", "validate": lambda self, **kwargs: None,
+    })())
+    monkeypatch.setattr(cli, "PayrollSheetsReadRepository", lambda _id: repository)
+    monkeypatch.setattr(
+        cli, "PayrollMasterSyncWriteRepository",
+        lambda _id: (_ for _ in ()).throw(AssertionError("writer constructed")),
+    )
+    monkeypatch.setattr(sys, "argv", ["prog", "payroll-master-sync"])
+    cli.main()
+    assert '"applied": false' in capsys.readouterr().out
+    assert repository.writes == []
