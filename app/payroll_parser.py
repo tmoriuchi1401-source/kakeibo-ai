@@ -46,6 +46,10 @@ SUMMARY_LABELS = {
     "支給合計", "総支給額", "支給額計", "控除合計", "控除額計", "差引支給額",
 }
 
+OCR_OWNERSHIP_FRAGMENTS = {
+    "給与", "出勤", "手当", "保険", "控除", "支給", "合計", "対象", "累計",
+}
+
 
 def compact(value: str) -> str:
     return re.sub(r"[\s　]+", "", value).replace("，", ",")
@@ -53,6 +57,16 @@ def compact(value: str) -> str:
 
 def amounts(value: str) -> list[int]:
     return [int(x.replace(",", "")) for x in re.findall(r"(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d)", value)]
+
+
+def _ocr_dot_amounts(token: PositionedText) -> list[int]:
+    """Treat only a complete, confident OCR thousands-group token as money."""
+    if token.confidence < 60:
+        return []
+    value = token.text.strip()
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", value) is None:
+        return []
+    return [int(value.replace(".", ""))]
 
 
 def candidate(name: str) -> str | None:
@@ -121,6 +135,66 @@ def _is_non_item_heading(name: str) -> bool:
         normalized in {"給与明細書", "給与支給明細書", "課税処理", "年次有給休暇", "本年累計"}
         or normalized.startswith("支給日")
     )
+
+
+def _is_plausible_item_label(name: str) -> bool:
+    return bool(
+        candidate(name)
+        or section_for(name) == "attendance"
+        or any(term in name for term in ITEM_TERMS)
+    )
+
+
+def _same_ocr_line(left: PositionedText, right: PositionedText) -> bool:
+    return (
+        left.page == right.page
+        and abs(left.y - right.y) <= max(left.height, right.height) * .65
+    )
+
+
+def _crosses_ocr_vertical_rule(
+    label: PositionedText,
+    number: PositionedText,
+    tokens: tuple[PositionedText, ...],
+) -> bool:
+    left = label.x + label.width
+    top = min(label.y, number.y)
+    bottom = max(label.y + label.height, number.y + number.height)
+    return any(
+        token.page == label.page
+        and re.fullmatch(r"[|｜]+", token.text.strip()) is not None
+        and left <= token.x <= number.x
+        and token.y <= bottom
+        and token.y + token.height >= top
+        for token in tokens
+    )
+
+
+def _owns_ocr_horizontal_value(
+    label: PositionedText,
+    number: PositionedText,
+    labels: list[PositionedText],
+    tokens: tuple[PositionedText, ...],
+) -> bool:
+    """Assign an OCR value to at most one unambiguous label in its table cell."""
+    owners = []
+    for other in labels:
+        if (compact(other.text) in OCR_OWNERSHIP_FRAGMENTS
+                or not _is_plausible_item_label(other.text)
+                or not _same_ocr_line(other, number)
+                or number.x < other.x + other.width - 3
+                or _crosses_ocr_vertical_rule(other, number, tokens)):
+            continue
+        owners.append((number.x - (other.x + other.width), other))
+    owners.sort(key=lambda entry: entry[0])
+    if not owners or owners[0][1] is not label:
+        return False
+    if len(owners) > 1:
+        margin = owners[1][0] - owners[0][0]
+        minimum_margin = max(8, max(label.height, owners[1][1].height) * .4)
+        if margin < minimum_margin:
+            return False
+    return True
 
 
 def _mark_ytd_block(
@@ -443,6 +517,10 @@ def _logical_pdf_value_pairs(
 def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = False) -> list[PayrollItem]:
     """Pair labels only with geometrically adjacent values; ambiguity becomes review."""
     money = [(token, amounts(token.text)) for token in tokens if amounts(token.text)]
+    ocr_dot_money = [
+        (token, values) for token in tokens
+        if ocr and (values := _ocr_dot_amounts(token))
+    ]
     labels = _ocr_label_tokens(tokens) if ocr else [
         token for token in tokens
         if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
@@ -461,6 +539,11 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             continue
         attendance_type = _attendance_value_type(name) if section_for(name) == "attendance" else None
         same_page = [(number, vals) for number, vals in money if number.page == label.page]
+        if attendance_type is None:
+            same_page.extend(
+                (number, vals) for number, vals in ocr_dot_money
+                if number.page == label.page
+            )
         if attendance_type is not None:
             same_page.extend(
                 (number, [value]) for number in tokens
@@ -470,7 +553,10 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         horizontal = [(number, vals, number.x - (label.x + label.width))
                       for number, vals in same_page
                       if abs(number.y - label.y) <= max(label.height, number.height) * .65
-                      and number.x >= label.x + label.width - 3]
+                      and number.x >= label.x + label.width - 3
+                      and (not ocr or _owns_ocr_horizontal_value(
+                          label, number, labels, tokens,
+                      ))]
         below = [(number, vals, number.y - (label.y + label.height))
                  for number, vals in same_page
                  if 0 <= number.y - (label.y + label.height) <= label.height * 2.2
@@ -486,7 +572,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                       or (sorted(above, key=lambda item: item[2]) if ocr else [])
                       or logical_candidate)
         chosen = candidates[0] if candidates else None
-        plausible_name = candidate(name) or section_for(name) == "attendance" or any(term in name for term in ITEM_TERMS)
+        plausible_name = _is_plausible_item_label(name)
         if not plausible_name: continue
         ambiguous = len(candidates) > 1 and abs(candidates[1][2] - candidates[0][2]) < max(label.width, 12)
         low_confidence = ocr and (label.confidence < 60 or

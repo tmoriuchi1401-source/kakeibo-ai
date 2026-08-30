@@ -370,6 +370,109 @@ def test_existing_standard_items_still_resolve_after_ocr_joining():
     ]
 
 
+def test_ocr_dot_group_money_uses_near_value_without_crossing_ytd_column():
+    items = parse_positioned_items((
+        token("非課税合計", 10, 10),
+        token("38.430", 100, 10, 83),
+        PositionedText("|", 1, 180, 0, 3, 30, 90),
+        token("総支給額累計", 200, 10),
+        token("7,087,172", 300, 10, 70),
+    ), ocr=True)
+    by_name = {item.raw_item_name: item for item in items}
+    current = by_name["非課税合計"]
+    assert current.raw_value == "38.430"
+    assert current.value == 38430
+    assert not current.needs_review
+    assert by_name["総支給額累計"].raw_value == "7,087,172"
+
+
+def test_ocr_dot_group_money_requires_strict_token_and_confidence():
+    for raw_value, confidence in (
+        ("38.430", 59),
+        ("2011.300", 95),
+        ("409.257|", 95),
+    ):
+        item = parse_positioned_items((
+            token("住民税", 10, 10), token(raw_value, 100, 10, confidence),
+        ), ocr=True)[0]
+        assert item.raw_value is None
+        assert item.value is None
+        assert item.needs_review
+
+
+def test_ocr_dot_group_money_is_not_used_for_attendance():
+    item = parse_positioned_items((
+        token("残業時間", 10, 10), token("7.500", 100, 10),
+    ), ocr=True)[0]
+    assert item.section == "attendance"
+    assert item.raw_value is None
+    assert item.value is None
+    assert item.needs_review
+
+
+def test_ocr_horizontal_value_does_not_cross_vertical_rule():
+    item = parse_positioned_items((
+        token("独自手当", 10, 10),
+        PositionedText("｜", 1, 80, 0, 3, 30, 90),
+        token("12,000", 120, 10),
+    ), ocr=True)[0]
+    assert item.raw_value is None
+    assert item.value is None
+    assert item.needs_review
+
+
+def test_ocr_horizontal_value_belongs_to_nearest_left_payroll_label_only():
+    items = parse_positioned_items((
+        token("独自手当", 10, 10), token("所得税", 100, 10),
+        token("12,000", 180, 10),
+    ), ocr=True)
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["独自手当"].value is None
+    assert by_name["独自手当"].needs_review
+    assert by_name["所得税"].value == 12000
+    assert not by_name["所得税"].needs_review
+
+
+def test_ocr_fragmented_generic_suffix_does_not_steal_value_ownership():
+    items = parse_positioned_items((
+        token("厚生年金", 10, 10), token("保険", 65, 9),
+        token("137.250", 150, 10),
+        token("課税", 10, 40), token("合計", 65, 39),
+        token("4,930,861", 150, 40),
+    ), ocr=True)
+    by_name = {item.raw_item_name: item for item in items}
+    assert by_name["厚生年金"].value == 137250
+    assert by_name["課税"].value == 4930861
+
+
+def test_ocr_horizontal_ambiguous_ownership_is_not_confirmed():
+    items = parse_positioned_items((
+        token("独自手当", 10, 10), token("所得税", 15, 10),
+        token("12,000", 110, 10),
+    ), ocr=True)
+    assert all(item.value is None and item.needs_review for item in items)
+
+
+def test_dot_group_money_does_not_change_pdf_text_path():
+    dot = parse_positioned_items((
+        token("住民税", 10, 10), token("51.500", 100, 10),
+    ))[0]
+    comma = parse_positioned_items((
+        token("住民税", 10, 10), token("51,500", 100, 10),
+    ))[0]
+    assert dot.value is None and dot.needs_review
+    assert comma.value == 51500 and not comma.needs_review
+
+
+def test_existing_comma_money_still_pairs_in_ocr():
+    item = parse_positioned_items((
+        token("住民税", 10, 10), token("51,500", 100, 10),
+    ), ocr=True)[0]
+    assert item.raw_value == "51,500"
+    assert item.value == 51500
+    assert not item.needs_review
+
+
 def test_positioned_ytd_block_is_classified_without_changing_current_income_tax():
     items = parse_positioned_items((
         token("所得税", 20, 40), token("16,840", 100, 40),
