@@ -12,7 +12,9 @@ from app.medical_receipt_input import (
     PartialOCRFailure,
     TesseractUnavailable,
     _analyze_ocr,
+    _extract_ocr_payment_amount,
     _ocr_image,
+    _unique_fuzzy_label,
     pdf_text_is_sufficient,
     screen_medical_receipt,
 )
@@ -426,3 +428,133 @@ def test_synthetic_local_tesseract_smoke():
 )
 def test_pdf_text_quality_uses_structure_and_meaningful_characters(text, expected):
     assert pdf_text_is_sufficient(text) is expected
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected_label"),
+    [
+        (("請", "求", "額"), "請求額"),
+        (("お", "支払", "額"), "お支払額"),
+        (("自己", "負担", "額"), "自己負担額"),
+        (("一部", "負担", "金"), "一部負担金"),
+    ],
+)
+def test_adjacent_tokens_join_to_exact_payment_label(parts, expected_label):
+    labels = tuple(token(part, 10 + index * 25, 10, width=20) for index, part in enumerate(parts))
+    result = _extract_ocr_payment_amount(labels + (token("3,000円", 120, 10),))
+    assert (result.amount, result.label, result.match_type) == (
+        3000, expected_label, "exact_joined")
+
+
+def test_large_token_gap_is_not_joined():
+    tokens = (token("請", 10, 10, width=20), token("求", 100, 10, width=20),
+              token("額", 130, 10, width=20), token("3,000円", 180, 10))
+    assert _extract_ocr_payment_amount(tokens).amount is None
+
+
+def test_tokens_on_different_lines_are_not_joined():
+    tokens = (token("請", 10, 10, line=1), token("求", 35, 30, line=2),
+              token("額", 60, 30, line=2), token("3,000円", 120, 30, line=2))
+    assert _extract_ocr_payment_amount(tokens).amount is None
+
+
+def test_tokens_on_different_pages_are_not_joined():
+    tokens = (token("請", 10, 10, page=1), token("求", 35, 10, page=2),
+              token("額", 60, 10, page=2), token("3,000円", 120, 10, page=2))
+    assert _extract_ocr_payment_amount(tokens).amount is None
+
+
+def test_edit_distance_one_high_confidence_label_uses_unique_right_amount():
+    result = _extract_ocr_payment_amount((
+        token("請汞額", 10, 10, confidence=96), token("3,000円", 100, 10),
+    ))
+    assert (result.amount, result.label, result.match_type) == (
+        3000, "請求額", "edit_distance_1")
+
+
+def test_edit_distance_two_is_not_corrected():
+    result = _extract_ocr_payment_amount((token("請汞金", 10, 10),
+                                          token("3,000円", 100, 10)))
+    assert result.amount is None
+
+
+def test_fuzzy_label_mapping_must_be_unique():
+    assert _unique_fuzzy_label("請額", ("請求額", "請収額")) is None
+
+
+def test_low_confidence_fuzzy_label_is_not_corrected():
+    result = _extract_ocr_payment_amount((
+        token("請汞額", 10, 10, confidence=69), token("3,000円", 100, 10),
+    ))
+    assert result.amount is None
+
+
+def test_fuzzy_label_with_multiple_amounts_is_ambiguous():
+    result = _extract_ocr_payment_amount((
+        token("請汞額", 10, 10, confidence=96), token("3,000円", 100, 10),
+        token("4,000円", 180, 10),
+    ))
+    assert result.amount is None
+
+
+def test_fuzzy_label_with_exclusion_conflict_is_not_corrected():
+    result = _extract_ocr_payment_amount((
+        token("請汞額", 10, 10, confidence=96), token("総医療費", 75, 10),
+        token("3,000円", 160, 10),
+    ))
+    assert result.amount is None
+
+
+def test_weak_total_is_not_fuzzy_corrected():
+    result = _extract_ocr_payment_amount((token("合討", 10, 10),
+                                          token("3,000円", 100, 10)))
+    assert result.amount is None
+
+
+def test_multiple_fuzzy_labels_with_different_amounts_are_rejected():
+    result = _extract_ocr_payment_amount((
+        token("請汞額", 10, 10, confidence=96, line=1), token("3,000円", 100, 10, line=1),
+        token("請汞額", 10, 40, confidence=96, line=2), token("4,000円", 100, 40, line=2),
+    ))
+    assert result.amount is None
+
+
+def test_exact_joined_label_has_priority_over_fuzzy_candidate():
+    result = _extract_ocr_payment_amount((
+        token("請", 10, 10, width=20, line=1), token("求", 35, 10, width=20, line=1),
+        token("額", 60, 10, width=20, line=1), token("3,000円", 120, 10, line=1),
+        token("請汞額", 10, 200, confidence=96, line=2), token("4,000円", 100, 200, line=2),
+    ))
+    assert (result.amount, result.match_type) == (3000, "exact_joined")
+
+
+def test_exact_joined_and_fuzzy_conflict_is_rejected_when_ambiguity_remains():
+    result = _extract_ocr_payment_amount((
+        token("請", 10, 10, width=20, line=1), token("求", 35, 10, width=20, line=1),
+        token("額", 60, 10, width=20, line=1), token("3,000円", 120, 10, line=1),
+        token("請汞額", 10, 40, confidence=96, line=2), token("4,000円", 100, 40, line=2),
+    ))
+    assert result.amount is None
+
+
+def test_existing_single_exact_label_behavior_is_preserved():
+    result = _extract_ocr_payment_amount((token("領収金額", 10, 10),
+                                          token("3,000円", 100, 10)))
+    assert (result.amount, result.label, result.match_type) == (
+        3000, "領収金額", "exact_single")
+
+
+def test_b6_synthetic_failure_pattern_is_recovered_without_raw_text_in_diagnostics():
+    tokens = (
+        token("領収書", 10, 10, line=1), token("患者", 10, 30, line=2),
+        token("診療", 80, 30, line=2), token("病院", 140, 30, line=2),
+        token("請汞額", 10, 50, confidence=96, line=3), token("3,000円", 100, 50, line=3),
+    )
+    result = _analyze_ocr(
+        OCRExtraction("領収書\n患者 診療 病院\n請汞額 3,000円", tokens), "pdf_ocr",
+    )
+    assert result.analysis.amount == 3000
+    assert result.analysis.amount_label == "請求額"
+    diagnostics = " ".join(result.analysis.evidence) + " " + result.analysis.reason
+    assert "label_match:edit_distance_1" in diagnostics
+    assert "請汞額" not in diagnostics
