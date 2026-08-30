@@ -22,13 +22,13 @@ def snapshot(standards=(), aliases=()):
 def test_empty_sheet_previews_all_code_masters_in_dependency_order():
     plan = build_master_sync_plan(snapshot())
     output = master_sync_preview(plan)
-    assert output["code_standard_item_count"] == 24
+    assert output["code_standard_item_count"] == 25
     assert output["schema_ok"] is True
     assert output["sheets_active_standard_item_count"] == 0
-    assert output["code_exact_alias_count"] == 20
+    assert output["code_exact_alias_count"] == 21
     assert output["sheets_active_alias_count"] == 0
-    assert len(output["would_add_standard_items"]) == 24
-    assert len(output["would_add_aliases"]) == 20
+    assert len(output["would_add_standard_items"]) == 25
+    assert len(output["would_add_aliases"]) == 21
     assert output["already_present"] == []
     assert output["conflict_unsafe"] == []
 
@@ -37,7 +37,7 @@ def test_identical_active_rows_are_already_present_not_duplicates():
     plan = build_master_sync_plan(snapshot(INITIAL_STANDARD_ITEMS, INITIAL_ALIASES))
     assert plan.would_add_standard_items == []
     assert plan.would_add_aliases == []
-    assert len(plan.already_present) == 44
+    assert len(plan.already_present) == 46
     assert plan.conflict_unsafe == []
 
 
@@ -97,6 +97,21 @@ def test_schema_mismatch_blocks_every_candidate():
     assert plan.conflict_unsafe[0].reason == "sheet_schema_not_safe"
 
 
+def test_collective_savings_is_the_only_candidate_against_previous_code_master():
+    previous_standards = [item for item in INITIAL_STANDARD_ITEMS
+                          if item.standard_item_id != "collective_savings"]
+    previous_aliases = [alias for alias in INITIAL_ALIASES
+                        if alias.alias_id != "alias-collective-savings"]
+    plan = build_master_sync_plan(snapshot(previous_standards, previous_aliases))
+    assert [item.standard_item_id for item in plan.would_add_standard_items] == [
+        "collective_savings",
+    ]
+    assert [alias.alias_id for alias in plan.would_add_aliases] == [
+        "alias-collective-savings",
+    ]
+    assert plan.conflict_unsafe == []
+
+
 class FakeRepository:
     def __init__(self, current=None, *, fail_stage=None):
         self.current = current or snapshot()
@@ -124,8 +139,8 @@ def test_safe_apply_writes_standards_before_aliases_and_is_idempotent():
     first = apply_master_sync(build_master_sync_plan(repository.snapshot()), repository,
                               repository, confirmed=True)
     assert first["applied"] is True
-    assert len(first["added_standard_items"]) == 24
-    assert len(first["added_aliases"]) == 20
+    assert len(first["added_standard_items"]) == 25
+    assert len(first["added_aliases"]) == 21
     assert [stage for stage, _ in repository.writes] == ["standards", "aliases"]
 
     repository.writes.clear()
@@ -134,7 +149,7 @@ def test_safe_apply_writes_standards_before_aliases_and_is_idempotent():
     assert second["applied"] is True
     assert second["added_standard_items"] == []
     assert second["added_aliases"] == []
-    assert len(second["already_present"]) == 44
+    assert len(second["already_present"]) == 46
     assert repository.writes == []
 
 
@@ -203,14 +218,14 @@ def test_write_failures_stop_later_stages_and_allow_safe_retry():
     result = apply_master_sync(plan, repository, repository, confirmed=True)
     assert result["errors"][0]["stage"] == "aliases"
     assert [stage for stage, _ in repository.writes] == ["standards", "aliases"]
-    assert len(repository.current.standard_items) == 24
+    assert len(repository.current.standard_items) == 25
     assert repository.current.aliases == []
 
     repository.fail_stage = None
     retry_plan = build_master_sync_plan(repository.snapshot())
     result = apply_master_sync(retry_plan, repository, repository, confirmed=True)
     assert result["added_standard_items"] == []
-    assert len(result["added_aliases"]) == 20
+    assert len(result["added_aliases"]) == 21
 
 
 def test_cli_without_apply_uses_read_only_preview(monkeypatch, capsys):

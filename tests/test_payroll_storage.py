@@ -126,7 +126,6 @@ def test_union_dues_initial_master_and_confirmed_value():
     assert standard.value_type == "money"
     assert standard.active
     assert resolve_alias("組合費", INITIAL_ALIASES) == "union_dues"
-    assert resolve_alias("一斉預金", INITIAL_ALIASES) is None
 
     source = preview().model_copy(update={"items": [PayrollItem(
         raw_item_name="組合費", section="deductions", raw_value="7,100",
@@ -137,6 +136,16 @@ def test_union_dues_initial_master_and_confirmed_value():
     assert item.section == "deduction"
     assert item.value == 7100
     assert not item.needs_review
+
+
+def test_collective_savings_initial_master_and_exact_alias():
+    standard = next(item for item in INITIAL_STANDARD_ITEMS
+                    if item.standard_item_id == "collective_savings")
+    assert standard.standard_name == "一斉預金"
+    assert standard.section == "deduction"
+    assert standard.value_type == "money"
+    assert standard.active
+    assert resolve_alias("一斉預金", INITIAL_ALIASES) == "collective_savings"
 
 
 def test_reference_initial_masters_and_aliases():
