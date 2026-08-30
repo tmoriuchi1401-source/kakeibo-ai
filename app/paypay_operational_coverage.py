@@ -131,6 +131,16 @@ def preview_operational_evidence(
 def classify_operational_evidence(
     evidences: list[PayPayOperationalEvidence],
 ) -> tuple[list[PayPayOperationalEvidence], int, int]:
+    hash_groups: dict[str, list[int]] = {}
+    for index, item in enumerate(evidences):
+        if item.csv_sha256:
+            hash_groups.setdefault(item.csv_sha256, []).append(index)
+    duplicate_indexes = {
+        index
+        for indexes in hash_groups.values()
+        for index in indexes[1:]
+    }
+    duplicates = sum(len(indexes) - 1 for indexes in hash_groups.values())
     groups: dict[tuple[str, str], list[int]] = {}
     for index, item in enumerate(evidences):
         if (
@@ -138,18 +148,14 @@ def classify_operational_evidence(
             and item.requested_start and item.requested_end
         ):
             groups.setdefault((item.requested_start, item.requested_end), []).append(index)
-    duplicate_indexes: set[int] = set()
     conflict_indexes: set[int] = set()
-    duplicates = conflicts = 0
+    conflicts = 0
     for indexes in groups.values():
         hashes = [evidences[index].csv_sha256 for index in indexes
                   if evidences[index].csv_sha256]
         if len(hashes) < 2:
             continue
-        if len(set(hashes)) == 1:
-            duplicates += len(hashes) - 1
-            duplicate_indexes.update(indexes[1:])
-        else:
+        if len(set(hashes)) != 1:
             conflicts += len(set(hashes)) - 1
             conflict_indexes.update(indexes)
     result = []
@@ -159,7 +165,7 @@ def classify_operational_evidence(
                 item, operational_coverage="rejected",
                 reason="conflicting_operational_evidence",
             )
-        elif index in duplicate_indexes and item.operational_coverage == "usable":
+        elif index in duplicate_indexes:
             item = replace(item, reason="duplicate_operational_evidence")
         result.append(item)
     return result, duplicates, conflicts

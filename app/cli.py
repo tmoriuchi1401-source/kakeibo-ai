@@ -58,6 +58,7 @@ from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
 from .payment_coverage_status_preview import preview_payment_coverage_status
 from .payment_coverage_manifest import preview_payment_coverage_manifests
 from .paypay_shortcut_inbox import preview_shortcut_inbox
+from .paypay_drive_inbox import PayPayDriveInboxPreview
 from .amazon_cancellation_item_count_fill_preview import (
     apply_amazon_cancellation_item_count_fills,
     preview_amazon_cancellation_item_count_fills,
@@ -152,6 +153,7 @@ def main():
     pcm.add_argument("--au-pay-card-csv",action="append",default=[])
     ppsi=sub.add_parser("paypay-shortcut-inbox-preview")
     ppsi.add_argument("inbox")
+    sub.add_parser("paypay-drive-inbox-preview")
     acosa=sub.add_parser("amazon-cancellation-order-status-apply")
     acosa.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-cancellation-item-count-fill-preview")
@@ -374,6 +376,9 @@ def main():
         ))
     elif args.cmd=="paypay-shortcut-inbox-preview":
         print(preview_shortcut_inbox(args.inbox))
+    elif args.cmd=="paypay-drive-inbox-preview":
+        s=Settings(); s.validate(need_paypay_drive=True)
+        print(PayPayDriveInboxPreview(s.paypay_drive_folder_id).preview())
     elif args.cmd=="amazon-cancellation-order-status-apply":
         if not args.apply:
             p.error("amazon-cancellation-order-status-apply requires --apply")
