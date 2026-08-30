@@ -472,6 +472,66 @@ def test_edit_distance_one_high_confidence_label_uses_unique_right_amount():
         3000, "請求額", "edit_distance_1")
 
 
+def test_two_character_missing_label_uses_unique_positioned_amount():
+    result = _extract_ocr_payment_amount((
+        token("請額", 10, 10, confidence=96), token("3,000円", 100, 10),
+    ))
+    assert (result.amount, result.label, result.match_type) == (
+        3000, "請求額", "edit_distance_1")
+
+
+def test_two_character_missing_label_mapping_must_be_unique():
+    assert _unique_fuzzy_label("請額", ("請求額", "請収額")) is None
+
+
+def test_low_confidence_two_character_label_is_not_corrected():
+    result = _extract_ocr_payment_amount((
+        token("請額", 10, 10, confidence=69), token("3,000円", 100, 10),
+    ))
+    assert result.amount is None
+
+
+def test_two_character_label_rejects_low_confidence_amount():
+    result = _extract_ocr_payment_amount((
+        token("請額", 10, 10, confidence=96),
+        token("3,000円", 100, 10, confidence=69),
+    ))
+    assert result.amount is None
+
+
+def test_two_character_label_rejects_multiple_positioned_amounts():
+    result = _extract_ocr_payment_amount((
+        token("請額", 10, 10, confidence=96), token("3,000円", 100, 10),
+        token("4,000円", 180, 10),
+    ))
+    assert result.amount is None
+
+
+def test_two_character_label_rejects_missing_positioned_amount():
+    result = _extract_ocr_payment_amount((token("請額", 10, 10, confidence=96),))
+    assert result.amount is None
+
+
+def test_two_character_label_rejects_exclusion_conflict():
+    result = _extract_ocr_payment_amount((
+        token("請額", 10, 10, confidence=96), token("総医療費", 75, 10),
+        token("3,000円", 160, 10),
+    ))
+    assert result.amount is None
+
+
+def test_two_character_candidate_does_not_match_longer_known_label():
+    assert _unique_fuzzy_label("領額", ("領収金額",)) is None
+
+
+def test_two_character_candidate_does_not_enable_weak_label_fuzzy_matching():
+    assert _unique_fuzzy_label("合討", ("合計",)) is None
+
+
+def test_one_character_candidate_is_not_corrected():
+    assert _unique_fuzzy_label("額", ("請求額",)) is None
+
+
 def test_edit_distance_two_is_not_corrected():
     result = _extract_ocr_payment_amount((token("請汞金", 10, 10),
                                           token("3,000円", 100, 10)))
@@ -544,6 +604,36 @@ def test_existing_single_exact_label_behavior_is_preserved():
         3000, "領収金額", "exact_single")
 
 
+def test_two_character_correction_does_not_override_joined_exact_priority():
+    result = _extract_ocr_payment_amount((
+        token("請", 10, 10, width=20, line=1),
+        token("求", 35, 10, width=20, line=1),
+        token("額", 60, 10, width=20, line=1),
+        token("3,000円", 120, 10, line=1),
+        token("請額", 10, 200, confidence=96, line=2),
+        token("4,000円", 100, 200, line=2),
+    ))
+    assert (result.amount, result.match_type) == (3000, "exact_joined")
+
+
+def test_two_character_correction_does_not_override_single_exact_priority():
+    result = _extract_ocr_payment_amount((
+        token("請求額", 10, 10, line=1), token("3,000円", 100, 10, line=1),
+        token("請額", 10, 200, confidence=96, line=2),
+        token("4,000円", 100, 200, line=2),
+    ))
+    assert (result.amount, result.match_type) == (3000, "exact_single")
+
+
+def test_higher_tier_ambiguity_does_not_fall_back_to_two_character_fuzzy():
+    result = _extract_ocr_payment_amount((
+        token("請求額", 10, 10, line=1), token("3,000円", 100, 10, line=1),
+        token("4,000円", 180, 10, line=1),
+        token("請額", 10, 40, confidence=96, line=2), token("5,000円", 100, 40, line=2),
+    ))
+    assert result.amount is None
+
+
 def test_b6_synthetic_failure_pattern_is_recovered_without_raw_text_in_diagnostics():
     tokens = (
         token("領収書", 10, 10, line=1), token("患者", 10, 30, line=2),
@@ -558,3 +648,21 @@ def test_b6_synthetic_failure_pattern_is_recovered_without_raw_text_in_diagnosti
     diagnostics = " ".join(result.analysis.evidence) + " " + result.analysis.reason
     assert "label_match:edit_distance_1" in diagnostics
     assert "請汞額" not in diagnostics
+
+
+def test_b8_two_character_failure_pattern_is_recovered_without_raw_text_in_diagnostics():
+    raw_ocr_candidate = "請額"
+    tokens = (
+        token("領収書", 10, 10, line=1), token("患者", 10, 30, line=2),
+        token("診療", 80, 30, line=2), token("病院", 140, 30, line=2),
+        token(raw_ocr_candidate, 10, 50, confidence=96, line=3),
+        token("3,000円", 100, 50, line=3),
+    )
+    result = _analyze_ocr(
+        OCRExtraction("領収書\n患者 診療 病院\n支払情報 3,000円", tokens), "pdf_ocr",
+    )
+    assert result.analysis.amount == 3000
+    assert result.analysis.amount_label == "請求額"
+    diagnostics = " ".join(result.analysis.evidence) + " " + result.analysis.reason
+    assert "label_match:edit_distance_1" in diagnostics
+    assert raw_ocr_candidate not in diagnostics

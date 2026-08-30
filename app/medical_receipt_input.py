@@ -241,14 +241,32 @@ def _edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
+def _is_single_missing_character(value: str, label: str) -> bool:
+    """Return whether value is label with exactly one character omitted."""
+    if len(value) != 2 or len(label) != 3:
+        return False
+    return any(label[:index] + label[index + 1:] == value
+               for index in range(len(label)))
+
+
 def _unique_fuzzy_label(
-    value: str, labels: tuple[str, ...] | None = None,
+    value: str, labels: tuple[str, ...] | None = None, *,
+    allow_two_character_missing: bool = True,
 ) -> str | None:
     value = _normalized_ocr_word(value)
-    if len(value) < MIN_FUZZY_LABEL_LENGTH:
+    if (len(value) < MIN_FUZZY_LABEL_LENGTH
+            and not (allow_two_character_missing and len(value) == 2)):
         return None
     known = labels or tuple(STRONG_AMOUNT_LABELS + MEDIUM_AMOUNT_LABELS)
-    matches = [label for label in known if _edit_distance(value, label) == 1]
+    matches = [
+        label for label in known
+        if _edit_distance(value, label) == 1
+        and (
+            len(value) >= MIN_FUZZY_LABEL_LENGTH
+            or (allow_two_character_missing
+                and _is_single_missing_character(value, _normalized_ocr_word(label)))
+        )
+    ]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -292,7 +310,9 @@ def _label_candidates(tokens: tuple[OCRToken, ...]):
                 joined, _combined_label_token(parts, joined), "exact_joined",
             ))
         else:
-            corrected = _unique_fuzzy_label(joined, payment_labels)
+            corrected = _unique_fuzzy_label(
+                joined, payment_labels, allow_two_character_missing=False,
+            )
             if corrected:
                 fuzzy_joined.append(_LabelCandidate(
                     corrected, _combined_label_token(parts, corrected), "edit_distance_1",
