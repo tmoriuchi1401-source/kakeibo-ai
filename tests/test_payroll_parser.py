@@ -473,6 +473,271 @@ def test_existing_comma_money_still_pairs_in_ocr():
     assert not item.needs_review
 
 
+def fragmented_employment_insurance(*extra, value="10,056", value_confidence=92):
+    return (
+        PositionedText("雇用", 1, 1310, 235, 40, 20, 86),
+        PositionedText("保険", 1, 1358, 234, 37, 21, 96),
+        PositionedText("料", 1, 1405, 236, 12, 18, 59),
+        *extra,
+        PositionedText(value, 1, 1725, 229, 67, 34, value_confidence),
+    )
+
+
+def local_fragmented_employment_insurance(
+    *extra,
+    xs=(10, 34, 58),
+    ys=(10, 10, 10),
+    confidences=(86, 96, 59),
+    value="10,056",
+    value_confidence=92,
+    value_x=120,
+    value_y=10,
+):
+    return (
+        PositionedText("雇用", 1, xs[0], ys[0], 20, 10, confidences[0]),
+        PositionedText("保険", 1, xs[1], ys[1], 20, 10, confidences[1]),
+        PositionedText("料", 1, xs[2], ys[2], 8, 10, confidences[2]),
+        *extra,
+        PositionedText(value, 1, value_x, value_y, 50, 10, value_confidence),
+    )
+
+
+def test_exact_known_ocr_label_can_use_one_low_confidence_suffix():
+    items = parse_positioned_items(fragmented_employment_insurance(), ocr=True)
+
+    assert [(item.raw_item_name, item.value, item.needs_review) for item in items] == [
+        ("雇用保険料", 10056, False),
+    ]
+    item = items[0]
+    assert item.standard_item_candidate == "employment_insurance"
+    assert item.section == "deduction"
+    assert item.raw_value == "10,056"
+    assert item.confidence == 59
+
+
+def test_exact_ocr_label_reconstruction_requires_local_ordered_tokens():
+    distant = (
+        PositionedText("雇用", 1, 1310, 235, 40, 20, 86),
+        PositionedText("保険", 1, 1500, 234, 37, 21, 96),
+        PositionedText("料", 1, 1545, 236, 12, 18, 59),
+        PositionedText("10,056", 1, 1725, 229, 67, 34, 92),
+    )
+    wrong_order = (
+        PositionedText("雇用", 1, 1310, 235, 40, 20, 86),
+        PositionedText("料", 1, 1358, 236, 12, 18, 59),
+        PositionedText("保険", 1, 1378, 234, 37, 21, 96),
+        PositionedText("10,056", 1, 1725, 229, 67, 34, 92),
+    )
+    for tokens in (distant, wrong_order):
+        assert not any(
+            item.standard_item_candidate == "employment_insurance"
+            and item.value == 10056 and not item.needs_review
+            for item in parse_positioned_items(tokens, ocr=True)
+        )
+
+
+def test_exact_ocr_label_reconstruction_requires_one_common_line():
+    boundary = local_fragmented_employment_insurance(ys=(10, 12.75, 15.5))
+    beyond = local_fragmented_employment_insurance(ys=(10, 12.8, 15.6))
+
+    for tokens, expected in ((boundary, True), (beyond, False)):
+        items = parse_positioned_items(tokens, ocr=True)
+        confirmed = [item for item in items
+                     if item.standard_item_candidate == "employment_insurance"
+                     and not item.needs_review]
+        assert bool(confirmed) is expected
+
+
+def test_exact_ocr_label_reconstruction_rejects_cumulative_y_drift():
+    items = parse_positioned_items(
+        local_fragmented_employment_insurance(ys=(0, 5, 10), value_y=0), ocr=True)
+
+    assert not any(item.standard_item_candidate == "employment_insurance"
+                   and item.value == 10056 and not item.needs_review for item in items)
+
+
+def test_exact_ocr_label_reconstruction_honors_token_gap_boundary():
+    boundary = local_fragmented_employment_insurance(xs=(10, 54, 98), value_x=160)
+    beyond = local_fragmented_employment_insurance(xs=(10, 54.1, 98.1), value_x=160)
+
+    for tokens, expected in ((boundary, True), (beyond, False)):
+        items = parse_positioned_items(tokens, ocr=True)
+        confirmed = [item for item in items
+                     if item.standard_item_candidate == "employment_insurance"
+                     and not item.needs_review]
+        assert bool(confirmed) is expected
+
+
+def test_exact_ocr_label_reconstruction_requires_every_component():
+    cases = (
+        (PositionedText("保険", 1, 34, 10, 20, 10, 96),
+         PositionedText("料", 1, 58, 10, 8, 10, 59)),
+        (PositionedText("雇用", 1, 10, 10, 20, 10, 86),
+         PositionedText("料", 1, 58, 10, 8, 10, 59)),
+        (PositionedText("雇用", 1, 10, 10, 20, 10, 86),
+         PositionedText("保険", 1, 34, 10, 20, 10, 59)),
+    )
+    for parts in cases:
+        items = parse_positioned_items((*parts, token("10,056", 120, 10, 92)), ocr=True)
+        assert not any(item.standard_item_candidate == "employment_insurance"
+                       and not item.needs_review for item in items)
+
+
+def test_exact_ocr_label_reconstruction_rejects_duplicate_or_unrelated_words():
+    duplicate = local_fragmented_employment_insurance(
+        PositionedText("保険", 1, 58, 10, 20, 10, 96),
+        xs=(10, 34, 82), value_x=150,
+    )
+    unrelated = local_fragmented_employment_insurance(
+        PositionedText("対象", 1, 70, 10, 20, 10, 96),
+    )
+    for tokens in (duplicate, unrelated):
+        items = parse_positioned_items(tokens, ocr=True)
+        assert not any(item.standard_item_candidate == "employment_insurance"
+                       and not item.needs_review for item in items)
+
+
+def test_exact_ocr_label_reconstruction_does_not_cross_component_rule():
+    items = parse_positioned_items(local_fragmented_employment_insurance(
+        PositionedText("|", 1, 55, 0, 3, 30, 90),
+    ), ocr=True)
+
+    assert not any(item.standard_item_candidate == "employment_insurance"
+                   and not item.needs_review for item in items)
+
+
+def test_exact_ocr_label_reconstruction_rejects_adjacent_unknown_text():
+    items = parse_positioned_items(fragmented_employment_insurance(
+        PositionedText("X", 1, 1422, 235, 10, 20, 95),
+    ), ocr=True)
+
+    assert not any(item.value == 10056 and not item.needs_review for item in items)
+
+
+def test_low_confidence_exact_ocr_label_requires_strong_comma_money():
+    for tokens in (
+        fragmented_employment_insurance(value_confidence=79),
+        fragmented_employment_insurance(value="10056"),
+    ):
+        item = next(item for item in parse_positioned_items(tokens, ocr=True)
+                    if item.raw_item_name == "雇用保険料")
+        assert item.raw_value is None
+        assert item.value is None
+        assert item.needs_review
+
+
+def test_low_confidence_exact_ocr_label_confidence_boundaries():
+    for confidence, expected in ((49, False), (50, True), (59, True), (60, True)):
+        items = parse_positioned_items(
+            local_fragmented_employment_insurance(confidences=(86, 96, confidence)), ocr=True)
+        confirmed = [item for item in items if item.standard_item_candidate == "employment_insurance"
+                     and not item.needs_review]
+        assert bool(confirmed) is expected
+
+    for confidence, expected in ((79, False), (80, True)):
+        items = parse_positioned_items(
+            local_fragmented_employment_insurance(confidences=(confidence, 96, 59)), ocr=True)
+        confirmed = [item for item in items if item.standard_item_candidate == "employment_insurance"
+                     and not item.needs_review]
+        assert bool(confirmed) is expected
+
+    for confidence, expected in ((79, False), (80, True)):
+        items = parse_positioned_items(
+            local_fragmented_employment_insurance(value_confidence=confidence), ocr=True)
+        confirmed = [item for item in items if item.standard_item_candidate == "employment_insurance"
+                     and not item.needs_review]
+        assert bool(confirmed) is expected
+
+
+def test_low_confidence_exact_ocr_label_does_not_cross_column_rule():
+    item = next(item for item in parse_positioned_items(
+        fragmented_employment_insurance(
+            PositionedText("|", 1, 1600, 220, 3, 50, 90),
+        ), ocr=True
+    ) if item.raw_item_name == "雇用保険料")
+
+    assert item.value is None
+    assert item.needs_review
+
+
+def test_low_confidence_exact_ocr_label_rejects_multiple_values():
+    item = next(item for item in parse_positioned_items(
+        fragmented_employment_insurance(
+            PositionedText("12,000", 1, 2200, 229, 67, 34, 95),
+        ), ocr=True
+    ) if item.raw_item_name == "雇用保険料")
+
+    assert item.value is None
+    assert item.needs_review
+
+
+def test_low_confidence_exact_ocr_label_requires_no_other_nearby_amount():
+    horizontal_and_below = local_fragmented_employment_insurance(
+        PositionedText("12,000", 1, 30, 30, 50, 10, 95),
+    )
+    far = local_fragmented_employment_insurance(value_x=400)
+    for tokens in (horizontal_and_below, far):
+        items = parse_positioned_items(tokens, ocr=True)
+        assert not any(item.standard_item_candidate == "employment_insurance"
+                       and not item.needs_review for item in items)
+
+
+def test_low_confidence_exact_ocr_label_rejects_two_reconstructed_owners():
+    tokens = (
+        *local_fragmented_employment_insurance(value_x=220)[:-1],
+        PositionedText("健康", 1, 100, 10, 20, 10, 86),
+        PositionedText("保険", 1, 124, 10, 20, 10, 96),
+        PositionedText("料", 1, 148, 10, 8, 10, 59),
+        PositionedText("10,056", 1, 220, 10, 50, 10, 92),
+    )
+    items = parse_positioned_items(tokens, ocr=True)
+
+    assert not any(item.value == 10056 and not item.needs_review for item in items)
+
+
+def test_low_confidence_exact_ocr_label_requires_unambiguous_ownership():
+    tokens = (
+        PositionedText("雇用", 1, 10, 10, 20, 10, 86),
+        PositionedText("保険", 1, 34, 10, 20, 10, 96),
+        PositionedText("料", 1, 58, 10, 8, 10, 59),
+        PositionedText("所得税", 1, 17, 10, 48, 10, 95),
+        PositionedText("10,056", 1, 120, 10, 50, 10, 92),
+    )
+    items = parse_positioned_items(tokens, ocr=True)
+
+    assert not any(item.value == 10056 and not item.needs_review for item in items)
+
+
+def test_exact_ocr_label_override_does_not_change_other_paths():
+    pdf_item = parse_positioned_items((
+        PositionedText("雇用保険料", 1, 10, 10, 70, 10, 59),
+        PositionedText("10,056", 1, 100, 10, 50, 10, 92),
+    ))[0]
+    low_ocr = parse_positioned_items((
+        PositionedText("住民税", 1, 10, 10, 50, 10, 59),
+        PositionedText("51,500", 1, 100, 10, 50, 10, 92),
+    ), ocr=True)[0]
+    regular_ocr = parse_positioned_items((
+        token("健康保険料", 10, 10), token("67,669", 100, 10),
+        token("厚生年金", 10, 40), token("137,250", 100, 40),
+        token("住民税", 10, 70), token("51,500", 100, 70),
+    ), ocr=True)
+
+    assert pdf_item.value == 10056 and not pdf_item.needs_review
+    assert low_ocr.value is None and low_ocr.needs_review
+    assert [item.value for item in regular_ocr] == [67669, 137250, 51500]
+    assert not any(item.needs_review for item in regular_ocr)
+
+
+def test_split_high_confidence_label_keeps_normal_ocr_pairing_path():
+    items = parse_positioned_items(
+        local_fragmented_employment_insurance(confidences=(86, 96, 60)), ocr=True)
+
+    assert [(item.raw_item_name, item.value, item.needs_review) for item in items] == [
+        ("雇用保険料", 10056, False),
+    ]
+
+
 def test_positioned_ytd_block_is_classified_without_changing_current_income_tax():
     items = parse_positioned_items((
         token("所得税", 20, 40), token("16,840", 100, 40),

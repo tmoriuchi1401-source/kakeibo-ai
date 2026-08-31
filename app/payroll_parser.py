@@ -394,6 +394,163 @@ def _ocr_label_tokens(tokens: tuple[PositionedText, ...]) -> list[PositionedText
     return merged
 
 
+def _ocr_label_component(token: PositionedText) -> bool:
+    return bool(
+        compact(token.text)
+        and not amounts(token.text)
+        and not re.search(r"\d", token.text)
+        and not any(border in token.text for border in "|｜")
+    )
+
+
+def _local_ocr_label_tokens(left: PositionedText, right: PositionedText) -> bool:
+    if left.page != right.page or right.x <= left.x:
+        return False
+    scale = max(left.height, right.height)
+    gap = right.x - (left.x + left.width)
+    return (
+        abs(left.y - right.y) <= scale * .55
+        and -scale <= gap <= max(24, scale * 2)
+    )
+
+
+def _ocr_label_components_share_line(parts: tuple[PositionedText, ...]) -> bool:
+    """Require every reconstructed component to fit one common OCR line."""
+    scale = max(part.height for part in parts)
+    return max(part.y for part in parts) - min(part.y for part in parts) <= scale * .55
+
+
+def _has_intervening_ocr_rule(
+    left: PositionedText,
+    right: PositionedText,
+    tokens: tuple[PositionedText, ...],
+) -> bool:
+    top = min(left.y, right.y)
+    bottom = max(left.y + left.height, right.y + right.height)
+    return any(
+        token.page == left.page
+        and re.fullmatch(r"[|｜]+", token.text.strip()) is not None
+        and left.x + left.width <= token.x <= right.x
+        and token.y <= bottom
+        and token.y + token.height >= top
+        for token in tokens
+    )
+
+
+def _local_ocr_reconstructed_value(
+    label: PositionedText,
+    number: PositionedText,
+) -> bool:
+    """Keep low-confidence OCR recovery within one local label/value region."""
+    gap = number.x - (label.x + label.width)
+    return (
+        _same_ocr_line(label, number)
+        and -3 <= gap <= max(label.width, number.width) * 3
+    )
+
+
+def _ocr_exact_known_label_reconstructions(
+    tokens: tuple[PositionedText, ...],
+) -> list[tuple[PositionedText, tuple[PositionedText, ...]]]:
+    """Rebuild only complete known earning/deduction labels from local OCR words."""
+    components = [token for token in tokens if _ocr_label_component(token)]
+    known = {
+        compact(label): label for label in STANDARD_NAMES
+        if section_for(label) in {"earning", "deduction"}
+    }
+    matches: list[tuple[str, tuple[PositionedText, ...]]] = []
+
+    def extend(target: str, parts: tuple[PositionedText, ...], text: str) -> None:
+        if text == target:
+            matches.append((target, parts))
+            return
+        previous = parts[-1]
+        for following in components:
+            if following in parts or not _local_ocr_label_tokens(previous, following):
+                continue
+            if _has_intervening_ocr_rule(previous, following, tokens):
+                continue
+            combined = text + compact(following.text)
+            if target.startswith(combined):
+                extend(target, (*parts, following), combined)
+
+    for target in known:
+        for first in components:
+            first_text = compact(first.text)
+            if first_text and target.startswith(first_text):
+                extend(target, (first,), first_text)
+
+    # Prefer the longest exact label when the same component sequence is also a
+    # known prefix (for example, 健康保険料 over 健康保険).
+    matches = [
+        match for match in matches
+        if len(match[1]) >= 2
+        and _ocr_label_components_share_line(match[1])
+        and len([part for part in match[1] if part.confidence < 60]) == 1
+        and match[1][-1].confidence < 60
+        and len(compact(match[1][-1].text)) == 1
+        and match[1][-1].confidence >= 50
+        and all(part.confidence >= 80 for part in match[1][:-1])
+        and not any(
+            len(other_parts) > len(match[1])
+            and other_parts[:len(match[1])] == match[1]
+            for _other_target, other_parts in matches
+        )
+        # A split prefix can be a complete alias only when it is not also an
+        # incomplete prefix of another known payroll label.
+        and not any(other_target != match[0] and other_target.startswith(match[0])
+                    for other_target in known)
+    ]
+    reconstructed = []
+    for target, parts in matches:
+        first, last = parts[0], parts[-1]
+        # Extra adjacent OCR text would make the reconstructed label incomplete.
+        if any(
+            other not in parts
+            and (_local_ocr_label_tokens(other, first)
+                 or _local_ocr_label_tokens(last, other)
+                 or (first.x < other.x < last.x + last.width
+                     and _same_ocr_line(first, other)))
+            for other in components
+        ):
+            continue
+        right = max(part.x + part.width for part in parts)
+        reconstructed.append((PositionedText(
+            text=known[target], page=first.page, x=first.x,
+            y=min(part.y for part in parts), width=right - first.x,
+            height=max(part.height for part in parts),
+            confidence=min(part.confidence for part in parts),
+        ), parts))
+    return reconstructed
+
+
+def _safe_low_confidence_exact_ocr_label(
+    label: PositionedText,
+    number: PositionedText,
+    parts: tuple[PositionedText, ...] | None,
+) -> bool:
+    """Allow one auditable low-confidence suffix only with independent evidence."""
+    if parts is None or len(parts) < 2:
+        return False
+    normalized = compact(label.text)
+    exact_labels = {compact(name) for name in STANDARD_NAMES}
+    if (normalized not in exact_labels
+            or section_for(label.text) not in {"earning", "deduction"}
+            or "".join(compact(part.text) for part in parts) != normalized):
+        return False
+    low = [part for part in parts if part.confidence < 60]
+    if (len(low) != 1 or low[0] is not parts[-1]
+            or len(compact(low[0].text)) != 1
+            or low[0].confidence < 50):
+        return False
+    if any(part.confidence < 80 for part in parts[:-1]):
+        return False
+    return (
+        number.confidence >= 80
+        and re.fullmatch(r"\d{1,3}(?:,\d{3})+", number.text.strip()) is not None
+    )
+
+
 def parse_period_and_date(text: str) -> tuple[str | None, str | None]:
     normalized = compact(text)
     dates = re.findall(r"(20\d{2})年(\d{1,2})月(\d{1,2})日", normalized)
@@ -521,10 +678,25 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         (token, values) for token in tokens
         if ocr and (values := _ocr_dot_amounts(token))
     ]
-    labels = _ocr_label_tokens(tokens) if ocr else [
-        token for token in tokens
-        if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
-    ]
+    exact_reconstruction_parts: dict[int, tuple[PositionedText, ...]] = {}
+    if ocr:
+        labels = _ocr_label_tokens(tokens)
+        for reconstructed, parts in _ocr_exact_known_label_reconstructions(tokens):
+            existing = next((label for label in labels
+                             if compact(label.text) == compact(reconstructed.text)
+                             and label.page == reconstructed.page
+                             and abs(label.x - reconstructed.x) <= 1
+                             and abs(label.y - reconstructed.y) <= 1
+                             and abs(label.width - reconstructed.width) <= 1), None)
+            label = existing or reconstructed
+            if existing is None:
+                labels.append(label)
+            exact_reconstruction_parts[id(label)] = parts
+    else:
+        labels = [
+            token for token in tokens
+            if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
+        ]
     logical_values = {} if ocr else _logical_pdf_value_pairs(tokens)
     entries = []
     sensitive = ("殿", "社員番号", "株式会社", "銀行", "支店", "本部", "センタ")
@@ -575,8 +747,25 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         plausible_name = _is_plausible_item_label(name)
         if not plausible_name: continue
         ambiguous = len(candidates) > 1 and abs(candidates[1][2] - candidates[0][2]) < max(label.width, 12)
-        low_confidence = ocr and (label.confidence < 60 or
-                                  (chosen is not None and chosen[0].confidence < 60))
+        exact_label_override = bool(
+            ocr and chosen is not None and not ambiguous
+            and len(horizontal) == 1 and horizontal[0][0] is chosen[0]
+            and not below and not above
+            and _local_ocr_reconstructed_value(label, chosen[0])
+            and len([
+                other for other in labels
+                if id(other) in exact_reconstruction_parts
+                and _local_ocr_reconstructed_value(other, chosen[0])
+                and not _crosses_ocr_vertical_rule(other, chosen[0], tokens)
+            ]) == 1
+            and _safe_low_confidence_exact_ocr_label(
+                label, chosen[0], exact_reconstruction_parts.get(id(label)),
+            )
+        )
+        low_confidence = ocr and (
+            (label.confidence < 60 and not exact_label_override)
+            or (chosen is not None and chosen[0].confidence < 60)
+        )
         confirmed = chosen is not None and not ambiguous and not low_confidence
         number = chosen[0] if chosen else None
         if confirmed and number is not None and _attendance_value_conflicts(name, number.text):
