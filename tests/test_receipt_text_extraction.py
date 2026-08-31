@@ -6,6 +6,7 @@ import sys
 import threading
 
 from PIL import Image
+from pypdf import PdfWriter
 import pytest
 
 from app import receipt_text_extraction as extraction
@@ -63,6 +64,44 @@ def test_corrupt_pdf_is_a_safe_failure():
     assert result.extraction_status == "extraction_failed"
     assert result.extraction_method == "pdf_text"
     assert result.text_present is False
+
+
+def test_corrupt_pdf_does_not_call_pdf_ocr_renderer(monkeypatch):
+    called = False
+
+    def renderer(content):
+        nonlocal called
+        called = True
+        return "should not be used"
+
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", renderer)
+
+    result = extraction.extract_receipt_text(b"not-a-pdf", "application/pdf")
+
+    assert called is False
+    assert result.extraction_status == "extraction_failed"
+    assert result.extraction_method == "pdf_text"
+
+
+def test_unavailable_embedded_text_does_not_call_pdf_ocr_renderer(monkeypatch):
+    called = False
+
+    def renderer(content):
+        nonlocal called
+        called = True
+        return "should not be used"
+
+    def unavailable(content):
+        raise extraction._PdfEmbeddedTextUnavailable()
+
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", unavailable)
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", renderer)
+
+    result = extraction.extract_receipt_text(b"encrypted-pdf", "application/pdf")
+
+    assert called is False
+    assert result.extraction_status == "extraction_failed"
+    assert result.extraction_method == "pdf_text"
 
 
 def test_corrupt_pdf_does_not_emit_input_marker(capfd, caplog):
@@ -226,9 +265,13 @@ def test_mime_case_and_whitespace_are_normalized(monkeypatch, mime_type):
 
 
 def test_pdf_embedded_text_path_is_safe_metadata(monkeypatch):
+    def pdf_ocr_must_not_run(content):
+        raise AssertionError("embedded PDF text must skip OCR")
+
     monkeypatch.setattr(
         extraction, "_extract_pdf_embedded_text", lambda content: "レシート 商品 合計 100円"
     )
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", pdf_ocr_must_not_run)
 
     result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
 
@@ -237,13 +280,250 @@ def test_pdf_embedded_text_path_is_safe_metadata(monkeypatch):
     assert result.text_present is True
 
 
-def test_pdf_without_embedded_text_fails_closed(monkeypatch):
+def test_pdf_without_embedded_text_uses_pdf_ocr_fallback(monkeypatch):
+    rendered_contents = []
+
     monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: " \n")
+    monkeypatch.setattr(
+        extraction,
+        "_extract_pdf_ocr_text",
+        lambda content: rendered_contents.append(content) or "レシート 商品 合計 100円",
+    )
 
     result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
 
-    assert result.extraction_status == "pdf_text_empty"
-    assert result.extraction_method == "pdf_text"
+    assert rendered_contents == [b"synthetic-pdf"]
+    assert result.extraction_status == "extracted"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is True
+
+
+@pytest.mark.parametrize("ocr_text", ["", " \n\t "])
+def test_empty_pdf_ocr_is_a_safe_failure(monkeypatch, ocr_text):
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", lambda content: ocr_text)
+
+    result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
+
+    assert result.extraction_status == "pdf_ocr_empty"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is False
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        (extraction._PdfRenderFailed, "pdf_render_failed"),
+        (extraction._PdfOcrFailed, "pdf_ocr_failed"),
+        (extraction._PdfPageLimitExceeded, "pdf_page_limit_exceeded"),
+    ],
+)
+def test_pdf_ocr_failures_are_safe(monkeypatch, failure, status):
+    def fail(content):
+        raise failure()
+
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", fail)
+
+    result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
+
+    assert result.extraction_status == status
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is False
+
+
+def test_pdf_ocr_renders_bytes_in_memory_with_bounded_pages(monkeypatch):
+    received_contents = []
+    rendered_scales = []
+    closed = []
+
+    class FakeImage:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+        def close(self):
+            closed.append(f"image-{self.page_index}")
+
+    class FakeBitmap:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+        def to_pil(self):
+            return FakeImage(self.page_index)
+
+        def close(self):
+            closed.append(f"bitmap-{self.page_index}")
+
+    class FakePage:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+        def render(self, *, scale):
+            rendered_scales.append(scale)
+            return FakeBitmap(self.page_index)
+
+        def close(self):
+            closed.append(f"page-{self.page_index}")
+
+    class FakeDocument:
+        def __init__(self, content):
+            received_contents.append(content)
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, page_index):
+            return FakePage(page_index)
+
+        def close(self):
+            closed.append("document")
+
+    monkeypatch.setattr("pypdfium2.PdfDocument", FakeDocument)
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr(
+        extraction, "_run_image_ocr", lambda image: f"page-{image.page_index} text"
+    )
+
+    result = extraction.extract_receipt_text(b"scan-pdf-bytes", "application/pdf")
+
+    assert received_contents == [b"scan-pdf-bytes"]
+    assert rendered_scales == [extraction._PDF_OCR_RENDER_SCALE] * 2
+    assert result.extraction_status == "extracted"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is True
+    assert closed.count("document") == 1
+
+
+def test_partial_pdf_ocr_failure_is_not_used_for_classification(monkeypatch):
+    class FakeImage:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+    class FakeBitmap:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+        def to_pil(self):
+            return FakeImage(self.page_index)
+
+    class FakePage:
+        def __init__(self, page_index):
+            self.page_index = page_index
+
+        def render(self, *, scale):
+            return FakeBitmap(self.page_index)
+
+    class FakeDocument:
+        def __init__(self, content):
+            pass
+
+        def __len__(self):
+            return 2
+
+        def __getitem__(self, page_index):
+            return FakePage(page_index)
+
+    def fake_ocr(image):
+        if image.page_index == 0:
+            return "レシート 商品 小計 100円 現金 100円"
+        raise RuntimeError("synthetic second-page OCR failure")
+
+    monkeypatch.setattr("pypdfium2.PdfDocument", FakeDocument)
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr(extraction, "_run_image_ocr", fake_ocr)
+
+    result = extraction.extract_receipt_text(b"two-page-scan", "application/pdf")
+
+    assert result.extraction_status == "pdf_ocr_failed"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is False
+
+
+def test_pdf_ocr_page_limit_fails_before_rendering(monkeypatch):
+    page_requests = []
+
+    class TooManyPagesDocument:
+        def __init__(self, content):
+            pass
+
+        def __len__(self):
+            return extraction._MAX_PDF_OCR_PAGES + 1
+
+        def __getitem__(self, page_index):
+            page_requests.append(page_index)
+            raise AssertionError("over-limit PDF must not render any page")
+
+    monkeypatch.setattr("pypdfium2.PdfDocument", TooManyPagesDocument)
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+
+    result = extraction.extract_receipt_text(b"many-pages", "application/pdf")
+
+    assert page_requests == []
+    assert result.extraction_status == "pdf_page_limit_exceeded"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.text_present is False
+
+
+def test_pdf_ocr_private_text_is_absent_from_public_result_and_output(monkeypatch, capfd, caplog):
+    sensitive = "山田太郎 患者番号ABC123 保険者番号99999999 胃炎 テスト病院"
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr(extraction, "_extract_pdf_ocr_text", lambda content: sensitive)
+
+    with caplog.at_level(logging.DEBUG):
+        result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
+
+    captured = capfd.readouterr()
+    exposed = " ".join(
+        (repr(result), str(result.model_dump()), result.model_dump_json(), captured.out,
+         captured.err, " ".join(record.getMessage() for record in caplog.records))
+    )
+    for marker in ("山田太郎", "患者番号ABC123", "保険者番号99999999", "胃炎", "テスト病院"):
+        assert marker not in exposed
+    assert result.extraction_status == "extracted"
+    assert result.extraction_method == "pdf_ocr"
+
+
+def test_pdfium_bytes_render_does_not_emit_pdf_metadata(monkeypatch, capfd, caplog):
+    marker = "PDFIUM_SYNTHETIC_METADATA_MARKER"
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.add_metadata({"/Title": marker})
+    output = BytesIO()
+    writer.write(output)
+    monkeypatch.setattr(extraction, "_run_image_ocr", lambda image: "レシート 商品 合計 100円")
+
+    with caplog.at_level(logging.DEBUG):
+        result = extraction.extract_receipt_text(output.getvalue(), "application/pdf")
+
+    captured = capfd.readouterr()
+    logging_text = " ".join(record.getMessage() for record in caplog.records)
+    assert marker not in captured.out
+    assert marker not in captured.err
+    assert marker not in logging_text
+    assert result.extraction_status == "extracted"
+    assert result.extraction_method == "pdf_ocr"
+
+
+def test_pdf_renderer_exception_message_is_not_exposed(monkeypatch, capfd, caplog):
+    marker = "PDF_RENDERER_PRIVATE_MARKER"
+
+    class FailingDocument:
+        def __init__(self, content):
+            raise RuntimeError(marker)
+
+    monkeypatch.setattr(extraction, "_extract_pdf_embedded_text", lambda content: "")
+    monkeypatch.setattr("pypdfium2.PdfDocument", FailingDocument)
+
+    with caplog.at_level(logging.DEBUG):
+        result = extraction.extract_receipt_text(b"synthetic-pdf", "application/pdf")
+
+    captured = capfd.readouterr()
+    exposed = " ".join(
+        (repr(result), str(result.model_dump()), result.model_dump_json(), captured.out,
+         captured.err, " ".join(record.getMessage() for record in caplog.records))
+    )
+    assert marker not in exposed
+    assert result.extraction_status == "pdf_render_failed"
     assert result.text_present is False
 
 

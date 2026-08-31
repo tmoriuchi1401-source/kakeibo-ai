@@ -18,6 +18,10 @@ ExtractionStatus = Literal[
     "unsupported_mime_type",
     "empty_content",
     "pdf_text_empty",
+    "pdf_ocr_empty",
+    "pdf_render_failed",
+    "pdf_ocr_failed",
+    "pdf_page_limit_exceeded",
     "ocr_empty",
     "extraction_failed",
 ]
@@ -25,6 +29,24 @@ ExtractionMethod = Literal["pdf_text", "image_ocr", "pdf_ocr", "none"]
 
 _IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg"})
 _PYPDF_EXTRACTION_LOCK = threading.Lock()
+_MAX_PDF_OCR_PAGES = 3
+_PDF_OCR_RENDER_SCALE = 3
+
+
+class _PdfRenderFailed(Exception):
+    """Internal, data-free signal for an unsafe PDF render failure."""
+
+
+class _PdfOcrFailed(Exception):
+    """Internal, data-free signal for an unsafe PDF OCR failure."""
+
+
+class _PdfPageLimitExceeded(Exception):
+    """Internal signal that prevents partial PDF OCR classification."""
+
+
+class _PdfEmbeddedTextUnavailable(Exception):
+    """Internal signal for PDFs that must not enter the renderer fallback."""
 
 
 class SafeExtractionModelError(ValueError):
@@ -69,6 +91,13 @@ class ReceiptTextExtractionResult(BaseModel):
             "pdf_ocr",
         }:
             raise ValueError("ocr empty status requires an ocr method")
+        if self.extraction_status in {
+            "pdf_ocr_empty",
+            "pdf_render_failed",
+            "pdf_ocr_failed",
+            "pdf_page_limit_exceeded",
+        } and self.extraction_method != "pdf_ocr":
+            raise ValueError("pdf ocr status requires pdf ocr method")
         return self
 
     def model_copy(
@@ -143,8 +172,59 @@ def _extract_pdf_embedded_text(content: bytes) -> str | None:
     with _suppress_pypdf_output():
         reader = PdfReader(BytesIO(content))
         if reader.is_encrypted:
-            return None
+            raise _PdfEmbeddedTextUnavailable()
         return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _close_if_possible(value: object | None) -> None:
+    close = getattr(value, "close", None)
+    if callable(close):
+        close()
+
+
+def _extract_pdf_ocr_text(content: bytes) -> str:
+    """Render every bounded PDF page in memory and return only transient OCR text."""
+
+    import pypdfium2 as pdfium
+
+    document = None
+    try:
+        try:
+            document = pdfium.PdfDocument(content)
+        except Exception:
+            raise _PdfRenderFailed() from None
+
+        page_count = len(document)
+        if page_count > _MAX_PDF_OCR_PAGES:
+            raise _PdfPageLimitExceeded()
+
+        page_texts: list[str] = []
+        for page_index in range(page_count):
+            page = None
+            bitmap = None
+            image = None
+            try:
+                try:
+                    page = document[page_index]
+                    bitmap = page.render(scale=_PDF_OCR_RENDER_SCALE)
+                    image = bitmap.to_pil()
+                except Exception:
+                    raise _PdfRenderFailed() from None
+                try:
+                    text = _run_image_ocr(image)
+                except Exception:
+                    # Do not classify a document from a successful subset of pages.
+                    raise _PdfOcrFailed() from None
+                if text and text.strip():
+                    page_texts.append(text)
+            finally:
+                _close_if_possible(image)
+                _close_if_possible(bitmap)
+                _close_if_possible(page)
+
+        return "\n".join(page_texts)
+    finally:
+        _close_if_possible(document)
 
 
 def _run_image_ocr(image) -> str:
@@ -175,8 +255,20 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
             # Parser errors are untrusted-document failures. No parser detail escapes.
             return _ReceiptTextExtraction("extraction_failed", "pdf_text", None)
         if not text or not text.strip():
-            # M2-A intentionally has no scanned-PDF OCR fallback: fail closed.
-            return _ReceiptTextExtraction("pdf_text_empty", "pdf_text", None)
+            try:
+                text = _extract_pdf_ocr_text(content)
+            except _PdfPageLimitExceeded:
+                return _ReceiptTextExtraction("pdf_page_limit_exceeded", "pdf_ocr", None)
+            except _PdfRenderFailed:
+                return _ReceiptTextExtraction("pdf_render_failed", "pdf_ocr", None)
+            except _PdfOcrFailed:
+                return _ReceiptTextExtraction("pdf_ocr_failed", "pdf_ocr", None)
+            except Exception:
+                # Do not expose or trust an unexpected renderer/OCR failure.
+                return _ReceiptTextExtraction("pdf_ocr_failed", "pdf_ocr", None)
+            if not text or not text.strip():
+                return _ReceiptTextExtraction("pdf_ocr_empty", "pdf_ocr", None)
+            return _ReceiptTextExtraction("extracted", "pdf_ocr", text)
         return _ReceiptTextExtraction("extracted", "pdf_text", text)
 
     if normalized_mime in _IMAGE_MIME_TYPES:

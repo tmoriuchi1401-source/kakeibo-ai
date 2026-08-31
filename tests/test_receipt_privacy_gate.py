@@ -10,8 +10,8 @@ from app import receipt_privacy_gate as gate
 from app.receipt_text_extraction import _ReceiptTextExtraction
 
 
-def _extracted(text: str) -> _ReceiptTextExtraction:
-    return _ReceiptTextExtraction("extracted", "image_ocr", text)
+def _extracted(text: str, method: str = "image_ocr") -> _ReceiptTextExtraction:
+    return _ReceiptTextExtraction("extracted", method, text)
 
 
 def _failed(status: str = "extraction_failed") -> _ReceiptTextExtraction:
@@ -21,6 +21,15 @@ def _failed(status: str = "extraction_failed") -> _ReceiptTextExtraction:
 def _gate_for(monkeypatch, text: str):
     monkeypatch.setattr(gate, "_extract_receipt_text", lambda content, mime_type: _extracted(text))
     return gate.evaluate_receipt_privacy(b"synthetic-document", "image/png")
+
+
+def _scan_pdf_gate_for(monkeypatch, text: str):
+    monkeypatch.setattr(
+        gate,
+        "_extract_receipt_text",
+        lambda content, mime_type: _extracted(text, "pdf_ocr"),
+    )
+    return gate.evaluate_receipt_privacy(b"synthetic-scan-pdf", "application/pdf")
 
 
 def test_normal_text_is_the_only_gemini_allowed_result(monkeypatch):
@@ -44,10 +53,61 @@ def test_medical_text_stays_local_and_extracts_payment(monkeypatch):
     assert result.category == "医療費"
 
 
+def test_scan_pdf_ocr_medical_text_stays_local_and_extracts_payment(monkeypatch):
+    result = _scan_pdf_gate_for(monkeypatch, "診療 領収書 患者負担額 3,250円")
+
+    assert result.classification == "medical"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.status == "confirmed"
+    assert result.gemini_allowed is False
+    assert result.medical_payment_amount == 3250
+
+
 def test_payroll_text_is_blocked(monkeypatch):
     result = _gate_for(monkeypatch, "給与明細 基本給 控除合計 差引支給額")
 
     assert result.classification == "payroll"
+    assert result.status == "blocked"
+    assert result.gemini_allowed is False
+
+
+def test_scan_pdf_ocr_normal_text_is_gemini_allowed(monkeypatch):
+    result = _scan_pdf_gate_for(monkeypatch, "レシート 商品 小計 1,000円 現金 1,000円")
+
+    assert result.classification == "normal"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.status == "ready_for_gemini"
+    assert result.gemini_allowed is True
+
+
+@pytest.mark.parametrize(
+    "text, classification",
+    [
+        ("給与明細 基本給 控除合計 差引支給額", "payroll"),
+        ("診療 給与", "sensitive_unknown"),
+    ],
+)
+def test_scan_pdf_ocr_sensitive_text_is_blocked(monkeypatch, text, classification):
+    result = _scan_pdf_gate_for(monkeypatch, text)
+
+    assert result.classification == classification
+    assert result.extraction_method == "pdf_ocr"
+    assert result.status == "blocked"
+    assert result.gemini_allowed is False
+
+
+def test_scan_pdf_ocr_failure_is_sensitive_unknown_and_blocked(monkeypatch):
+    monkeypatch.setattr(
+        gate,
+        "_extract_receipt_text",
+        lambda content, mime_type: _ReceiptTextExtraction("pdf_ocr_failed", "pdf_ocr", None),
+    )
+
+    result = gate.evaluate_receipt_privacy(b"synthetic-scan-pdf", "application/pdf")
+
+    assert result.classification == "sensitive_unknown"
+    assert result.extraction_status == "pdf_ocr_failed"
+    assert result.extraction_method == "pdf_ocr"
     assert result.status == "blocked"
     assert result.gemini_allowed is False
 
@@ -126,6 +186,18 @@ def test_gate_result_never_retains_synthetic_sensitive_text(monkeypatch):
         assert forbidden not in exposed
     for field_name in ("raw_text", "extracted_text", "snippet", "matched_line", "patient_name"):
         assert field_name not in type(result).model_fields
+
+
+def test_scan_pdf_gate_result_never_retains_synthetic_sensitive_text(monkeypatch):
+    sensitive = "山田太郎 患者番号ABC123 保険者番号99999999 胃炎 テスト病院 診療 患者負担額 3250円"
+    result = _scan_pdf_gate_for(monkeypatch, sensitive)
+
+    exposed = "\n".join((repr(result), str(result.model_dump()), result.model_dump_json()))
+    for forbidden in ("山田太郎", "患者番号ABC123", "保険者番号99999999", "胃炎", "テスト病院"):
+        assert forbidden not in exposed
+    assert result.classification == "medical"
+    assert result.extraction_method == "pdf_ocr"
+    assert result.gemini_allowed is False
 
 
 def test_gate_result_rejects_unsafe_update_copy(monkeypatch):
