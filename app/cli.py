@@ -58,6 +58,12 @@ from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
 from .payment_coverage_status_preview import preview_payment_coverage_status
 from .payment_coverage_manifest import preview_payment_coverage_manifests
 from .coverage_confirmation_sheets_preview import preview_coverage_confirmation_sheet
+from .coverage_confirmation_cli import (
+    CoverageConfirmationInputError,
+    load_coverage_confirmation_input,
+    run_coverage_confirmation_apply,
+    run_coverage_confirmation_preflight,
+)
 from .paypay_shortcut_inbox import preview_shortcut_inbox
 from .paypay_drive_inbox import PayPayDriveInboxPreview
 from .amazon_cancellation_item_count_fill_preview import (
@@ -147,6 +153,12 @@ def main():
     sub.add_parser("amazon-payment-coverage-preview")
     sub.add_parser("payment-coverage-status-preview")
     sub.add_parser("coverage-confirmation-sheet-preview")
+    ccp=sub.add_parser("coverage-confirmation-preflight")
+    ccp.add_argument("--input-json",required=True)
+    cca=sub.add_parser("coverage-confirmation-apply")
+    cca.add_argument("--input-json",required=True)
+    cca.add_argument("--apply",action="store_true")
+    cca.add_argument("--confirm-id")
     pcm=sub.add_parser("payment-coverage-manifest-preview")
     pcm.add_argument("--paypay-csv",action="append",default=[])
     pcm.add_argument("--paypay-export-evidence",action="append",default=[])
@@ -375,6 +387,33 @@ def main():
         print(json.dumps(
             preview_coverage_confirmation_sheet(db), ensure_ascii=False,
         ))
+    elif args.cmd in {"coverage-confirmation-preflight", "coverage-confirmation-apply"}:
+        import json
+        try:
+            explicit_input=load_coverage_confirmation_input(args.input_json)
+        except CoverageConfirmationInputError as exc:
+            p.error(str(exc))
+        apply_requested=(
+            args.cmd=="coverage-confirmation-apply" and args.apply is True
+        )
+        if args.cmd=="coverage-confirmation-apply" and not apply_requested \
+                and args.confirm_id is not None:
+            p.error("--confirm-id requires --apply")
+        if apply_requested:
+            if args.confirm_id is None:
+                p.error("coverage-confirmation-apply requires --confirm-id")
+            if args.confirm_id != explicit_input.confirmation_id:
+                p.error("--confirm-id does not match generated Confirmation ID")
+            s=Settings(); s.validate(need_sheet=True)
+            db=SheetsDB(s.spreadsheet_id)
+            result=run_coverage_confirmation_apply(
+                db,explicit_input,apply=True,confirm_id=args.confirm_id,
+            )
+        else:
+            s=Settings(); s.validate(need_sheet=True)
+            db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+            result=run_coverage_confirmation_preflight(db,explicit_input)
+        print(json.dumps(result,ensure_ascii=False))
     elif args.cmd=="payment-coverage-manifest-preview":
         print(preview_payment_coverage_manifests(
             paypay_csvs=args.paypay_csv,

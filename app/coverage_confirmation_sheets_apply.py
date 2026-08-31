@@ -97,12 +97,26 @@ def build_coverage_confirmation_write_plan(
 ) -> CoverageConfirmationWritePlan:
     """Build a write-free plan from the current sheet state."""
 
+    plan, _report = build_coverage_confirmation_write_plan_with_report(
+        db, record=record, created_at=created_at,
+    )
+    return plan
+
+
+def build_coverage_confirmation_write_plan_with_report(
+    db,
+    *,
+    record: CoverageConfirmationRecord,
+    created_at: datetime,
+) -> tuple[CoverageConfirmationWritePlan, dict]:
+    """Return one plan and its human-review report from the same read snapshot."""
+
     target_spreadsheet_id = _spreadsheet_id(db)
     candidate_row = _candidate_row(record, created_at)
     report = preview_coverage_confirmation_sheet(
         db, record=record, created_at=created_at,
     )
-    return CoverageConfirmationWritePlan(
+    plan = CoverageConfirmationWritePlan(
         target_spreadsheet_id=target_spreadsheet_id,
         record=record,
         created_at=created_at,
@@ -113,6 +127,7 @@ def build_coverage_confirmation_write_plan(
         blocked=bool(report["blocked"]),
         reason=str(report["reason"]),
     )
+    return plan, report
 
 
 def _status_from_report(
