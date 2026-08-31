@@ -1,6 +1,7 @@
 from __future__ import annotations
 import mimetypes, uuid
 from .gemini_ai import GeminiAI
+from .receipt_privacy_gate import evaluate_receipt_privacy
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 
@@ -9,6 +10,20 @@ class ReceiptPipeline:
     def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str=""):
         import_id=f"receipt:{source_id}"
         if import_id in self.db.import_ids(): return {"status":"skipped","reason":"already_imported"}
+        privacy=evaluate_receipt_privacy(image_bytes,mime_type)
+        if privacy.classification != "normal" or not privacy.gemini_allowed:
+            return {
+                "status":"privacy_blocked",
+                "classification":privacy.classification,
+                "reason_code":privacy.reason_code,
+                "gemini_allowed":privacy.gemini_allowed,
+                "extraction_status":privacy.extraction_status,
+                "extraction_method":privacy.extraction_method,
+                "text_present":privacy.text_present,
+                "medical_payment_amount":privacy.medical_payment_amount,
+                "medical_candidate_count":privacy.medical_candidate_count,
+                "category":privacy.category,
+            }
         cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats)
         allowed=set(cats)
         invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]

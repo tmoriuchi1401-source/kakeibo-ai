@@ -89,6 +89,14 @@ def make(require_gemini=True):
     ai=GeminiAI(s.gemini_api_key,s.gemini_model) if require_gemini else None
     return s,db,ai
 
+
+def print_drive_receipt_results(results):
+    for name,res in results:
+        if res.get("status") == "privacy_blocked":
+            print(res)
+        else:
+            print(name,res)
+
 def main():
     p=argparse.ArgumentParser(description="家計簿AI")
     sub=p.add_subparsers(dest="cmd",required=True)
@@ -407,7 +415,9 @@ def main():
             print(parse_amazon_email(f.read()).anonymized())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
-        for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
+        print_drive_receipt_results(
+            process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id)
+        )
     elif args.cmd=="drive-paypay-preview":
         s=Settings(); s.validate(need_paypay_drive=True)
         print(DrivePayPayPipeline(s.paypay_drive_folder_id).preview())

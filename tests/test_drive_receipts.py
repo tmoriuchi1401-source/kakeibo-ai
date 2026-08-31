@@ -35,6 +35,7 @@ def test_archive_recorded_receipt_results(result):
     "result",
     [
         {"status": "skipped", "reason": "unsupported"},
+        {"status": "privacy_blocked"},
         {"status": "error"},
         {},
     ],
