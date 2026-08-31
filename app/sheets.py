@@ -55,6 +55,25 @@ class SheetsDB:
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+    def create_sheet(self,title:str,*,frozen_row_count:int=1):
+        self.svc.spreadsheets().batchUpdate(
+            spreadsheetId=self.sid,
+            body={"requests":[{"addSheet":{"properties":{
+                "title":title,"gridProperties":{"frozenRowCount":frozen_row_count}
+            }}}]},
+        ).execute()
+    def write_header_raw(self,sheet:str,header:list[str]):
+        self.svc.spreadsheets().values().update(
+            spreadsheetId=self.sid,range=f"{sheet}!A1",valueInputOption="RAW",
+            body={"values":[header]},
+        ).execute()
+    def append_raw(self,sheet:str,rows:list[list]):
+        if not rows:return
+        self.svc.spreadsheets().values().append(
+            spreadsheetId=self.sid,range=f"{sheet}!A:A",
+            valueInputOption="RAW",insertDataOption="INSERT_ROWS",
+            body={"values":rows},
+        ).execute()
     def clear(self,rng:str):
         self.svc.spreadsheets().values().clear(
             spreadsheetId=self.sid,range=rng,body={}
