@@ -94,6 +94,11 @@ class PayrollEmployerRecord(BaseModel):
 class PayrollStorageCandidate(BaseModel):
     statement: PayrollStatementRecord
     items: list[PayrollStatementItemRecord] = Field(default_factory=list)
+    # Preview-only source context. These fields are deliberately absent from the
+    # Sheets schemas and therefore can never become stored columns by accident.
+    file_name: str | None = None
+    parse_method: Literal["pdf_text", "ocr"] | None = None
+    employee: str | None = None
 
 
 class DuplicateDecision(BaseModel):
@@ -278,6 +283,8 @@ def phase_a_to_storage_candidate(
     content_hash: str | None = None,
     aliases: Iterable[PayrollItemAliasRecord] = INITIAL_ALIASES,
     parser_version: str = PARSER_VERSION,
+    file_name: str | None = None,
+    employee: str | None = None,
 ) -> PayrollStorageCandidate:
     """Convert Phase A output to a storage candidate without I/O or mutation."""
     statement_type = classify_statement_type(statement_label)
@@ -302,4 +309,10 @@ def phase_a_to_storage_candidate(
         or statement_type == "other"
         or any(item.needs_review for item in items)
     )
-    return PayrollStorageCandidate(statement=statement, items=items)
+    return PayrollStorageCandidate(
+        statement=statement,
+        items=items,
+        file_name=file_name,
+        parse_method=preview.extraction_method,
+        employee=employee,
+    )
