@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 import tempfile
+from typing import Protocol
 
+from .coverage_confirmation import (
+    ConfirmationIdentity,
+    CoverageConfirmationIdentityResolution,
+    CoverageConfirmationRecord,
+)
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file, read_only_drive_service
 from .paypay_operational_coverage import (
@@ -12,6 +18,13 @@ from .paypay_operational_coverage import (
     classify_operational_evidence,
     preview_operational_evidence,
 )
+
+
+class CoverageConfirmationResolver(Protocol):
+    def resolve(
+        self,
+        identity: ConfirmationIdentity,
+    ) -> CoverageConfirmationIdentityResolution: ...
 
 
 @contextmanager
@@ -25,12 +38,20 @@ def _temporary_named_csv(data: bytes, filename: str):
 class PayPayDriveInboxPreview:
     """Read-only preview for CSV files shared directly into a Drive inbox."""
 
-    def __init__(self, folder_id: str, *, service=None, downloader=None):
+    def __init__(
+        self,
+        folder_id: str,
+        *,
+        service=None,
+        downloader=None,
+        confirmation_resolver: CoverageConfirmationResolver | None = None,
+    ):
         self.folder_id = normalize_folder_id(folder_id)
         self.service = service or read_only_drive_service()
         self.downloader = downloader or (
             lambda file_id: download_drive_file(file_id, service=self.service)
         )
+        self.confirmation_resolver = confirmation_resolver
 
     def _files(self) -> list[dict]:
         query = f"'{self.folder_id}' in parents and trashed=false"
@@ -48,7 +69,38 @@ class PayPayDriveInboxPreview:
         try:
             data = self.downloader(file["id"])
             with _temporary_named_csv(data, filename) as path:
-                return preview_operational_evidence(path)
+                evidence = preview_operational_evidence(path)
+                if self.confirmation_resolver is None or not evidence.csv_sha256:
+                    return evidence
+                identity = ConfirmationIdentity("paypay", evidence.csv_sha256)
+                try:
+                    resolution = self.confirmation_resolver.resolve(identity)
+                except Exception:
+                    return replace(
+                        evidence,
+                        operational_coverage="rejected",
+                        reason="coverage_confirmation_lookup_failed",
+                    )
+                if resolution.status == "not_found":
+                    return evidence
+                record = resolution.record
+                if (
+                    resolution.status != "exact_match"
+                    or not isinstance(record, CoverageConfirmationRecord)
+                    or record.identity != identity
+                ):
+                    return replace(
+                        evidence,
+                        operational_coverage="rejected",
+                        reason="coverage_confirmation_store_invalid",
+                    )
+                return preview_operational_evidence(
+                    path,
+                    requested_start=record.confirmed_start,
+                    requested_end=record.confirmed_end,
+                    range_source="user_confirmed",
+                    range_confirmed=True,
+                )
         except Exception as exc:
             return PayPayOperationalEvidence(
                 None, None, None, False, filename, None, None,

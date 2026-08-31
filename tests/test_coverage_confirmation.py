@@ -16,6 +16,7 @@ from app.coverage_confirmation import (
     evaluate_confirmation_records,
     lookup_coverage_confirmation_rows,
     preview_coverage_confirmation_append,
+    resolve_coverage_confirmation_identity,
 )
 
 
@@ -337,3 +338,204 @@ def test_append_preview_only_iterates_rows_and_cannot_call_a_write_method():
 
     assert preview.append_planned is True
     assert rows == []
+
+
+def test_identity_resolver_restores_exact_single_full_record():
+    item = record()
+    row = coverage_confirmation_to_sheet_row(item, created_at=CREATED_AT).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(item.identity, [row])
+
+    assert result.status == "exact_match"
+    assert result.diagnostic == "exact_identity_match"
+    assert result.matching_row_number == 2
+    assert result.record == item
+    stored = result.stored_confirmation
+    assert stored is not None
+    assert stored.confirmation_id == coverage_confirmation_id(item.identity)
+    assert stored.schema_version == "1"
+    assert stored.provider == "paypay"
+    assert stored.content_sha256 == HASH
+    assert stored.confirmed_start == "2025-08-20"
+    assert stored.confirmed_end == "2026-08-20"
+    assert stored.range_source == "user_confirmed"
+    assert stored.coverage_status == COVERAGE_STATUS_USER_CONFIRMED
+    assert stored.coverage_reason == COVERAGE_REASON_OPERATIONAL_ONLY
+    assert stored.confirmed_at == UTC_NOW
+    assert stored.confirmation_version == "1"
+    assert stored.source_filename == "Transactions_20250820-20260820.csv"
+    assert stored.drive_file_id is None
+    assert stored.created_at == CREATED_AT
+
+
+def test_identity_resolver_distinguishes_valid_not_found_store():
+    unrelated = record(content_sha256="b" * 64)
+    row = coverage_confirmation_to_sheet_row(
+        unrelated, created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(record().identity, [row])
+
+    assert result.status == "not_found"
+    assert result.diagnostic == "confirmation_not_found"
+    assert result.record is None
+    assert result.stored_confirmation is None
+
+
+def test_identity_resolver_restores_empty_drive_file_id_as_none():
+    item = record(drive_file_id=None)
+    row = coverage_confirmation_to_sheet_row(item, created_at=CREATED_AT).to_sheet_row()
+    assert row[12] == ""
+
+    result = resolve_coverage_confirmation_identity(item.identity, [row])
+
+    assert result.status == "exact_match"
+    assert result.record is not None
+    assert result.record.drive_file_id is None
+
+
+def test_identity_resolver_fails_closed_for_any_malformed_row():
+    valid = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(
+        record().identity, [valid, ["malformed"]],
+    )
+
+    assert result.status == "invalid_store"
+    assert result.diagnostic == "invalid_existing_row"
+    assert result.record is None
+
+
+def test_identity_resolver_fails_closed_for_duplicate_identity_rows():
+    first = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    second = coverage_confirmation_to_sheet_row(
+        record(confirmed_at=datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc)),
+        created_at=datetime(2026, 8, 31, 9, 5, tzinfo=timezone.utc),
+    ).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(
+        record().identity, [first, second],
+    )
+
+    assert result.status == "invalid_store"
+    assert result.diagnostic == "duplicate_identity"
+    assert result.record is None
+
+
+def test_identity_resolver_fails_closed_for_identity_range_conflict():
+    first = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    second = coverage_confirmation_to_sheet_row(
+        record(confirmed_start="2025-08-21"), created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(
+        record().identity, [first, second],
+    )
+
+    assert result.status == "invalid_store"
+    assert result.diagnostic == "identity_range_conflict"
+    assert result.record is None
+
+
+def test_identity_resolver_allows_unrelated_distinct_identities():
+    target = record()
+    rows = [
+        coverage_confirmation_to_sheet_row(
+            record(content_sha256="b" * 64), created_at=CREATED_AT,
+        ).to_sheet_row(),
+        coverage_confirmation_to_sheet_row(
+            target, created_at=CREATED_AT,
+        ).to_sheet_row(),
+        coverage_confirmation_to_sheet_row(
+            record(provider="au_pay_card", content_sha256="c" * 64),
+            created_at=CREATED_AT,
+        ).to_sheet_row(),
+    ]
+
+    result = resolve_coverage_confirmation_identity(target.identity, rows)
+
+    assert result.status == "exact_match"
+    assert result.record == target
+    assert result.matching_row_number == 3
+
+
+@pytest.mark.parametrize("identity", [
+    ConfirmationIdentity("au_pay_card", HASH),
+    ConfirmationIdentity("paypay", "b" * 64),
+])
+def test_identity_resolver_wrong_provider_or_sha_is_not_found(identity):
+    row = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+
+    result = resolve_coverage_confirmation_identity(identity, [row])
+
+    assert result.status == "not_found"
+    assert result.record is None
+
+
+def test_identity_resolver_revalidates_deterministic_confirmation_id():
+    row = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    row[0] = "CC-invalid"
+
+    result = resolve_coverage_confirmation_identity(record().identity, [row])
+
+    assert result.status == "invalid_store"
+    assert result.diagnostic == "invalid_existing_row"
+
+
+@pytest.mark.parametrize("cell,value", [
+    (4, "not-a-date"),
+    (4, "2026-08-21"),
+])
+def test_identity_resolver_fails_closed_for_invalid_date_or_range(cell, value):
+    row = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    row[cell] = value
+
+    result = resolve_coverage_confirmation_identity(record().identity, [row])
+
+    assert result.status == "invalid_store"
+    assert result.record is None
+
+
+@pytest.mark.parametrize("cell", [9, 13])
+def test_identity_resolver_fails_closed_for_invalid_timestamp(cell):
+    row = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    row[cell] = "not-a-timestamp"
+
+    result = resolve_coverage_confirmation_identity(record().identity, [row])
+
+    assert result.status == "invalid_store"
+    assert result.record is None
+
+
+@pytest.mark.parametrize("cell,value", [
+    (1, "2"),
+    (6, "filename_candidate"),
+    (7, "complete"),
+    (8, "provider_completeness_proven"),
+    (10, ""),
+    (11, ""),
+])
+def test_identity_resolver_reuses_all_stored_record_validation(cell, value):
+    row = coverage_confirmation_to_sheet_row(
+        record(), created_at=CREATED_AT,
+    ).to_sheet_row()
+    row[cell] = value
+
+    result = resolve_coverage_confirmation_identity(record().identity, [row])
+
+    assert result.status == "invalid_store"
+    assert result.record is None

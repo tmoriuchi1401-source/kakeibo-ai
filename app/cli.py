@@ -57,7 +57,11 @@ from .amazon_cancellation_reconciliation_preview import (
 from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
 from .payment_coverage_status_preview import preview_payment_coverage_status
 from .payment_coverage_manifest import preview_payment_coverage_manifests
-from .coverage_confirmation_sheets_preview import preview_coverage_confirmation_sheet
+from .coverage_confirmation_sheets_preview import (
+    CoverageConfirmationReadOnlyAdapter,
+    CoverageConfirmationReadOnlyResolver,
+    preview_coverage_confirmation_sheet,
+)
 from .coverage_confirmation_cli import (
     CoverageConfirmationInputError,
     load_coverage_confirmation_input,
@@ -97,6 +101,23 @@ def make(require_gemini=True):
     db=SheetsDB(s.spreadsheet_id)
     ai=GeminiAI(s.gemini_api_key,s.gemini_model) if require_gemini else None
     return s,db,ai
+
+
+def build_paypay_coverage_confirmation_resolver(settings):
+    """Optionally build the PayPay confirmation lookup with read-only Sheets."""
+
+    spreadsheet_id = getattr(settings, "spreadsheet_id", "")
+    if not spreadsheet_id:
+        return None
+    try:
+        db = SheetsDB(
+            spreadsheet_id,
+            service=read_only_sheets_service(),
+        )
+        adapter = CoverageConfirmationReadOnlyAdapter(db)
+        return CoverageConfirmationReadOnlyResolver(adapter)
+    except Exception:
+        return None
 
 def main():
     p=argparse.ArgumentParser(description="家計簿AI")
@@ -426,7 +447,11 @@ def main():
         print(preview_shortcut_inbox(args.inbox))
     elif args.cmd=="paypay-drive-inbox-preview":
         s=Settings(); s.validate(need_paypay_drive=True)
-        print(PayPayDriveInboxPreview(s.paypay_drive_folder_id).preview())
+        resolver=build_paypay_coverage_confirmation_resolver(s)
+        print(PayPayDriveInboxPreview(
+            s.paypay_drive_folder_id,
+            confirmation_resolver=resolver,
+        ).preview())
     elif args.cmd=="amazon-cancellation-order-status-apply":
         if not args.apply:
             p.error("amazon-cancellation-order-status-apply requires --apply")

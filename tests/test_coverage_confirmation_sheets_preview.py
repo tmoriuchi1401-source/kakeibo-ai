@@ -3,15 +3,19 @@ import sys
 from copy import deepcopy
 from datetime import datetime, timezone
 
+import pytest
+
 from app import cli
 from app.coverage_confirmation import (
     COVERAGE_CONFIRMATION_HEADERS,
     COVERAGE_CONFIRMATION_SHEET,
+    ConfirmationIdentity,
     CoverageConfirmationRecord,
     coverage_confirmation_to_sheet_row,
 )
 from app.coverage_confirmation_sheets_preview import (
     CoverageConfirmationReadOnlyAdapter,
+    CoverageConfirmationReadOnlyResolver,
     preview_coverage_confirmation_sheet,
     verify_coverage_confirmation_schema,
 )
@@ -205,6 +209,117 @@ def test_read_only_adapter_calls_only_title_and_get_methods():
     assert adapter.sheet_exists() is True
     assert adapter.header() == COVERAGE_CONFIRMATION_HEADERS
     assert adapter.data_rows() == [sheet_row()]
+    assert db.reads == [
+        "sheet_titles",
+        f"{COVERAGE_CONFIRMATION_SHEET}!1:1",
+        f"{COVERAGE_CONFIRMATION_SHEET}!A2:N",
+    ]
+
+
+def test_read_only_resolver_returns_full_exact_record():
+    item = record()
+    db = ReadOnlyDB(rows=[sheet_row(item)])
+    resolver = CoverageConfirmationReadOnlyResolver(
+        CoverageConfirmationReadOnlyAdapter(db),
+    )
+
+    result = resolver.resolve(item.identity)
+
+    assert result.status == "exact_match"
+    assert result.record == item
+    assert result.stored_confirmation is not None
+    assert result.stored_confirmation.created_at == CREATED_AT
+    assert db.reads == [
+        "sheet_titles",
+        f"{COVERAGE_CONFIRMATION_SHEET}!1:1",
+        f"{COVERAGE_CONFIRMATION_SHEET}!A2:N",
+    ]
+
+
+def test_read_only_resolver_sheet_missing_is_safe_not_found():
+    db = ReadOnlyDB(sheet_exists=False)
+    resolver = CoverageConfirmationReadOnlyResolver(
+        CoverageConfirmationReadOnlyAdapter(db),
+    )
+
+    result = resolver.resolve(ConfirmationIdentity("paypay", HASH))
+
+    assert result.status == "not_found"
+    assert result.diagnostic == "sheet_missing"
+    assert result.record is None
+    assert db.reads == ["sheet_titles"]
+
+
+@pytest.mark.parametrize("header", [
+    [],
+    ["wrong"],
+    COVERAGE_CONFIRMATION_HEADERS[:-1],
+])
+def test_read_only_resolver_invalid_schema_fails_closed_without_row_read(header):
+    db = ReadOnlyDB(header=header, rows=[sheet_row()])
+    resolver = CoverageConfirmationReadOnlyResolver(
+        CoverageConfirmationReadOnlyAdapter(db),
+    )
+
+    result = resolver.resolve(ConfirmationIdentity("paypay", HASH))
+
+    assert result.status == "invalid_store"
+    assert result.record is None
+    assert f"{COVERAGE_CONFIRMATION_SHEET}!A2:N" not in db.reads
+
+
+@pytest.mark.parametrize("failing_read,diagnostic", [
+    ("sheet_titles", "sheet_titles_read_failed"),
+    (f"{COVERAGE_CONFIRMATION_SHEET}!1:1", "header_read_failed"),
+    (f"{COVERAGE_CONFIRMATION_SHEET}!A2:N", "data_rows_read_failed"),
+])
+def test_read_only_resolver_read_error_fails_closed(failing_read, diagnostic):
+    class ReadErrorDB(ReadOnlyDB):
+        def sheet_titles(self):
+            if failing_read == "sheet_titles":
+                raise RuntimeError("read failed")
+            return super().sheet_titles()
+
+        def get(self, rng):
+            if failing_read == rng:
+                raise RuntimeError("read failed")
+            return super().get(rng)
+
+    resolver = CoverageConfirmationReadOnlyResolver(
+        CoverageConfirmationReadOnlyAdapter(ReadErrorDB(rows=[sheet_row()])),
+    )
+
+    result = resolver.resolve(ConfirmationIdentity("paypay", HASH))
+
+    assert result.status == "invalid_store"
+    assert result.diagnostic == diagnostic
+    assert result.record is None
+
+
+def test_read_only_resolver_never_uses_write_api():
+    class WriteGuardDB(ReadOnlyDB):
+        def append(self, *args, **kwargs):
+            raise AssertionError("write attempted")
+
+        def update(self, *args, **kwargs):
+            raise AssertionError("write attempted")
+
+        def clear(self, *args, **kwargs):
+            raise AssertionError("write attempted")
+
+        def ensure_sheet(self, *args, **kwargs):
+            raise AssertionError("write attempted")
+
+    item = record()
+    db = WriteGuardDB(rows=[sheet_row(item)])
+    resolver = CoverageConfirmationReadOnlyResolver(
+        CoverageConfirmationReadOnlyAdapter(db),
+    )
+
+    result = resolver.resolve(item.identity)
+
+    assert result.status == "exact_match"
+    assert result.record == item
     assert db.reads == [
         "sheet_titles",
         f"{COVERAGE_CONFIRMATION_SHEET}!1:1",

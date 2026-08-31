@@ -8,10 +8,13 @@ from typing import Literal, Sequence
 from .coverage_confirmation import (
     COVERAGE_CONFIRMATION_HEADERS,
     COVERAGE_CONFIRMATION_SHEET,
+    ConfirmationIdentity,
     CoverageConfirmationAppendPreview,
+    CoverageConfirmationIdentityResolution,
     CoverageConfirmationRecord,
     diagnose_coverage_confirmation_rows,
     preview_coverage_confirmation_append,
+    resolve_coverage_confirmation_identity,
 )
 
 
@@ -335,6 +338,55 @@ class CoverageConfirmationReadOnlyAdapter:
                 raise ValueError("invalid_data_row")
             rows.append(list(row))
         return rows
+
+
+class CoverageConfirmationReadOnlyResolver:
+    """Resolve stored confirmations through read-only adapter operations only."""
+
+    def __init__(self, adapter: CoverageConfirmationReadOnlyAdapter):
+        if not isinstance(adapter, CoverageConfirmationReadOnlyAdapter):
+            raise TypeError("coverage_confirmation_read_only_adapter_required")
+        self.adapter = adapter
+
+    def resolve(
+        self,
+        identity: ConfirmationIdentity,
+    ) -> CoverageConfirmationIdentityResolution:
+        if not isinstance(identity, ConfirmationIdentity):
+            raise TypeError("confirmation_identity_required")
+        try:
+            sheet_exists = self.adapter.sheet_exists()
+        except Exception:
+            return CoverageConfirmationIdentityResolution(
+                "invalid_store", "sheet_titles_read_failed",
+            )
+        if not sheet_exists:
+            return CoverageConfirmationIdentityResolution(
+                "not_found", "sheet_missing",
+            )
+
+        try:
+            header = self.adapter.header()
+        except Exception:
+            return CoverageConfirmationIdentityResolution(
+                "invalid_store", "header_read_failed",
+            )
+        verification = verify_coverage_confirmation_schema(
+            sheet_exists=True,
+            actual_headers=header,
+        )
+        if verification.status != "exact_match":
+            return CoverageConfirmationIdentityResolution(
+                "invalid_store", verification.diagnostic,
+            )
+
+        try:
+            rows = self.adapter.data_rows()
+        except Exception:
+            return CoverageConfirmationIdentityResolution(
+                "invalid_store", "data_rows_read_failed",
+            )
+        return resolve_coverage_confirmation_identity(identity, rows)
 
 
 def _base_report() -> dict:

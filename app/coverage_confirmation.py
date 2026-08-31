@@ -283,15 +283,96 @@ class CoverageConfirmationSheetLookupResult:
 
 
 @dataclass(frozen=True)
-class _ParsedSheetConfirmation:
-    identity: ConfirmationIdentity
-    confirmed_start: str
-    confirmed_end: str
+class StoredCoverageConfirmation:
+    """One fully validated confirmation restored from the fixed Sheets row."""
+
+    confirmation_id: str
+    record: CoverageConfirmationRecord
+    coverage_status: str
+    coverage_reason: str
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.record, CoverageConfirmationRecord):
+            raise TypeError("coverage_confirmation_record_required")
+        if self.confirmation_id != coverage_confirmation_id(self.record.identity):
+            raise ConfirmationValidationError("invalid_confirmation_id")
+        if self.coverage_status != COVERAGE_STATUS_USER_CONFIRMED:
+            raise ConfirmationValidationError("invalid_coverage_status")
+        if self.coverage_reason != COVERAGE_REASON_OPERATIONAL_ONLY:
+            raise ConfirmationValidationError("invalid_coverage_reason")
+        _utc_iso_timestamp(self.created_at, "created_at")
+        object.__setattr__(
+            self, "created_at", self.created_at.astimezone(timezone.utc),
+        )
+
+    @property
+    def identity(self) -> ConfirmationIdentity:
+        return self.record.identity
+
+    @property
+    def schema_version(self) -> str:
+        return self.record.schema_version
+
+    @property
+    def provider(self) -> str:
+        return self.record.provider
+
+    @property
+    def content_sha256(self) -> str:
+        return self.record.content_sha256
+
+    @property
+    def confirmed_start(self) -> str:
+        return self.record.confirmed_start
+
+    @property
+    def confirmed_end(self) -> str:
+        return self.record.confirmed_end
+
+    @property
+    def range_source(self) -> str:
+        return self.record.range_source
+
+    @property
+    def confirmed_at(self) -> datetime:
+        return self.record.confirmed_at
+
+    @property
+    def confirmation_version(self) -> str:
+        return self.record.confirmation_version
+
+    @property
+    def source_filename(self) -> str:
+        return self.record.source_filename
+
+    @property
+    def drive_file_id(self) -> str | None:
+        return self.record.drive_file_id
 
 
-def _parse_confirmation_sheet_row(
+IdentityResolutionStatus = Literal["exact_match", "not_found", "invalid_store"]
+
+
+@dataclass(frozen=True)
+class CoverageConfirmationIdentityResolution:
+    status: IdentityResolutionStatus
+    diagnostic: str
+    stored_confirmation: StoredCoverageConfirmation | None = None
+    matching_row_number: int | None = None
+
+    @property
+    def record(self) -> CoverageConfirmationRecord | None:
+        if self.stored_confirmation is None:
+            return None
+        return self.stored_confirmation.record
+
+
+def parse_stored_coverage_confirmation(
     raw_row: Sequence[object],
-) -> _ParsedSheetConfirmation | None:
+) -> StoredCoverageConfirmation | None:
+    """Restore and validate one fixed 14-column row without performing I/O."""
+
     if isinstance(raw_row, (str, bytes, bytearray)):
         raise ConfirmationValidationError("invalid_sheet_row")
     row = list(raw_row)
@@ -316,11 +397,31 @@ def _parse_confirmation_sheet_row(
         raise ConfirmationValidationError("invalid_coverage_status")
     if cells[8] != COVERAGE_REASON_OPERATIONAL_ONLY:
         raise ConfirmationValidationError("invalid_coverage_reason")
-    _parse_utc_timestamp(cells[9], "confirmed_at")
-    _required_text(cells[10], "confirmation_version")
-    _required_text(cells[11], "source_filename")
-    _parse_utc_timestamp(cells[13], "created_at")
-    return _ParsedSheetConfirmation(identity, start, end)
+    record = CoverageConfirmationRecord(
+        schema_version=cells[1],
+        provider=identity.provider,
+        content_sha256=identity.content_sha256,
+        confirmed_start=start,
+        confirmed_end=end,
+        range_source=cells[6],
+        confirmed_at=_parse_utc_timestamp(cells[9], "confirmed_at"),
+        confirmation_version=cells[10],
+        source_filename=cells[11],
+        drive_file_id=cells[12] or None,
+    )
+    return StoredCoverageConfirmation(
+        confirmation_id=cells[0],
+        record=record,
+        coverage_status=cells[7],
+        coverage_reason=cells[8],
+        created_at=_parse_utc_timestamp(cells[13], "created_at"),
+    )
+
+
+def _parse_confirmation_sheet_row(
+    raw_row: Sequence[object],
+) -> StoredCoverageConfirmation | None:
+    return parse_stored_coverage_confirmation(raw_row)
 
 
 @dataclass(frozen=True)
@@ -338,7 +439,7 @@ def diagnose_coverage_confirmation_rows(
 ) -> CoverageConfirmationRowsDiagnostics:
     """Count row health without exposing row values or changing lookup semantics."""
 
-    valid: list[_ParsedSheetConfirmation] = []
+    valid: list[StoredCoverageConfirmation] = []
     invalid_count = 0
     empty_count = 0
     for raw_row in existing_rows:
@@ -352,7 +453,7 @@ def diagnose_coverage_confirmation_rows(
         else:
             valid.append(parsed)
 
-    identities: dict[ConfirmationIdentity, list[_ParsedSheetConfirmation]] = {}
+    identities: dict[ConfirmationIdentity, list[StoredCoverageConfirmation]] = {}
     for item in valid:
         identities.setdefault(item.identity, []).append(item)
     duplicate_count = sum(len(items) - 1 for items in identities.values())
@@ -367,6 +468,57 @@ def diagnose_coverage_confirmation_rows(
         empty_row_count=empty_count,
         duplicate_identity_count=duplicate_count,
         identity_conflict_count=conflict_count,
+    )
+
+
+def resolve_coverage_confirmation_identity(
+    identity: ConfirmationIdentity,
+    existing_rows: Iterable[Sequence[object]],
+) -> CoverageConfirmationIdentityResolution:
+    """Resolve exactly one stored confirmation by identity, failing closed globally."""
+
+    if not isinstance(identity, ConfirmationIdentity):
+        raise TypeError("confirmation_identity_required")
+    try:
+        rows = list(existing_rows)
+    except TypeError:
+        return CoverageConfirmationIdentityResolution(
+            "invalid_store", "invalid_existing_rows",
+        )
+
+    diagnostics = diagnose_coverage_confirmation_rows(rows)
+    if diagnostics.invalid_row_count:
+        return CoverageConfirmationIdentityResolution(
+            "invalid_store", "invalid_existing_row",
+        )
+    if diagnostics.identity_conflict_count:
+        return CoverageConfirmationIdentityResolution(
+            "invalid_store", "identity_range_conflict",
+        )
+    if diagnostics.duplicate_identity_count:
+        return CoverageConfirmationIdentityResolution(
+            "invalid_store", "duplicate_identity",
+        )
+
+    matches: list[tuple[int, StoredCoverageConfirmation]] = []
+    for row_number, raw_row in enumerate(rows, start=2):
+        stored = _parse_confirmation_sheet_row(raw_row)
+        if stored is not None and stored.identity == identity:
+            matches.append((row_number, stored))
+    if not matches:
+        return CoverageConfirmationIdentityResolution(
+            "not_found", "confirmation_not_found",
+        )
+    if len(matches) != 1:
+        return CoverageConfirmationIdentityResolution(
+            "invalid_store", "target_identity_not_unique",
+        )
+    row_number, stored = matches[0]
+    return CoverageConfirmationIdentityResolution(
+        "exact_match",
+        "exact_identity_match",
+        stored_confirmation=stored,
+        matching_row_number=row_number,
     )
 
 
