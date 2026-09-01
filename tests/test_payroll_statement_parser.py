@@ -100,3 +100,42 @@ def test_non_reference_reviewed_or_missing_value_items_are_not_candidates():
     ]
 
     assert _totals("", items) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("taxable", "non_taxable", "expected_gross"),
+    (
+        ("38.430", "0", 38430),
+        ("53.985", "0", 53985),
+        ("51.500", "0", 51500),
+        ("702.239", "560,520", 1262759),
+        ("38430", "0", 38430),
+        ("560520", "0", 560520),
+    ),
+)
+def test_total_anchor_fallback_accepts_complete_money_tokens(
+    taxable, non_taxable, expected_gross,
+):
+    text = f"課税対象支給額 {taxable}\n非課税合計 {non_taxable}"
+
+    assert _totals(text, []) == (expected_gross, None, None)
+
+
+@pytest.mark.parametrize(
+    "malformed_taxable",
+    (
+        "2011.300",
+        "|38.430",
+        "409.257|",
+        ".38.430",
+        "38.430.",
+        "38..430",
+        "38,43",
+        "38,430,00",
+        "38,430.000",
+    ),
+)
+def test_total_anchor_fallback_rejects_malformed_amount_tokens(malformed_taxable):
+    text = f"課税対象支給額 {malformed_taxable}\n非課税合計 38.430"
+
+    assert _totals(text, []) == (None, None, None)

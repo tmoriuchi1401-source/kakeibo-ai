@@ -11,6 +11,9 @@ from .payroll_parser import amounts, compact, parse_positioned_items, parse_peri
 _COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
 _SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
 _SUMMARY_CANDIDATES = ("gross_pay", "total_deductions", "net_pay")
+_COMPLETE_MONEY_TOKEN = re.compile(
+    r"\d+|\d{1,3}(?:,\d{3})+|\d{1,3}(?:\.\d{3})+"
+)
 
 
 def _company_name(text: str) -> str | None:
@@ -67,6 +70,17 @@ def _supplement_totals_from_items(
     return (resolved["gross_pay"], resolved["total_deductions"], resolved["net_pay"])
 
 
+def _anchored_money_token(text: str, label_pattern: str) -> int | None:
+    """Read one complete money token after a known total label without repair."""
+    match = re.search(rf"{label_pattern}\s*(\S+)", text)
+    if match is None:
+        return None
+    token = compact(match.group(1))
+    if _COMPLETE_MONEY_TOKEN.fullmatch(token) is None:
+        return None
+    return int(token.replace(",", "").replace(".", ""))
+
+
 def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None, int | None]:
     normalized = compact(text)
     gross = deductions = net = None
@@ -88,12 +102,9 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
     # OCR often retains these three robust anchors even when the summary row loses
     # its labels: taxable earnings + non-taxable earnings = gross; transfer = net.
     if gross is None:
-        tax = re.search(r"課税対象支給額\s*([\d,.]+)", text)
-        non_tax = re.search(r"非課税合計\s*([\d,.]+)", text)
-        insured = re.search(r"[屋雇]用保険対象額\s*([\d,.]+)", text)
-        def number(match):
-            return int(re.sub(r"\D", "", match.group(1))) if match else None
-        taxable, non_taxable, insured_total = number(tax), number(non_tax), number(insured)
+        taxable = _anchored_money_token(text, r"課税対象支給額")
+        non_taxable = _anchored_money_token(text, r"非課税合計")
+        insured_total = _anchored_money_token(text, r"[屋雇]用保険対象額")
         if taxable is not None and non_taxable is not None:
             gross = taxable + non_taxable
         elif insured_total is not None:
