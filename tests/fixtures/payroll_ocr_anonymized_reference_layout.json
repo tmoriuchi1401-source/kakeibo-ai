@@ -1,0 +1,24 @@
+{
+  "fixture_name": "anonymized_payroll_ocr_reference_layout",
+  "anonymization": {
+    "source": "synthetic reconstruction of payroll OCR layout",
+    "company_name": null,
+    "employee_name": null,
+    "employee_id": null,
+    "account_information": null
+  },
+  "text": "2026年8月分 給与明細書\n課税対象支給額 702.239\n非課税合計 38.430\n振込 560,520",
+  "file_type": "pdf",
+  "extraction_method": "ocr",
+  "tokens": [
+    {"text": "課税対象支給額", "page": 1, "x": 20, "y": 20, "width": 110, "height": 16, "confidence": 96},
+    {"text": "702.239", "page": 1, "x": 155, "y": 20, "width": 66, "height": 16, "confidence": 93},
+    {"text": "非課税合計", "page": 1, "x": 20, "y": 52, "width": 88, "height": 16, "confidence": 91},
+    {"text": "38.430", "page": 1, "x": 155, "y": 52, "width": 60, "height": 16, "confidence": 83},
+    {"text": "|", "page": 1, "x": 238, "y": 8, "width": 3, "height": 78, "confidence": 90},
+    {"text": "総支給額累計", "page": 1, "x": 260, "y": 52, "width": 98, "height": 16, "confidence": 88},
+    {"text": "7,087,172", "page": 1, "x": 382, "y": 52, "width": 88, "height": 16, "confidence": 72},
+    {"text": "標準報酬月額", "page": 1, "x": 20, "y": 88, "width": 100, "height": 16, "confidence": 95},
+    {"text": "300,000", "page": 1, "x": 155, "y": 88, "width": 66, "height": 16, "confidence": 94}
+  ]
+}
