@@ -6,9 +6,11 @@ from app.medical_receipt_privacy import (
     PaymentAmountCandidate,
     ReceiptPrivacyPreview,
     SafeModelValidationError,
+    _StructuredOcrToken,
     build_receipt_privacy_preview,
     classify_receipt_text,
     extract_medical_payment_candidates,
+    extract_structured_medical_payment_candidates,
     gemini_allowed_for,
     resolve_medical_payment_candidates,
 )
@@ -184,6 +186,73 @@ def test_keeps_allowed_specific_payment_labels(text, label_type):
 )
 def test_ambiguous_or_cross_line_relationships_produce_no_candidate(text):
     assert extract_medical_payment_candidates(text) == []
+
+
+def _ocr_token(
+    text: str,
+    x: float,
+    *,
+    confidence: float = 96,
+    page: int = 1,
+    line: int = 1,
+    width: float = 50,
+) -> _StructuredOcrToken:
+    return _StructuredOcrToken(
+        text=text,
+        page=page,
+        x=x,
+        y=float(line * 20),
+        width=width,
+        height=12,
+        confidence=confidence,
+        line_key=(1, 1, line, 5),
+    )
+
+
+def test_structured_ocr_confirms_one_high_confidence_same_line_payment():
+    candidates = extract_structured_medical_payment_candidates(
+        (_ocr_token("支払額", 10), _ocr_token("3,250円", 100))
+    )
+
+    assert [(candidate.amount, candidate.label_type, candidate.strength) for candidate in candidates] == [
+        (3250, "payment_amount", "strong")
+    ]
+
+
+def test_structured_ocr_supports_only_unambiguous_truncated_strong_label():
+    candidates = extract_structured_medical_payment_candidates(
+        (_ocr_token("支額", 10), _ocr_token("3,250円", 100))
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].amount == 3250
+    assert candidates[0].strength == "strong"
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        (_ocr_token("支払額", 10), _ocr_token("38.430円", 100)),
+        (_ocr_token("支払額", 10), _ocr_token("3,250円", 100), _ocr_token("4,000円", 180)),
+        (_ocr_token("保険", 10), _ocr_token("支払額", 70), _ocr_token("3,250円", 150)),
+        (_ocr_token("支払額", 10), _ocr_token("3,250円", 100, page=2)),
+        (_ocr_token("支払額", 10), _ocr_token("3,250円", 100, confidence=69)),
+    ],
+)
+def test_structured_ocr_rejects_ambiguous_or_unsafe_payment_evidence(tokens):
+    assert extract_structured_medical_payment_candidates(tokens) == []
+
+
+def test_dot_separated_structured_ocr_amount_stays_needs_review():
+    preview = build_receipt_privacy_preview(
+        "病院 診療",
+        (_ocr_token("支払額", 10), _ocr_token("38.430円", 100)),
+    )
+
+    assert preview.classification == "medical"
+    assert preview.status == "needs_review"
+    assert preview.payment_amount is None
+    assert preview.reason_code == "no_candidate"
 
 
 def _candidate(

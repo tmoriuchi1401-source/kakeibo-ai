@@ -171,7 +171,8 @@ def evaluate_receipt_privacy(
         )
         extracted = type(extracted)(failure_status, extracted.method, None)
     preview = build_receipt_privacy_preview(
-        extracted.text if extracted.status == "extracted" else None
+        extracted.text if extracted.status == "extracted" else None,
+        extracted.structured_tokens if extracted.status == "extracted" else (),
     )
 
     if preview.classification == "normal":

@@ -253,6 +253,65 @@ def test_synthetic_image_uses_bytesio_ocr_path(monkeypatch):
     assert result.text_present is True
 
 
+def test_structured_ocr_tokens_remain_private_to_the_gate_hand_off(monkeypatch):
+    token = extraction._StructuredOcrToken(
+        "synthetic-token", 1, 10, 10, 50, 12, 96, (1, 1, 1, 5)
+    )
+    monkeypatch.setattr(extraction, "_run_image_ocr", lambda image: "レシート 商品 合計 100円")
+    monkeypatch.setattr(extraction, "_run_image_ocr_tokens", lambda image, page: (token,))
+
+    private = extraction._extract_receipt_text(_synthetic_png(), "image/png")
+    public = extraction.extract_receipt_text(_synthetic_png(), "image/png")
+
+    assert private.structured_tokens == (token,)
+    assert set(public.model_dump()) == {
+        "extraction_status",
+        "extraction_method",
+        "text_present",
+    }
+
+
+def test_image_to_data_maps_geometry_and_confidence_to_private_tokens(monkeypatch):
+    class Output:
+        DICT = object()
+
+    class FakeTesseract:
+        pass
+
+    FakeTesseract.Output = Output
+
+    def image_to_data(image, *, lang, config, output_type):
+        assert lang == "jpn+eng"
+        assert config == "--psm 6"
+        assert output_type is Output.DICT
+        return {
+            "text": ["", "synthetic"],
+            "conf": ["-1", "96.5"],
+            "left": [0, 10],
+            "top": [0, 20],
+            "width": [0, 30],
+            "height": [0, 12],
+            "block_num": [0, 1],
+            "par_num": [0, 2],
+            "line_num": [0, 3],
+            "level": [0, 5],
+        }
+
+    FakeTesseract.image_to_data = staticmethod(image_to_data)
+
+    monkeypatch.setitem(sys.modules, "pytesseract", FakeTesseract)
+
+    tokens = extraction._run_image_ocr_tokens(object(), page=2)
+
+    assert len(tokens) == 1
+    assert (tokens[0].page, tokens[0].x, tokens[0].y, tokens[0].confidence) == (
+        2,
+        10,
+        20,
+        96.5,
+    )
+
+
 @pytest.mark.parametrize("mime_type", ["IMAGE/PNG", " image/png ", " ImAgE/JpEg "])
 def test_mime_case_and_whitespace_are_normalized(monkeypatch, mime_type):
     monkeypatch.setattr(extraction, "_run_image_ocr", lambda image: "レシート 商品 合計 100円")

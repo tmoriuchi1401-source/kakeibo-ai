@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app import receipt_privacy_gate as gate
+from app.medical_receipt_privacy import _StructuredOcrToken
 from app.receipt_text_extraction import _ReceiptTextExtraction
 
 
@@ -30,6 +31,10 @@ def _scan_pdf_gate_for(monkeypatch, text: str):
         lambda content, mime_type: _extracted(text, "pdf_ocr"),
     )
     return gate.evaluate_receipt_privacy(b"synthetic-scan-pdf", "application/pdf")
+
+
+def _ocr_token(text: str, x: float) -> _StructuredOcrToken:
+    return _StructuredOcrToken(text, 1, x, 20, 50, 12, 96, (1, 1, 1, 5))
 
 
 def test_normal_text_is_the_only_gemini_allowed_result(monkeypatch):
@@ -61,6 +66,35 @@ def test_scan_pdf_ocr_medical_text_stays_local_and_extracts_payment(monkeypatch)
     assert result.status == "confirmed"
     assert result.gemini_allowed is False
     assert result.medical_payment_amount == 3250
+
+
+def test_structured_ocr_stays_private_and_can_confirm_a_local_payment(monkeypatch):
+    tokens = (_ocr_token("支額", 10), _ocr_token("3,250円", 100))
+    monkeypatch.setattr(
+        gate,
+        "_extract_receipt_text",
+        lambda content, mime_type: _ReceiptTextExtraction(
+            "extracted", "image_ocr", "病院 診療", tokens
+        ),
+    )
+
+    result = gate.evaluate_receipt_privacy(b"synthetic-document", "image/png")
+
+    assert result.classification == "medical"
+    assert result.status == "confirmed"
+    assert result.medical_payment_amount == 3250
+    assert set(result.model_dump()) == {
+        "classification",
+        "extraction_status",
+        "extraction_method",
+        "text_present",
+        "status",
+        "reason_code",
+        "medical_payment_amount",
+        "medical_candidate_count",
+        "category",
+        "gemini_allowed",
+    }
 
 
 def test_payroll_text_is_blocked(monkeypatch):

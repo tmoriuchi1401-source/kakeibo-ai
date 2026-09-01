@@ -12,6 +12,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from .medical_receipt_privacy import _StructuredOcrToken
+
 
 ExtractionStatus = Literal[
     "extracted",
@@ -47,6 +49,17 @@ class _PdfPageLimitExceeded(Exception):
 
 class _PdfEmbeddedTextUnavailable(Exception):
     """Internal signal for PDFs that must not enter the renderer fallback."""
+
+
+class _OcrText(str):
+    """Transient OCR text plus private geometry from one renderer pass."""
+
+    __slots__ = ("structured_tokens",)
+
+    def __new__(cls, value: str, structured_tokens: tuple[_StructuredOcrToken, ...]) -> Self:
+        result = super().__new__(cls, value)
+        result.structured_tokens = structured_tokens
+        return result
 
 
 class SafeExtractionModelError(ValueError):
@@ -130,6 +143,7 @@ class _ReceiptTextExtraction:
     status: ExtractionStatus
     method: ExtractionMethod
     text: str | None = field(repr=False)
+    structured_tokens: tuple[_StructuredOcrToken, ...] = field(default=(), repr=False)
 
     @property
     def text_present(self) -> bool:
@@ -199,6 +213,8 @@ def _extract_pdf_ocr_text(content: bytes) -> str:
             raise _PdfPageLimitExceeded()
 
         page_texts: list[str] = []
+        structured_tokens: list[_StructuredOcrToken] = []
+        structured_complete = True
         for page_index in range(page_count):
             page = None
             bitmap = None
@@ -217,12 +233,23 @@ def _extract_pdf_ocr_text(content: bytes) -> str:
                     raise _PdfOcrFailed() from None
                 if text and text.strip():
                     page_texts.append(text)
+                try:
+                    page_tokens = _run_image_ocr_tokens(image, page=page_index + 1)
+                except Exception:
+                    structured_complete = False
+                else:
+                    if page_tokens:
+                        structured_tokens.extend(page_tokens)
+                    else:
+                        structured_complete = False
             finally:
                 _close_if_possible(image)
                 _close_if_possible(bitmap)
                 _close_if_possible(page)
 
-        return "\n".join(page_texts)
+        return _OcrText(
+            "\n".join(page_texts), tuple(structured_tokens) if structured_complete else ()
+        )
     finally:
         _close_if_possible(document)
 
@@ -231,6 +258,52 @@ def _run_image_ocr(image) -> str:
     import pytesseract
 
     return pytesseract.image_to_string(image, lang="jpn+eng", config="--psm 6")
+
+
+def _run_image_ocr_tokens(image, page: int) -> tuple[_StructuredOcrToken, ...]:
+    """Return transient local OCR geometry without exposing it from this module."""
+    import pytesseract
+
+    data = pytesseract.image_to_data(
+        image,
+        lang="jpn+eng",
+        config="--psm 6",
+        output_type=pytesseract.Output.DICT,
+    )
+    tokens: list[_StructuredOcrToken] = []
+    for index, raw_text in enumerate(data.get("text", ())):
+        text = str(raw_text or "").strip()
+        if not text:
+            continue
+        try:
+            confidence = float(data["conf"][index])
+            x = float(data["left"][index])
+            y = float(data["top"][index])
+            width = float(data["width"][index])
+            height = float(data["height"][index])
+            line_key = (
+                int(data["block_num"][index]),
+                int(data["par_num"][index]),
+                int(data["line_num"][index]),
+                int(data["level"][index]),
+            )
+        except (KeyError, IndexError, TypeError, ValueError):
+            # A malformed OCR adapter result cannot be trusted for pairing.
+            return ()
+        if confidence < 0 or width <= 0 or height <= 0:
+            continue
+        tokens.append(
+            _StructuredOcrToken(text, page, x, y, width, height, confidence, line_key)
+        )
+    return tuple(tokens)
+
+
+def _extract_image_ocr_tokens(content: bytes) -> tuple[_StructuredOcrToken, ...]:
+    from PIL import Image
+
+    with Image.open(BytesIO(content)) as image:
+        image.load()
+        return _run_image_ocr_tokens(image, page=1)
 
 
 def _extract_image_text(content: bytes) -> str | None:
@@ -268,7 +341,8 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
                 return _ReceiptTextExtraction("pdf_ocr_failed", "pdf_ocr", None)
             if not text or not text.strip():
                 return _ReceiptTextExtraction("pdf_ocr_empty", "pdf_ocr", None)
-            return _ReceiptTextExtraction("extracted", "pdf_ocr", text)
+            tokens = getattr(text, "structured_tokens", ())
+            return _ReceiptTextExtraction("extracted", "pdf_ocr", text, tokens)
         return _ReceiptTextExtraction("extracted", "pdf_text", text)
 
     if normalized_mime in _IMAGE_MIME_TYPES:
@@ -279,7 +353,11 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
             return _ReceiptTextExtraction("extraction_failed", "image_ocr", None)
         if not text or not text.strip():
             return _ReceiptTextExtraction("ocr_empty", "image_ocr", None)
-        return _ReceiptTextExtraction("extracted", "image_ocr", text)
+        try:
+            tokens = _extract_image_ocr_tokens(content)
+        except Exception:
+            tokens = ()
+        return _ReceiptTextExtraction("extracted", "image_ocr", text, tokens)
 
     return _ReceiptTextExtraction("unsupported_mime_type", "none", None)
 

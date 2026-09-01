@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -331,6 +332,34 @@ _CURRENCY_TOKEN_RE = re.compile(
 _PLAIN_NUMBER_RE = re.compile(r"[0-9]+")
 _GROUPED_NUMBER_RE = re.compile(r"[0-9]{1,3}(?:,[0-9]{3})+")
 _JAPANESE_BOUNDARY_RE = re.compile(r"[一-龯々ぁ-ゖァ-ヺ]")
+_STRUCTURED_AMOUNT_RE = re.compile(
+    r"(?:¥\s*)?(?P<number>[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\s*円)?"
+)
+_MIN_STRUCTURED_LABEL_CONFIDENCE = 90.0
+_MIN_STRUCTURED_AMOUNT_CONFIDENCE = 70.0
+_MAX_STRUCTURED_HORIZONTAL_GAP = 240.0
+
+
+@dataclass(frozen=True)
+class _StructuredOcrToken:
+    """Private local OCR data; it must never cross a public result boundary."""
+
+    text: str
+    page: int
+    x: float
+    y: float
+    width: float
+    height: float
+    confidence: float
+    line_key: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class _StructuredLabelMatch:
+    token: _StructuredOcrToken
+    label_type: LabelType
+    strength: CandidateStrength
+    rank: int
 
 
 def _matched_signals(text: str, signals: tuple[str, ...]) -> set[str]:
@@ -475,6 +504,120 @@ def _payment_labels_on_line(
     return matches
 
 
+def _compact_ocr_token(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
+
+
+def _structured_label_match(value: str) -> tuple[LabelType, CandidateStrength, int] | None:
+    """Recognise exact labels, plus one tightly bounded truncated strong label."""
+    compact = _compact_ocr_token(value)
+    if (
+        not compact
+        or any(excluded in compact for excluded in _EXCLUDED_AMOUNT_CONTEXT)
+        or _EXCLUDED_COMPOUND_PAYMENT_RE.search(compact)
+    ):
+        return None
+    for label, label_type, strength, rank in _LABEL_RULES:
+        if compact == label:
+            return label_type, strength, rank
+    if compact == "支払額":
+        return "payment_amount", "strong", 1
+
+    # A two-character token may be a three-character strong payment label with
+    # exactly one missing character. Do not allow substitutions, longer labels,
+    # weak labels, or non-unique mappings.
+    truncated = [
+        (label_type, strength, rank)
+        for label, label_type, strength, rank in _LABEL_RULES + (("支払額", "payment_amount", "strong", 1),)
+        if strength == "strong"
+        and len(label) == 3
+        and len(compact) == 2
+        and any(label[:index] + label[index + 1 :] == compact for index in range(len(label)))
+    ]
+    return truncated[0] if len(truncated) == 1 else None
+
+
+def _structured_amount(value: str) -> int | None:
+    """Accept an entire integer token only; dots, signs, and partial matches fail closed."""
+    match = _STRUCTURED_AMOUNT_RE.fullmatch(unicodedata.normalize("NFKC", value).strip())
+    if match is None:
+        return None
+    return _parse_number_token(match.group("number"), "")
+
+
+def _same_structured_line(left: _StructuredOcrToken, right: _StructuredOcrToken) -> bool:
+    return left.page == right.page and left.line_key == right.line_key
+
+
+def _structured_line_key(token: _StructuredOcrToken) -> tuple[int, tuple[int, int, int, int]]:
+    return token.page, token.line_key
+
+
+def _structured_excluded_line(tokens: tuple[_StructuredOcrToken, ...]) -> bool:
+    compact = "".join(_compact_ocr_token(token.text) for token in tokens)
+    return bool(
+        any(excluded in compact for excluded in _EXCLUDED_AMOUNT_CONTEXT)
+        or _EXCLUDED_COMPOUND_PAYMENT_RE.search(compact)
+    )
+
+
+def extract_structured_medical_payment_candidates(
+    tokens: tuple[_StructuredOcrToken, ...],
+) -> list[PaymentAmountCandidate]:
+    """Use transient local OCR geometry only when every pairing fact is unambiguous."""
+    by_line: dict[tuple[int, tuple[int, int, int, int]], list[_StructuredOcrToken]] = {}
+    for token in tokens:
+        if not token.text or token.page < 1 or token.confidence < 0:
+            continue
+        by_line.setdefault(_structured_line_key(token), []).append(token)
+
+    candidates: list[PaymentAmountCandidate] = []
+    for line_index, (_, line_tokens) in enumerate(sorted(by_line.items(), key=lambda item: item[0])):
+        ordered = tuple(sorted(line_tokens, key=lambda token: token.x))
+        if _structured_excluded_line(ordered):
+            continue
+        labels = [
+            _StructuredLabelMatch(
+                token=token,
+                label_type=match[0],
+                strength=match[1],
+                rank=match[2],
+            )
+            for token in ordered
+            if token.confidence >= _MIN_STRUCTURED_LABEL_CONFIDENCE
+            if (match := _structured_label_match(token.text)) is not None
+        ]
+        amounts = [
+            (token, amount)
+            for token in ordered
+            if token.confidence >= _MIN_STRUCTURED_AMOUNT_CONFIDENCE
+            if (amount := _structured_amount(token.text)) is not None
+        ]
+        # Do not guess a relationship on a line containing multiple labels or
+        # numbers. This also rejects a token such as "38.430" rather than
+        # treating either segment as a payment amount.
+        if len(labels) != 1 or len(amounts) != 1:
+            continue
+        label = labels[0]
+        amount_token, amount = amounts[0]
+        horizontal_gap = amount_token.x - (label.token.x + label.token.width)
+        if not (
+            _same_structured_line(label.token, amount_token)
+            and 0 <= horizontal_gap <= _MAX_STRUCTURED_HORIZONTAL_GAP
+        ):
+            continue
+        candidates.append(
+            PaymentAmountCandidate(
+                amount=amount,
+                label_type=label.label_type,
+                strength=label.strength,
+                rank=label.rank,
+                source_line_index=line_index,
+            )
+        )
+    return candidates
+
+
 def extract_medical_payment_candidates(text: str) -> list[PaymentAmountCandidate]:
     """Return only unambiguous same-line, labelled payment candidates."""
     candidates: list[PaymentAmountCandidate] = []
@@ -541,7 +684,10 @@ def resolve_medical_payment_candidates(
     )
 
 
-def build_receipt_privacy_preview(text: str | None) -> ReceiptPrivacyPreview:
+def build_receipt_privacy_preview(
+    text: str | None,
+    structured_tokens: tuple[_StructuredOcrToken, ...] = (),
+) -> ReceiptPrivacyPreview:
     """Build a decision-only preview without retaining raw OCR data."""
     decision = classify_receipt_text(text)
     if decision.classification != "medical":
@@ -553,7 +699,9 @@ def build_receipt_privacy_preview(text: str | None) -> ReceiptPrivacyPreview:
             reason_code=decision.reason_code,
         )
 
-    resolution = resolve_medical_payment_candidates(extract_medical_payment_candidates(text or ""))
+    text_candidates = extract_medical_payment_candidates(text or "")
+    structured_candidates = extract_structured_medical_payment_candidates(structured_tokens)
+    resolution = resolve_medical_payment_candidates(text_candidates + structured_candidates)
     return ReceiptPrivacyPreview(
         classification="medical",
         status=resolution.status,
