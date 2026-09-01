@@ -436,12 +436,16 @@ def main():
             result=run_coverage_confirmation_preflight(db,explicit_input)
         print(json.dumps(result,ensure_ascii=False))
     elif args.cmd=="payment-coverage-manifest-preview":
+        resolver = None
+        if args.paypay_csv:
+            resolver = build_paypay_coverage_confirmation_resolver(Settings())
         print(preview_payment_coverage_manifests(
             paypay_csvs=args.paypay_csv,
             paypay_export_evidence_files=args.paypay_export_evidence,
             paypay_status_image_files=args.paypay_status_image,
             paypay_confirmed_ranges=args.paypay_confirmed_range,
             au_pay_card_csvs=args.au_pay_card_csv,
+            confirmation_resolver=resolver,
         ))
     elif args.cmd=="paypay-shortcut-inbox-preview":
         print(preview_shortcut_inbox(args.inbox))

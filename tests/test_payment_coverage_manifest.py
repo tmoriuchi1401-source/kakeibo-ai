@@ -1,10 +1,19 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import sys
 
 import pytest
 
 from app import cli
 from app.paypay_evidence_bundle import EvidenceVerificationResult
+from app.coverage_confirmation import (
+    COVERAGE_REASON_OPERATIONAL_ONLY,
+    COVERAGE_STATUS_USER_CONFIRMED,
+    ConfirmationIdentity,
+    CoverageConfirmationIdentityResolution,
+    CoverageConfirmationRecord,
+    StoredCoverageConfirmation,
+    coverage_confirmation_id,
+)
 from app.payment_coverage_manifest import (
     CoverageManifest,
     classify_evidence,
@@ -50,6 +59,39 @@ def _captured(start="2026-08-01", end="2026-08-31"):
         evidence_id_valid=True, csv_hash_valid=True,
         status_image_hash_valid=True, signature_valid=True,
         candidate_complete=True, completeness_proven=False,
+    )
+
+
+class _Resolver:
+    def __init__(self, response=None, *, error=None):
+        self.response = response
+        self.error = error
+        self.calls = []
+
+    def resolve(self, identity):
+        self.calls.append(identity)
+        if self.error:
+            raise self.error
+        return self.response(identity) if callable(self.response) else self.response
+
+
+def _confirmation(path, *, provider="paypay", start="2026-08-01",
+                  end="2026-08-31", drive_file_id=None):
+    record = CoverageConfirmationRecord(
+        schema_version="1", provider=provider,
+        content_sha256=__import__("hashlib").sha256(path.read_bytes()).hexdigest(),
+        confirmed_start=start, confirmed_end=end, range_source="user_confirmed",
+        confirmed_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        confirmation_version="1", source_filename=path.name,
+        drive_file_id=drive_file_id,
+    )
+    stored = StoredCoverageConfirmation(
+        coverage_confirmation_id(record.identity), record,
+        COVERAGE_STATUS_USER_CONFIRMED, COVERAGE_REASON_OPERATIONAL_ONLY,
+        datetime(2026, 8, 31, tzinfo=timezone.utc),
+    )
+    return record, CoverageConfirmationIdentityResolution(
+        "exact_match", "exact_identity_match", stored,
     )
 
 
@@ -217,3 +259,148 @@ def test_preview_and_cli_are_local_read_only(monkeypatch, capsys):
 def test_model_rejects_unproven_complete():
     with pytest.raises(ValueError, match="completeness_proven"):
         CoverageManifest(source="paypay", completion_status="complete")
+
+
+def test_stored_confirmation_supplies_manifest_scope_without_completeness(tmp_path):
+    path = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    record, resolution = _confirmation(path)
+    resolver = _Resolver(resolution)
+
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)], confirmation_resolver=resolver,
+    )
+
+    evidence = result["paypay_operational_evidence"][0]
+    manifest = next(row for row in result["manifests"] if row["source"] == "paypay")
+    assert (evidence["requested_start"], evidence["requested_end"]) == (
+        record.confirmed_start, record.confirmed_end,
+    )
+    assert evidence["operational_coverage"] == "usable"
+    assert (manifest["coverage_start"], manifest["coverage_end"]) == (
+        record.confirmed_start, record.confirmed_end,
+    )
+    assert manifest["completion_status"] == "unknown"
+    assert manifest["completeness_proven"] is False
+    assert manifest["completeness_reason"] == (
+        "explicit_user_confirmation_not_provider_completeness"
+    )
+    assert resolver.calls == [record.identity]
+
+
+def test_confirmation_not_found_preserves_unconfirmed_behavior(tmp_path):
+    path = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    resolver = _Resolver(CoverageConfirmationIdentityResolution(
+        "not_found", "confirmation_not_found",
+    ))
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)], confirmation_resolver=resolver,
+    )
+    evidence = result["paypay_operational_evidence"][0]
+    assert evidence["operational_coverage"] == "needs_confirmation"
+    assert evidence["reason"] == "filename_range_requires_confirmation"
+
+
+@pytest.mark.parametrize("response,error,reason", [
+    (CoverageConfirmationIdentityResolution("invalid_store", "duplicate_identity"),
+     None, "coverage_confirmation_store_invalid"),
+    (None, RuntimeError("read failed"), "coverage_confirmation_lookup_failed"),
+])
+def test_confirmation_failure_fails_closed_per_evidence(
+    tmp_path, response, error, reason,
+):
+    path = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)],
+        confirmation_resolver=_Resolver(response, error=error),
+    )
+    evidence = result["paypay_operational_evidence"][0]
+    assert evidence["operational_coverage"] == "rejected"
+    assert evidence["reason"] == reason
+
+
+def test_manual_and_stored_ranges_must_match(tmp_path):
+    path = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    _, resolution = _confirmation(path)
+    same = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)],
+        paypay_confirmed_ranges=["2026-08-01:2026-08-31"],
+        confirmation_resolver=_Resolver(resolution),
+    )["paypay_operational_evidence"][0]
+    different = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)],
+        paypay_confirmed_ranges=["2026-08-02:2026-08-31"],
+        confirmation_resolver=_Resolver(resolution),
+    )["paypay_operational_evidence"][0]
+    assert same["operational_coverage"] == "usable"
+    assert different["operational_coverage"] == "rejected"
+    assert different["reason"] == "coverage_confirmation_range_conflict"
+
+
+def test_wrong_sha_and_wrong_provider_do_not_match(tmp_path):
+    path = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    wrong_path = _paypay(tmp_path, "wrong.csv", tx="TX-WRONG")
+    wrong_record, _ = _confirmation(wrong_path)
+
+    def only_exact(identity):
+        if identity == wrong_record.identity:
+            return _confirmation(wrong_path)[1]
+        return CoverageConfirmationIdentityResolution(
+            "not_found", "confirmation_not_found",
+        )
+
+    resolver = _Resolver(only_exact)
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)], confirmation_resolver=resolver,
+    )
+    assert resolver.calls[0].provider == "paypay"
+    assert resolver.calls[0].content_sha256 != wrong_record.content_sha256
+    assert result["paypay_operational_evidence"][0]["range_confirmed"] is False
+
+
+def test_null_drive_id_and_same_sha_files_share_one_lookup(tmp_path):
+    first = _paypay(tmp_path, "Transactions_20260801-20260831.csv")
+    duplicate_dir = tmp_path / "duplicate"
+    duplicate_dir.mkdir()
+    second = duplicate_dir / first.name
+    second.write_bytes(first.read_bytes())
+    record, resolution = _confirmation(first, drive_file_id=None)
+    resolver = _Resolver(resolution)
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(first), str(second)], confirmation_resolver=resolver,
+    )
+    assert record.drive_file_id is None
+    assert resolver.calls == [ConfirmationIdentity("paypay", record.content_sha256)]
+    assert all(item["range_confirmed"] for item in result["paypay_operational_evidence"])
+
+
+@pytest.mark.parametrize("name,start,end,reason", [
+    ("Transactions_20260701-20260731.csv", "2026-08-01", "2026-08-31",
+     "confirmed_range_conflicts_with_filename_candidate"),
+    ("paypay.csv", "2026-08-02", "2026-08-31",
+     "transaction_outside_requested_range"),
+])
+def test_stored_confirmation_does_not_bypass_operational_rejects(
+    tmp_path, name, start, end, reason,
+):
+    path = _paypay(tmp_path, name)
+    _, resolution = _confirmation(path, start=start, end=end)
+    evidence = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)], confirmation_resolver=_Resolver(resolution),
+    )["paypay_operational_evidence"][0]
+    assert evidence["operational_coverage"] in {"needs_confirmation", "rejected"}
+    assert evidence["reason"] == reason
+
+
+def test_stored_confirmation_does_not_bypass_parse_error(tmp_path):
+    path = tmp_path / "bad.csv"
+    path.write_text("not,a,paypay,csv\n", encoding="utf-8")
+    _, resolution = _confirmation(path)
+    result = preview_payment_coverage_manifests(
+        paypay_csvs=[str(path)], confirmation_resolver=_Resolver(resolution),
+    )
+    evidence = result["paypay_operational_evidence"][0]
+    manifest = next(row for row in result["manifests"] if row["source"] == "paypay")
+    assert evidence["operational_coverage"] == "rejected"
+    assert evidence["reason"] == "parse_error"
+    assert manifest["completion_status"] == "unknown"
+    assert manifest["completeness_proven"] is False

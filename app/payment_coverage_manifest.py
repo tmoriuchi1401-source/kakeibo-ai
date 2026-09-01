@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 from uuid import UUID, uuid5
 
 from .aupay_card_pipeline import parse_aupay_card_csv
@@ -21,11 +21,24 @@ from .paypay_operational_coverage import (
     preview_operational_evidence,
 )
 from .paypay_pipeline import inspect_paypay_csv
+from .coverage_confirmation import (
+    COVERAGE_REASON_OPERATIONAL_ONLY,
+    ConfirmationIdentity,
+    CoverageConfirmationIdentityResolution,
+    CoverageConfirmationRecord,
+)
 
 
 CompletionStatus: TypeAlias = Literal["complete", "incomplete", "unknown"]
 CoverageBasis: TypeAlias = Literal["transaction_date", "billing_cycle", "message_date"]
 PeriodType: TypeAlias = Literal["calendar_month", "explicit_range", "file_defined_range"]
+
+
+class CoverageConfirmationResolver(Protocol):
+    def resolve(
+        self,
+        identity: ConfirmationIdentity,
+    ) -> CoverageConfirmationIdentityResolution: ...
 
 _MANIFEST_NAMESPACE = UUID("46996176-9ad0-4adc-a1b8-3c5bfd01a2b6")
 _SOURCES = ("paypay", "au_pay_card", "amazon_gmail", "au_pay_gmail")
@@ -90,6 +103,7 @@ def _filename_period(path: Path) -> str | None:
 def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = None,
                  paypay_evidence_verification: EvidenceVerificationResult | None = None,
                  paypay_operational_evidence: PayPayOperationalEvidence | None = None,
+                 paypay_confirmed_range: tuple[str, str] | None = None,
                  coverage_basis: CoverageBasis | None = None,
                  period_type: PeriodType = "file_defined_range",
                  imported_at: str | None = None) -> CoverageManifest:
@@ -97,7 +111,11 @@ def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = Non
     path = Path(path)
     basis = coverage_basis or ("billing_cycle" if source == "au_pay_card"
                                else "transaction_date")
-    content_hash = _file_hash(path)
+    content_hash = (
+        paypay_operational_evidence.csv_sha256
+        if source == "paypay" and paypay_operational_evidence
+        else _file_hash(path)
+    )
     try:
         if source == "paypay":
             inspection = inspect_paypay_csv(path)
@@ -135,12 +153,25 @@ def csv_manifest(path: str | Path, source: str, *, evidence_id: str | None = Non
     )
     if scope and not scope_conflict:
         start, end = scope
+    confirmation_scope_conflict = bool(
+        paypay_confirmed_range and observed_start and observed_end
+        and (
+            observed_start < paypay_confirmed_range[0]
+            or observed_end > paypay_confirmed_range[1]
+        )
+    )
+    if paypay_confirmed_range and not confirmation_scope_conflict:
+        start, end = paypay_confirmed_range
     candidate = bool(start and end) or bool(scope)
     proven = False  # Provider verification and complete activation are not implemented.
-    if scope_conflict:
+    if confirmation_scope_conflict:
+        reason = "observed_transaction_outside_confirmed_range"
+    elif scope_conflict:
         reason = "observed_transaction_outside_export_scope"
     elif verification:
         reason = verification.reason
+    elif paypay_confirmed_range:
+        reason = COVERAGE_REASON_OPERATIONAL_ONLY
     else:
         reason = "export_scope_not_proven"
     return CoverageManifest(
@@ -224,6 +255,7 @@ def preview_payment_coverage_manifests(
     paypay_confirmed_ranges: list[str] | None = None,
     au_pay_card_csvs: list[str] | None = None,
     signature_verifier: SignatureVerifier | None = None,
+    confirmation_resolver: CoverageConfirmationResolver | None = None,
 ) -> dict:
     paypay_paths = paypay_csvs or []
     evidence_paths = paypay_export_evidence_files or []
@@ -252,6 +284,11 @@ def preview_payment_coverage_manifests(
     else:
         verifications = [None] * len(paypay_paths)
     operational_evidences = []
+    stored_confirmed_ranges: list[tuple[str, str] | None] = []
+    resolution_cache: dict[
+        ConfirmationIdentity,
+        CoverageConfirmationIdentityResolution | Exception,
+    ] = {}
     for index, path in enumerate(paypay_paths):
         start = end = None
         if confirmed_ranges:
@@ -259,19 +296,82 @@ def preview_payment_coverage_manifests(
             if len(parts) != 2:
                 raise ValueError("confirmed rangeはSTART:END形式で指定してください")
             start, end = parts
-        operational_evidences.append(preview_operational_evidence(
+        manual_range = (start, end) if confirmed_ranges else None
+        initial = preview_operational_evidence(
             path, requested_start=start, requested_end=end,
             range_source="user_confirmed" if confirmed_ranges else None,
             range_confirmed=bool(confirmed_ranges),
+        )
+        if confirmation_resolver is None or not initial.csv_sha256:
+            operational_evidences.append(initial)
+            stored_confirmed_ranges.append(None)
+            continue
+        identity = ConfirmationIdentity("paypay", initial.csv_sha256)
+        if identity not in resolution_cache:
+            try:
+                resolution_cache[identity] = confirmation_resolver.resolve(identity)
+            except Exception as exc:
+                resolution_cache[identity] = exc
+        resolution = resolution_cache[identity]
+        if isinstance(resolution, Exception):
+            operational_evidences.append(replace(
+                initial,
+                operational_coverage="rejected",
+                reason="coverage_confirmation_lookup_failed",
+            ))
+            stored_confirmed_ranges.append(None)
+            continue
+        if not isinstance(resolution, CoverageConfirmationIdentityResolution):
+            operational_evidences.append(replace(
+                initial,
+                operational_coverage="rejected",
+                reason="coverage_confirmation_store_invalid",
+            ))
+            stored_confirmed_ranges.append(None)
+            continue
+        if resolution.status == "not_found":
+            operational_evidences.append(initial)
+            stored_confirmed_ranges.append(None)
+            continue
+        record = resolution.record
+        if (
+            resolution.status != "exact_match"
+            or not isinstance(record, CoverageConfirmationRecord)
+            or record.identity != identity
+        ):
+            operational_evidences.append(replace(
+                initial,
+                operational_coverage="rejected",
+                reason="coverage_confirmation_store_invalid",
+            ))
+            stored_confirmed_ranges.append(None)
+            continue
+        stored_range = (record.confirmed_start, record.confirmed_end)
+        if manual_range is not None and manual_range != stored_range:
+            operational_evidences.append(replace(
+                initial,
+                operational_coverage="rejected",
+                reason="coverage_confirmation_range_conflict",
+            ))
+            stored_confirmed_ranges.append(None)
+            continue
+        operational_evidences.append(preview_operational_evidence(
+            path,
+            requested_start=record.confirmed_start,
+            requested_end=record.confirmed_end,
+            range_source="user_confirmed",
+            range_confirmed=True,
         ))
+        stored_confirmed_ranges.append(stored_range)
     operational_evidences, operational_duplicates, operational_conflicts = (
         classify_operational_evidence(operational_evidences)
     )
     manifests = [csv_manifest(
         path, "paypay", paypay_evidence_verification=verification,
         paypay_operational_evidence=operational,
-    ) for path, verification, operational in zip(
-        paypay_paths, verifications, operational_evidences,
+        paypay_confirmed_range=confirmed_range,
+    ) for path, verification, operational, confirmed_range in zip(
+        paypay_paths, verifications, operational_evidences, stored_confirmed_ranges,
     )]
     manifests += [csv_manifest(path, "au_pay_card") for path in (au_pay_card_csvs or [])]
     present = {item.source for item in manifests}

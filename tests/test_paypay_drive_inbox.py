@@ -557,7 +557,7 @@ def test_cli_missing_coverage_credentials_falls_back_without_resolver(
     assert captured == [None]
 
 
-def test_manifest_cli_does_not_build_paypay_confirmation_resolver(
+def test_manifest_cli_without_paypay_csv_stays_offline(
     monkeypatch, capsys,
 ):
     expected = {"manifest": "unchanged"}
@@ -578,3 +578,56 @@ def test_manifest_cli_does_not_build_paypay_confirmation_resolver(
     cli.main()
 
     assert ast.literal_eval(capsys.readouterr().out) == expected
+
+
+def test_manifest_cli_reuses_optional_read_only_resolver_factory(
+    monkeypatch, capsys,
+):
+    expected = {"manifest": "confirmed"}
+    resolver = object()
+    settings = object()
+    captured = []
+    monkeypatch.setattr(cli, "Settings", lambda: settings)
+    monkeypatch.setattr(
+        cli, "build_paypay_coverage_confirmation_resolver",
+        lambda value: resolver if value is settings else pytest.fail("wrong settings"),
+    )
+
+    def preview_manifest(**kwargs):
+        captured.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(cli, "preview_payment_coverage_manifests", preview_manifest)
+    monkeypatch.setattr(sys, "argv", [
+        "kakeibo", "payment-coverage-manifest-preview",
+        "--paypay-csv", "Transactions_20260801-20260831.csv",
+    ])
+
+    cli.main()
+
+    assert ast.literal_eval(capsys.readouterr().out) == expected
+    assert captured[0]["confirmation_resolver"] is resolver
+
+
+def test_manifest_cli_missing_sheet_configuration_passes_no_resolver(
+    monkeypatch, capsys,
+):
+    expected = {"manifest": "offline"}
+    captured = []
+    monkeypatch.setattr(cli, "Settings", lambda: object())
+    monkeypatch.setattr(
+        cli, "build_paypay_coverage_confirmation_resolver", lambda _settings: None,
+    )
+    monkeypatch.setattr(
+        cli, "preview_payment_coverage_manifests",
+        lambda **kwargs: captured.append(kwargs) or expected,
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "kakeibo", "payment-coverage-manifest-preview",
+        "--paypay-csv", "local.csv",
+    ])
+
+    cli.main()
+
+    assert ast.literal_eval(capsys.readouterr().out) == expected
+    assert captured[0]["confirmation_resolver"] is None
