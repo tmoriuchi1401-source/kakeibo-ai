@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
-from typing import Literal, TypeAlias
+from typing import Iterable, Literal, TypeAlias
+
+from .payment_coverage_dual_track import (
+    PaymentCoverageDualTrackResult,
+    evaluate_payment_coverage_dual_track,
+)
+from .payment_coverage_manifest import CoverageManifest
 
 
 CoverageStatus: TypeAlias = Literal["complete", "incomplete", "unknown"]
@@ -190,7 +196,13 @@ def build_payment_coverage_context(
     header_rows: list[list],
     *,
     as_of: date,
-) -> dict:
+    strict_evaluation: bool = False,
+    strict_manifests: Iterable[CoverageManifest] = (),
+    strict_required_providers: Iterable[str] | None = None,
+    strict_coverage_basis: str | None = None,
+    strict_required_start: date | None = None,
+    strict_required_end: date | None = None,
+) -> dict | PaymentCoverageDualTrackResult[dict]:
     """Build the shared source and per-order coverage evaluation."""
 
     evidence = _source_evidence(import_rows, event_rows)
@@ -219,7 +231,17 @@ def build_payment_coverage_context(
             },
             "overall_payment_coverage_status": overall_status(per_source),
         })
-    return {"source_coverage": source_coverage, "orders": orders}
+    legacy_result = {"source_coverage": source_coverage, "orders": orders}
+    if not strict_evaluation:
+        return legacy_result
+    return evaluate_payment_coverage_dual_track(
+        legacy_result,
+        manifests=strict_manifests,
+        required_providers=strict_required_providers,
+        coverage_basis=strict_coverage_basis,
+        required_start=strict_required_start,
+        required_end=strict_required_end,
+    )
 
 
 def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
