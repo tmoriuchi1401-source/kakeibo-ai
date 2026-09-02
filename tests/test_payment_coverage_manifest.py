@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import date, datetime, timezone
 import sys
 
@@ -16,12 +17,14 @@ from app.coverage_confirmation import (
 )
 from app.payment_coverage_manifest import (
     CoverageManifest,
+    assemble_payment_coverage_manifests,
     classify_evidence,
     csv_manifest,
     gmail_manifest,
     manifest_for_required_window,
     preview_payment_coverage_manifests,
 )
+from app.paypay_operational_coverage import preview_operational_evidence
 
 
 PAYPAY_HEADER = (
@@ -99,6 +102,49 @@ def test_no_evidence_is_unknown():
     result = preview_payment_coverage_manifests()
     assert result["unknown_count"] == 4
     assert all(row["completion_status"] == "unknown" for row in result["manifests"])
+
+
+def test_object_assembly_is_reusable_before_preview_serialization(tmp_path):
+    paypay_path = _paypay(tmp_path)
+    card_path = _card(tmp_path)
+    manifests = assemble_payment_coverage_manifests([
+        csv_manifest(
+            paypay_path,
+            "paypay",
+            paypay_operational_evidence=preview_operational_evidence(paypay_path),
+        ),
+        csv_manifest(card_path, "au_pay_card"),
+    ])
+
+    assert isinstance(manifests, list)
+    assert all(isinstance(item, CoverageManifest) for item in manifests)
+    assert [item.source for item in manifests] == [
+        "paypay", "au_pay_card", "amazon_gmail", "au_pay_gmail",
+    ]
+    assert [item.coverage_basis for item in manifests] == [
+        "transaction_date", "billing_cycle", "message_date", "message_date",
+    ]
+
+    preview = preview_payment_coverage_manifests(
+        paypay_csvs=[str(paypay_path)],
+        au_pay_card_csvs=[str(card_path)],
+    )
+    assert preview["manifests"] == [asdict(item) for item in manifests]
+
+
+def test_object_assembly_preserves_placeholders_and_evidence_classification(tmp_path):
+    path = _paypay(tmp_path)
+    manifests = assemble_payment_coverage_manifests([
+        csv_manifest(path, "paypay"),
+        csv_manifest(path, "paypay"),
+    ])
+
+    assert [item.source for item in manifests] == [
+        "paypay", "paypay", "au_pay_card", "amazon_gmail", "au_pay_gmail",
+    ]
+    assert manifests[1].completeness_reason == "duplicate_evidence"
+    assert manifests[2].coverage_basis == "billing_cycle"
+    assert manifests[2].completeness_reason == "no_completion_evidence"
 
 
 def test_period_without_full_export_proof_is_unknown(tmp_path):

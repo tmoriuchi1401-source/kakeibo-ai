@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Literal, Protocol, TypeAlias
+from typing import Iterable, Literal, Protocol, TypeAlias
 from uuid import UUID, uuid5
 
 from .aupay_card_pipeline import parse_aupay_card_csv
@@ -202,6 +202,30 @@ def gmail_manifest(source: str) -> CoverageManifest:
     )
 
 
+def assemble_payment_coverage_manifests(
+    csv_manifests: Iterable[CoverageManifest],
+) -> list[CoverageManifest]:
+    """Assemble reusable manifest objects before preview serialization.
+
+    Callers supply already-inspected PayPay and au Pay card CSV manifests.  This
+    pure boundary adds the same missing-source and Gmail manifests as the
+    existing preview, then applies the existing evidence classification.
+    """
+
+    manifests = list(csv_manifests)
+    if any(not isinstance(item, CoverageManifest) for item in manifests):
+        raise TypeError("invalid_coverage_manifest_type")
+    present = {item.source for item in manifests}
+    manifests += [CoverageManifest(
+        source=source,
+        coverage_basis=("billing_cycle" if source == "au_pay_card"
+                        else "transaction_date"),
+    ) for source in ("paypay", "au_pay_card") if source not in present]
+    manifests += [gmail_manifest("amazon_gmail"), gmail_manifest("au_pay_gmail")]
+    classified, _, _ = classify_evidence(manifests)
+    return classified
+
+
 def manifest_for_required_window(manifest: CoverageManifest, required_start: date,
                                  required_end: date,
                                  *, coverage_basis: CoverageBasis) -> CompletionStatus:
@@ -366,21 +390,18 @@ def preview_payment_coverage_manifests(
     operational_evidences, operational_duplicates, operational_conflicts = (
         classify_operational_evidence(operational_evidences)
     )
-    manifests = [csv_manifest(
+    csv_manifests = [csv_manifest(
         path, "paypay", paypay_evidence_verification=verification,
         paypay_operational_evidence=operational,
         paypay_confirmed_range=confirmed_range,
     ) for path, verification, operational, confirmed_range in zip(
         paypay_paths, verifications, operational_evidences, stored_confirmed_ranges,
     )]
-    manifests += [csv_manifest(path, "au_pay_card") for path in (au_pay_card_csvs or [])]
-    present = {item.source for item in manifests}
-    manifests += [CoverageManifest(source=source,
-                                   coverage_basis=("billing_cycle" if source == "au_pay_card"
-                                                   else "transaction_date"))
-                  for source in ("paypay", "au_pay_card") if source not in present]
-    manifests += [gmail_manifest("amazon_gmail"), gmail_manifest("au_pay_gmail")]
-    manifests, duplicates, conflicts = classify_evidence(manifests)
+    csv_manifests += [
+        csv_manifest(path, "au_pay_card") for path in (au_pay_card_csvs or [])
+    ]
+    manifests = assemble_payment_coverage_manifests(csv_manifests)
+    _, duplicates, conflicts = classify_evidence(manifests)
     counts = {status: sum(item.completion_status == status for item in manifests)
               for status in ("complete", "incomplete", "unknown")}
     return {
