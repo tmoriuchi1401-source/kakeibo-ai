@@ -244,7 +244,17 @@ def build_payment_coverage_context(
     )
 
 
-def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
+def preview_payment_coverage_status(
+    db,
+    *,
+    as_of: date | None = None,
+    strict_evaluation: bool = False,
+    strict_manifests: Iterable[CoverageManifest] = (),
+    strict_required_providers: Iterable[str] | None = None,
+    strict_coverage_basis: str | None = None,
+    strict_required_start: date | None = None,
+    strict_required_end: date | None = None,
+) -> dict | PaymentCoverageDualTrackResult[dict]:
     """Report source and order coverage using Sheets reads only."""
 
     as_of = as_of or datetime.now(timezone.utc).date()
@@ -252,14 +262,29 @@ def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
     event_rows = [list(row) for row in db.get("Amazonイベント!A2:X")]
     header_rows = [list(row) for row in db.get("Amazon注文ヘッダ!A2:O")]
     context = build_payment_coverage_context(
-        import_rows, event_rows, header_rows, as_of=as_of,
+        import_rows,
+        event_rows,
+        header_rows,
+        as_of=as_of,
+        strict_evaluation=strict_evaluation,
+        strict_manifests=strict_manifests,
+        strict_required_providers=strict_required_providers,
+        strict_coverage_basis=strict_coverage_basis,
+        strict_required_start=strict_required_start,
+        strict_required_end=strict_required_end,
     )
-    source_coverage = context["source_coverage"]
-    orders = context["orders"]
+    if isinstance(context, PaymentCoverageDualTrackResult):
+        legacy_context = context.legacy_result
+        strict_result = context.strict_result
+    else:
+        legacy_context = context
+        strict_result = None
+    source_coverage = legacy_context["source_coverage"]
+    orders = legacy_context["orders"]
 
     counts = {status: sum(row["coverage_status"] == status for row in source_coverage)
               for status in ("complete", "incomplete", "unknown")}
-    return {
+    legacy_result = {
         "previewed_at": as_of.isoformat(),
         "source_count": len(source_coverage),
         "source_status_counts": counts,
@@ -267,3 +292,8 @@ def preview_payment_coverage_status(db, *, as_of: date | None = None) -> dict:
         "sampled_order_count": len(orders),
         "orders": orders,
     }
+    if not strict_evaluation:
+        return legacy_result
+    if strict_result is None:
+        raise ValueError("strict_context_result_missing")
+    return PaymentCoverageDualTrackResult(legacy_result, strict_result)
