@@ -338,6 +338,9 @@ _STRUCTURED_AMOUNT_RE = re.compile(
 _MIN_STRUCTURED_LABEL_CONFIDENCE = 90.0
 _MIN_STRUCTURED_AMOUNT_CONFIDENCE = 70.0
 _MAX_STRUCTURED_HORIZONTAL_GAP = 240.0
+_MAX_RECONSTRUCTED_LABEL_TOKENS = max(len(label) for label, _, _, _ in _LABEL_RULES)
+_MAX_RECONSTRUCTED_LABEL_GAP_HEIGHT_RATIO = 0.75
+_MIN_RECONSTRUCTED_LABEL_VERTICAL_OVERLAP_RATIO = 0.5
 
 
 @dataclass(frozen=True)
@@ -537,6 +540,25 @@ def _structured_label_match(value: str) -> tuple[LabelType, CandidateStrength, i
     return truncated[0] if len(truncated) == 1 else None
 
 
+def _exact_strong_structured_label_match(
+    value: str,
+) -> tuple[LabelType, CandidateStrength, int] | None:
+    """Match only a complete, allowlisted strong label without OCR tolerance."""
+    compact = _compact_ocr_token(value)
+    if (
+        not compact
+        or any(excluded in compact for excluded in _EXCLUDED_AMOUNT_CONTEXT)
+        or _EXCLUDED_COMPOUND_PAYMENT_RE.search(compact)
+    ):
+        return None
+    for label, label_type, strength, rank in _LABEL_RULES:
+        if strength == "strong" and compact == label:
+            return label_type, strength, rank
+    if compact == "支払額":
+        return "payment_amount", "strong", 1
+    return None
+
+
 def _structured_amount(value: str) -> int | None:
     """Accept an entire integer token only; dots, signs, and partial matches fail closed."""
     match = _STRUCTURED_AMOUNT_RE.fullmatch(unicodedata.normalize("NFKC", value).strip())
@@ -561,6 +583,97 @@ def _structured_excluded_line(tokens: tuple[_StructuredOcrToken, ...]) -> bool:
     )
 
 
+def _reconstruction_tokens_are_adjacent(
+    left: _StructuredOcrToken,
+    right: _StructuredOcrToken,
+) -> bool:
+    """Require scale-independent, baseline-aligned adjacency for label fragments."""
+    if not _same_structured_line(left, right) or left.x + left.width > right.x:
+        return False
+    shared_height = min(left.height, right.height)
+    if shared_height <= 0:
+        return False
+    vertical_overlap = min(left.y + left.height, right.y + right.height) - max(left.y, right.y)
+    if vertical_overlap < shared_height * _MIN_RECONSTRUCTED_LABEL_VERTICAL_OVERLAP_RATIO:
+        return False
+    gap = right.x - (left.x + left.width)
+    return gap <= max(left.height, right.height) * _MAX_RECONSTRUCTED_LABEL_GAP_HEIGHT_RATIO
+
+
+def _reconstructed_structured_label_matches(
+    ordered: tuple[_StructuredOcrToken, ...],
+) -> list[_StructuredLabelMatch]:
+    """Reconstruct only contiguous, high-confidence fragments into strong allowlist labels."""
+    matches: list[tuple[int, int, _StructuredLabelMatch]] = []
+    for start, first in enumerate(ordered):
+        if first.confidence < _MIN_STRUCTURED_LABEL_CONFIDENCE:
+            continue
+        fragments = [first]
+        compact = _compact_ocr_token(first.text)
+        for end in range(start + 1, min(len(ordered), start + _MAX_RECONSTRUCTED_LABEL_TOKENS)):
+            current = ordered[end]
+            if (
+                current.confidence < _MIN_STRUCTURED_LABEL_CONFIDENCE
+                or not _reconstruction_tokens_are_adjacent(fragments[-1], current)
+            ):
+                break
+            fragments.append(current)
+            compact += _compact_ocr_token(current.text)
+            match = _exact_strong_structured_label_match(compact)
+            if match is None:
+                continue
+            last = fragments[-1]
+            matches.append(
+                (
+                    start,
+                    end + 1,
+                    _StructuredLabelMatch(
+                        token=_StructuredOcrToken(
+                            compact,
+                            first.page,
+                            first.x,
+                            min(token.y for token in fragments),
+                            last.x + last.width - first.x,
+                            max(token.y + token.height for token in fragments)
+                            - min(token.y for token in fragments),
+                            min(token.confidence for token in fragments),
+                            first.line_key,
+                        ),
+                        label_type=match[0],
+                        strength=match[1],
+                        rank=match[2],
+                    ),
+                )
+            )
+
+    specific = [
+        item for item in matches if item[2].token.text != "支払額"
+    ]
+    return [
+        item[2]
+        for item in matches
+        if item[2].token.text != "支払額"
+        or not any(item[0] < other[1] and item[1] > other[0] for other in specific)
+    ]
+
+
+def _structured_label_matches(
+    ordered: tuple[_StructuredOcrToken, ...],
+) -> list[_StructuredLabelMatch]:
+    direct = [
+        _StructuredLabelMatch(
+            token=token,
+            label_type=match[0],
+            strength=match[1],
+            rank=match[2],
+        )
+        for token in ordered
+        if token.confidence >= _MIN_STRUCTURED_LABEL_CONFIDENCE
+        if (match := _structured_label_match(token.text)) is not None
+    ]
+    return direct + _reconstructed_structured_label_matches(ordered)
+
+
 def extract_structured_medical_payment_candidates(
     tokens: tuple[_StructuredOcrToken, ...],
 ) -> list[PaymentAmountCandidate]:
@@ -576,17 +689,7 @@ def extract_structured_medical_payment_candidates(
         ordered = tuple(sorted(line_tokens, key=lambda token: token.x))
         if _structured_excluded_line(ordered):
             continue
-        labels = [
-            _StructuredLabelMatch(
-                token=token,
-                label_type=match[0],
-                strength=match[1],
-                rank=match[2],
-            )
-            for token in ordered
-            if token.confidence >= _MIN_STRUCTURED_LABEL_CONFIDENCE
-            if (match := _structured_label_match(token.text)) is not None
-        ]
+        labels = _structured_label_matches(ordered)
         amounts = [
             (token, amount)
             for token in ordered

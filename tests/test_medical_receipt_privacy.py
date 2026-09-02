@@ -196,14 +196,16 @@ def _ocr_token(
     page: int = 1,
     line: int = 1,
     width: float = 50,
+    y: float | None = None,
+    height: float = 12,
 ) -> _StructuredOcrToken:
     return _StructuredOcrToken(
         text=text,
         page=page,
         x=x,
-        y=float(line * 20),
+        y=float(line * 20) if y is None else y,
         width=width,
-        height=12,
+        height=height,
         confidence=confidence,
         line_key=(1, 1, line, 5),
     )
@@ -227,6 +229,118 @@ def test_structured_ocr_supports_only_unambiguous_truncated_strong_label():
     assert len(candidates) == 1
     assert candidates[0].amount == 3250
     assert candidates[0].strength == "strong"
+
+
+def test_structured_ocr_reconstructs_adjacent_high_confidence_strong_label():
+    candidates = extract_structured_medical_payment_candidates(
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("3,250円", 90),
+        )
+    )
+
+    assert [(candidate.amount, candidate.label_type, candidate.strength) for candidate in candidates] == [
+        (3250, "patient_responsibility", "strong")
+    ]
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [
+        # A large horizontal gap breaks the contiguous-label requirement.
+        (
+            _ocr_token("患者", 10, width=20),
+            _ocr_token("負担", 50, width=20),
+            _ocr_token("額", 72, width=12),
+            _ocr_token("3,250円", 100),
+        ),
+        # Matching line_key is not enough when the tokens do not share a baseline.
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24, y=50),
+            _ocr_token("額", 62, width=12, y=50),
+            _ocr_token("3,250円", 90),
+        ),
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24, confidence=89),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("3,250円", 90),
+        ),
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負?", 36, width=24),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("3,250円", 90),
+        ),
+        # Left-to-right text order, not input order, must compose the allowlist label.
+        (
+            _ocr_token("額", 10, width=12),
+            _ocr_token("負担", 24, width=24),
+            _ocr_token("患者", 50, width=24),
+            _ocr_token("3,250円", 90),
+        ),
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24),
+            _ocr_token("3,250円", 90),
+        ),
+        # The complete line is excluded before reconstruction can promote a label.
+        (
+            _ocr_token("保険", 10, width=24),
+            _ocr_token("支", 36, width=12),
+            _ocr_token("払", 50, width=12),
+            _ocr_token("額", 64, width=12),
+            _ocr_token("3,250円", 90),
+        ),
+        # A reconstructed label cannot select among multiple amount tokens.
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("3,250円", 90),
+            _ocr_token("4,000円", 170),
+        ),
+        # Two reconstructed labels are an ambiguous relationship, even with one amount.
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("自己", 76, width=24),
+            _ocr_token("負担", 102, width=24),
+            _ocr_token("額", 128, width=12),
+            _ocr_token("3,250円", 160),
+        ),
+        # The amount must remain to the right of the reconstructed label.
+        (
+            _ocr_token("3,250円", 10),
+            _ocr_token("患者", 100, width=24),
+            _ocr_token("負担", 126, width=24),
+            _ocr_token("額", 152, width=12),
+        ),
+    ],
+)
+def test_structured_ocr_reconstruction_rejects_unsafe_evidence(tokens):
+    assert extract_structured_medical_payment_candidates(tokens) == []
+
+
+def test_failed_reconstruction_stays_medical_needs_review_and_blocks_gemini():
+    preview = build_receipt_privacy_preview(
+        "病院 診療",
+        (
+            _ocr_token("患者", 10, width=24),
+            _ocr_token("負担", 36, width=24, confidence=89),
+            _ocr_token("額", 62, width=12),
+            _ocr_token("3,250円", 90),
+        ),
+    )
+
+    assert preview.classification == "medical"
+    assert preview.status == "needs_review"
+    assert preview.reason_code == "no_candidate"
+    assert preview.gemini_allowed is False
 
 
 @pytest.mark.parametrize(
