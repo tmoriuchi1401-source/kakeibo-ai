@@ -8,6 +8,7 @@ from app.coverage_confirmation import COVERAGE_REASON_OPERATIONAL_ONLY
 from app.payment_coverage_dual_track import PaymentCoverageDualTrackResult
 from app.payment_coverage_manifest import (
     CoverageManifest,
+    _PaymentCoverageManifestPreparation,
     assemble_payment_coverage_manifests,
 )
 from app.payment_coverage_status_preview import preview_payment_coverage_status
@@ -199,3 +200,53 @@ def test_boundary_does_not_normalize_provider_identities() -> None:
     assert result.strict_result.coverage_status == "unknown"
     assert result.strict_result.overall_result is not None
     assert result.strict_result.overall_result.required_providers == ("amazon",)
+
+
+def test_raw_boundary_prepares_once_and_passes_manifest_objects_unchanged(
+    monkeypatch,
+) -> None:
+    manifests = [_manifest()]
+    preparation = _PaymentCoverageManifestPreparation(
+        manifests=manifests,
+        paypay_operational_evidences=[],
+        paypay_evidence_verifications=[],
+        duplicate_evidence_count=0,
+        conflicting_evidence_count=0,
+        operational_duplicate_count=0,
+        operational_conflict_count=0,
+    )
+    preparation_calls = []
+    strict_calls = []
+
+    def prepare(**kwargs):
+        preparation_calls.append(kwargs)
+        return preparation
+
+    original = orchestration.preview_payment_coverage_status_with_strict
+
+    def strict(*args, **kwargs):
+        strict_calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(orchestration, "_prepare_payment_coverage_manifests", prepare)
+    monkeypatch.setattr(
+        orchestration, "preview_payment_coverage_status_with_strict", strict,
+    )
+
+    result = orchestration._preview_payment_coverage_status_with_strict_from_raw_inputs(
+        _ReadOnlyDB(),
+        paypay_csvs=["raw.csv"],
+        required_providers=["paypay"],
+        coverage_basis="transaction_date",
+        required_start=START,
+        required_end=END,
+        as_of=AS_OF,
+    )
+
+    assert result.strict_result.coverage_status == "complete"
+    assert len(preparation_calls) == 1
+    assert strict_calls[0][1]["manifests"] is manifests
+    assert strict_calls[0][1]["required_providers"] == ["paypay"]
+    assert strict_calls[0][1]["coverage_basis"] == "transaction_date"
+    assert strict_calls[0][1]["required_start"] is START
+    assert strict_calls[0][1]["required_end"] is END
