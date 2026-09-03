@@ -386,11 +386,34 @@ def test_ocr_dot_group_money_uses_near_value_without_crossing_ytd_column():
     assert by_name["総支給額累計"].raw_value == "7,087,172"
 
 
+def test_ocr_dot_group_money_accepts_complete_grouping_in_money_context():
+    for raw_value, expected in (
+        ("38.430", 38430),
+        ("53.985", 53985),
+        ("51.500", 51500),
+        ("702.239", 702239),
+        ("828.402", 828402),
+        ("516.867", 516867),
+        ("568.288", 568288),
+    ):
+        item = parse_positioned_items((
+            token("住民税", 10, 10), token(raw_value, 100, 10),
+        ), ocr=True)[0]
+        assert item.raw_value == raw_value
+        assert item.value == expected
+        assert not item.needs_review
+
+
 def test_ocr_dot_group_money_requires_strict_token_and_confidence():
     for raw_value, confidence in (
         ("38.430", 59),
         ("2011.300", 95),
         ("409.257|", 95),
+        ("1.5", 95),
+        ("7.50", 95),
+        ("0.125", 95),
+        ("12.34", 95),
+        ("12.3456", 95),
     ):
         item = parse_positioned_items((
             token("住民税", 10, 10), token(raw_value, 100, 10, confidence),
@@ -408,6 +431,30 @@ def test_ocr_dot_group_money_is_not_used_for_attendance():
     assert item.raw_value is None
     assert item.value is None
     assert item.needs_review
+
+
+def test_ocr_dot_group_money_is_not_used_for_rate_labels():
+    for raw_value in ("38.430", "1.000", "12.345"):
+        item = parse_positioned_items((
+            token("税率", 10, 10), token(raw_value, 100, 10),
+        ), ocr=True)[0]
+        assert item.raw_value is None
+        assert item.value is None
+        assert item.needs_review
+
+
+def test_ambiguous_dot_group_without_label_is_not_money():
+    assert parse_positioned_items((token("1.000", 100, 10),), ocr=True) == []
+
+
+def test_attendance_decimal_with_unit_remains_a_quantity():
+    item = parse_positioned_items((
+        token("残業時間", 10, 10), token("7.50時間", 100, 10),
+    ), ocr=True)[0]
+    assert item.section == "attendance"
+    assert item.raw_value == "7.50時間"
+    assert item.value == 7.5
+    assert not item.needs_review
 
 
 def test_ocr_horizontal_value_does_not_cross_vertical_rule():

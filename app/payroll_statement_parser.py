@@ -5,14 +5,20 @@ from pathlib import Path
 
 from .payroll_models import PayrollItem, PayrollPreview
 from .payroll_ocr import extract_payroll_text
-from .payroll_parser import amounts, compact, parse_positioned_items, parse_period_and_date
+from .payroll_parser import (
+    _dot_grouped_amount,
+    amounts,
+    compact,
+    parse_period_and_date,
+    parse_positioned_items,
+)
 
 
 _COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
 _SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
 _SUMMARY_CANDIDATES = ("gross_pay", "total_deductions", "net_pay")
 _COMPLETE_MONEY_TOKEN = re.compile(
-    r"\d+|\d{1,3}(?:,\d{3})+|\d{1,3}(?:\.\d{3})+"
+    r"\d+|\d{1,3}(?:,\d{3})+"
 )
 
 
@@ -76,9 +82,9 @@ def _anchored_money_token(text: str, label_pattern: str) -> int | None:
     if match is None:
         return None
     token = compact(match.group(1))
-    if _COMPLETE_MONEY_TOKEN.fullmatch(token) is None:
-        return None
-    return int(token.replace(",", "").replace(".", ""))
+    if _COMPLETE_MONEY_TOKEN.fullmatch(token) is not None:
+        return int(token.replace(",", ""))
+    return _dot_grouped_amount(token)
 
 
 def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None, int | None]:

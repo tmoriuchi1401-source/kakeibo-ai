@@ -59,14 +59,20 @@ def amounts(value: str) -> list[int]:
     return [int(x.replace(",", "")) for x in re.findall(r"(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d)", value)]
 
 
+def _dot_grouped_amount(value: str) -> int | None:
+    """Parse a complete dot-grouped money token without accepting decimals."""
+    token = value.strip()
+    if re.fullmatch(r"[1-9]\d{0,2}(?:\.\d{3})+", token) is None:
+        return None
+    return int(token.replace(".", ""))
+
+
 def _ocr_dot_amounts(token: PositionedText) -> list[int]:
     """Treat only a complete, confident OCR thousands-group token as money."""
     if token.confidence < 60:
         return []
-    value = token.text.strip()
-    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", value) is None:
-        return []
-    return [int(value.replace(".", ""))]
+    value = _dot_grouped_amount(token.text)
+    return [] if value is None else [value]
 
 
 def candidate(name: str) -> str | None:
@@ -127,6 +133,11 @@ def _attendance_value_conflicts(name: str, raw_value: str) -> bool:
 def _is_explicit_attendance_quantity(value: str) -> bool:
     return any(_explicit_attendance_value(value, value_type) is not None
                for value_type in ("days", "hours"))
+
+
+def _is_rate_value_label(name: str) -> bool:
+    normalized = compact(name)
+    return "率" in normalized or any(symbol in normalized for symbol in ("%", "％"))
 
 
 def _is_non_item_heading(name: str) -> bool:
@@ -711,7 +722,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             continue
         attendance_type = _attendance_value_type(name) if section_for(name) == "attendance" else None
         same_page = [(number, vals) for number, vals in money if number.page == label.page]
-        if attendance_type is None:
+        if attendance_type is None and not _is_rate_value_label(name):
             same_page.extend(
                 (number, vals) for number, vals in ocr_dot_money
                 if number.page == label.page

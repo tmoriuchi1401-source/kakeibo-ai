@@ -81,6 +81,11 @@ def test_anonymized_ocr_fixture_covers_preview_totals_and_storage_review(monkeyp
         740669, 180149, 560520,
     )
     parsed = {item.raw_item_name: item for item in preview.items}
+    assert (parsed["課税対象支給額"].raw_value,
+            parsed["課税対象支給額"].value,
+            parsed["課税対象支給額"].needs_review) == (
+        "702.239", 702239, False,
+    )
     assert (parsed["非課税合計"].raw_value, parsed["非課税合計"].value,
             parsed["非課税合計"].needs_review, parsed["非課税合計"].confidence) == (
         "38.430", 38430, False, 83,
@@ -166,6 +171,10 @@ def test_non_reference_reviewed_or_missing_value_items_are_not_candidates():
         ("53.985", "0", 53985),
         ("51.500", "0", 51500),
         ("702.239", "560,520", 1262759),
+        ("828.402", "0", 828402),
+        ("516.867", "0", 516867),
+        ("568.288", "0", 568288),
+        ("1.000", "0", 1000),
         ("38430", "0", 38430),
         ("560520", "0", 560520),
     ),
@@ -190,6 +199,11 @@ def test_total_anchor_fallback_accepts_complete_money_tokens(
         "38,43",
         "38,430,00",
         "38,430.000",
+        "1.5",
+        "7.50",
+        "0.125",
+        "12.34",
+        "12.3456",
     ),
 )
 def test_total_anchor_fallback_rejects_malformed_amount_tokens(malformed_taxable):
