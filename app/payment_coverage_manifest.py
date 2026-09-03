@@ -272,7 +272,20 @@ def classify_evidence(manifests: list[CoverageManifest]) -> tuple[list[CoverageM
     return result, duplicate_count, conflict_count
 
 
-def preview_payment_coverage_manifests(
+@dataclass(frozen=True)
+class _PaymentCoverageManifestPreparation:
+    """Raw payment-coverage preparation before preview serialization."""
+
+    manifests: list[CoverageManifest]
+    paypay_operational_evidences: list[PayPayOperationalEvidence]
+    paypay_evidence_verifications: list[EvidenceVerificationResult | None]
+    duplicate_evidence_count: int
+    conflicting_evidence_count: int
+    operational_duplicate_count: int
+    operational_conflict_count: int
+
+
+def _prepare_payment_coverage_manifests(
     *, paypay_csvs: list[str] | None = None,
     paypay_export_evidence_files: list[str] | None = None,
     paypay_status_image_files: list[str] | None = None,
@@ -280,7 +293,15 @@ def preview_payment_coverage_manifests(
     au_pay_card_csvs: list[str] | None = None,
     signature_verifier: SignatureVerifier | None = None,
     confirmation_resolver: CoverageConfirmationResolver | None = None,
-) -> dict:
+) -> _PaymentCoverageManifestPreparation:
+    """Prepare raw payment inputs into reusable manifest objects.
+
+    This keeps file inspection, evidence lookup, and operational validation at
+    one boundary.  The existing assembly function remains the pure object
+    assembly step, and callers receive the same diagnostics needed by the
+    legacy preview serializer.
+    """
+
     paypay_paths = paypay_csvs or []
     evidence_paths = paypay_export_evidence_files or []
     image_paths = paypay_status_image_files or []
@@ -402,6 +423,38 @@ def preview_payment_coverage_manifests(
     ]
     manifests = assemble_payment_coverage_manifests(csv_manifests)
     _, duplicates, conflicts = classify_evidence(manifests)
+    return _PaymentCoverageManifestPreparation(
+        manifests=manifests,
+        paypay_operational_evidences=operational_evidences,
+        paypay_evidence_verifications=verifications,
+        duplicate_evidence_count=duplicates,
+        conflicting_evidence_count=conflicts,
+        operational_duplicate_count=operational_duplicates,
+        operational_conflict_count=operational_conflicts,
+    )
+
+
+def preview_payment_coverage_manifests(
+    *, paypay_csvs: list[str] | None = None,
+    paypay_export_evidence_files: list[str] | None = None,
+    paypay_status_image_files: list[str] | None = None,
+    paypay_confirmed_ranges: list[str] | None = None,
+    au_pay_card_csvs: list[str] | None = None,
+    signature_verifier: SignatureVerifier | None = None,
+    confirmation_resolver: CoverageConfirmationResolver | None = None,
+) -> dict:
+    prepared = _prepare_payment_coverage_manifests(
+        paypay_csvs=paypay_csvs,
+        paypay_export_evidence_files=paypay_export_evidence_files,
+        paypay_status_image_files=paypay_status_image_files,
+        paypay_confirmed_ranges=paypay_confirmed_ranges,
+        au_pay_card_csvs=au_pay_card_csvs,
+        signature_verifier=signature_verifier,
+        confirmation_resolver=confirmation_resolver,
+    )
+    manifests = prepared.manifests
+    operational_evidences = prepared.paypay_operational_evidences
+    verifications = prepared.paypay_evidence_verifications
     counts = {status: sum(item.completion_status == status for item in manifests)
               for status in ("complete", "incomplete", "unknown")}
     return {
@@ -411,8 +464,8 @@ def preview_payment_coverage_manifests(
         "complete_count": counts["complete"],
         "incomplete_count": counts["incomplete"],
         "unknown_count": counts["unknown"],
-        "duplicate_evidence_count": duplicates,
-        "conflicting_evidence_count": conflicts,
+        "duplicate_evidence_count": prepared.duplicate_evidence_count,
+        "conflicting_evidence_count": prepared.conflicting_evidence_count,
         "operational_usable_count": sum(
             item.operational_coverage == "usable" for item in operational_evidences
         ),
@@ -423,8 +476,8 @@ def preview_payment_coverage_manifests(
         "operational_rejected_count": sum(
             item.operational_coverage == "rejected" for item in operational_evidences
         ),
-        "operational_duplicate_count": operational_duplicates,
-        "operational_conflict_count": operational_conflicts,
+        "operational_duplicate_count": prepared.operational_duplicate_count,
+        "operational_conflict_count": prepared.operational_conflict_count,
         "paypay_operational_evidence": [
             asdict(item) for item in operational_evidences
         ],

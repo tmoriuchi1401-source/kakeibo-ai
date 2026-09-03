@@ -17,6 +17,7 @@ from app.coverage_confirmation import (
 )
 from app.payment_coverage_manifest import (
     CoverageManifest,
+    _prepare_payment_coverage_manifests,
     assemble_payment_coverage_manifests,
     classify_evidence,
     csv_manifest,
@@ -145,6 +146,28 @@ def test_object_assembly_preserves_placeholders_and_evidence_classification(tmp_
     assert manifests[1].completeness_reason == "duplicate_evidence"
     assert manifests[2].coverage_basis == "billing_cycle"
     assert manifests[2].completeness_reason == "no_completion_evidence"
+
+
+def test_raw_preparation_returns_reusable_manifest_result(tmp_path):
+    paypay_path = _paypay(tmp_path)
+    card_path = _card(tmp_path)
+
+    prepared = _prepare_payment_coverage_manifests(
+        paypay_csvs=[str(paypay_path)],
+        au_pay_card_csvs=[str(card_path)],
+    )
+
+    assert isinstance(prepared.manifests, list)
+    assert all(isinstance(item, CoverageManifest) for item in prepared.manifests)
+    assert [item.source for item in prepared.manifests] == [
+        "paypay", "au_pay_card", "amazon_gmail", "au_pay_gmail",
+    ]
+    assert len(prepared.paypay_operational_evidences) == 1
+    assert prepared.paypay_evidence_verifications == [None]
+    assert prepared.duplicate_evidence_count == 0
+    assert prepared.conflicting_evidence_count == 0
+    assert prepared.operational_duplicate_count == 0
+    assert prepared.operational_conflict_count == 0
 
 
 def test_period_without_full_export_proof_is_unknown(tmp_path):
