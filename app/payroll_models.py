@@ -5,6 +5,12 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+PayrollReviewReasonCode = Literal[
+    "ocr_reference_guard",
+    "unknown_with_value",
+]
+
+
 class PayrollItem(BaseModel):
     raw_item_name: str
     section: Literal["earning", "deduction", "attendance", "reference", "unknown"]

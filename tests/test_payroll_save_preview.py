@@ -1,6 +1,7 @@
 from app.payroll_models import PayrollItem, PayrollPreview
 from app.payroll_sheets import PayrollSheetsSnapshot, validate_sheet_schema
 from app.payroll_storage import (
+    INITIAL_STANDARD_ITEMS,
     PAYROLL_SCHEMAS,
     PayrollEmployerRecord,
     PayrollItemAliasRecord,
@@ -116,6 +117,35 @@ def test_save_plan_contains_header_and_all_prospective_item_rows():
     assert plan.employer == "勤務先A"
 
 
+def test_save_preview_exposes_anonymous_review_reason_counts():
+    source = PayrollPreview(
+        file_type="image", extraction_method="ocr", pay_period="2026-08",
+        parse_status="success",
+        items=[PayrollItem(
+            raw_item_name="非課税合計", section="reference", raw_value="38.430",
+            value=38430,
+        )],
+    )
+    target = snapshot()
+    target.standard_items.append(next(
+        item for item in INITIAL_STANDARD_ITEMS
+        if item.standard_item_id == "non_taxable_total"
+    ))
+    target.aliases.append(PayrollItemAliasRecord(
+        raw_item_name="非課税合計", standard_item_id="non_taxable_total",
+    ))
+    storage = phase_a_to_storage_candidate(source, statement_label="給与明細")
+
+    plans = build_save_plan([storage], target)
+    summary = save_preview_summary(plans, target, sampled_files=1, failed_files=0)
+
+    assert plans[0].review_reason_counts == {"ocr_reference_guard": 1}
+    assert summary["review_reason_counts"] == {"ocr_reference_guard": 1}
+    assert plans[0].items[0].planned_row["review_reason_code"] == (
+        "ocr_reference_guard"
+    )
+
+
 def test_alias_unknown_and_needs_review_are_visible_without_guessing():
     plan = build_save_plan([candidate()], snapshot())[0]
     alias, unknown = plan.items[1:]
@@ -163,6 +193,7 @@ def test_summary_aggregates_required_b4_counts():
     assert result["duplicate_count"] == 0
     assert result["unknown_item_count"] == 1
     assert result["needs_review_count"] == 1
+    assert result["review_reason_counts"] == {}
     assert result["recognized_item_count"] == 2
     assert result["recognized_without_value_count"] == 0
 

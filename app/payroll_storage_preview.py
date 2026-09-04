@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, Field
 
 from .drive_payroll import DrivePayrollPreview, _suffix, temporary_payroll_file
+from .payroll_models import PayrollReviewReasonCode
 from .payroll_sheets import PayrollSheetsSnapshot, usable_aliases
 from .payroll_storage import (
     PayrollStandardItemRecord,
     PayrollStorageCandidate,
     decide_duplicate,
     phase_a_to_storage_candidate,
+    review_reason_counts,
+    sync_statement_review_reasons,
 )
 
 
@@ -47,6 +51,7 @@ class PayrollSavePlan(BaseModel):
     would_create_header: bool
     would_create_items: int
     review_reason: list[str] = Field(default_factory=list)
+    review_reason_counts: dict[PayrollReviewReasonCode, int] = Field(default_factory=dict)
     planned_header: dict[str, Any]
     items: list[PayrollItemSavePreview] = Field(default_factory=list)
 
@@ -83,6 +88,7 @@ def enforce_active_standard_items(
             result.statement.needs_review = True
         elif item.standard_item_id is not None:
             item.section = active_items[item.standard_item_id].section
+    sync_statement_review_reasons(result.statement, result.items)
     return result
 
 
@@ -100,6 +106,7 @@ def exclude_header_duplicate_summary_items(
             and item.value == getattr(result.statement, item.standard_item_id)
         )
     ]
+    sync_statement_review_reasons(result.statement, result.items)
     return result
 
 
@@ -220,6 +227,7 @@ def build_save_plan(
             would_create_header=can_create,
             would_create_items=len(eligible_items) if can_create else 0,
             review_reason=legacy.review_reason,
+            review_reason_counts=review_reason_counts(candidate.items),
             planned_header=statement.model_dump(mode="json"),
             items=item_previews,
         ))
@@ -234,6 +242,9 @@ def save_preview_summary(
     failed_files: int,
 ) -> dict[str, Any]:
     plans = list(plans)
+    reason_counts = Counter()
+    for plan in plans:
+        reason_counts.update(plan.review_reason_counts)
     return {
         "read_only": True,
         "schema_ok": snapshot.schema_ok,
@@ -253,6 +264,7 @@ def save_preview_summary(
         "recognized_without_value_count": sum(
             plan.recognized_without_value_count for plan in plans
         ),
+        "review_reason_counts": dict(reason_counts),
         "statements": [plan.model_dump(mode="json") for plan in plans],
     }
 

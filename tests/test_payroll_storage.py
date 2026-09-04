@@ -74,6 +74,8 @@ def test_unknown_item_and_raw_fields_are_preserved_but_not_confirmed():
     assert item.value is None
     assert item.needs_review
     assert item.review_status == "pending"
+    assert item.review_reason_code == "unknown_with_value"
+    assert result.statement.review_reasons == ["unknown_with_value"]
 
 
 def test_uncertain_ocr_value_is_not_promoted_to_confirmed_value():
@@ -83,6 +85,8 @@ def test_uncertain_ocr_value_is_not_promoted_to_confirmed_value():
     assert item.value is None
     assert item.needs_review
     assert item.review_status == "pending"
+    assert item.review_reason_code is None
+    assert result.statement.review_reasons == []
     assert result.statement.needs_review
 
 
@@ -94,6 +98,11 @@ def test_item_model_itself_cannot_confirm_a_pending_value():
     assert item.raw_value == "12,34?"
     assert item.value is None
     assert item.review_status == "pending"
+
+
+def test_review_reason_diagnostics_are_not_storage_columns():
+    assert "review_reason_code" not in PAYROLL_SCHEMAS["payroll_items"]
+    assert "review_reasons" not in PAYROLL_SCHEMAS["payroll_statements"]
 
 
 def test_inactive_standard_item_is_retained_in_catalog():
@@ -228,6 +237,8 @@ def test_ocr_reference_is_recognized_but_requires_review():
     assert item.value is None
     assert item.needs_review
     assert item.review_status == "pending"
+    assert item.review_reason_code == "ocr_reference_guard"
+    assert result.statement.review_reasons == ["ocr_reference_guard"]
 
 
 def test_pdf_text_reference_is_recognized_without_review():
@@ -248,6 +259,8 @@ def test_pdf_text_reference_is_recognized_without_review():
     assert item.value == 624698
     assert not item.needs_review
     assert item.review_status == "not_required"
+    assert item.review_reason_code is None
+    assert result.statement.review_reasons == []
 
 
 def test_inactive_alias_is_not_used():

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timezone
 from typing import Iterable, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
-from .payroll_models import PayrollItem, PayrollPreview
+from .payroll_models import PayrollItem, PayrollPreview, PayrollReviewReasonCode
 
 
 StatementType = Literal["salary", "bonus", "adjustment", "other"]
@@ -41,6 +42,8 @@ class PayrollStatementRecord(BaseModel):
     content_hash: str | None = None
     imported_at: datetime = Field(default_factory=_now)
     parser_version: str = PARSER_VERSION
+    # Diagnostic-only context; it is intentionally excluded from sheet columns.
+    review_reasons: list[PayrollReviewReasonCode] = Field(default_factory=list)
 
 
 class PayrollStatementItemRecord(BaseModel):
@@ -54,6 +57,8 @@ class PayrollStatementItemRecord(BaseModel):
     confidence: float | None = None
     needs_review: bool = False
     review_status: ReviewStatus = "not_required"
+    # Diagnostic-only context; it is intentionally excluded from sheet columns.
+    review_reason_code: PayrollReviewReasonCode | None = None
     display_order: int = 0
 
     @model_validator(mode="after")
@@ -362,6 +367,9 @@ def _convert_item(
         or standard_item_id is None
         or (extraction_method == "ocr" and section == "reference")
     )
+    review_reason_code = _review_reason_code(
+        item, standard_item_id, section, extraction_method,
+    )
     return PayrollStatementItemRecord(
         statement_id=statement_id,
         raw_item_name=item.raw_item_name,
@@ -372,8 +380,49 @@ def _convert_item(
         confidence=item.confidence,
         needs_review=uncertain,
         review_status="pending" if uncertain else "not_required",
+        review_reason_code=review_reason_code,
         display_order=display_order,
     )
+
+
+def _review_reason_code(
+    item: PayrollItem,
+    standard_item_id: str | None,
+    section: ItemSection,
+    extraction_method: Literal["pdf_text", "ocr"],
+) -> PayrollReviewReasonCode | None:
+    """Explain only review conditions that are explicit at this conversion point."""
+    if item.needs_review:
+        # The parser's reason is not carried in the legacy Phase A model, so do
+        # not guess among pairing, confidence, and parsing causes here.
+        return None
+    if (extraction_method == "ocr" and section == "reference"
+            and standard_item_id is not None):
+        return "ocr_reference_guard"
+    if standard_item_id is None and item.value is not None:
+        return "unknown_with_value"
+    return None
+
+
+def review_reason_counts(
+    items: Iterable[PayrollStatementItemRecord],
+) -> dict[PayrollReviewReasonCode, int]:
+    """Return anonymous counts for the reason codes attached to review items."""
+    return dict(Counter(
+        item.review_reason_code for item in items
+        if item.needs_review and item.review_reason_code is not None
+    ))
+
+
+def sync_statement_review_reasons(
+    statement: PayrollStatementRecord,
+    items: Iterable[PayrollStatementItemRecord],
+) -> None:
+    """Keep statement diagnostics derived from the current item collection."""
+    statement.review_reasons = sorted({
+        item.review_reason_code for item in items
+        if item.needs_review and item.review_reason_code is not None
+    })
 
 
 def phase_a_to_storage_candidate(
@@ -411,6 +460,7 @@ def phase_a_to_storage_candidate(
         preview.extraction_method,
     )
              for index, item in enumerate(preview.items)]
+    sync_statement_review_reasons(statement, items)
     statement.needs_review = (
         preview.parse_status != "success"
         or statement_type == "other"

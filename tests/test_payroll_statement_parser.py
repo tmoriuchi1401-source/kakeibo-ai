@@ -99,10 +99,21 @@ def test_anonymized_ocr_fixture_covers_preview_totals_and_storage_review(monkeyp
 
     stored = {item.raw_item_name: item for item in candidate.items}
     assert candidate.statement.needs_review
+    assert candidate.statement.review_reasons == ["ocr_reference_guard"]
+    assert {
+        item.standard_item_id: item.review_reason_code
+        for item in candidate.items
+    } == {
+        "taxable_earnings": "ocr_reference_guard",
+        "non_taxable_total": "ocr_reference_guard",
+        "ytd_gross_pay": "ocr_reference_guard",
+        "standard_monthly_remuneration": "ocr_reference_guard",
+    }
     assert (stored["非課税合計"].standard_item_id, stored["非課税合計"].raw_value,
             stored["非課税合計"].value, stored["非課税合計"].needs_review) == (
         "non_taxable_total", "38.430", None, True,
     )
+    assert stored["非課税合計"].review_reason_code == "ocr_reference_guard"
     assert (stored["標準報酬月額"].standard_item_id,
             stored["標準報酬月額"].value, stored["標準報酬月額"].needs_review) == (
         "standard_monthly_remuneration", None, True,
