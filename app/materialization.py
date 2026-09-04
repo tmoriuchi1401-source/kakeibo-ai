@@ -18,6 +18,8 @@ from typing import Literal, Mapping, TypeAlias
 JsonScalar: TypeAlias = None | bool | int | float | str
 JsonValue: TypeAlias = JsonScalar | tuple["JsonValue", ...] | Mapping[str, "JsonValue"]
 OperationKind: TypeAlias = Literal["append_row", "create_sheet", "update_cells"]
+ResultStatus: TypeAlias = Literal["applied", "skipped", "blocked", "failed"]
+OperationResultStatus: TypeAlias = Literal["applied", "skipped", "failed"]
 
 
 def _required_text(value: object, field_name: str) -> str:
@@ -209,6 +211,94 @@ class MaterializationPlan:
             "blocked": self.blocked,
             "blocked_reason": self.blocked_reason,
             "provenance": _jsonable(self.provenance),
+        }
+
+    def to_json(self) -> str:
+        return _canonical_json(self.to_dict())
+
+
+@dataclass(frozen=True)
+class MaterializationOperationResult:
+    """Observed outcome for one operation already present in a plan."""
+
+    operation_id: str
+    status: OperationResultStatus
+    external_write: bool
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "operation_id", _required_text(self.operation_id, "operation_id"))
+        if self.status not in {"applied", "skipped", "failed"}:
+            raise ValueError("unsupported_operation_result_status")
+        if not isinstance(self.external_write, bool):
+            raise TypeError("external_write_must_be_bool")
+        if self.reason is not None:
+            object.__setattr__(self, "reason", _required_text(self.reason, "reason"))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "operation_id": self.operation_id,
+            "status": self.status,
+            "external_write": self.external_write,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class MaterializationResult:
+    """Pure, privacy-safe observation of one existing materialization apply."""
+
+    plan_id: str
+    status: ResultStatus
+    external_write: bool
+    action_requested: str
+    actions_performed: tuple[str, ...]
+    operations: tuple[MaterializationOperationResult, ...]
+    reason: str
+    observed_before: Mapping[str, JsonValue] | None = None
+    observed_after: Mapping[str, JsonValue] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "plan_id", _required_text(self.plan_id, "plan_id"))
+        if self.status not in {"applied", "skipped", "blocked", "failed"}:
+            raise ValueError("unsupported_materialization_result_status")
+        if not isinstance(self.external_write, bool):
+            raise TypeError("external_write_must_be_bool")
+        object.__setattr__(self, "action_requested", _required_text(self.action_requested, "action_requested"))
+        actions = tuple(_required_text(action, "performed_action") for action in self.actions_performed)
+        object.__setattr__(self, "actions_performed", actions)
+        operations = tuple(self.operations)
+        if any(not isinstance(item, MaterializationOperationResult) for item in operations):
+            raise TypeError("materialization_operation_result_required")
+        operation_ids = [item.operation_id for item in operations]
+        if len(operation_ids) != len(set(operation_ids)):
+            raise ValueError("operation_result_ids_must_be_unique")
+        object.__setattr__(self, "operations", operations)
+        object.__setattr__(self, "reason", _required_text(self.reason, "reason"))
+        for name in ("observed_before", "observed_after"):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            frozen = _freeze_json(value)
+            if not isinstance(frozen, Mapping):
+                raise TypeError(f"{name}_mapping_required")
+            object.__setattr__(self, name, frozen)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "plan_id": self.plan_id,
+            "status": self.status,
+            "external_write": self.external_write,
+            "action_requested": self.action_requested,
+            "actions_performed": list(self.actions_performed),
+            "operations": [item.to_dict() for item in self.operations],
+            "reason": self.reason,
+            "observed_before": (
+                _jsonable(self.observed_before) if self.observed_before is not None else None
+            ),
+            "observed_after": (
+                _jsonable(self.observed_after) if self.observed_after is not None else None
+            ),
         }
 
     def to_json(self) -> str:
