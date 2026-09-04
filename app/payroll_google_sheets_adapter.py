@@ -29,6 +29,10 @@ class PayrollSingleAttemptRequestExecutor(Protocol):
     def execute_once(self, request): ...
 
 
+class PayrollRequestNotSentError(RuntimeError):
+    """The payroll write request was rejected before transport dispatch."""
+
+
 class PayrollGoogleSheetsAppendAdapter:
     """Google Values append boundary with one HTTP attempt per method call.
 
@@ -92,6 +96,13 @@ class PayrollGoogleSheetsAppendAdapter:
 
         try:
             response = self.executor.execute_once(request)
+        except PayrollRequestNotSentError as exc:
+            return PayrollAppendOutcome(
+                status="confirmed_failure",
+                requested_rows=requested_rows,
+                failure_kind="request_not_sent",
+                error_type=type(exc).__name__,
+            )
         except HttpError as exc:
             status = int(getattr(exc.resp, "status", 0) or 0)
             confirmed = status in _CONFIRMED_NO_WRITE_HTTP_STATUSES
