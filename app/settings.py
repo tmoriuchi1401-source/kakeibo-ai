@@ -1,6 +1,6 @@
 from __future__ import annotations
 import json, os, tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,6 +25,10 @@ class Settings:
         'in:anywhere from:info@wallet.auone.jp '
         'subject:"【au PAY】ご利用のお知らせ" "メールコードP1002" newer_than:30d'
     )
+    aupay_card_gmail_query: str = field(default_factory=lambda: os.getenv("AUPAY_CARD_GMAIL_QUERY") or (
+        'in:anywhere from:info@kddi-fs.com '
+        'subject:"【ご利用詳細】au PAY カード" newer_than:30d'
+    ))
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,

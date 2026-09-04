@@ -139,6 +139,21 @@ python -m app.cli card-eml-import "【ご利用詳細】au PAY カード.eml"
 一意キーにする。オートチャージ、Amazon、その他利用の判定はカードCSVと同じ
 ルールを使用する。
 
+カード利用詳細をGmailから読む場合は、残高通知用の `AUPAY_GMAIL_QUERY` とは別の
+`AUPAY_CARD_GMAIL_QUERY` を設定する。まず書込みを行わない確認を実行する:
+
+```bash
+python -m app.cli card-gmail-preview --max-results 100
+```
+
+確認後に次を実行すると、Gmailを変更せず、既存の「取込データ」へカード明細を
+冪等に取り込む。RFC Message-IDまたは必須明細項目がないメールは取込せず、件数と
+reason codeだけを返す。
+
+```bash
+python -m app.cli card-gmail-import --max-results 100
+```
+
 伝票番号を `aupay:<伝票番号>` という取込IDにするため、同じメールを何度検索しても
 二重登録されない。必須項目が欠けるメールは自動登録せず `needs_review` として集計する。
 

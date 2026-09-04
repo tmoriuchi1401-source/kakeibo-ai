@@ -14,6 +14,7 @@ from email.parser import BytesParser
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
+from .aupay_card_pipeline import AuPayCardPipeline
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
 
@@ -123,10 +124,16 @@ def parse_eml(path: str) -> AuPayNotice:
     return parse_aupay_notice("\n".join(parts))
 
 
-def parse_aupay_card_eml(path: str) -> list[dict]:
-    """Parse the multi-transaction 'au PAY カード' usage detail email."""
-    with open(path, "rb") as handle:
-        message = BytesParser(policy=policy.default).parse(handle)
+def parse_aupay_card_raw(raw_mime: bytes) -> list[dict]:
+    """Parse one raw au PAY card usage-detail MIME message.
+
+    The RFC Message-ID is deliberately required: card detail numbers are only
+    unique within a message, so accepting a message without it would make
+    retries unsafe.
+    """
+    if not isinstance(raw_mime, bytes) or not raw_mime:
+        raise ValueError("カードメールのraw MIMEがありません")
+    message = BytesParser(policy=policy.default).parsebytes(raw_mime)
     subject = str(message.get("subject", ""))
     if "au PAY カード" not in unicodedata.normalize("NFKC", subject):
         raise ValueError("au PAYカード利用詳細メールではありません")
@@ -169,6 +176,12 @@ def parse_aupay_card_eml(path: str) -> list[dict]:
     return rows
 
 
+def parse_aupay_card_eml(path: str) -> list[dict]:
+    """Parse the multi-transaction 'au PAY カード' usage detail email."""
+    with open(path, "rb") as handle:
+        return parse_aupay_card_raw(handle.read())
+
+
 def _decode_gmail_body(payload: dict) -> str:
     texts = []
     if payload.get("mimeType") in ("text/plain", "text/html") and payload.get("body", {}).get("data"):
@@ -188,6 +201,32 @@ def _decode_gmail_body(payload: dict) -> str:
     for part in payload.get("parts", []):
         texts.append(_decode_gmail_body(part))
     return "\n".join(x for x in texts if x)
+
+
+def _decode_gmail_raw(value: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise ValueError("Gmail raw MIMEを取得できません")
+    try:
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Gmail raw MIMEが不正です") from exc
+
+
+def _card_mail_reason(error: ValueError) -> str:
+    message = str(error)
+    if "Message-ID" in message:
+        return "missing_message_id"
+    if "text/plain" in message:
+        return "missing_plain_text"
+    if "利用明細がありません" in message:
+        return "missing_card_details"
+    if "必須項目" in message:
+        return "missing_required_fields"
+    if "カード利用詳細" in message or "利用明細" in message:
+        return "non_card_notice"
+    if "raw MIME" in message:
+        return "invalid_raw_mime"
+    return "parse_failed"
 
 
 def gmail_service(token_json: str):
@@ -246,3 +285,91 @@ class AuPayMailPipeline:
             if not page_token:
                 break
         return stats
+
+
+class AuPayCardMailPipeline:
+    """Read au PAY card detail messages and hand parsed rows to the card pipeline."""
+
+    def __init__(self, db: SheetsDB | None = None):
+        self.db = db
+
+    @staticmethod
+    def _empty_summary() -> dict[str, int]:
+        return {
+            "found": 0,
+            "fetched": 0,
+            "duplicate_gmail_message": 0,
+            "parsed_messages": 0,
+            "parsed_transactions": 0,
+            "needs_review": 0,
+            "missing_message_id": 0,
+            "missing_plain_text": 0,
+            "missing_required_fields": 0,
+            "missing_card_details": 0,
+            "non_card_notice": 0,
+            "invalid_raw_mime": 0,
+            "parse_failed": 0,
+        }
+
+    @classmethod
+    def _collect(cls, service, query: str, max_results: int) -> tuple[list[dict], dict[str, int]]:
+        if max_results <= 0:
+            raise ValueError("max_resultsは1以上にしてください")
+        summary = cls._empty_summary()
+        transactions: list[dict] = []
+        seen_message_ids: set[str] = set()
+        page_token = None
+        while summary["found"] < max_results:
+            list_response = service.users().messages().list(
+                userId="me", q=query,
+                maxResults=min(100, max_results - summary["found"]),
+                pageToken=page_token,
+            ).execute()
+            messages = list_response.get("messages", [])
+            if not messages:
+                break
+            for item in messages:
+                if summary["found"] >= max_results:
+                    break
+                summary["found"] += 1
+                gmail_message_id = str(item.get("id") or "").strip()
+                if not gmail_message_id:
+                    summary["needs_review"] += 1
+                    summary["invalid_raw_mime"] += 1
+                    continue
+                if gmail_message_id in seen_message_ids:
+                    summary["duplicate_gmail_message"] += 1
+                    continue
+                seen_message_ids.add(gmail_message_id)
+                try:
+                    response = service.users().messages().get(
+                        userId="me", id=gmail_message_id, format="raw",
+                    ).execute()
+                    raw_mime = _decode_gmail_raw(response.get("raw", ""))
+                    parsed = parse_aupay_card_raw(raw_mime)
+                except ValueError as exc:
+                    summary["needs_review"] += 1
+                    summary[_card_mail_reason(exc)] += 1
+                    continue
+                summary["fetched"] += 1
+                summary["parsed_messages"] += 1
+                summary["parsed_transactions"] += len(parsed)
+                transactions.extend(parsed)
+            page_token = list_response.get("nextPageToken")
+            if not page_token:
+                break
+        return transactions, summary
+
+    def preview_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
+        """Read and parse Gmail messages without accessing Sheets or writing data."""
+        _, summary = self._collect(gmail_service(token_json), query, max_results)
+        return summary
+
+    def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
+        """Read card detail messages and idempotently import their parsed transactions."""
+        if self.db is None:
+            raise ValueError("カードGmail取込にはSheetsDBが必要です")
+        transactions, summary = self._collect(gmail_service(token_json), query, max_results)
+        imported = AuPayCardPipeline(self.db).import_transactions(transactions)
+        summary.update(imported)
+        return summary

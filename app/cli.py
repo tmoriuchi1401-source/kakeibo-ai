@@ -10,6 +10,7 @@ from .drive_paypay import DrivePayPayPipeline
 from .aupay_card_pipeline import AuPayCardPipeline
 from .paypay_pipeline import PayPayPipeline
 from .aupay_mail_pipeline import (
+    AuPayCardMailPipeline,
     AuPayMailPipeline,
     authorize_gmail,
     parse_eml,
@@ -108,6 +109,8 @@ def main():
     pi=sub.add_parser("paypay-import"); pi.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
+    cgp=sub.add_parser("card-gmail-preview"); cgp.add_argument("--max-results",type=int,default=100)
+    cgi=sub.add_parser("card-gmail-import"); cgi.add_argument("--max-results",type=int,default=100)
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
     aci=sub.add_parser("aupay-csv-import"); aci.add_argument("csv")
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -253,6 +256,16 @@ def main():
     elif args.cmd=="aupay-gmail":
         s,db,_=make(False); s.validate(need_gmail=True)
         print(AuPayMailPipeline(db).import_gmail(s.gmail_token_json,s.aupay_gmail_query,args.max_results))
+    elif args.cmd=="card-gmail-preview":
+        s=Settings(); s.validate(need_gmail=True)
+        print(AuPayCardMailPipeline().preview_gmail(
+            s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
+        ))
+    elif args.cmd=="card-gmail-import":
+        s,db,_=make(False); s.validate(need_gmail=True)
+        print(AuPayCardMailPipeline(db).import_gmail(
+            s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
+        ))
     elif args.cmd=="aupay-csv-preview":
         s,db,_=make(False); print(AuPayCsvPipeline(db).preview(args.csv))
     elif args.cmd=="aupay-csv-import":
