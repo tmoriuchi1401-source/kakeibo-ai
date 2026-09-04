@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 import app.payment_coverage_manifest as manifest_module
 import app.payment_coverage_orchestration as orchestration
 from app.coverage_confirmation import COVERAGE_REASON_OPERATIONAL_ONLY
@@ -12,6 +14,7 @@ from app.payment_coverage_manifest import (
     assemble_payment_coverage_manifests,
 )
 from app.payment_coverage_status_preview import preview_payment_coverage_status
+from app.payment_coverage_orchestration import PaymentCoverageStrictRequest
 
 
 START = date(2025, 1, 1)
@@ -250,3 +253,60 @@ def test_raw_boundary_prepares_once_and_passes_manifest_objects_unchanged(
     assert strict_calls[0][1]["coverage_basis"] == "transaction_date"
     assert strict_calls[0][1]["required_start"] is START
     assert strict_calls[0][1]["required_end"] is END
+
+
+def test_application_request_delegates_all_explicit_inputs_to_raw_boundary(
+    monkeypatch,
+) -> None:
+    request = PaymentCoverageStrictRequest(
+        required_providers=["paypay"],
+        coverage_basis="transaction_date",
+        required_start=START,
+        required_end=END,
+        paypay_csvs=["raw.csv"],
+        paypay_export_evidence_files=["evidence.json"],
+        paypay_status_image_files=["status.png"],
+        paypay_confirmed_ranges=["2025-01-01:2025-01-31"],
+        au_pay_card_csvs=["card.csv"],
+        as_of=AS_OF,
+    )
+    calls = []
+    expected = object()
+
+    def raw_boundary(*args, **kwargs):
+        calls.append((args, kwargs))
+        return expected
+
+    monkeypatch.setattr(
+        orchestration,
+        "_preview_payment_coverage_status_with_strict_from_raw_inputs",
+        raw_boundary,
+    )
+
+    result = orchestration.preview_payment_coverage_status_with_strict_request(
+        _ReadOnlyDB(), request,
+    )
+
+    assert result is expected
+    assert len(calls) == 1
+    assert calls[0][1] == {
+        "paypay_csvs": ["raw.csv"],
+        "paypay_export_evidence_files": ["evidence.json"],
+        "paypay_status_image_files": ["status.png"],
+        "paypay_confirmed_ranges": ["2025-01-01:2025-01-31"],
+        "au_pay_card_csvs": ["card.csv"],
+        "signature_verifier": None,
+        "confirmation_resolver": None,
+        "required_providers": ["paypay"],
+        "coverage_basis": "transaction_date",
+        "required_start": START,
+        "required_end": END,
+        "as_of": AS_OF,
+    }
+
+
+def test_application_request_requires_the_request_type() -> None:
+    with pytest.raises(TypeError, match="invalid_payment_coverage_strict_request_type"):
+        orchestration.preview_payment_coverage_status_with_strict_request(
+            _ReadOnlyDB(), object(),
+        )
