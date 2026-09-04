@@ -237,7 +237,7 @@ def test_loaded_employer_alias_takes_priority_over_common_alias():
     assert resolve_alias("手当", usable, "employer-1") == "specific"
 
 
-def test_duplicate_file_id_and_hash_are_skipped_in_priority_order():
+def test_duplicate_and_source_identity_conflict_are_fail_closed():
     existing = PayrollStatementRecord(
         statement_id="stored", employer_id="employer-1", statement_type="salary",
         pay_period="2026-08", source_file_id="same-file", content_hash="same-hash",
@@ -247,7 +247,7 @@ def test_duplicate_file_id_and_hash_are_skipped_in_priority_order():
                         pay_period="2026-09")
     plans = build_append_plan([by_file, by_hash], snapshot(statements=[existing]))
     assert [(plan.action, plan.duplicate_reason) for plan in plans] == [
-        ("skip_duplicate", "source_file_id"),
+        ("needs_review", "source_identity_conflict"),
         ("skip_duplicate", "content_hash"),
     ]
 

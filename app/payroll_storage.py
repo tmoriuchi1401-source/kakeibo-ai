@@ -16,6 +16,7 @@ ReviewStatus = Literal["not_required", "pending", "confirmed", "corrected"]
 DuplicateStatus = Literal["new", "duplicate", "needs_review"]
 
 PARSER_VERSION = "payroll-phase-b1-v1"
+_STATEMENT_TYPE_UNSET = object()
 
 
 def _uuid() -> str:
@@ -29,7 +30,7 @@ def _now() -> datetime:
 class PayrollStatementRecord(BaseModel):
     statement_id: str = Field(default_factory=_uuid)
     employer_id: str | None = None
-    statement_type: StatementType = "other"
+    statement_type: StatementType | None = None
     pay_period: str | None = None
     pay_date: str | None = None
     gross_pay: int | None = None
@@ -108,7 +109,10 @@ class PayrollStorageCandidate(BaseModel):
 
 class DuplicateDecision(BaseModel):
     status: DuplicateStatus
-    reason: Literal["none", "source_file_id", "content_hash", "statement_key"]
+    reason: Literal[
+        "none", "exact_duplicate", "content_hash", "source_identity_conflict",
+        "statement_key",
+    ]
     matched_statement_id: str | None = None
 
 
@@ -308,11 +312,12 @@ def decide_duplicate(
 ) -> DuplicateDecision:
     """Return a decision without changing either candidate or existing records."""
     records = tuple(existing)
-    if candidate.source_file_id:
+    if candidate.source_file_id and candidate.content_hash:
         match = next((record for record in records
-                      if record.source_file_id == candidate.source_file_id), None)
+                      if record.source_file_id == candidate.source_file_id
+                      and record.content_hash == candidate.content_hash), None)
         if match:
-            return DuplicateDecision(status="duplicate", reason="source_file_id",
+            return DuplicateDecision(status="duplicate", reason="exact_duplicate",
                                      matched_statement_id=match.statement_id)
     if candidate.content_hash:
         match = next((record for record in records
@@ -320,7 +325,16 @@ def decide_duplicate(
         if match:
             return DuplicateDecision(status="duplicate", reason="content_hash",
                                      matched_statement_id=match.statement_id)
-    if candidate.employer_id and candidate.pay_period:
+    if candidate.source_file_id:
+        match = next((record for record in records
+                      if record.source_file_id == candidate.source_file_id), None)
+        if match:
+            return DuplicateDecision(
+                status="needs_review", reason="source_identity_conflict",
+                matched_statement_id=match.statement_id,
+            )
+    if (candidate.employer_id and candidate.pay_period
+            and candidate.statement_type in {"salary", "bonus", "adjustment"}):
         match = next((record for record in records
                       if record.employer_id == candidate.employer_id
                       and record.pay_period == candidate.pay_period
@@ -428,6 +442,7 @@ def phase_a_to_storage_candidate(
     *,
     employer_id: str | None = None,
     statement_label: str | None = None,
+    statement_type: StatementType | None | object = _STATEMENT_TYPE_UNSET,
     source_type: Literal["drive", "local", "other"] = "other",
     source_file_id: str | None = None,
     content_hash: str | None = None,
@@ -438,10 +453,13 @@ def phase_a_to_storage_candidate(
     employee: str | None = None,
 ) -> PayrollStorageCandidate:
     """Convert Phase A output to a storage candidate without I/O or mutation."""
-    statement_type = classify_statement_type(statement_label)
+    resolved_statement_type = (
+        statement_type if statement_type is not _STATEMENT_TYPE_UNSET
+        else classify_statement_type(statement_label)
+    )
     statement = PayrollStatementRecord(
         employer_id=employer_id,
-        statement_type=statement_type,
+        statement_type=resolved_statement_type,
         pay_period=preview.pay_period,
         pay_date=preview.pay_date,
         gross_pay=preview.gross_pay,
@@ -461,7 +479,7 @@ def phase_a_to_storage_candidate(
     sync_statement_review_reasons(statement, items)
     statement.needs_review = (
         preview.parse_status != "success"
-        or statement_type == "other"
+        or resolved_statement_type in {None, "other"}
         or any(item.needs_review for item in items)
     )
     return PayrollStorageCandidate(

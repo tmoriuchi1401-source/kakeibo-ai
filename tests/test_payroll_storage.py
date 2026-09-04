@@ -296,12 +296,19 @@ def test_inactive_alias_is_not_used():
     assert resolve_alias("旧名称", [alias]) is None
 
 
-def test_duplicate_priority_source_file_id_then_content_hash():
+def test_duplicate_priority_exact_identity_then_hash_and_source_conflict():
     existing = statement(statement_id="stored")
+    exact = statement(source_file_id="file-1", content_hash="hash-1",
+                      pay_period="2026-09")
+    assert decide_duplicate(exact, [existing]).model_dump() == {
+        "status": "duplicate", "reason": "exact_duplicate",
+        "matched_statement_id": "stored",
+    }
     by_file = statement(source_file_id="file-1", content_hash="different",
                         pay_period="2026-09")
     assert decide_duplicate(by_file, [existing]).model_dump() == {
-        "status": "duplicate", "reason": "source_file_id", "matched_statement_id": "stored",
+        "status": "needs_review", "reason": "source_identity_conflict",
+        "matched_statement_id": "stored",
     }
     by_hash = statement(source_file_id="file-2", content_hash="hash-1",
                         pay_period="2026-09")

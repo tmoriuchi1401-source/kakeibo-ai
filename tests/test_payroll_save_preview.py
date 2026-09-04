@@ -1,3 +1,6 @@
+import json
+import sys
+
 from app.payroll_models import PayrollItem, PayrollPreview
 from app.payroll_sheets import PayrollSheetsSnapshot, validate_sheet_schema
 from app.payroll_storage import (
@@ -12,6 +15,7 @@ from app.payroll_storage import (
 from app.payroll_storage_preview import (
     build_save_plan,
     drive_save_preview,
+    drive_storage_candidates,
     save_preview_summary,
 )
 
@@ -105,10 +109,22 @@ def candidate(*, source_file_id="file-1", content_hash="hash-1"):
     )
 
 
+def safe_candidate(*, source_file_id="file-1", content_hash="hash-1"):
+    source = parsed_statement().model_copy(deep=True)
+    source.parse_status = "success"
+    source.items = source.items[:2]
+    return phase_a_to_storage_candidate(
+        source, employer_id="employer-1", statement_type="salary",
+        source_type="drive", source_file_id=source_file_id,
+        content_hash=content_hash, aliases=snapshot().aliases,
+        file_name="2026-08-payroll.pdf",
+    )
+
+
 def test_save_plan_contains_header_and_all_prospective_item_rows():
-    plan = build_save_plan([candidate()], snapshot())[0]
+    plan = build_save_plan([safe_candidate()], snapshot())[0]
     assert plan.planned_header["source_file_id"] == "file-1"
-    assert plan.item_count == len(plan.items) == 3
+    assert plan.item_count == len(plan.items) == 2
     assert all(item.planned_row["statement_id"] ==
                plan.planned_header["statement_id"] for item in plan.items)
     assert plan.file_name == "2026-08-payroll.pdf"
@@ -141,9 +157,8 @@ def test_save_preview_exposes_anonymous_review_reason_counts():
 
     assert plans[0].review_reason_counts == {"ocr_reference_guard": 1}
     assert summary["review_reason_counts"] == {"ocr_reference_guard": 1}
-    assert plans[0].items[0].planned_row["review_reason_code"] == (
-        "ocr_reference_guard"
-    )
+    assert plans[0].items[0].planned_row == {}
+    assert plans[0].write_plan.planned_item_rows == ()
 
 
 def test_save_preview_counts_parser_native_reason_without_changing_eligibility():
@@ -171,10 +186,10 @@ def test_alias_unknown_and_needs_review_are_visible_without_guessing():
     plan = build_save_plan([candidate()], snapshot())[0]
     alias, unknown = plan.items[1:]
     assert alias.standard_item_name == "健康保険"
-    assert alias.planned_row["standard_item_id"] == "health_insurance"
+    assert alias.planned_row == {}
     assert unknown.section == "unknown"
     assert unknown.standard_item_name is None
-    assert unknown.planned_row["standard_item_id"] is None
+    assert unknown.planned_row == {}
     assert unknown.needs_review
     assert unknown.value == "5,000"
     assert plan.recognized_item_count == 2
@@ -182,19 +197,19 @@ def test_alias_unknown_and_needs_review_are_visible_without_guessing():
 
 
 def test_new_statement_would_create_header_and_correct_item_count():
-    plan = build_save_plan([candidate()], snapshot())[0]
+    plan = build_save_plan([safe_candidate()], snapshot())[0]
     assert plan.duplicate_status == "new"
     assert plan.would_create_header is True
-    assert plan.would_create_items == plan.item_count == 3
+    assert plan.would_create_items == plan.item_count == 2
 
 
 def test_existing_source_file_is_reported_and_would_not_create_rows():
     existing = PayrollStatementRecord(
-        statement_id="stored", source_file_id="file-1", content_hash="old-hash",
+        statement_id="stored", source_file_id="file-1", content_hash="hash-1",
     )
     plan = build_save_plan([candidate()], snapshot(statements=[existing]))[0]
     assert plan.duplicate_status == "existing"
-    assert plan.duplicate_reason == "source_file_id"
+    assert plan.duplicate_reason == "exact_duplicate"
     assert plan.header_action == "skip_duplicate"
     assert plan.would_create_header is False
     assert plan.would_create_items == 0
@@ -209,14 +224,16 @@ def test_summary_aggregates_required_b4_counts():
     assert result["sampled_files"] == 2
     assert result["parsed_files"] == 1
     assert result["failed_files"] == 1
-    assert result["would_create_headers"] == 1
-    assert result["would_create_items"] == 3
+    assert result["would_create_headers"] == 0
+    assert result["would_create_items"] == 0
     assert result["duplicate_count"] == 0
     assert result["unknown_item_count"] == 1
     assert result["needs_review_count"] == 1
     assert result["review_reason_counts"] == {}
     assert result["recognized_item_count"] == 2
     assert result["recognized_without_value_count"] == 0
+    assert result["write_plans"][0]["planned_header_rows"] == []
+    assert result["write_plans"][0]["planned_item_rows"] == []
 
 
 def test_items_without_raw_value_are_diagnostic_only_but_zero_is_kept():
@@ -278,7 +295,8 @@ def test_items_without_raw_value_are_diagnostic_only_but_zero_is_kept():
     assert [item.raw_item_name for item in plan.items] == [
         "基本給", "健康保険料", "調整手当A", "出勤日数", "残業時間", "勤務区分",
     ]
-    assert plan.item_count == plan.would_create_items == 6
+    assert plan.item_count == 6
+    assert plan.would_create_items == 0
     assert plan.recognized_item_count == 4
     assert plan.recognized_without_value_count == 2
     assert plan.unknown_item_count == 2
@@ -315,7 +333,7 @@ def test_union_dues_resolves_without_promoting_other_unknown_items():
     assert dues.standard_item_name == "組合費"
     assert dues.section == "deduction"
     assert dues.value == 7100
-    assert dues.planned_row["standard_item_id"] == "union_dues"
+    assert dues.planned_row == {}
     assert not dues.needs_review
     for raw_name in ("一斉預金", "深夜勤務", "支給合計"):
         assert by_name[raw_name].standard_item_name is None
@@ -341,7 +359,8 @@ def test_matching_header_summary_items_are_excluded_from_save_candidates():
     assert [item.raw_item_name for item in plan.items] == [
         "基本給", "健康保険料", "調整手当A",
     ]
-    assert plan.item_count == plan.would_create_items == 3
+    assert plan.item_count == 3
+    assert plan.would_create_items == 0
     assert plan.unknown_item_count == plan.needs_review_count == 1
 
 
@@ -405,3 +424,78 @@ def test_drive_preview_never_calls_drive_write_methods():
     )
     assert result["sampled_files"] == result["parsed_files"] == 1
     assert service.write_calls == []
+
+
+def test_drive_candidate_propagates_explicit_operator_identity_without_guessing():
+    service = DriveService([
+        {"id": "file-1", "name": "salary.pdf", "mimeType": "application/pdf"},
+    ])
+    candidates = drive_storage_candidates(
+        "folder-123456", snapshot(), service=service,
+        downloader=lambda _file_id: b"payroll",
+        parser=lambda _path: parsed_statement(),
+        employer_id="operator-employer", statement_type="bonus",
+    )
+
+    assert candidates[0].statement.employer_id == "operator-employer"
+    assert candidates[0].statement.statement_type == "bonus"
+    assert service.write_calls == []
+
+
+def test_drive_candidate_without_operator_identity_stays_missing_and_blocked():
+    service = DriveService([
+        {"id": "file-1", "name": "salary.pdf", "mimeType": "application/pdf"},
+    ])
+    source = parsed_statement().model_copy(deep=True)
+    source.parse_status = "success"
+    source.items = source.items[:2]
+    candidates = drive_storage_candidates(
+        "folder-123456", snapshot(), service=service,
+        downloader=lambda _file_id: b"payroll",
+        parser=lambda _path: source,
+    )
+
+    assert candidates[0].statement.employer_id is None
+    assert candidates[0].statement.statement_type is None
+    plan = build_save_plan(candidates, snapshot())[0].write_plan
+    assert {"employer_id_missing", "statement_type_missing"} <= set(plan.reasons)
+    assert plan.planned_header_rows == plan.planned_item_rows == ()
+    assert service.write_calls == []
+
+
+def test_cli_propagates_operator_identity_to_drive_save_preview(monkeypatch, capsys):
+    import app.cli as cli
+
+    class FakeSettings:
+        spreadsheet_id = "sheet-id"
+        payroll_drive_folder_id = "folder-id"
+
+        def validate(self, **_kwargs):
+            return None
+
+    captured = {}
+    monkeypatch.setattr(cli, "Settings", FakeSettings)
+    monkeypatch.setattr(
+        cli, "PayrollSheetsReadRepository",
+        lambda _spreadsheet_id: type(
+            "Reader", (), {"snapshot": staticmethod(snapshot)},
+        )(),
+    )
+
+    def preview(folder_id, sheet_snapshot, **kwargs):
+        captured.update(folder_id=folder_id, snapshot=sheet_snapshot, **kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(cli, "drive_save_preview", preview)
+    monkeypatch.setattr(sys, "argv", [
+        "app.cli", "payroll-save-preview",
+        "--employer-id", "operator-employer",
+        "--statement-type", "bonus",
+    ])
+
+    cli.main()
+
+    assert captured["folder_id"] == "folder-id"
+    assert captured["employer_id"] == "operator-employer"
+    assert captured["statement_type"] == "bonus"
+    assert json.loads(capsys.readouterr().out) == {"ok": True}

@@ -152,8 +152,16 @@ def main():
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-import-preview")
     sub.add_parser("payroll-drive-preview")
-    sub.add_parser("payroll-storage-preview")
-    sub.add_parser("payroll-save-preview")
+    payroll_storage_preview=sub.add_parser("payroll-storage-preview")
+    payroll_storage_preview.add_argument("--employer-id")
+    payroll_storage_preview.add_argument(
+        "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
+    )
+    payroll_save_preview=sub.add_parser("payroll-save-preview")
+    payroll_save_preview.add_argument("--employer-id")
+    payroll_save_preview.add_argument(
+        "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
+    )
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-master-sync-preview")
     payroll_master_apply=sub.add_parser("payroll-master-sync")
@@ -185,7 +193,10 @@ def main():
         import json
         s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
         snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
-        candidates=drive_storage_candidates(s.payroll_drive_folder_id,snapshot)
+        candidates=drive_storage_candidates(
+            s.payroll_drive_folder_id,snapshot,
+            employer_id=args.employer_id,statement_type=args.statement_type,
+        )
         plans=build_append_plan(candidates,snapshot)
         print(json.dumps(preview_summary(plans,snapshot),ensure_ascii=False))
     elif args.cmd=="payroll-save-preview":
@@ -193,7 +204,10 @@ def main():
         s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
         snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
         print(json.dumps(
-            drive_save_preview(s.payroll_drive_folder_id,snapshot),
+            drive_save_preview(
+                s.payroll_drive_folder_id,snapshot,
+                employer_id=args.employer_id,statement_type=args.statement_type,
+            ),
             ensure_ascii=False,
         ))
     elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
