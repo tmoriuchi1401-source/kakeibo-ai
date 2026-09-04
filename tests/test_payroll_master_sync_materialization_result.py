@@ -72,7 +72,7 @@ def test_full_success_projects_two_existing_apply_stages_without_apply():
         ("sync_standard_items", "applied"),
         ("sync_aliases", "applied"),
     ]
-    assert "2026-09-04" not in materialized.to_json()
+    assert materialized.occurred_at == "2026-09-04T00:00:00+00:00"
 
 
 def test_all_already_present_is_skipped_without_external_write():
@@ -86,6 +86,7 @@ def test_all_already_present_is_skipped_without_external_write():
     assert materialized.status == "skipped"
     assert materialized.external_write is False
     assert {item.status for item in materialized.operations} == {"skipped"}
+    assert materialized.occurred_at == "2026-09-04T00:00:00+00:00"
 
 
 def test_conflict_is_blocked_without_recomputing_or_writing():
@@ -179,3 +180,43 @@ def test_inconsistent_unapplied_result_fails_closed_instead_of_becoming_skipped(
         payroll_master_sync_result_to_materialization_result(
             result(applied=False), master_sync_plan(),
         )
+
+
+def test_source_less_noop_and_blocked_plans_keep_overall_result_without_fake_operations():
+    from app.payroll_master_sync import build_master_sync_plan
+    from app.payroll_master_sync_materialization import (
+        payroll_master_sync_to_materialization_plan,
+    )
+    from app.payroll_sheets import PayrollSheetsSnapshot
+    from app.payroll_storage import INITIAL_ALIASES, INITIAL_STANDARD_ITEMS
+
+    noop_plan = payroll_master_sync_to_materialization_plan(build_master_sync_plan(
+        PayrollSheetsSnapshot(
+            schemas=[], standard_items=list(INITIAL_STANDARD_ITEMS),
+            aliases=list(INITIAL_ALIASES),
+        )
+    ))
+    noop = payroll_master_sync_result_to_materialization_result(result(
+        already_present=[
+            {"kind": "standard_item", "id": "basic_pay"},
+            {"kind": "alias", "id": "alias-basic-pay-honkyu"},
+        ],
+    ), noop_plan)
+    assert noop.status == "skipped"
+    assert noop.operations == ()
+
+    blocked_plan = payroll_master_sync_to_materialization_plan(build_master_sync_plan(
+        PayrollSheetsSnapshot(schemas=[], standard_items=[
+            INITIAL_STANDARD_ITEMS[0].model_copy(update={"active": False}),
+        ])
+    ))
+    blocked = payroll_master_sync_result_to_materialization_result(result(
+        applied=False,
+        skipped=[{"kind": "standard_item", "id": "overtime_pay"}],
+        conflicts=[{
+            "kind": "standard_item", "code_id": "basic_pay",
+            "reason": "standard_item_id_collision_or_inactive",
+        }],
+    ), blocked_plan)
+    assert blocked.status == "blocked"
+    assert blocked.operations == ()

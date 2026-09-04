@@ -138,6 +138,20 @@ def _operation_results(
             continue
         operation_id = operations_by_stage.get(stage)
         if operation_id is None:
+            informational_only = bool(
+                _stage_entries(already_present, stage)
+                and not added[stage]
+                and not _stage_entries(skipped, stage)
+                and error is None
+            )
+            blocked_skip = bool(
+                plan.blocked
+                and _stage_entries(skipped, stage)
+                and not added[stage]
+                and error is None
+            )
+            if informational_only or blocked_skip:
+                continue
             # A result cannot safely claim an operation identity absent from
             # its plan.  Do not invent stage IDs to make the join appear valid.
             raise ValueError("payroll_master_sync_result_operation_missing_from_plan")
@@ -193,10 +207,9 @@ def payroll_master_sync_result_to_materialization_result(
 ) -> MaterializationResult:
     """Project an already-produced master-sync result without invoking apply.
 
-    ``applied_at`` is intentionally not copied: it is an audit timestamp, not
-    an observed state, and the current common result contract has no timestamp
-    field.  No source identity is inferred because master sync has none in its
-    existing apply result.
+    ``applied_at`` is copied only into the common result's optional occurrence
+    timestamp.  No source identity is inferred because master sync has none in
+    its existing apply result.
     """
 
     if not isinstance(result, Mapping):
@@ -214,6 +227,9 @@ def payroll_master_sync_result_to_materialization_result(
     skipped = _safe_entries(_required_list(result, "skipped"), field_name="skipped")
     conflicts = _safe_conflicts(_required_list(result, "conflicts"))
     errors = _safe_errors(_required_list(result, "errors"))
+    applied_at = result.get("applied_at")
+    if applied_at is not None and (not isinstance(applied_at, str) or not applied_at.strip()):
+        raise ValueError("invalid_payroll_master_sync_applied_at")
     status, reason = _result_status(
         applied=applied,
         added_standard_items=added_standard_items,
@@ -248,4 +264,5 @@ def payroll_master_sync_result_to_materialization_result(
             "conflicts": conflicts,
             "errors": errors,
         },
+        occurred_at=applied_at,
     )
