@@ -393,9 +393,7 @@ def _review_reason_code(
 ) -> PayrollReviewReasonCode | None:
     """Explain only review conditions that are explicit at this conversion point."""
     if item.needs_review:
-        # The parser's reason is not carried in the legacy Phase A model, so do
-        # not guess among pairing, confidence, and parsing causes here.
-        return None
+        return item.review_reason_code
     if (extraction_method == "ocr" and section == "reference"
             and standard_item_id is not None):
         return "ocr_reference_guard"

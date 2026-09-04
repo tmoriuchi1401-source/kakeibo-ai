@@ -90,6 +90,7 @@ def test_positioned_legacy_table_preserves_blank_cell():
     assert by_name["基本給"].value == 300000
     assert by_name["独自手当"].value is None
     assert by_name["独自手当"].needs_review
+    assert by_name["独自手当"].review_reason_code == "pairing_not_found"
     assert by_name["支給合計"].value == 320000
 
 
@@ -146,6 +147,7 @@ def test_attendance_days_does_not_confirm_adjacent_money_value():
     assert item.value is None
     assert item.raw_value is None
     assert item.needs_review
+    assert item.review_reason_code == "attendance_conflict"
 
 
 def test_attendance_hours_does_not_confirm_adjacent_money_value():
@@ -156,6 +158,7 @@ def test_attendance_hours_does_not_confirm_adjacent_money_value():
     assert all(item.section == "attendance" for item in items)
     assert all(item.value is None and item.raw_value is None for item in items)
     assert all(item.needs_review for item in items)
+    assert all(item.review_reason_code == "attendance_conflict" for item in items)
 
 
 def test_explicit_attendance_units_remain_confirmed():
@@ -187,6 +190,7 @@ def test_low_ocr_confidence_is_reviewed_without_value():
                                   ocr=True)[0]
     assert item.value is None
     assert item.needs_review
+    assert item.review_reason_code == "low_confidence"
 
 
 def test_unknown_payroll_item_is_retained_with_geometry():
@@ -223,6 +227,7 @@ def test_ambiguous_ocr_values_above_are_not_confirmed():
     assert len(items) == 1
     assert items[0].value is None
     assert items[0].needs_review
+    assert items[0].review_reason_code == "ambiguous_ownership"
 
 
 def test_ocr_value_immediately_above_same_column_is_still_paired():
@@ -249,6 +254,7 @@ def test_pdf_summary_values_directly_below_are_recovered_when_consistent():
     assert {item.standard_item_candidate: item.value for item in items} == {
         "gross_pay": 530865, "total_deductions": 94185, "net_pay": 436680,
     }
+    assert all(item.review_reason_code is None for item in items)
 
 
 def test_pdf_summary_below_rejects_multiple_candidates():
@@ -498,6 +504,7 @@ def test_ocr_horizontal_ambiguous_ownership_is_not_confirmed():
         token("12,000", 110, 10),
     ), ocr=True)
     assert all(item.value is None and item.needs_review for item in items)
+    assert all(item.review_reason_code == "ambiguous_ownership" for item in items)
 
 
 def test_dot_group_money_does_not_change_pdf_text_path():

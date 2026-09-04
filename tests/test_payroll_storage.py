@@ -90,6 +90,33 @@ def test_uncertain_ocr_value_is_not_promoted_to_confirmed_value():
     assert result.statement.needs_review
 
 
+def test_parser_review_reason_is_propagated_without_storage_reclassification():
+    legacy_source = preview(review=True).model_copy(deep=True)
+    source = preview(review=True).model_copy(deep=True)
+    source.items[0].review_reason_code = "low_confidence"
+
+    legacy = phase_a_to_storage_candidate(legacy_source, statement_label="給与明細")
+    result = phase_a_to_storage_candidate(source, statement_label="給与明細")
+
+    assert result.items[0].review_reason_code == "low_confidence"
+    assert result.statement.review_reasons == ["low_confidence"]
+    assert (
+        result.items[0].standard_item_id,
+        result.items[0].raw_value,
+        result.items[0].value,
+        result.items[0].needs_review,
+        result.items[0].review_status,
+        result.statement.needs_review,
+    ) == (
+        legacy.items[0].standard_item_id,
+        legacy.items[0].raw_value,
+        legacy.items[0].value,
+        legacy.items[0].needs_review,
+        legacy.items[0].review_status,
+        legacy.statement.needs_review,
+    )
+
+
 def test_item_model_itself_cannot_confirm_a_pending_value():
     item = PayrollStatementItemRecord(
         statement_id="statement", raw_item_name="OCR項目", raw_value="12,34?",

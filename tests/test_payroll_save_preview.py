@@ -146,6 +146,27 @@ def test_save_preview_exposes_anonymous_review_reason_counts():
     )
 
 
+def test_save_preview_counts_parser_native_reason_without_changing_eligibility():
+    source = parsed_statement().model_copy(deep=True)
+    source.items[2].raw_value = None
+    source.items[2].value = None
+    source.items[2].review_reason_code = "pairing_not_found"
+    storage = phase_a_to_storage_candidate(
+        source, employer_id="employer-1", statement_label="給与明細",
+        source_type="drive", aliases=snapshot().aliases,
+    )
+
+    plan = build_save_plan([storage], snapshot())[0]
+    summary = save_preview_summary(
+        [plan], snapshot(), sampled_files=1, failed_files=0,
+    )
+
+    assert plan.item_count == 2
+    assert plan.needs_review_count == 0
+    assert plan.review_reason_counts == {"pairing_not_found": 1}
+    assert summary["review_reason_counts"] == {"pairing_not_found": 1}
+
+
 def test_alias_unknown_and_needs_review_are_visible_without_guessing():
     plan = build_save_plan([candidate()], snapshot())[0]
     alias, unknown = plan.items[1:]

@@ -10,13 +10,17 @@ from app.payroll_statement_parser import _totals, preview_payroll_file
 from app.payroll_storage import phase_a_to_storage_candidate
 
 
-def summary_item(candidate, value, *, section="reference", needs_review=False):
+def summary_item(
+    candidate, value, *, section="reference", needs_review=False,
+    review_reason_code=None,
+):
     return PayrollItem(
         raw_item_name=candidate,
         section=section,
         value=value,
         standard_item_candidate=candidate,
         needs_review=needs_review,
+        review_reason_code=review_reason_code,
     )
 
 
@@ -173,6 +177,18 @@ def test_non_reference_reviewed_or_missing_value_items_are_not_candidates():
     ]
 
     assert _totals("", items) == (None, None, None)
+
+
+def test_review_reason_diagnostic_does_not_change_reconciliation_inputs():
+    legacy = summary_item("total_deductions", 50000, needs_review=True)
+    diagnosed = summary_item(
+        "total_deductions", 50000, needs_review=True,
+        review_reason_code="low_confidence",
+    )
+
+    assert _totals("", [legacy]) == _totals("", [diagnosed]) == (
+        None, None, None,
+    )
 
 
 @pytest.mark.parametrize(

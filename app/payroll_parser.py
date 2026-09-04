@@ -361,6 +361,7 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
         item.raw_value = number.text
         item.confidence = min(item.confidence, number.confidence)
         item.needs_review = False
+        item.review_reason_code = None
     return entries
 
 
@@ -733,13 +734,19 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                 if number.page == label.page
                 and (value := _explicit_attendance_value(number.text, attendance_type)) is not None
             )
-        horizontal = [(number, vals, number.x - (label.x + label.width))
-                      for number, vals in same_page
-                      if abs(number.y - label.y) <= max(label.height, number.height) * .65
-                      and number.x >= label.x + label.width - 3
-                      and (not ocr or _owns_ocr_horizontal_value(
-                          label, number, labels, tokens,
-                      ))]
+        horizontal_in_range = [
+            (number, vals, number.x - (label.x + label.width))
+            for number, vals in same_page
+            if abs(number.y - label.y) <= max(label.height, number.height) * .65
+            and number.x >= label.x + label.width - 3
+        ]
+        horizontal = [
+            entry for entry in horizontal_in_range
+            if not ocr or _owns_ocr_horizontal_value(
+                label, entry[0], labels, tokens,
+            )
+        ]
+        ownership_rejected = ocr and len(horizontal) < len(horizontal_in_range)
         below = [(number, vals, number.y - (label.y + label.height))
                  for number, vals in same_page
                  if 0 <= number.y - (label.y + label.height) <= label.height * 2.2
@@ -779,8 +786,26 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         )
         confirmed = chosen is not None and not ambiguous and not low_confidence
         number = chosen[0] if chosen else None
-        if confirmed and number is not None and _attendance_value_conflicts(name, number.text):
+        attendance_conflict = bool(
+            confirmed and number is not None
+            and _attendance_value_conflicts(name, number.text)
+        )
+        if attendance_conflict:
             confirmed = False
+        review_reason_code = None
+        if not confirmed:
+            # Keep the primary reason aligned with the parser guard order. This
+            # is diagnostic only and does not participate in confirmation.
+            if chosen is None and ownership_rejected:
+                review_reason_code = "ambiguous_ownership"
+            elif chosen is None:
+                review_reason_code = "pairing_not_found"
+            elif ambiguous:
+                review_reason_code = "ambiguous_ownership"
+            elif low_confidence:
+                review_reason_code = "low_confidence"
+            elif attendance_conflict:
+                review_reason_code = "attendance_conflict"
         raw_value = number.text if confirmed else None
         value = chosen[1][0] if confirmed and len(chosen[1]) == 1 else None
         item = PayrollItem(
@@ -788,6 +813,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             standard_item_candidate=candidate(name), page=label.page, x=label.x, y=label.y,
             confidence=min(label.confidence, number.confidence) if number else label.confidence,
             needs_review=not confirmed,
+            review_reason_code=review_reason_code,
         )
         entries.append((item, label, number, ambiguous))
     if not ocr:

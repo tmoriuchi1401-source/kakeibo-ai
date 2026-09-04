@@ -5,10 +5,21 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
-PayrollReviewReasonCode = Literal[
+PayrollParserReviewReasonCode = Literal[
+    "pairing_not_found",
+    "ambiguous_ownership",
+    "low_confidence",
+    "attendance_conflict",
+]
+
+PayrollStorageReviewReasonCode = Literal[
     "ocr_reference_guard",
     "unknown_with_value",
 ]
+
+PayrollReviewReasonCode = (
+    PayrollParserReviewReasonCode | PayrollStorageReviewReasonCode
+)
 
 
 class PayrollItem(BaseModel):
@@ -24,6 +35,8 @@ class PayrollItem(BaseModel):
     column: int | None = None
     confidence: float | None = None
     needs_review: bool = False
+    # Parser-native diagnostic only; never persisted in the Sheets schema.
+    review_reason_code: PayrollParserReviewReasonCode | None = None
 
     @field_validator("section", mode="before")
     @classmethod
