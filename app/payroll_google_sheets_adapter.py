@@ -6,7 +6,10 @@ from googleapiclient.errors import HttpError
 from pydantic import BaseModel, ConfigDict
 
 from .payroll_sheets import SHEET_TITLES
-from .payroll_storage import PAYROLL_ITEM_COLUMNS, PAYROLL_STATEMENT_COLUMNS
+from .payroll_storage import (
+    PAYROLL_ITEM_COLUMNS,
+    PAYROLL_STATEMENT_COLUMNS,
+)
 from .payroll_storage_preview import PayrollPlannedRow, PayrollWriteIdentity, PayrollWritePlan
 from .payroll_writer import PayrollAppendOutcome, validate_payroll_write_contract
 
@@ -171,6 +174,84 @@ class PayrollRecoveryReadAdapter(Protocol):
     ) -> Iterable[PayrollPlannedRow]: ...
 
 
+class PayrollRecoveryReadError(RuntimeError):
+    """A recovery read could not safely establish the stored state."""
+
+
+class PayrollGoogleSheetsRecoveryReadAdapter:
+    """Strict, read-only lookup of Payroll rows by stable ``statement_id``.
+
+    The adapter reads each target sheet once and scans its schema-validated rows
+    for the identifier. It never uses a guessed row number, and it exposes no
+    write method. Invalid schemas or malformed responses fail closed instead of
+    being interpreted as an absent record.
+    """
+
+    def __init__(self, spreadsheet_id: str, *, service=None):
+        if not spreadsheet_id:
+            raise ValueError("spreadsheet_id is required")
+        if service is None:
+            from .google_clients import read_only_sheets_service
+            service = read_only_sheets_service()
+        self.spreadsheet_id = spreadsheet_id
+        self.service = service
+
+    def read_header_rows(
+        self, statement_id: str,
+    ) -> tuple[PayrollPlannedRow, ...]:
+        return self._read_target_rows(
+            "payroll_statements", PAYROLL_STATEMENT_COLUMNS, statement_id,
+        )
+
+    def read_item_rows(
+        self, statement_id: str,
+    ) -> tuple[PayrollPlannedRow, ...]:
+        return self._read_target_rows(
+            "payroll_items", PAYROLL_ITEM_COLUMNS, statement_id,
+        )
+
+    def _read_target_rows(
+        self,
+        sheet_key: str,
+        columns: tuple[str, ...],
+        statement_id: str,
+    ) -> tuple[PayrollPlannedRow, ...]:
+        title = SHEET_TITLES[sheet_key]
+        try:
+            response = self.service.spreadsheets().values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range=f"'{title}'!A1:ZZ",
+                valueRenderOption="UNFORMATTED_VALUE",
+            ).execute()
+        except Exception as exc:
+            raise PayrollRecoveryReadError(
+                f"{sheet_key} recovery read failed",
+            ) from exc
+
+        values = response.get("values") if isinstance(response, dict) else None
+        if not isinstance(values, list) or not values:
+            raise PayrollRecoveryReadError(f"{sheet_key} schema is unavailable")
+        header = values[0]
+        if (not isinstance(header, list)
+                or tuple(str(value) for value in header) != columns):
+            raise PayrollRecoveryReadError(f"{sheet_key} schema does not match")
+
+        try:
+            statement_index = columns.index("statement_id")
+        except ValueError as exc:  # Defensive: both supported schemas have it.
+            raise PayrollRecoveryReadError("statement_id is unavailable") from exc
+
+        matched = []
+        for raw_row in values[1:]:
+            if not isinstance(raw_row, list) or len(raw_row) > len(columns):
+                raise PayrollRecoveryReadError(f"{sheet_key} row is malformed")
+            padded = list(raw_row) + [None] * (len(columns) - len(raw_row))
+            normalized = tuple(None if value == "" else value for value in padded)
+            if normalized[statement_index] == statement_id:
+                matched.append(PayrollPlannedRow(columns=columns, values=normalized))
+        return tuple(matched)
+
+
 class PayrollRecoveryAssessment(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -178,6 +259,7 @@ class PayrollRecoveryAssessment(BaseModel):
     header_state: Literal["absent", "identity_confirmed", "conflict_or_duplicate"]
     item_state: Literal["absent", "complete", "incomplete_or_duplicate"]
     matching_header_count: int
+    header_matches_expected: bool
     observed_item_count: int
     expected_item_count: int
     safe_to_automatic_retry: Literal[False] = False
@@ -221,6 +303,10 @@ def inspect_payroll_recovery(
     matching_headers = sum(
         _identity_matches(row, plan.identity) for row in headers
     )
+    header_matches_expected = (
+        len(headers) == 1
+        and _same_rows(plan.planned_header_rows, headers)
+    )
     if not headers:
         header_state = "absent"
     elif len(headers) == 1 and matching_headers == 1:
@@ -239,6 +325,7 @@ def inspect_payroll_recovery(
         header_state=header_state,
         item_state=item_state,
         matching_header_count=matching_headers,
+        header_matches_expected=header_matches_expected,
         observed_item_count=len(items),
         expected_item_count=len(plan.planned_item_rows),
     )
