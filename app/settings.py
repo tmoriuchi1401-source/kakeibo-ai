@@ -26,7 +26,7 @@ class Settings:
         'subject:"【au PAY】ご利用のお知らせ" "メールコードP1002" newer_than:30d'
     )
     aupay_card_gmail_query: str = field(default_factory=lambda: os.getenv("AUPAY_CARD_GMAIL_QUERY") or (
-        'in:anywhere from:info@kddi-fs.com '
+        'in:anywhere from:kddi-fs.com '
         'subject:"【ご利用詳細】au PAY カード" newer_than:30d'
     ))
 

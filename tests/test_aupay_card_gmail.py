@@ -1,6 +1,12 @@
 import base64
 import sys
+from email import policy
 from email.message import EmailMessage
+from email.parser import BytesParser
+
+import pytest
+from googleapiclient.errors import HttpError
+from httplib2 import Response
 
 from app import cli
 from app.aupay_mail_pipeline import AuPayCardMailPipeline, parse_aupay_card_raw
@@ -109,6 +115,31 @@ def test_raw_parser_preserves_multiple_card_details():
     ]
     assert rows[0]["import_id"].startswith("aupaycard-mail:")
     assert rows[0]["import_id"] != rows[1]["import_id"]
+
+
+def test_raw_parser_accepts_multipart_message_when_plain_part_is_present():
+    message = BytesParser(policy=policy.default).parsebytes(raw_message(
+        detail(1, "fixture merchant", 1200),
+    ))
+    message.add_alternative("<p>non-authoritative HTML alternative</p>", subtype="html")
+
+    rows = parse_aupay_card_raw(message.as_bytes())
+
+    assert len(rows) == 1
+    assert rows[0]["amount"] == 1200
+
+
+def test_raw_parser_fails_closed_for_html_only_message():
+    source = BytesParser(policy=policy.default).parsebytes(raw_message(
+        detail(1, "fixture merchant", 1200),
+    ))
+    message = EmailMessage()
+    message["Subject"] = source["Subject"]
+    message["Message-ID"] = source["Message-ID"]
+    message.set_content("<p>HTML-only card notice</p>", subtype="html")
+
+    with pytest.raises(ValueError, match="text/plain"):
+        parse_aupay_card_raw(message.as_bytes())
 
 
 def test_gmail_import_writes_existing_card_transaction_contract(monkeypatch):
@@ -233,3 +264,77 @@ def test_card_gmail_query_is_configurable_without_changing_wallet_query(monkeypa
 
     assert settings.aupay_card_gmail_query == "label:card-test newer_than:7d"
     assert "wallet.auone.jp" in settings.aupay_gmail_query
+
+
+def test_default_card_gmail_query_matches_sender_domain_with_bounded_date(monkeypatch):
+    monkeypatch.delenv("AUPAY_CARD_GMAIL_QUERY", raising=False)
+
+    query = Settings().aupay_card_gmail_query
+
+    assert "from:kddi-fs.com" in query
+    assert "newer_than:30d" in query
+
+
+def test_gmail_read_error_is_counted_without_upstream_detail(monkeypatch):
+    class FailingRequest:
+        def execute(self):
+            raise HttpError(Response({"status": "429"}), b"sensitive upstream detail")
+
+    class FailingRawMessages(Messages):
+        def get(self, **kwargs):
+            return FailingRequest()
+
+    class FailingRawService:
+        def __init__(self):
+            self.messages_api = FailingRawMessages(
+                [{"messages": [{"id": "gmail-unit-1"}]}], {},
+            )
+
+        def users(self):
+            return self
+
+        def messages(self):
+            return self.messages_api
+
+    monkeypatch.setattr(
+        "app.aupay_mail_pipeline.gmail_service", lambda _: FailingRawService(),
+    )
+
+    result = AuPayCardMailPipeline().preview_gmail("token", "card-query")
+
+    assert result["needs_review"] == 1
+    assert result["gmail_read_failed"] == 1
+    assert "sensitive upstream detail" not in str(result)
+
+
+def test_import_fails_closed_when_gmail_read_is_incomplete(monkeypatch):
+    class FailingRequest:
+        def execute(self):
+            raise HttpError(Response({"status": "429"}), b"sensitive upstream detail")
+
+    class FailingRawMessages(Messages):
+        def get(self, **kwargs):
+            return FailingRequest()
+
+    class FailingRawService:
+        def __init__(self):
+            self.messages_api = FailingRawMessages(
+                [{"messages": [{"id": "gmail-unit-1"}]}], {},
+            )
+
+        def users(self):
+            return self
+
+        def messages(self):
+            return self.messages_api
+
+    monkeypatch.setattr(
+        "app.aupay_mail_pipeline.gmail_service", lambda _: FailingRawService(),
+    )
+    db = CardDB()
+
+    with pytest.raises(RuntimeError, match="gmail_collection_incomplete"):
+        AuPayCardMailPipeline(db).import_gmail("token", "card-query")
+
+    assert db.rows == []
+    assert db.append_calls == []

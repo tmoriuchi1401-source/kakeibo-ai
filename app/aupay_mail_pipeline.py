@@ -13,6 +13,7 @@ from email.parser import BytesParser
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from .aupay_card_pipeline import AuPayCardPipeline
 from .sheets import SheetsDB
@@ -309,6 +310,8 @@ class AuPayCardMailPipeline:
             "non_card_notice": 0,
             "invalid_raw_mime": 0,
             "parse_failed": 0,
+            "gmail_list_failed": 0,
+            "gmail_read_failed": 0,
         }
 
     @classmethod
@@ -320,11 +323,15 @@ class AuPayCardMailPipeline:
         seen_message_ids: set[str] = set()
         page_token = None
         while summary["found"] < max_results:
-            list_response = service.users().messages().list(
-                userId="me", q=query,
-                maxResults=min(100, max_results - summary["found"]),
-                pageToken=page_token,
-            ).execute()
+            try:
+                list_response = service.users().messages().list(
+                    userId="me", q=query,
+                    maxResults=min(100, max_results - summary["found"]),
+                    pageToken=page_token,
+                ).execute()
+            except HttpError:
+                summary["gmail_list_failed"] += 1
+                break
             messages = list_response.get("messages", [])
             if not messages:
                 break
@@ -347,6 +354,10 @@ class AuPayCardMailPipeline:
                     ).execute()
                     raw_mime = _decode_gmail_raw(response.get("raw", ""))
                     parsed = parse_aupay_card_raw(raw_mime)
+                except HttpError:
+                    summary["needs_review"] += 1
+                    summary["gmail_read_failed"] += 1
+                    continue
                 except ValueError as exc:
                     summary["needs_review"] += 1
                     summary[_card_mail_reason(exc)] += 1
@@ -370,6 +381,8 @@ class AuPayCardMailPipeline:
         if self.db is None:
             raise ValueError("カードGmail取込にはSheetsDBが必要です")
         transactions, summary = self._collect(gmail_service(token_json), query, max_results)
+        if summary["gmail_list_failed"] or summary["gmail_read_failed"]:
+            raise RuntimeError("gmail_collection_incomplete")
         imported = AuPayCardPipeline(self.db).import_transactions(transactions)
         summary.update(imported)
         return summary
