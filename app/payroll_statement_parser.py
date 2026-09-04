@@ -5,7 +5,86 @@ from pathlib import Path
 
 from .payroll_models import PayrollItem, PayrollPreview
 from .payroll_ocr import extract_payroll_text
-from .payroll_parser import amounts, compact, parse_positioned_items, parse_period_and_date
+from .payroll_parser import (
+    _dot_grouped_amount,
+    amounts,
+    compact,
+    parse_period_and_date,
+    parse_positioned_items,
+)
+
+
+_COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
+_SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
+_SUMMARY_CANDIDATES = ("gross_pay", "total_deductions", "net_pay")
+_COMPLETE_MONEY_TOKEN = re.compile(
+    r"\d+|\d{1,3}(?:,\d{3})+"
+)
+
+
+def _company_name(text: str) -> str | None:
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if (line and any(marker in line for marker in _COMPANY_MARKERS)
+                and not any(marker in line for marker in _SENSITIVE_MARKERS)):
+            return line
+    return None
+
+
+def _confirmed_summary_values(items: list[PayrollItem]) -> dict[str, int]:
+    grouped = {
+        candidate: {
+            item.value for item in items
+            if item.standard_item_candidate == candidate
+            and item.section == "reference"
+            and isinstance(item.value, int)
+            and not isinstance(item.value, bool)
+            and not item.needs_review
+        }
+        for candidate in _SUMMARY_CANDIDATES
+    }
+    return {
+        candidate: next(iter(values))
+        for candidate, values in grouped.items()
+        if len(values) == 1
+    }
+
+
+def _supplement_totals_from_items(
+    gross: int | None,
+    deductions: int | None,
+    net: int | None,
+    items: list[PayrollItem],
+) -> tuple[int | None, int | None, int | None]:
+    existing = {
+        "gross_pay": gross,
+        "total_deductions": deductions,
+        "net_pay": net,
+    }
+    confirmed = _confirmed_summary_values(items)
+    supplements = {
+        candidate: value for candidate, value in confirmed.items()
+        if existing[candidate] is None
+    }
+    proposed = existing | supplements
+    if (all(isinstance(proposed[candidate], int) for candidate in _SUMMARY_CANDIDATES)
+            and proposed["gross_pay"] - proposed["total_deductions"]
+            != proposed["net_pay"]):
+        # Do not make a contradictory three-value header authoritative using items.
+        supplements = {}
+    resolved = existing | supplements
+    return (resolved["gross_pay"], resolved["total_deductions"], resolved["net_pay"])
+
+
+def _anchored_money_token(text: str, label_pattern: str) -> int | None:
+    """Read one complete money token after a known total label without repair."""
+    match = re.search(rf"{label_pattern}\s*(\S+)", text)
+    if match is None:
+        return None
+    token = compact(match.group(1))
+    if _COMPLETE_MONEY_TOKEN.fullmatch(token) is not None:
+        return int(token.replace(",", ""))
+    return _dot_grouped_amount(token)
 
 
 def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None, int | None]:
@@ -23,20 +102,15 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
         gross, net = (int(value.replace(",", "")) for value in match.groups())
     match = re.search(r"控除合計[^\n]*\n\s*([\d,]+)", text)
     if match: deductions = int(match.group(1).replace(",", ""))
-    for item in items:
-        if not isinstance(item.value, int): continue
-        if item.standard_item_candidate == "gross_pay": gross = item.value
-        elif item.standard_item_candidate == "total_deductions": deductions = item.value
-        elif item.standard_item_candidate == "net_pay": net = item.value
+    gross, deductions, net = _supplement_totals_from_items(
+        gross, deductions, net, items,
+    )
     # OCR often retains these three robust anchors even when the summary row loses
     # its labels: taxable earnings + non-taxable earnings = gross; transfer = net.
     if gross is None:
-        tax = re.search(r"課税対象支給額\s*([\d,.]+)", text)
-        non_tax = re.search(r"非課税合計\s*([\d,.]+)", text)
-        insured = re.search(r"[屋雇]用保険対象額\s*([\d,.]+)", text)
-        def number(match):
-            return int(re.sub(r"\D", "", match.group(1))) if match else None
-        taxable, non_taxable, insured_total = number(tax), number(non_tax), number(insured)
+        taxable = _anchored_money_token(text, r"課税対象支給額")
+        non_taxable = _anchored_money_token(text, r"非課税合計")
+        insured_total = _anchored_money_token(text, r"[屋雇]用保険対象額")
         if taxable is not None and non_taxable is not None:
             gross = taxable + non_taxable
         elif insured_total is not None:
@@ -60,6 +134,7 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
 
 def preview_payroll_file(path: str | Path) -> PayrollPreview:
     extracted = extract_payroll_text(path)
+    company_name = _company_name(extracted.text)
     period, pay_date = parse_period_and_date(extracted.text)
     items = parse_positioned_items(extracted.tokens, ocr=extracted.extraction_method == "ocr")
     if extracted.extraction_method == "ocr":
@@ -70,6 +145,8 @@ def preview_payroll_file(path: str | Path) -> PayrollPreview:
     status = "success" if period and gross is not None and deductions is not None and net is not None else "partial"
     return PayrollPreview(file_type=extracted.file_type,
                           extraction_method=extracted.extraction_method,
+                          company_name=company_name,
+                          company_present=bool(company_name),
                           pay_period=period, pay_date=pay_date, gross_pay=gross,
                           total_deductions=deductions, net_pay=net, items=items,
                           parse_status=status)
