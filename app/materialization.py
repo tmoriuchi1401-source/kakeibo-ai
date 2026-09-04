@@ -147,11 +147,16 @@ class MaterializationOperation:
 
 @dataclass(frozen=True)
 class MaterializationPlan:
-    """A deterministic, write-free representation of domain-approved intent."""
+    """A deterministic, write-free representation of domain-approved intent.
+
+    ``source`` is optional only for domains whose existing preview plan has no
+    source identity, such as a code-master reconciliation plan.  Adapters must
+    not invent an identity merely to satisfy this common contract.
+    """
 
     domain: str
     plan_version: str
-    source: MaterializationSource
+    source: MaterializationSource | None
     operations: tuple[MaterializationOperation, ...]
     blocked: bool = False
     blocked_reason: str | None = None
@@ -161,7 +166,7 @@ class MaterializationPlan:
     def __post_init__(self) -> None:
         object.__setattr__(self, "domain", _required_text(self.domain, "domain"))
         object.__setattr__(self, "plan_version", _required_text(self.plan_version, "plan_version"))
-        if not isinstance(self.source, MaterializationSource):
+        if self.source is not None and not isinstance(self.source, MaterializationSource):
             raise TypeError("materialization_source_required")
         operations = tuple(self.operations)
         if any(not isinstance(item, MaterializationOperation) for item in operations):
@@ -192,7 +197,7 @@ class MaterializationPlan:
             "contract_version": "materialization-plan-id-v1",
             "domain": self.domain,
             "plan_version": self.plan_version,
-            "source": self.source.to_dict(),
+            "source": self.source.to_dict() if self.source is not None else None,
             "operations": [item.to_dict() for item in self.operations],
             "blocked": self.blocked,
         }
@@ -206,7 +211,7 @@ class MaterializationPlan:
             "plan_id": self.plan_id,
             "domain": self.domain,
             "plan_version": self.plan_version,
-            "source": self.source.to_dict(),
+            "source": self.source.to_dict() if self.source is not None else None,
             "operations": [item.to_dict() for item in self.operations],
             "blocked": self.blocked,
             "blocked_reason": self.blocked_reason,

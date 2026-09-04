@@ -127,6 +127,35 @@ def test_blocked_plan_is_explicitly_representable():
     assert result.operations == ()
 
 
+def test_source_less_plan_is_explicit_without_changing_source_backed_identity_rules():
+    source_less = MaterializationPlan(
+        domain="example", plan_version="v1", source=None,
+        operations=(operation(),),
+    )
+
+    assert source_less.source is None
+    assert source_less.to_dict()["source"] is None
+    assert source_less.plan_id != plan().plan_id
+
+
+def test_source_less_plan_identity_is_deterministic_and_keeps_semantic_changes_distinct():
+    first = MaterializationPlan(
+        domain="example", plan_version="v1", source=None,
+        operations=(operation(payload={"count": 1}),),
+    )
+    same = MaterializationPlan(
+        domain="example", plan_version="v1", source=None,
+        operations=(operation(payload={"count": 1}),),
+    )
+    changed = MaterializationPlan(
+        domain="example", plan_version="v1", source=None,
+        operations=(operation(payload={"count": 2}),),
+    )
+
+    assert first.plan_id == same.plan_id
+    assert first.plan_id != changed.plan_id
+
+
 def confirmation_record():
     return CoverageConfirmationRecord(
         schema_version="1", provider="paypay", content_sha256="a" * 64,
@@ -170,6 +199,7 @@ def test_paypay_adapter_projects_existing_plan_without_apply_or_external_write()
     assert {item.kind for item in result.operations[0].preconditions} == {
         "target_spreadsheet_id", "sheet_status", "duplicate_status",
     }
+    assert result.plan_id == "MP-0ae092de7bb918c7ac2950ebf930db07"
 
 
 def test_paypay_adapter_preserves_blocked_plan_without_operations():
@@ -229,6 +259,19 @@ def test_payroll_adapter_projects_append_intent_without_reinterpreting_values():
     ]
     assert result.operations[0].payload == {"statement_id": "statement-1", "row_count": 1}
     assert "300,000" not in result.to_json()
+
+
+def test_payroll_storage_adapter_keeps_existing_content_hash_fallback_identity():
+    candidate = payroll_candidate()
+    candidate.statement.source_file_id = None
+    append, save = payroll_plans()
+
+    result = payroll_storage_to_materialization_plan(candidate, append, save)
+
+    assert result.source is not None
+    assert result.source.identity_kind == "content_hash"
+    assert result.source.identity_value == "content-1"
+    assert result.source.content_hash == "content-1"
 
 
 def test_payroll_adapter_preserves_review_and_blocked_semantics():
