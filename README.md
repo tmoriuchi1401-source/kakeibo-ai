@@ -85,6 +85,7 @@ Secretsに以下を登録:
 - SPREADSHEET_ID
 - GOOGLE_SERVICE_ACCOUNT_JSON（JSON全文）
 - RECEIPT_DRIVE_FOLDER_ID
+- PAYPAY_DRIVE_FOLDER_ID（PayPay CSV受信フォルダを使う場合）
 - PROCESSED_DRIVE_FOLDER_ID（推奨。`receipt_processed` のフォルダURLまたはID）
 - BACKUP_DRIVE_FOLDER_ID（月次バックアップ先のフォルダID）
 - GOOGLE_DRIVE_BACKUP_TOKEN_JSON（Driveバックアップ用OAuth authorized-user JSON）
@@ -169,20 +170,69 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
+## PayPay CSVを取り込む
+
+### Local CSV
+
+ローカルに保存したPayPay CSVは、次の順番で確認・取込・支出化する。
+
+```bash
+python -m app.cli paypay-preview path/to/paypay.csv
+python -m app.cli paypay-import path/to/paypay.csv
+python -m app.cli reconcile
+python -m app.cli auto-expense
+```
+
+- `paypay-preview`: CSVの行数、支払い件数、合計、サンプルを確認する。Sheetsへは書き込まない。
+- `paypay-import`: 支払い行を重複確認し、「取込データ」へ保存する。
+- `reconcile`: 取込データとレシート等の照合結果を反映する。
+- `auto-expense`: 明確な取引を「支出明細」へ計上し、判断が必要な取引は「要確認」に残す。
+
+Local CSVの取込には、既存の`SPREADSHEET_ID`とSheetsへ書き込める
+`GOOGLE_SERVICE_ACCOUNT_JSON`またはサービスアカウントファイルが必要になる。
+
 ## Google DriveからPayPay CSVを取り込む
 
-`PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定する。
-書き込みなしの確認と取込は次のコマンドで行う:
+`PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定し、PayPayから取得したCSVを配置する。
+書き込みなしの確認と取込は次の順番で行う:
 
 ```bash
 python -m app.cli drive-paypay-preview
 python -m app.cli drive-paypay
+python -m app.cli reconcile
+python -m app.cli auto-expense
 ```
 
-PayPay CSVとして解析できる `.csv` だけをファイル単位で取り込む。成功後は
-`PROCESSED_DRIVE_FOLDER_ID` があればそこへ移動し、未設定ならDriveのファイルプロパティに
-処理済みを記録する。ファイルは削除しない。壊れたCSVはエラーとして残し、他ファイルの
-取込は継続する。
+`drive-paypay-preview` は対象CSVの認識、行数、支払い件数、合計を確認するだけで、SheetsやDriveへ書き込まない。
+`drive-paypay` はPayPay CSVとして解析できる `.csv` だけをファイル単位で取り込み、まず「取込データ」へ保存する。
+その後、`reconcile` と `auto-expense` により「支出明細」または「要確認」へ反映する。
+
+取込に成功したファイルには処理済みmarkerが付き、`PROCESSED_DRIVE_FOLDER_ID` を設定している場合は
+そのフォルダへ移動する。未設定の場合もDriveのファイルプロパティに処理済みを記録する。
+ファイルは削除しない。処理済みmarkerのあるファイルは次回以降skipされる。
+同じCSVを別のファイルとして再実行しても、取引番号から作られる安定した取込IDで既存取引を検出し、
+「取込データ」の行は増えない。壊れたCSVはエラーとして残し、他ファイルの取込は継続する。
+
+GitHub Actionsでは、設定済みのDrive受信フォルダを3時間ごとまたは手動実行で確認し、同じ処理を行う。
+
+### PayPay β版でのcoverage扱い
+
+confirmation、manifest、strict coverageはdiagnosticおよび将来拡張用の仕組みであり、
+PayPay CSV importの必須手順ではない。指定期間の全件性を証明することもβ版要件に含めない。
+
+### 初回・更新時のsmoke checklist
+
+新しいPayPay CSVが通常どおり受信フォルダへ入ったとき、次を確認する。
+
+- [ ] `drive-paypay-preview` で対象CSVとして認識される
+- [ ] `drive-paypay` で取込される
+- [ ] Sheetsの「取込データ」に反映される
+- [ ] `reconcile` を実行する
+- [ ] `auto-expense` を実行する
+- [ ] 「支出明細」または「要確認」を確認する
+- [ ] processed markerが付くことを確認する
+- [ ] 設定時はprocessed folderへ移動することを確認する
+- [ ] 同じ入力を再実行してもSheetsの行数が増えないことを確認する
 
 ## スマホ用「要確認」シート
 
