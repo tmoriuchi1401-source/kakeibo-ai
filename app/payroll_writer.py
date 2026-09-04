@@ -13,12 +13,30 @@ class PayrollWriterContractError(RuntimeError):
     """Raised before any write when a plan violates the writer contract."""
 
 
+class PayrollAppendOutcome(BaseModel):
+    """One append request outcome; unknown outcomes must never be retried."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["confirmed_success", "confirmed_failure", "outcome_unknown"]
+    requested_rows: int
+    confirmed_rows: int = 0
+    failure_kind: str | None = None
+    error_type: str | None = None
+    http_status: int | None = None
+    updated_range: str | None = None
+
+
 class PayrollAppendAdapter(Protocol):
     """Minimal append-only boundary; no update, delete, or row construction."""
 
-    def append_header_rows(self, rows: tuple[PayrollPlannedRow, ...]) -> None: ...
+    def append_header_rows(
+        self, rows: tuple[PayrollPlannedRow, ...],
+    ) -> PayrollAppendOutcome: ...
 
-    def append_item_rows(self, rows: tuple[PayrollPlannedRow, ...]) -> None: ...
+    def append_item_rows(
+        self, rows: tuple[PayrollPlannedRow, ...],
+    ) -> PayrollAppendOutcome: ...
 
 
 class PayrollWritePreview(BaseModel):
@@ -37,7 +55,8 @@ class PayrollPlanApplyResult(BaseModel):
 
     statement_id: str
     outcome: Literal[
-        "written", "skipped", "header_outcome_unknown", "partial_failure",
+        "written", "skipped", "confirmed_failure", "header_outcome_unknown",
+        "partial_failure",
     ]
     reason: str
     header_rows_confirmed: int = 0
@@ -51,7 +70,8 @@ class PayrollWriteBatchResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: Literal[
-        "completed", "stale_plan", "header_outcome_unknown", "partial_failure",
+        "completed", "stale_plan", "confirmed_failure",
+        "header_outcome_unknown", "partial_failure",
     ]
     applied: bool
     results: tuple[PayrollPlanApplyResult, ...] = ()
@@ -150,6 +170,32 @@ def preview_payroll_write(plans: Iterable[PayrollWritePlan]) -> PayrollWritePrev
     )
 
 
+def _validate_adapter_outcome(
+    outcome: PayrollAppendOutcome,
+    *,
+    requested_rows: int,
+    stage: str,
+) -> PayrollAppendOutcome:
+    if not isinstance(outcome, PayrollAppendOutcome):
+        raise PayrollWriterContractError(
+            f"adapter contract violation: {stage} returned no outcome",
+        )
+    if outcome.requested_rows != requested_rows:
+        raise PayrollWriterContractError(
+            f"adapter contract violation: {stage} requested_rows mismatch",
+        )
+    if outcome.status == "confirmed_success":
+        if outcome.confirmed_rows != requested_rows:
+            raise PayrollWriterContractError(
+                f"adapter contract violation: {stage} confirmed_rows mismatch",
+            )
+    elif outcome.confirmed_rows != 0:
+        raise PayrollWriterContractError(
+            f"adapter contract violation: {stage} non-success confirmed rows",
+        )
+    return outcome
+
+
 def apply_payroll_write_plans(
     preview_plans: Iterable[PayrollWritePlan],
     writer: PayrollAppendAdapter,
@@ -162,6 +208,9 @@ def apply_payroll_write_plans(
     The callable must rebuild plans from the same candidates and a fresh Sheets
     snapshot. A failed append has an ambiguous remote outcome, so later stages
     stop and no rollback or automatic retry is attempted.
+
+    This preflight narrows but cannot eliminate the race after the fresh snapshot:
+    Google Sheets append provides no database transaction or compare-and-swap.
     """
     if not confirmed:
         raise RuntimeError("--apply が必要です")
@@ -188,7 +237,11 @@ def apply_payroll_write_plans(
             continue
 
         try:
-            writer.append_header_rows(plan.planned_header_rows)
+            header_outcome = _validate_adapter_outcome(
+                writer.append_header_rows(plan.planned_header_rows),
+                requested_rows=len(plan.planned_header_rows),
+                stage="header",
+            )
         except Exception as exc:
             return PayrollWriteBatchResult(
                 status="header_outcome_unknown",
@@ -207,8 +260,46 @@ def apply_payroll_write_plans(
                 ),
             )
 
+        if header_outcome.status == "confirmed_failure":
+            return PayrollWriteBatchResult(
+                status="confirmed_failure",
+                applied=False,
+                results=tuple([*results, PayrollPlanApplyResult(
+                    statement_id=plan.identity.statement_id,
+                    outcome="confirmed_failure",
+                    reason=header_outcome.failure_kind or "confirmed_failure",
+                    failure_stage="header",
+                    error_type=header_outcome.error_type,
+                )]),
+                not_attempted_statement_ids=tuple(
+                    remaining.identity.statement_id
+                    for remaining in current_plans[index + 1:]
+                ),
+            )
+        if header_outcome.status == "outcome_unknown":
+            return PayrollWriteBatchResult(
+                status="header_outcome_unknown",
+                applied=False,
+                results=tuple([*results, PayrollPlanApplyResult(
+                    statement_id=plan.identity.statement_id,
+                    outcome="header_outcome_unknown",
+                    reason=header_outcome.failure_kind or "outcome_unknown",
+                    failure_stage="header",
+                    outcome_unknown=True,
+                    error_type=header_outcome.error_type,
+                )]),
+                not_attempted_statement_ids=tuple(
+                    remaining.identity.statement_id
+                    for remaining in current_plans[index + 1:]
+                ),
+            )
+
         try:
-            writer.append_item_rows(plan.planned_item_rows)
+            item_outcome = _validate_adapter_outcome(
+                writer.append_item_rows(plan.planned_item_rows),
+                requested_rows=len(plan.planned_item_rows),
+                stage="items",
+            )
         except Exception as exc:
             return PayrollWriteBatchResult(
                 status="partial_failure",
@@ -221,6 +312,26 @@ def apply_payroll_write_plans(
                     failure_stage="items",
                     outcome_unknown=True,
                     error_type=type(exc).__name__,
+                )]),
+                not_attempted_statement_ids=tuple(
+                    remaining.identity.statement_id
+                    for remaining in current_plans[index + 1:]
+                ),
+            )
+
+        if item_outcome.status != "confirmed_success":
+            unknown = item_outcome.status == "outcome_unknown"
+            return PayrollWriteBatchResult(
+                status="partial_failure",
+                applied=False,
+                results=tuple([*results, PayrollPlanApplyResult(
+                    statement_id=plan.identity.statement_id,
+                    outcome="partial_failure",
+                    reason=item_outcome.failure_kind or item_outcome.status,
+                    header_rows_confirmed=len(plan.planned_header_rows),
+                    failure_stage="items",
+                    outcome_unknown=unknown,
+                    error_type=item_outcome.error_type,
                 )]),
                 not_attempted_statement_ids=tuple(
                     remaining.identity.statement_id

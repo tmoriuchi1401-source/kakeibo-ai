@@ -10,6 +10,7 @@ from app.payroll_storage import (
 )
 from app.payroll_storage_preview import build_write_plan
 from app.payroll_writer import (
+    PayrollAppendOutcome,
     PayrollWriterContractError,
     apply_payroll_write_plans,
     preview_payroll_write,
@@ -55,11 +56,19 @@ class FakeAppendAdapter:
         self.calls.append(("header", rows))
         if self.fail_stage == "header":
             raise RuntimeError("header append failed")
+        return PayrollAppendOutcome(
+            status="confirmed_success", requested_rows=len(rows),
+            confirmed_rows=len(rows),
+        )
 
     def append_item_rows(self, rows):
         self.calls.append(("items", rows))
         if self.fail_stage == "items":
             raise RuntimeError("item append failed")
+        return PayrollAppendOutcome(
+            status="confirmed_success", requested_rows=len(rows),
+            confirmed_rows=len(rows),
+        )
 
 
 def apply(plans, adapter, latest=None, confirmed=True):
@@ -202,6 +211,35 @@ def test_item_failure_reports_partial_write_and_never_rolls_back_or_continues():
     assert attempt.outcome_unknown is True
     assert result.not_attempted_statement_ids == (plans[1].identity.statement_id,)
     assert [stage for stage, _rows in adapter.calls] == ["header", "items"]
+
+
+@pytest.mark.parametrize(
+    ("malformed_stage", "expected_status"),
+    [("header", "header_outcome_unknown"), ("items", "partial_failure")],
+)
+def test_malformed_adapter_outcome_is_conservatively_unknown(
+    malformed_stage, expected_status,
+):
+    plan = build_write_plan([candidate()], snapshot())[0]
+
+    class MalformedOutcomeAdapter(FakeAppendAdapter):
+        def append_header_rows(self, rows):
+            outcome = super().append_header_rows(rows)
+            return None if malformed_stage == "header" else outcome
+
+        def append_item_rows(self, rows):
+            outcome = super().append_item_rows(rows)
+            return None if malformed_stage == "items" else outcome
+
+    adapter = MalformedOutcomeAdapter()
+
+    result = apply([plan], adapter)
+
+    assert result.status == expected_status
+    assert result.results[0].outcome_unknown is True
+    assert [stage for stage, _rows in adapter.calls] == (
+        ["header"] if malformed_stage == "header" else ["header", "items"]
+    )
 
 
 def test_stale_preflight_stops_every_write():
