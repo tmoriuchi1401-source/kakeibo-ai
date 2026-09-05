@@ -103,7 +103,7 @@ existing counter schema. No production module calls it.
 PNG/JPEG inputs use the exact loaded image dimensions. Multiple-frame images,
 non-default EXIF orientation and mismatched MIME/actual formats are rejected;
 there is no silent first-frame choice or orientation guess. PDFs are validated
-locally, then every page is rendered at the existing scale of 3. Actual bitmap
+locally, then every page is rendered at up to the existing scale of 3. Actual bitmap
 dimensions describe OCR coordinates, including PDF rotation and crop boxes.
 Embedded text never suppresses the rendering of later pages in this shadow path.
 Encrypted/corrupt PDFs are rejected before rendering. This intentionally differs
@@ -117,8 +117,13 @@ that the OCR engine never reports remain a limitation; full page traversal does
 not prove full visual coverage. No OCR engine or image preprocessing is added.
 
 The evaluation input is bounded to 20 MiB, 20 million pixels per page and three
-PDF pages. Pixel allocation is checked before PDF rendering and again against
-the actual image. Oversized or malformed input never yields a successful subset.
+PDF pages. PDF render allocation also limits either bitmap edge to 16,384 pixels.
+For PDF page coordinate frames that exceed those raster bounds at scale 3, the
+shadow renderer chooses a smaller scale with rounded dimensions inside both
+bounds. This is an allocation decision, never an amount or confidence heuristic.
+Ordinary PDF pages keep scale 3. PNG/JPEG size and orientation rejection rules
+are unchanged. Pixel allocation is checked before PDF rendering and again against
+the actual image. Invalid input never yields a successful subset.
 Images and renderer resources close on successful and failed observations.
 Only fixed integer counters leave the entry point; exception messages are not
 returned or logged. Existing Tesseract may use its normal local temporary files;
@@ -129,3 +134,10 @@ Synthetic media tests use real image decoding and PDF rendering with mocked OCR,
 including rotated/cropped PDFs, embedded-text bypass prevention, partial-page
 failures, bounds, immutable snapshots, malformed numbers and resource cleanup.
 These tests prove handoff behavior, not OCR accuracy on real medical originals.
+
+Bounded PDF scaling tests additionally cover fractional dimensions, extreme
+aspect ratios, rotation symmetry, unchanged scale for smaller pages, actual
+renderer-size revalidation, low-confidence competitors, and failure on a later
+page. Downsampling may lose text: complete traversal is not proof of complete
+visual observation or correct payment semantics. Every shadow payment role
+remains unproven; no production extraction path or resolver consumes this scale.

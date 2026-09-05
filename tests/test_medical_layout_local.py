@@ -1,6 +1,7 @@
 """Synthetic media with mocked local OCR; never real documents or AI transport."""
 from io import BytesIO
 import json
+import math
 
 from PIL import Image
 from pypdf import PdfWriter
@@ -212,3 +213,56 @@ def test_pdf_resources_closed_after_partial_ocr_failure(monkeypatch):
     assert closed.count("document") >= 1
     assert closed.count("page") >= 2
     assert closed.count("bitmap") >= 2
+
+
+@pytest.mark.parametrize("width,height", [(4000,6000),(1234.5,9876.5),(1000000,1),(1,1000000)])
+def test_pdf_scale_respects_rounded_pixel_and_edge_budgets(width,height):
+    scale=local._bounded_render_scale(width,height)
+    assert 0 < scale < local._RENDER_SCALE
+    w,h=math.ceil(width*scale),math.ceil(height*scale)
+    assert w*h <= local._MAX_PIXELS
+    assert max(w,h) <= local._MAX_RENDER_EDGE
+    assert scale == pytest.approx(local._bounded_render_scale(height,width))
+
+
+def test_small_pdf_keeps_existing_render_scale():
+    assert local._bounded_render_scale(100,200) == 3
+
+
+@pytest.mark.parametrize("width,height", [(0,10),(-1,10),(float('nan'),10),(10,float('inf')),(True,10)])
+def test_invalid_pdf_frame_stays_rejected(width,height):
+    with pytest.raises(local._InputRejected):
+        local._bounded_render_scale(width,height)
+
+
+def test_downscaled_pdf_keeps_all_pages_frames_and_unresolved_competitor(monkeypatch):
+    monkeypatch.setattr(local,'_MAX_PIXELS',140000)
+    observed=install_ocr(monkeypatch,competitor=True)
+    result=local.evaluate_local_medical_bytes(pdf(rotated=True),'application/pdf')
+    assert result['evaluation_failed'] == 0
+    assert len(observed) == 2
+    assert all(w*h <= local._MAX_PIXELS for _,(w,h) in observed)
+    assert observed[0][1] == tuple(reversed(observed[1][1]))
+    assert result['shadow_numeric_regions'] == 4
+    assert result['shadow_low_confidence_regions'] == 2
+    assert result['production_confirmed'] == 0
+    assert result['production_needs_review'] == 1
+
+
+def test_downscaled_pdf_empty_second_page_is_not_partial_success(monkeypatch):
+    monkeypatch.setattr(local,'_MAX_PIXELS',100000)
+    observed=install_ocr(monkeypatch,empty_page=2)
+    result=local.evaluate_local_medical_bytes(pdf(),'application/pdf')
+    assert len(observed) == 2
+    assert result['evaluation_failed'] == 1
+    assert result['shadow_numeric_regions'] == 0
+
+
+def test_actual_render_size_is_rechecked_before_ocr(monkeypatch):
+    import pypdfium2 as pdfium
+    observed=install_ocr(monkeypatch)
+    monkeypatch.setattr(local,'_MAX_PIXELS',100000)
+    monkeypatch.setattr(pdfium.PdfBitmap,'to_pil',lambda self: Image.new('RGB',(500,500)))
+    result=local.evaluate_local_medical_bytes(pdf(1),'application/pdf')
+    assert result['evaluation_failed'] == result['local_input_rejected'] == 1
+    assert not observed

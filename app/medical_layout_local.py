@@ -17,6 +17,7 @@ _MAX_BYTES = 20 * 1024 * 1024
 _MAX_PIXELS = 20_000_000
 _MAX_PAGES = 3
 _RENDER_SCALE = 3
+_MAX_RENDER_EDGE = 16384
 
 
 class _InputRejected(Exception):
@@ -37,6 +38,39 @@ def _check_size(width, height):
             or not math.isfinite(width) or not math.isfinite(height)
             or width <= 0 or height <= 0 or width * height > _MAX_PIXELS):
         raise _InputRejected()
+
+
+def _bounded_render_scale(width, height):
+    """Fit PDF raster allocation, not payment geometry or OCR confidence.
+
+    Preserve the usual scale when it fits. Otherwise find a scale whose rounded
+    bitmap dimensions meet both allocation bounds. Actual image size is checked
+    again after rendering. Downsampling never authorizes a payment candidate.
+    """
+    if (type(width) not in (int, float) or type(height) not in (int, float)
+            or not math.isfinite(width) or not math.isfinite(height)
+            or width <= 0 or height <= 0):
+        raise _InputRejected()
+
+    def fits(scale):
+        w, h = width * scale, height * scale
+        if not math.isfinite(w) or not math.isfinite(h):
+            return False
+        w, h = math.ceil(w), math.ceil(h)
+        return 0 < w <= _MAX_RENDER_EDGE and 0 < h <= _MAX_RENDER_EDGE and w * h <= _MAX_PIXELS
+
+    if fits(_RENDER_SCALE):
+        return _RENDER_SCALE
+    low, high = 0.0, float(_RENDER_SCALE)
+    for _ in range(52):
+        middle = (low + high) / 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle
+    if low <= 0 or not fits(low):
+        raise _InputRejected()
+    return low
 
 
 def _observe_image(image, page):
@@ -86,10 +120,13 @@ def _pdf_input(content):
             try:
                 page = document[index]
                 width, height = page.get_size()
-                # Bound allocation before rendering and verify actual pixels too.
-                _check_size(math.ceil(width * _RENDER_SCALE), math.ceil(height * _RENDER_SCALE))
-                bitmap = page.render(scale=_RENDER_SCALE)
+                # A large PDF coordinate frame is not necessarily a large image.
+                # Reduce only this shadow render scale, keeping allocation bounded.
+                scale = _bounded_render_scale(width, height)
+                bitmap = page.render(scale=scale)
                 image = bitmap.to_pil()
+                if max(image.size) > _MAX_RENDER_EDGE:
+                    raise _InputRejected()
                 text, observed, frame = _observe_image(image, index + 1)
                 texts.append(text)
                 tokens.extend(observed)
