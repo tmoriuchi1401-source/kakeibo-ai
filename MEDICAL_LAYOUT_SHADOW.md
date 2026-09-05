@@ -88,7 +88,44 @@ all partial counters and expose no exception text. Consumers must check the
 failure flag before interpreting or accumulating production outcomes.
 
 This is a callable offline evaluation boundary, not a new receipt CLI or original
-acquisition path. Existing OCR extraction does not yet provide explicit page
-frames; do not guess them. A future local extraction handoff must supply renderer
-dimensions and page coverage for the exact pass, with tests for cropped/rotated
-and mixed embedded-text/scanned PDF pages, before evaluating those inputs here.
+acquisition path. Existing production OCR extraction does not provide explicit
+page frames; do not guess them. The separate local handoff below supplies actual
+renderer dimensions and page traversal coverage for its own evaluation pass.
+
+## Local bytes evaluation handoff
+
+`app.medical_layout_local.evaluate_local_medical_bytes(content, mime_type)` is an
+opt-in evaluation entry point for already safely acquired immutable bytes. It
+does not accept URLs or paths, fetch originals, classify for external AI, save
+results, or return text/tokens/amounts. It adds fixed local failure flags to the
+existing counter schema. No production module calls it.
+
+PNG/JPEG inputs use the exact loaded image dimensions. Multiple-frame images,
+non-default EXIF orientation and mismatched MIME/actual formats are rejected;
+there is no silent first-frame choice or orientation guess. PDFs are validated
+locally, then every page is rendered at the existing scale of 3. Actual bitmap
+dimensions describe OCR coordinates, including PDF rotation and crop boxes.
+Embedded text never suppresses the rendering of later pages in this shadow path.
+Encrypted/corrupt PDFs are rejected before rendering. This intentionally differs
+from production PDF extraction, so baseline resolver counters describe the OCR
+observations supplied here, not a replay of production PDF routing.
+
+Both existing Tesseract APIs run on the same image and remain one observation
+group. Empty text/tokens, wrong page provenance, rendering/OCR exceptions or any
+failed page discard the entire document evaluation. Missing unreadable regions
+that the OCR engine never reports remain a limitation; full page traversal does
+not prove full visual coverage. No OCR engine or image preprocessing is added.
+
+The evaluation input is bounded to 20 MiB, 20 million pixels per page and three
+PDF pages. Pixel allocation is checked before PDF rendering and again against
+the actual image. Oversized or malformed input never yields a successful subset.
+Images and renderer resources close on successful and failed observations.
+Only fixed integer counters leave the entry point; exception messages are not
+returned or logged. Existing Tesseract may use its normal local temporary files;
+this is not a claim of an entirely RAM-only OCR subprocess. No external service
+receives bytes, OCR content, metadata or counters.
+
+Synthetic media tests use real image decoding and PDF rendering with mocked OCR,
+including rotated/cropped PDFs, embedded-text bypass prevention, partial-page
+failures, bounds, immutable snapshots, malformed numbers and resource cleanup.
+These tests prove handoff behavior, not OCR accuracy on real medical originals.
