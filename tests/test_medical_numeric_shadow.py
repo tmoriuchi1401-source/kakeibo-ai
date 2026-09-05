@@ -117,11 +117,11 @@ def test_no_production_import_or_resolution_change():
     assert build_receipt_privacy_preview('病院 診療',tokens)==before
     assert before.status=='needs_review'
     for path in (Path(__file__).resolve().parents[1]/'app').glob('*.py'):
-        if path.name=='medical_numeric_shadow.py':
+        if path.name in {'medical_numeric_shadow.py', 'medical_numeric_multipass.py'}:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
             names=[node.module or ''] if isinstance(node,ast.ImportFrom) else [a.name for a in node.names] if isinstance(node,ast.Import) else []
-            assert not any('medical_numeric_shadow' in name for name in names)
+            assert not any(module in name for name in names for module in ('medical_numeric_shadow', 'medical_numeric_multipass'))
 
 
 @pytest.mark.parametrize('parts', [('¥12', '80'), ('12', '80円'), ('¥', '12', '80')])
