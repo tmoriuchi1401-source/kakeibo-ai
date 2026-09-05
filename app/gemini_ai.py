@@ -1,7 +1,10 @@
 from __future__ import annotations
 import base64
+from hashlib import sha256
 from google import genai
 from .models import ReceiptResult, ProductClassificationBatch
+from .medical_receipt_privacy import Classification
+from .receipt_privacy_gate import ReceiptPrivacyBlocked, require_receipt_ai_permission
 
 class GeminiAI:
     def __init__(self, api_key: str, model: str = "gemini-3.6-flash"):
@@ -14,7 +17,27 @@ class GeminiAI:
         return "\n".join(f"- {a} / {b}" for a, b in categories)
 
     def analyze_receipt(self, image_bytes: bytes, mime_type: str,
-                        categories: list[tuple[str, str]]) -> ReceiptResult:
+                        categories: list[tuple[str, str]], *,
+                        known_source_classification: Classification | None = None) -> ReceiptResult:
+        # Only immutable bytes may be checked and then submitted; reject mutable
+        # buffers rather than authorizing one image and encoding another.
+        if not isinstance(image_bytes, bytes):
+            raise ReceiptPrivacyBlocked()
+        # Denials are monotonic for these exact bytes during this adapter's
+        # lifetime. No raw bytes, source identifiers, or successful permits are
+        # cached. Across instances/runs the caller must carry source provenance.
+        fingerprint = sha256(image_bytes).digest()
+        if fingerprint in getattr(self, "_blocked_receipts", ()):
+            raise ReceiptPrivacyBlocked()
+        try:
+            require_receipt_ai_permission(
+                image_bytes, mime_type, known_source_classification=known_source_classification,
+            )
+        except ReceiptPrivacyBlocked:
+            if not hasattr(self, "_blocked_receipts"):
+                self._blocked_receipts = set()
+            self._blocked_receipts.add(fingerprint)
+            raise
         prompt = f"""あなたは日本の家計簿レシート解析器です。画像またはPDFから購入情報を抽出してください。
 カテゴリは必ず次の一覧からのみ選び、新カテゴリを作らないでください。
 {self.category_text(categories)}

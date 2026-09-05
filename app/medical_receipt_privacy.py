@@ -1,7 +1,7 @@
 """Pure, privacy-first receipt classification and medical payment extraction.
 
 The functions here do not perform I/O and deliberately do not retain OCR text.
-They are intended to run before any future Gemini submission decision.
+They run locally before a receipt submission decision.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ ClassificationReasonCode = Literal[
     "sensitive_signal_insufficient",
     "normal_receipt_evidence",
     "insufficient_evidence",
+    "known_sensitive_source",
 ]
 PaymentReasonCode = Literal[
     "unique_strong_candidate",
@@ -52,6 +53,16 @@ PaymentReasonCode = Literal[
     "no_candidate",
 ]
 ReasonCode = ClassificationReasonCode | PaymentReasonCode
+
+PaymentDiagnosticCode = Literal[
+    "payment_label_not_observed",
+    "amount_not_observed",
+    "amount_observation_low_confidence",
+    "ambiguous_numeric_observations",
+    "structural_relationship_unresolved",
+    "conflicting_payment_candidates",
+    "observation_incomplete",
+]
 
 
 _CLASSIFICATION_REASONS: dict[Classification, frozenset[str]] = {
@@ -65,6 +76,7 @@ _CLASSIFICATION_REASONS: dict[Classification, frozenset[str]] = {
             "conflicting_sensitive_evidence",
             "sensitive_signal_insufficient",
             "insufficient_evidence",
+            "known_sensitive_source",
         }
     ),
 }
@@ -152,6 +164,7 @@ class PaymentAmountResolution(_SafeResultModel):
     amount: int | None = Field(default=None, ge=0)
     candidate_count: int = Field(ge=0)
     reason_code: PaymentReasonCode
+    diagnostic_codes: tuple[PaymentDiagnosticCode, ...] = Field(default=(), exclude=True, repr=False)
 
     @model_validator(mode="after")
     def validate_resolution_state(self) -> Self:
@@ -160,6 +173,7 @@ class PaymentAmountResolution(_SafeResultModel):
                 self.amount is None
                 or self.candidate_count < 1
                 or self.reason_code not in _CONFIRMED_REASONS
+                or self.diagnostic_codes
             ):
                 raise ValueError("invalid confirmed payment resolution")
         elif self.amount is not None or self.reason_code not in _REVIEW_REASONS:
@@ -176,6 +190,7 @@ class ReceiptPrivacyPreview(_SafeResultModel):
     candidate_count: int = Field(ge=0)
     reason_code: ReasonCode
     category: Literal["医療費"] | None = None
+    diagnostic_codes: tuple[PaymentDiagnosticCode, ...] = Field(default=(), exclude=True, repr=False)
 
     @computed_field(return_type=bool)
     @property
@@ -191,6 +206,8 @@ class ReceiptPrivacyPreview(_SafeResultModel):
                 raise ValueError("invalid medical preview reason")
             if self.status == "confirmed" and self.payment_amount is None:
                 raise ValueError("confirmed medical preview requires amount")
+            if self.status == "confirmed" and self.diagnostic_codes:
+                raise ValueError("confirmed medical preview cannot contain unresolved evidence")
             if self.status == "needs_review" and self.payment_amount is not None:
                 raise ValueError("review medical preview cannot contain amount")
         elif (
@@ -751,7 +768,11 @@ def extract_medical_payment_candidates(text: str) -> list[PaymentAmountCandidate
 def resolve_medical_payment_candidates(
     candidates: list[PaymentAmountCandidate],
 ) -> PaymentAmountResolution:
-    """Confirm only when every candidate agrees with at least one strong label."""
+    """Candidate-only compatibility helper, not the production OCR decision.
+
+    Production also requires the unresolved-evidence gate in
+    medical_payment_evidence.resolve_payment_evidence.
+    """
     if not candidates:
         return PaymentAmountResolution(
             status="needs_review", amount=None, candidate_count=0, reason_code="no_candidate"
@@ -790,6 +811,8 @@ def resolve_medical_payment_candidates(
 def build_receipt_privacy_preview(
     text: str | None,
     structured_tokens: tuple[_StructuredOcrToken, ...] = (),
+    *,
+    observation_complete: bool = True,
 ) -> ReceiptPrivacyPreview:
     """Build a decision-only preview without retaining raw OCR data."""
     decision = classify_receipt_text(text)
@@ -802,9 +825,13 @@ def build_receipt_privacy_preview(
             reason_code=decision.reason_code,
         )
 
-    text_candidates = extract_medical_payment_candidates(text or "")
-    structured_candidates = extract_structured_medical_payment_candidates(structured_tokens)
-    resolution = resolve_medical_payment_candidates(text_candidates + structured_candidates)
+    # Candidate-only helpers remain compatible, but are not an authorization to
+    # confirm OCR. All production paths must preserve unresolved observations.
+    from .medical_payment_evidence import collect_payment_evidence, resolve_payment_evidence
+
+    resolution = resolve_payment_evidence(
+        collect_payment_evidence(text or "", structured_tokens, observation_complete=observation_complete)
+    )
     return ReceiptPrivacyPreview(
         classification="medical",
         status=resolution.status,
@@ -812,4 +839,5 @@ def build_receipt_privacy_preview(
         candidate_count=resolution.candidate_count,
         reason_code=resolution.reason_code,
         category="医療費",
+        diagnostic_codes=resolution.diagnostic_codes,
     )

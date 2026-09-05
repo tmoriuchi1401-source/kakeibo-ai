@@ -4,6 +4,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.gemini_ai import GeminiAI
+from app import receipt_privacy_gate
+from app.receipt_text_extraction import _ReceiptTextExtraction
 
 
 class FakeInteractions:
@@ -32,7 +34,10 @@ class FakeInteractions:
     ("mime_type", "expected_type"),
     [("application/pdf", "document"), ("image/jpeg", "image")],
 )
-def test_receipt_media_uses_matching_interaction_type(mime_type, expected_type):
+def test_receipt_media_uses_matching_interaction_type(monkeypatch, mime_type, expected_type):
+    # Exercise the real privacy policy, replacing only the local OCR adapter.
+    monkeypatch.setattr(receipt_privacy_gate, "_extract_receipt_text", lambda content, mime:
+                        _ReceiptTextExtraction("extracted", "image_ocr", "レシート 商品 合計 100円"))
     interactions = FakeInteractions()
     ai = object.__new__(GeminiAI)
     ai.client = SimpleNamespace(interactions=interactions)

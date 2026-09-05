@@ -1,4 +1,4 @@
-"""Pure local gate for deciding whether a receipt may reach Gemini in a future phase."""
+"""Local fail-closed receipt gate and mandatory external-AI submission boundary."""
 
 from __future__ import annotations
 
@@ -16,7 +16,9 @@ from pydantic import (
 
 from .medical_receipt_privacy import (
     Classification,
+    PaymentDiagnosticCode,
     ReasonCode,
+    ReceiptPrivacyPreview,
     SafeModelValidationError,
     build_receipt_privacy_preview,
     gemini_allowed_for,
@@ -49,6 +51,7 @@ _NON_MEDICAL_REASON_CODES: dict[str, frozenset[str]] = {
             "conflicting_sensitive_evidence",
             "sensitive_signal_insufficient",
             "insufficient_evidence",
+            "known_sensitive_source",
         }
     ),
 }
@@ -91,7 +94,7 @@ class _SafeGateModel(BaseModel):
 
 
 class ReceiptPrivacyGateResult(_SafeGateModel):
-    """Future-pipeline decision with no OCR text, filenames, or source identifiers."""
+    """Pipeline decision with no OCR text, filenames, or source identifiers."""
 
     classification: Classification
     extraction_status: ExtractionStatus
@@ -102,6 +105,7 @@ class ReceiptPrivacyGateResult(_SafeGateModel):
     medical_payment_amount: int | None = Field(default=None, ge=0)
     medical_candidate_count: int = Field(default=0, ge=0)
     category: Literal["医療費"] | None = None
+    diagnostic_codes: tuple[PaymentDiagnosticCode, ...] = Field(default=(), exclude=True, repr=False)
 
     @computed_field(return_type=bool)
     @property
@@ -122,12 +126,14 @@ class ReceiptPrivacyGateResult(_SafeGateModel):
         if self.classification == "normal":
             if (
                 self.extraction_status != "extracted"
+                or self.extraction_method not in {"image_ocr", "pdf_ocr", "pdf_text"}
                 or not self.text_present
                 or self.status != "ready_for_gemini"
                 or self.reason_code not in _NON_MEDICAL_REASON_CODES["normal"]
                 or self.medical_payment_amount is not None
                 or self.medical_candidate_count != 0
                 or self.category is not None
+                or self.diagnostic_codes
             ):
                 raise ValueError("invalid normal gate state")
         elif self.classification == "medical":
@@ -137,6 +143,8 @@ class ReceiptPrivacyGateResult(_SafeGateModel):
                 raise ValueError("confirmed medical gate requires amount")
             if self.status == "confirmed" and self.medical_candidate_count < 1:
                 raise ValueError("confirmed medical gate requires candidates")
+            if self.status == "confirmed" and self.diagnostic_codes:
+                raise ValueError("confirmed medical gate cannot contain unresolved evidence")
             if self.status == "needs_review" and self.medical_payment_amount is not None:
                 raise ValueError("review medical gate cannot contain amount")
             if self.status not in {"confirmed", "needs_review"}:
@@ -155,9 +163,13 @@ class ReceiptPrivacyGateResult(_SafeGateModel):
 def evaluate_receipt_privacy(
     content: bytes | None,
     mime_type: str | None,
+    *,
+    known_source_classification: Classification | None = None,
 ) -> ReceiptPrivacyGateResult:
     """Classify local document text and return a data-minimised Gemini decision."""
 
+    if known_source_classification not in {None, "normal", "medical", "payroll", "sensitive_unknown"}:
+        raise SafeModelValidationError()
     extracted = _extract_receipt_text(content, mime_type)
     if extracted.status == "extracted" and not extracted.text_present:
         # Keep the public boundary fail-closed even if a low-level adapter violates
@@ -173,7 +185,32 @@ def evaluate_receipt_privacy(
     preview = build_receipt_privacy_preview(
         extracted.text if extracted.status == "extracted" else None,
         extracted.structured_tokens if extracted.status == "extracted" else (),
+        observation_complete=extracted.observation_complete and extracted.status == "extracted",
     )
+
+    # Source provenance is a restriction, never an authorization. OCR cannot
+    # downgrade an already-sensitive source, and a caller-supplied normal value
+    # cannot override the local gate. Keep public result fields compatible.
+    if preview.classification == "normal":
+        from .medical_receipt_privacy import classify_receipt_text
+
+        token_decision = classify_receipt_text(" ".join(t.text for t in extracted.structured_tokens))
+        if known_source_classification not in {None, "normal"}:
+            preview = ReceiptPrivacyPreview(
+                classification="sensitive_unknown", status="not_applicable",
+                reason_code="known_sensitive_source", candidate_count=0,
+            )
+        elif (not extracted.observation_complete or
+              (extracted.structured_tokens and token_decision.reason_code in {
+                  "medical_strong_signal", "medical_multiple_signals",
+                  "payroll_strong_signal", "payroll_multiple_signals",
+                  "conflicting_sensitive_evidence", "sensitive_signal_insufficient",
+              })):
+            preview = ReceiptPrivacyPreview(
+                classification="sensitive_unknown", status="not_applicable",
+                reason_code="insufficient_evidence", candidate_count=0,
+                diagnostic_codes=("observation_incomplete",),
+            )
 
     if preview.classification == "normal":
         status: GateStatus = "ready_for_gemini"
@@ -192,4 +229,45 @@ def evaluate_receipt_privacy(
         medical_payment_amount=preview.payment_amount,
         medical_candidate_count=preview.candidate_count,
         category=preview.category,
+        diagnostic_codes=(preview.diagnostic_codes if extracted.status == "extracted"
+                          else ("observation_incomplete",)),
     )
+
+
+class ReceiptPrivacyBlocked(ValueError):
+    """Data-free failure raised before any receipt media leaves this process."""
+
+    def __init__(self) -> None:
+        super().__init__("receipt external AI submission blocked by privacy gate")
+
+
+def require_receipt_ai_permission(
+    content: bytes, mime_type: str, *, known_source_classification: Classification | None = None,
+) -> None:
+    """Mandatory adapter boundary: re-evaluate the exact bytes about to be sent.
+
+    No caller-supplied gate result, allow flag, or stale cached permission is
+    accepted. Known-sensitive provenance short-circuits before OCR as well.
+    """
+    allowed = False
+    if known_source_classification in {None, "normal"}:
+        try:
+            result = evaluate_receipt_privacy(content, mime_type)
+            # Treat even our own gate's return as a checked boundary contract.
+            # Revalidate fields (including excluded diagnostics) strictly; a
+            # model_construct result, truthy string, or stale malformed result
+            # must not authorize transmission. No raw document data is present.
+            if type(result) is not ReceiptPrivacyGateResult:
+                raise SafeModelValidationError()
+            result = ReceiptPrivacyGateResult.model_validate(
+                {name: getattr(result, name) for name in ReceiptPrivacyGateResult.model_fields},
+                strict=True,
+            )
+            allowed = (result.classification == "normal" and result.gemini_allowed is True
+                       and result.status == "ready_for_gemini"
+                       and result.extraction_status == "extracted" and result.text_present is True)
+        except Exception:
+            # Never propagate OCR/parser exception messages or their context.
+            pass
+    if not allowed:
+        raise ReceiptPrivacyBlocked()

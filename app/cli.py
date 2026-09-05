@@ -3,6 +3,7 @@ import argparse, csv, mimetypes, os
 from .settings import Settings
 from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
+from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
@@ -103,6 +104,11 @@ def main():
     sub.add_parser("init")
     r=sub.add_parser("receipt"); r.add_argument("image")
     an=sub.add_parser("analyze"); an.add_argument("image")
+    for receipt_parser in (r, an):
+        receipt_parser.add_argument(
+            "--source-classification", choices=("medical", "payroll", "sensitive_unknown"),
+            help="Preserve known sensitive source provenance; never permits external AI",
+        )
     a=sub.add_parser("amazon"); a.add_argument("csv")
     ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
     asp=sub.add_parser("amazon-shipping-backfill-preview"); asp.add_argument("csv")
@@ -169,7 +175,8 @@ def main():
     aue.add_argument("--output",required=True)
     aep=sub.add_parser("amazon-email-preview")
     aep.add_argument("eml")
-    sub.add_parser("drive-receipts")
+    dr=sub.add_parser("drive-receipts")
+    dr.add_argument("--source-classification", choices=("medical", "payroll", "sensitive_unknown"))
     sub.add_parser("drive-paypay-preview")
     sub.add_parser("drive-paypay")
     sub.add_parser("backup")
@@ -207,11 +214,23 @@ def main():
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="receipt":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
-        print(ReceiptPipeline(db,ai).process_bytes(data,mime,os.path.basename(args.image)))
+        try:
+            print(ReceiptPipeline(db,ai).process_bytes(
+                data,mime,os.path.basename(args.image),
+                known_source_classification=args.source_classification,
+            ))
+        except ReceiptPrivacyBlocked:
+            print({"status":"privacy_blocked","gemini_allowed":False})
     elif args.cmd=="analyze":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
-        result=ai.analyze_receipt(data,mime,db.categories())
-        print(result.model_dump())
+        try:
+            result=ai.analyze_receipt(
+                data,mime,db.categories(),known_source_classification=args.source_classification,
+            )
+        except ReceiptPrivacyBlocked:
+            print({"status":"privacy_blocked","gemini_allowed":False})
+        else:
+            print(result.model_dump())
     elif args.cmd=="amazon":
         s,db,ai=make(); print(AmazonPipeline(db,ai).import_csv(args.csv))
     elif args.cmd=="amazon-baseline":
@@ -416,7 +435,8 @@ def main():
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         print_drive_receipt_results(
-            process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id)
+            process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id,
+                          known_source_classification=args.source_classification)
         )
     elif args.cmd=="drive-paypay-preview":
         s=Settings(); s.validate(need_paypay_drive=True)

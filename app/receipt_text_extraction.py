@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Mapping
 from contextlib import contextmanager, redirect_stderr
@@ -144,6 +145,7 @@ class _ReceiptTextExtraction:
     method: ExtractionMethod
     text: str | None = field(repr=False)
     structured_tokens: tuple[_StructuredOcrToken, ...] = field(default=(), repr=False)
+    observation_complete: bool = True
 
     @property
     def text_present(self) -> bool:
@@ -290,8 +292,13 @@ def _run_image_ocr_tokens(image, page: int) -> tuple[_StructuredOcrToken, ...]:
         except (KeyError, IndexError, TypeError, ValueError):
             # A malformed OCR adapter result cannot be trusted for pairing.
             return ()
-        if confidence < 0 or width <= 0 or height <= 0:
-            continue
+        if (not all(math.isfinite(v) for v in (confidence, x, y, width, height))
+                or confidence > 100 or x < 0 or y < 0 or width <= 0 or height <= 0):
+            # Do not erase malformed observations and leave a misleadingly
+            # complete subset. The caller marks this channel incomplete.
+            return ()
+        # Nonempty negative-confidence observations are retained as unresolved;
+        # blank hierarchy entries were already discarded before this point.
         tokens.append(
             _StructuredOcrToken(text, page, x, y, width, height, confidence, line_key)
         )
@@ -342,7 +349,7 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
             if not text or not text.strip():
                 return _ReceiptTextExtraction("pdf_ocr_empty", "pdf_ocr", None)
             tokens = getattr(text, "structured_tokens", ())
-            return _ReceiptTextExtraction("extracted", "pdf_ocr", text, tokens)
+            return _ReceiptTextExtraction("extracted", "pdf_ocr", text, tokens, bool(tokens))
         return _ReceiptTextExtraction("extracted", "pdf_text", text)
 
     if normalized_mime in _IMAGE_MIME_TYPES:
@@ -357,7 +364,7 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
             tokens = _extract_image_ocr_tokens(content)
         except Exception:
             tokens = ()
-        return _ReceiptTextExtraction("extracted", "image_ocr", text, tokens)
+        return _ReceiptTextExtraction("extracted", "image_ocr", text, tokens, bool(tokens))
 
     return _ReceiptTextExtraction("unsupported_mime_type", "none", None)
 
