@@ -70,3 +70,25 @@ prohibited on synthetic evidence alone. The next useful evaluation must pair
 geometry coverage with existing production evidence without allowing either to
 overwrite the other's unresolved observations, then measure coverage and false
 associations against safely available local originals and human ground truth.
+
+## Offline comparison boundary
+
+`app.medical_layout_evaluation.evaluate_medical_layout` accepts transient text,
+structured tokens, explicit frames and completeness for the same OCR observation.
+It separately runs the unchanged production evidence resolver and the shadow
+observer, returning only a fixed integer counter schema. No resolved amount or
+source content leaves this evaluation function. Production region counts are
+channel views, not independent signals. It does not infer a join from equal
+amounts or ordinals, combine confidence, or feed shadow output to production.
+
+`evaluation_failed` distinguishes incomplete/malformed evaluation from a valid
+baseline needs_review. Incomplete geometry retains available shadow aggregate
+counts, but production counters remain zero (not evaluated). Exceptions discard
+all partial counters and expose no exception text. Consumers must check the
+failure flag before interpreting or accumulating production outcomes.
+
+This is a callable offline evaluation boundary, not a new receipt CLI or original
+acquisition path. Existing OCR extraction does not yet provide explicit page
+frames; do not guess them. A future local extraction handoff must supply renderer
+dimensions and page coverage for the exact pass, with tests for cropped/rotated
+and mixed embedded-text/scanned PDF pages, before evaluating those inputs here.
