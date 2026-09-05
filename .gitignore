@@ -21,3 +21,4 @@ receipt_test.jpg
 gmail-token.json
 drive-backup-token.json
 client_secret_*.json
+/.private/medical-eval/
