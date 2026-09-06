@@ -179,7 +179,7 @@ def test_shadow_has_no_production_callers_and_cannot_change_resolution():
     assert build_receipt_privacy_preview("病院 診療", tokens) == before
     assert before.status == "needs_review"
     for path in (Path(__file__).resolve().parents[1] / "app").glob("*.py"):
-        if path.name in {"medical_layout_shadow.py", "medical_layout_evaluation.py", "medical_layout_local.py", "medical_numeric_shadow.py", "medical_numeric_multipass.py", "medical_region_shadow.py", "medical_receipt_unit_shadow.py"}:
+        if path.name in {"medical_layout_shadow.py", "medical_layout_evaluation.py", "medical_layout_local.py", "medical_numeric_shadow.py", "medical_numeric_multipass.py", "medical_region_shadow.py", "medical_receipt_unit_shadow.py", "medical_gemini_shadow.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         assert not any(isinstance(n, ast.ImportFrom) and
