@@ -168,3 +168,54 @@ inbound gate. Fixed data-free result codes cover `disabled`, `timeout`, `quota`,
 bodies, headers, keys, OCR, amounts, paths, and filenames are never put in a
 result or repr. Each request has exactly one fake transport invocation; no retry,
 model/provider fallback, paid route, or production apply path exists.
+
+## Explicit real-transport implementation (still disabled)
+
+Code now contains `MedicalGeminiShadowTransport`, but no application, CLI,
+pipeline, resolver, background job, or test constructs it with a live executor.
+**No real Gemini request has been sent.** The class requires explicit injection
+of both an `HttpExecutor` and an `ApiKeyProvider`; it never creates a default
+executor. `UrllibHttpExecutor` is a small standard-library REST implementation,
+available only when a future explicitly constructs and injects it. Tests inject a
+recording fake executor and patch the stdlib `urlopen` entrypoint to fail if touched.
+There is no Gemini SDK use, dependency addition, HTTP debug logging, tracing, or
+automatic retry in this route.
+
+The only endpoint is the fixed HTTPS POST path
+`v1beta/models/gemini-3.1-flash-lite:generateContent` at the Gemini API host.
+The model is not configurable and aliases/alternate models are rejected by the
+dedicated transport policy. A bounded 10-second stdlib socket timeout covers both
+connection and reads. Exactly one executor call is possible for a logical shadow
+request; 429, 5xx, timeout, connection/TLS/DNS exceptions, and malformed provider
+envelopes have fixed data-free outcomes with no retry, provider fallback, model
+fallback, or paid route.
+
+`run_real_shadow_transport` preserves the required ordering: (1) default-false
+kill switch, (2) fixed no-feature policy, (3) transport-only API-key availability,
+(4) `ValidatedAnonymousBytes` preparation, (5) fixed request construction, (6)
+one executor call, then (7) the existing response gates. A missing key returns
+`authentication` before byte preparation or executor invocation. The lazy
+`EnvironmentMedicalShadowApiKeyProvider` reads only
+`MEDICAL_GEMINI_SHADOW_API_KEY` when this ordering reaches key preflight; this
+phase never invoked it against the real environment. The key is sent only in the
+`x-goog-api-key` header, never a query string, body, repr, result, or exception.
+
+The request body has exactly a constant Gemini protocol wrapper: one static
+instruction plus the already validated canonical anonymous JSON as a separate
+text part. It has no interpolated OCR, amounts, metadata, filename, path, image,
+or local map. It requests `application/json` and supplies the narrow five-field
+response JSON schema; `candidateCount` is one and temperature is zero. There are
+no tools, function calls, grounding/search, URL context, code execution, file or
+multimodal input, cache, batch, priority, thinking output, retrieval, or system
+data. API-side structured output is only defense in depth: local MIME, UTF-8,
+size, JSON, privacy, semantic-schema, binding, and rehydration checks remain final
+authority. Provider response metadata and HTTP error bodies are discarded.
+
+This design does **not** programmatically guarantee Free Tier. It fixes the
+model and excludes optional/paid-like features, retry, and fallback, but account,
+billing, quota, and provider tier remain external facts. Before a separately
+approved real-shadow request, a human must confirm the dedicated Free-only
+project/key and current model eligibility, keep the kill switch explicitly
+enabled only for that request, confirm logging/telemetry controls, and retain
+production isolation. A successful shadow response remains local `needs_review`
+only and cannot save, apply, override, or fail a production result.

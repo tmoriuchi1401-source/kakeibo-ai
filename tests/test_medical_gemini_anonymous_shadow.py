@@ -3,14 +3,17 @@ import json
 from pathlib import Path
 
 import pytest
+import app.medical_gemini_shadow as shadow
 
 from app.medical_gemini_shadow import (
-    FakeAnonymousShadowTransport, FinalInboundGate, FinalOutboundGate,
+    EnvironmentMedicalShadowApiKeyProvider, FakeAnonymousShadowTransport,
+    FinalInboundGate, FinalOutboundGate, HttpResponse,
     GeminiFreeTierShadowPolicy, InboundRejected, LocalAmountMap,
-    MedicalAnonymousShadowTransportPolicy, OutboundRejected, TransportResponse,
+    MedicalAnonymousShadowTransportPolicy, MedicalGeminiShadowTransport,
+    OutboundRejected, TransportResponse,
     ValidatedAnonymousBytes, build_anonymous_shadow_payload, prepare_anonymous_shadow,
     receive_synthetic_shadow_response, rehydrate_anonymous_response,
-    run_fake_shadow_transport,
+    run_fake_shadow_transport, run_real_shadow_transport,
 )
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 
@@ -257,6 +260,40 @@ def enabled_transport_policy():
     return MedicalAnonymousShadowTransportPolicy.from_setting("true")
 
 
+class SyntheticKeyProvider:
+    def __init__(self, value="synthetic-shadow-key"):
+        self.value = value
+        self.calls = 0
+
+    def get(self):
+        self.calls += 1
+        return self.value
+
+
+class FakeHttpExecutor:
+    def __init__(self, response=None, failure=None):
+        self.response = response
+        self.failure = failure
+        self.calls = []
+
+    def execute(self, request):
+        self.calls.append(request)
+        if self.failure is not None:
+            raise self.failure
+        return self.response
+
+
+def gemini_envelope(text):
+    return json.dumps({"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]},
+                      separators=(",", ":")).encode("utf-8")
+
+
+def real_transport(response=None, key="synthetic-shadow-key", failure=None):
+    executor = FakeHttpExecutor(response, failure)
+    provider = SyntheticKeyProvider(key)
+    return MedicalGeminiShadowTransport(executor, provider), executor, provider
+
+
 def test_transport_kill_switch_is_default_false_unset_and_malformed_without_invocation():
     build = safe_build()
     source = observation([row("領収金額 4321円")])
@@ -376,3 +413,122 @@ def test_transport_gate_rejects_amount_representation_variants_before_semantics(
         build, observation([row("領収金額 38430円")]), fake, enabled_transport_policy())
     assert result.reason_code == "privacy_rejected"
     assert result.local_result is None and fake.invocations == 1
+
+
+def test_real_transport_kill_switch_precedes_key_request_build_and_network(monkeypatch):
+    build = safe_build()
+    transport, executor, provider = real_transport(
+        HttpResponse(200, "application/json", gemini_envelope(response(build).decode("utf-8"))))
+    monkeypatch.setattr(shadow, "urlopen", lambda *args, **kwargs: pytest.fail("network attempted"))
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport,
+        MedicalAnonymousShadowTransportPolicy())
+    assert result.reason_code == "disabled"
+    assert provider.calls == 0 and executor.calls == []
+
+
+def test_real_transport_missing_key_stops_before_request_and_executor():
+    build = safe_build()
+    transport, executor, provider = real_transport(key="")
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
+    assert result.reason_code == "authentication"
+    assert provider.calls == 1 and executor.calls == []
+
+
+def test_real_transport_uses_fake_executor_fixed_endpoint_wrapper_and_secret_header_only(monkeypatch):
+    build = safe_build()
+    key = "synthetic-secret-not-in-body"
+    transport, executor, provider = real_transport(
+        HttpResponse(200, "application/json", gemini_envelope(response(build).decode("utf-8"))), key)
+    monkeypatch.setattr(shadow, "urlopen", lambda *args, **kwargs: pytest.fail("network attempted"))
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
+    assert result.reason_code == "accepted_shadow_response"
+    assert provider.calls == 1 and len(executor.calls) == 1
+    request = executor.calls[0]
+    assert request.url == "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent"
+    assert "?" not in request.url and request.timeout_seconds == 10
+    assert dict(request.headers)["x-goog-api-key"] == key
+    assert key.encode() not in request.body and key not in repr(request) and key not in repr(result)
+    body = json.loads(request.body)
+    assert set(body) == {"contents", "generationConfig"}
+    assert set(body["generationConfig"]) == {"responseMimeType", "responseJsonSchema", "candidateCount", "temperature"}
+    assert body["generationConfig"]["responseMimeType"] == "application/json"
+    assert "tools" not in body and "systemInstruction" not in body
+    body_text = "".join(part["text"] for part in body["contents"][0]["parts"])
+    for forbidden in ("4321", "領収金額", "filename", "Drive", "C:/"):
+        assert forbidden not in body_text
+    assert "Return only one JSON object" in body_text
+    with pytest.raises(TypeError):
+        transport.build_request(build, transport.acquire_api_key())  # type: ignore[arg-type]
+
+
+def test_environment_key_provider_is_lazy_and_testable_without_reading_real_environment():
+    seen = []
+    provider = EnvironmentMedicalShadowApiKeyProvider(getenv=lambda name: seen.append(name) or "synthetic-key")
+    assert seen == []
+    assert provider.get() == "synthetic-key"
+    assert seen == ["MEDICAL_GEMINI_SHADOW_API_KEY"]
+
+
+@pytest.mark.parametrize("status,reason", [
+    (400, "transport_error"), (401, "authentication"), (403, "authentication"),
+    (404, "unavailable"), (429, "quota"), (500, "unavailable"),
+])
+def test_real_transport_maps_http_statuses_once_without_exposing_google_body(status, reason):
+    build = safe_build()
+    secret_error = b'{"error":{"message":"receipt 4321 C:/private.pdf"}}'
+    transport, executor, provider = real_transport(HttpResponse(status, "application/json", secret_error))
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
+    assert result.reason_code == reason
+    assert provider.calls == 1 and len(executor.calls) == 1
+    assert "4321" not in repr(result) and "private" not in repr(result)
+
+
+@pytest.mark.parametrize("failure,reason", [
+    (TimeoutError("receipt 4321"), "timeout"),
+    (ConnectionError("receipt 4321 C:/private.pdf"), "transport_error"),
+])
+def test_real_transport_exception_mapping_is_data_free_and_not_retried(failure, reason):
+    build = safe_build()
+    transport, executor, provider = real_transport(failure=failure)
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
+    assert result.reason_code == reason
+    assert provider.calls == 1 and len(executor.calls) == 1
+    assert "4321" not in repr(result) and "private" not in repr(result)
+
+
+@pytest.mark.parametrize("content_type,text,reason", [
+    ("text/html", "{}", "invalid_content_type"),
+    ("application/json", "```json\\n{}\\n```", "malformed_response"),
+    ("application/json", "{} trailing", "malformed_response"),
+    ("application/json", '{"schema_version":"medical-anonymous-shadow-response-v1",'
+     '"schema_version":"medical-anonymous-shadow-response-v1"}', "malformed_response"),
+])
+def test_real_transport_reuses_response_format_boundary(content_type, text, reason):
+    build = safe_build()
+    transport, executor, _ = real_transport(HttpResponse(200, content_type, gemini_envelope(text)))
+    result = run_real_shadow_transport(
+        build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
+    assert result.reason_code == reason and len(executor.calls) == 1
+
+
+def test_real_transport_reuses_privacy_binding_schema_and_rehydration_boundaries(monkeypatch):
+    build = safe_build()
+    source = observation([row("領収金額 4321円")])
+    calls = []
+    monkeypatch.setattr(LocalAmountMap, "resolve", lambda *args: calls.append(args))
+    for text, reason in (
+        (response(build, explanation="領収金額 4321円").decode("utf-8"), "privacy_rejected"),
+        (response(build, unit_ref="unit_abcdefghijklmnopqrstuvwxyz").decode("utf-8"), "binding_rejected"),
+        (json.dumps({"schema_version": "medical-anonymous-shadow-response-v1",
+                     "unit_ref": build.payload["unit_ref"], "decision": "select",
+                     "amount_id": "amount_B", "confidence": "high"}), "validation_rejected"),
+    ):
+        transport, executor, _ = real_transport(HttpResponse(200, "application/json", gemini_envelope(text)))
+        result = run_real_shadow_transport(build, source, transport, enabled_transport_policy())
+        assert result.reason_code == reason and len(executor.calls) == 1
+    assert calls == []

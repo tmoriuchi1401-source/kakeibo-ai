@@ -11,10 +11,14 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import math
+import os
 import re
 import secrets
+import socket
 import unicodedata
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
+from urllib.error import HTTPError
+from urllib.request import Request as UrlRequest, urlopen
 
 from .medical_layout_shadow import PageFrame, observe_layout
 from .medical_ocr_observation_shadow import OcrObservation
@@ -33,6 +37,28 @@ _NUMERIC_SURFACE = re.compile(r"(?<![A-Za-z0-9])[0-9０-９][0-9０-９,，.．\
 _TRANSPORT_CAPABILITY = object()
 _FREE_TIER_MODEL = "gemini-3.1-flash-lite"
 _JSON_CONTENT_TYPES = frozenset({"application/json", "application/json; charset=utf-8"})
+_GEMINI_GENERATE_CONTENT_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-3.1-flash-lite:generateContent"
+)
+_HTTP_TIMEOUT_SECONDS = 10
+_STATIC_SHADOW_INSTRUCTION = (
+    "Return only one JSON object matching the supplied response schema. "
+    "Use only the anonymous JSON evidence in the adjacent part. "
+    "Do not include explanation, markdown, reasoning, metadata, or extra fields."
+)
+_SHADOW_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["schema_version", "unit_ref", "decision", "amount_id", "confidence"],
+    "properties": {
+        "schema_version": {"type": "string", "enum": [_RESPONSE_VERSION]},
+        "unit_ref": {"type": "string"},
+        "decision": {"type": "string", "enum": ["select", "abstain", "unresolved"]},
+        "amount_id": {"type": ["string", "null"]},
+        "confidence": {"type": ["string", "null"]},
+    },
+}
 
 
 class OutboundRejected(ValueError):
@@ -45,6 +71,23 @@ class InboundRejected(ValueError):
 
 class TransportResponseRejected(ValueError):
     """A fixed, data-free failure before semantic inbound parsing."""
+
+
+class _ApiKeyHandle:
+    """Private transport-only secret holder; it deliberately has no useful repr."""
+
+    __slots__ = ("__value",)
+
+    def __init__(self, value: str, token: object) -> None:
+        if token is not _TRANSPORT_CAPABILITY or type(value) is not str or not value:
+            raise TypeError("api_key_required")
+        self.__value = value
+
+    def __repr__(self) -> str:
+        return "ApiKeyHandle()"
+
+    def _for_header(self) -> str:
+        return self.__value
 
 
 class ValidatedAnonymousBytes:
@@ -90,7 +133,7 @@ class ValidatedTransportResponse:
 class TransportResponse:
     """Minimal synthetic transport result; body stays hidden from repr."""
 
-    status: Literal["ok", "timeout", "quota", "authentication", "unavailable", "transport_error"]
+    status: Literal["ok", "timeout", "quota", "authentication", "unavailable", "transport_error", "malformed_response"]
     content_type: str | None = None
     body: bytes | None = field(default=None, repr=False)
 
@@ -120,6 +163,170 @@ class FakeAnonymousShadowTransport:
         if type(self.response) is not TransportResponse:
             raise RuntimeError("synthetic_transport_response_missing")
         return self.response
+
+
+@dataclass(frozen=True)
+class HttpRequest:
+    """Minimal REST request; URL, headers, and body never appear in repr."""
+
+    method: Literal["POST"]
+    url: str = field(repr=False)
+    headers: tuple[tuple[str, str], ...] = field(repr=False)
+    body: bytes = field(repr=False)
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class HttpResponse:
+    """Minimal executor output; no response headers beyond Content-Type survive."""
+
+    status_code: int
+    content_type: str | None = None
+    body: bytes = field(default=b"", repr=False)
+
+
+class HttpExecutor(Protocol):
+    """Explicitly injected execution boundary. Tests use a fake, never sockets."""
+
+    def execute(self, request: HttpRequest) -> HttpResponse: ...
+
+
+class ApiKeyProvider(Protocol):
+    """Transport-only source for a secret; builders and gates never receive it."""
+
+    def get(self) -> str | None: ...
+
+
+@dataclass(frozen=True)
+class EnvironmentMedicalShadowApiKeyProvider:
+    """Lazy environment boundary. Nothing reads it until transport preflight."""
+
+    getenv: Callable[[str], str | None] = field(default=os.getenv, repr=False)
+    variable_name: str = "MEDICAL_GEMINI_SHADOW_API_KEY"
+
+    def get(self) -> str | None:
+        value = self.getenv(self.variable_name)
+        return value if type(value) is str and value.strip() else None
+
+
+class UrllibHttpExecutor:
+    """One-shot stdlib REST executor, never instantiated automatically.
+
+    ``urlopen`` has one bounded socket timeout (10 seconds) covering connection
+    and reads. It has no retry configuration, retry adapter, SDK, tracing, or log.
+    """
+
+    def execute(self, request: HttpRequest) -> HttpResponse:
+        if type(request) is not HttpRequest or request.method != "POST":
+            raise TypeError("invalid_http_request")
+        try:
+            wire_request = UrlRequest(request.url, data=request.body, method="POST",
+                                      headers=dict(request.headers))
+            with urlopen(wire_request, timeout=request.timeout_seconds) as handle:  # noqa: S310
+                return HttpResponse(handle.status, handle.headers.get("Content-Type"), handle.read())
+        except HTTPError as error:
+            # HTTP status is useful for fixed mapping; error body is deliberately
+            # discarded, so a provider's diagnostic text cannot leave this layer.
+            return HttpResponse(error.code, error.headers.get("Content-Type") if error.headers else None)
+
+
+def _strict_json_loads(raw: bytes) -> object:
+    """Decode provider wrapper strictly without retaining it outside transport."""
+    if type(raw) is not bytes:
+        raise ValueError()
+    return json.loads(raw.decode("utf-8"), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+
+
+def _extract_gemini_response_text(raw: bytes) -> bytes:
+    """Extract only the structured text candidate; discard all provider metadata."""
+    try:
+        parsed = _strict_json_loads(raw)
+        if type(parsed) is not dict:
+            raise ValueError()
+        candidates = parsed.get("candidates")
+        if type(candidates) is not list or len(candidates) != 1 or type(candidates[0]) is not dict:
+            raise ValueError()
+        content = candidates[0].get("content")
+        if type(content) is not dict:
+            raise ValueError()
+        parts = content.get("parts")
+        if type(parts) is not list or len(parts) != 1 or type(parts[0]) is not dict:
+            raise ValueError()
+        text = parts[0].get("text")
+        if type(text) is not str:
+            raise ValueError()
+        return text.encode("utf-8")
+    except Exception as error:
+        raise ValueError("invalid_provider_response") from error
+
+
+class MedicalGeminiShadowTransport:
+    """Explicit-injection REST transport; it is not wired to any production path."""
+
+    def __init__(self, executor: HttpExecutor, key_provider: ApiKeyProvider) -> None:
+        self._executor = executor
+        self._key_provider = key_provider
+
+    def acquire_api_key(self) -> _ApiKeyHandle | None:
+        try:
+            value = self._key_provider.get()
+        except Exception:
+            return None
+        if type(value) is not str or not value.strip():
+            return None
+        return _ApiKeyHandle(value, _TRANSPORT_CAPABILITY)
+
+    def build_request(self, request: ValidatedAnonymousBytes, key: _ApiKeyHandle) -> HttpRequest:
+        if type(request) is not ValidatedAnonymousBytes or type(key) is not _ApiKeyHandle:
+            raise TypeError("validated_anonymous_bytes_and_api_key_required")
+        wire = request._for_transport()
+        try:
+            payload = _strict_json_loads(wire)
+            FinalOutboundGate()._validate(payload)
+            if FinalOutboundGate().serialize(payload) != wire:
+                raise ValueError()
+        except Exception as error:
+            raise OutboundRejected("invalid_validated_anonymous_bytes") from error
+        # Only constant protocol fields surround the prevalidated anonymous bytes.
+        body = json.dumps({
+            "contents": [{"role": "user", "parts": [
+                {"text": _STATIC_SHADOW_INSTRUCTION}, {"text": wire.decode("ascii")},
+            ]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseJsonSchema": _SHADOW_RESPONSE_SCHEMA,
+                "candidateCount": 1,
+                "temperature": 0,
+            },
+        }, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+        return HttpRequest(
+            "POST", _GEMINI_GENERATE_CONTENT_URL,
+            (("Content-Type", "application/json"), ("x-goog-api-key", key._for_header())),
+            body, _HTTP_TIMEOUT_SECONDS,
+        )
+
+    def send(self, request: ValidatedAnonymousBytes, key: _ApiKeyHandle) -> TransportResponse:
+        try:
+            http_response = self._executor.execute(self.build_request(request, key))
+        except (TimeoutError, socket.timeout):
+            return TransportResponse("timeout")
+        except Exception:
+            return TransportResponse("transport_error")
+        if type(http_response) is not HttpResponse or type(http_response.status_code) is not int:
+            return TransportResponse("transport_error")
+        if http_response.status_code in {401, 403}:
+            return TransportResponse("authentication")
+        if http_response.status_code == 404:
+            return TransportResponse("unavailable")
+        if http_response.status_code == 429:
+            return TransportResponse("quota")
+        if not 200 <= http_response.status_code < 300:
+            return TransportResponse("unavailable" if http_response.status_code >= 500 else "transport_error")
+        try:
+            return TransportResponse("ok", http_response.content_type,
+                                     _extract_gemini_response_text(http_response.body))
+        except Exception:
+            return TransportResponse("malformed_response")
 
 
 @dataclass(frozen=True)
@@ -755,6 +962,53 @@ def run_fake_shadow_transport(
     except InboundRejected as error:
         code = "binding_rejected" if "binding" in str(error) else "validation_rejected"
         return InboundShadowResult("needs_review", code)
+    except Exception:
+        return InboundShadowResult("needs_review", "validation_rejected")
+
+
+def run_real_shadow_transport(
+    build: AnonymousShadowBuild,
+    observation: OcrObservation,
+    transport: MedicalGeminiShadowTransport,
+    policy: MedicalAnonymousShadowTransportPolicy = MedicalAnonymousShadowTransportPolicy(),
+) -> InboundShadowResult:
+    """One-shot explicit-injection REST orchestration; it has no default caller."""
+    # 1/2: dedicated default-false switch and exact no-feature policy first.
+    if type(policy) is not MedicalAnonymousShadowTransportPolicy or not policy.transport_enabled:
+        return InboundShadowResult("needs_review", "disabled")
+    if type(transport) is not MedicalGeminiShadowTransport:
+        return InboundShadowResult("needs_review", "validation_rejected")
+    # 3: no key means no outbound preparation, request construction, or executor.
+    key = transport.acquire_api_key()
+    if key is None:
+        return InboundShadowResult("needs_review", "authentication")
+    # 4: create opaque bytes only after policy and key availability pass.
+    try:
+        request = _validated_request_for_transport(build, observation)
+    except Exception:
+        return InboundShadowResult("needs_review", "validation_rejected")
+    # 5/6: one fixed request and at most one executor call; no retry/fallback.
+    response = transport.send(request, key)
+    if type(response) is not TransportResponse:
+        return InboundShadowResult("needs_review", "transport_error")
+    if response.status != "ok":
+        failures = {
+            "timeout": "timeout", "quota": "quota", "authentication": "authentication",
+            "unavailable": "unavailable", "transport_error": "transport_error",
+            "malformed_response": "malformed_response",
+        }
+        return InboundShadowResult("needs_review", failures.get(response.status, "transport_error"))
+    # 7: reuse independent format/privacy and semantic/binding boundaries.
+    try:
+        checked = TransportResponseGate().validate(build, response)
+        accepted = FinalInboundGate().accept_transport_validated(build, checked)
+        return InboundShadowResult("needs_review", "accepted_shadow_response",
+                                   rehydrate_anonymous_response(build, accepted))
+    except TransportResponseRejected as error:
+        return InboundShadowResult("needs_review", str(error))
+    except InboundRejected as error:
+        return InboundShadowResult(
+            "needs_review", "binding_rejected" if "binding" in str(error) else "validation_rejected")
     except Exception:
         return InboundShadowResult("needs_review", "validation_rejected")
 
