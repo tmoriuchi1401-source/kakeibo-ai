@@ -6,7 +6,7 @@ import pytest
 
 from app.medical_gemini_shadow import (
     FinalOutboundGate, GeminiFreeTierShadowPolicy, OutboundRejected,
-    build_anonymous_shadow_payload,
+    build_anonymous_shadow_payload, prepare_anonymous_shadow,
 )
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 
@@ -48,6 +48,14 @@ def test_gate_rejects_raw_text_forbidden_fields_unknowns_and_final_byte_leakage(
     payload = safe_build().payload
     payload["unit_ref"] = "unit_SYNTHETIC_PRIVATE_abcdefghijklmnop"
     with pytest.raises(OutboundRejected): FinalOutboundGate().serialize(payload, ("SYNTHETIC_PRIVATE",))
+    payload = safe_build().payload
+    payload["regions"][0]["amount_id"] = "amount_SYNTHETIC_PRIVATE"
+    with pytest.raises(OutboundRejected, match="invalid_amount_id"):
+        FinalOutboundGate().serialize(payload)
+    payload = safe_build().payload
+    payload["regions"][0]["confidence"] = 1
+    with pytest.raises(OutboundRejected, match="invalid_semantic_category"):
+        FinalOutboundGate().serialize(payload)
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -70,6 +78,21 @@ def test_incomplete_observation_and_page_mixing_are_not_payload_inputs():
     assert first.payload["unit_ref"] != second.payload["unit_ref"]
     assert first.amount_map.resolve("amount_A") == 4321
     assert second.amount_map.resolve("amount_A") == 7654
+
+
+def test_preparation_returns_data_free_needs_review_and_binds_the_source_observation():
+    withheld = prepare_anonymous_shadow(observation([row("4321円")]))
+    assert withheld.status == "needs_review"
+    assert withheld.build is None
+    assert "4321" not in repr(withheld)
+    build = safe_build()
+    with pytest.raises(OutboundRejected, match="shadow_source_mismatch"):
+        GeminiFreeTierShadowPolicy(enabled=True).prepare(
+            build, observation([row("領収金額 7654円")]))
+    build.payload["unit_ref"] = "unit_abcdefghijklmnopqrstuvwxyz"
+    with pytest.raises(OutboundRejected, match="shadow_unit_mismatch"):
+        GeminiFreeTierShadowPolicy(enabled=True).prepare(
+            build, observation([row("領収金額 4321円")]))
 
 
 def test_free_tier_is_only_mode_and_disabled_stop_switch_fails_closed():

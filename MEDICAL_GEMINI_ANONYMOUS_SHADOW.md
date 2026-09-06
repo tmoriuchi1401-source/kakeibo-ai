@@ -19,6 +19,13 @@ polygons, confidence scores, and the actual amounts remain local.  The wire-only
 metadata.  Amount correspondence is held in `LocalAmountMap`; response handling
 must use that local map and must never add it to the payload.
 
+`prepare_anonymous_shadow` is the fail-closed local entrypoint. It turns every
+unsafe/ambiguous semanticization failure into a data-free `needs_review` result;
+only `shadow_ready` contains a private build. A private SHA-256 fingerprint binds
+that build to the exact local observation before `prepare` serializes bytes. The
+fingerprint is neither an input field nor wire data, so a different source cannot
+substitute its literals for final-byte scanning.
+
 ## Allowlist wire schema
 
 The only allowed serialized object is:
@@ -48,12 +55,13 @@ or unknown semantic label.
 ## Fail-closed outbound gate
 
 `FinalOutboundGate` independently validates exact keys, native types, enum values,
-opaque-ID shapes, finite normalized geometry, and relation references immediately
-before canonical JSON bytes are made.  It rejects extra/missing fields, subclasses
-and unexpected types.  It also scans those final bytes against locally supplied
-raw OCR literals and amount renderings, providing a regression tripwire beyond
-schema validation.  Only `GeminiFreeTierShadowPolicy.prepare` exposes preflight
-bytes for any future sender; no sender is implemented in this phase.
+opaque IDs in their builder-defined sequence, finite normalized geometry, bounded
+unique relations, and relation references immediately before canonical JSON bytes
+are made. It rejects extra/missing fields, subclasses and unexpected types. It
+also scans those final bytes against locally supplied raw OCR literals and amount
+renderings, providing a regression tripwire beyond schema validation. The policy
+also verifies the generated opaque unit reference before preflight bytes are
+exposed to any future sender; no sender is implemented in this phase.
 
 Local semanticization recognizes only explicit existing payment/excluded context.
 Possible-payment context, unassigned numeric text, multiple numeric runs,

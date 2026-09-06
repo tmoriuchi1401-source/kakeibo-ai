@@ -8,6 +8,7 @@ closed schema rather than arbitrary mappings, prompts, metadata, or OCR DTOs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 import re
@@ -55,6 +56,17 @@ class AnonymousShadowBuild:
 
     payload: dict = field(repr=False)
     amount_map: LocalAmountMap = field(repr=False)
+    _source_fingerprint: str = field(repr=False)
+    _unit_ref: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ShadowPreparation:
+    """Data-free local result; a withheld unit remains needs_review."""
+
+    status: Literal["shadow_ready", "needs_review"]
+    reason_code: str
+    build: AnonymousShadowBuild | None = field(default=None, repr=False)
 
 
 def _alpha(index: int) -> str:
@@ -90,6 +102,23 @@ def _geometry(observation: OcrObservation, ordinal: int) -> dict[str, float]:
 def _local_scope(text: str) -> str:
     compact = _compact_ocr_token(unicodedata.normalize("NFKC", text))
     return _scope(compact, bool(_payment_labels_on_line(text)))
+
+
+def _observation_fingerprint(observation: OcrObservation) -> str:
+    """Bind private literals to their build without creating a wire identifier."""
+    try:
+        digest = hashlib.sha256()
+        digest.update(observation.image_sha256.encode("ascii"))
+        digest.update(json.dumps([
+            observation.page, observation.width, observation.height,
+            [(region.ordinal, region.text, region.polygon, region.confidence,
+              region.detection_confidence, region.issues, region.granularity)
+             for region in observation.regions],
+            observation.issues,
+        ], ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii"))
+        return digest.hexdigest()
+    except Exception as error:
+        raise OutboundRejected("invalid_observation_fingerprint") from error
 
 
 def _layout(observation: OcrObservation):
@@ -176,11 +205,12 @@ def build_anonymous_shadow_payload(observation: OcrObservation) -> AnonymousShad
         and "competing_relationships" in hypothesis.issues
         for hypothesis in layout.hypotheses
     )
+    unit_ref = "unit_" + secrets.token_urlsafe(24)
     payload = {
         "schema_version": _VERSION,
         # This random value is generated for this handoff only.  It is not a receipt,
         # filename, page ordinal, path, Drive ID, image digest, or persistent key.
-        "unit_ref": "unit_" + secrets.token_urlsafe(24),
+        "unit_ref": unit_ref,
         "mode": "shadow_only",
         "state": "shadow_ready",
         # The local geometry is only an observation.  It never establishes a
@@ -190,10 +220,20 @@ def build_anonymous_shadow_payload(observation: OcrObservation) -> AnonymousShad
         "regions": regions,
         "relations": relations,
     }
-    result = AnonymousShadowBuild(payload, LocalAmountMap(tuple(values)))
+    result = AnonymousShadowBuild(payload, LocalAmountMap(tuple(values)), _observation_fingerprint(observation), unit_ref)
     # Gate the builder's own output as a regression tripwire before a caller gets it.
     FinalOutboundGate().serialize(result.payload, _private_literals(observation, result.amount_map))
     return result
+
+
+def prepare_anonymous_shadow(observation: OcrObservation) -> ShadowPreparation:
+    """Turn every local semanticization failure into data-free needs_review."""
+    try:
+        return ShadowPreparation("shadow_ready", "ready", build_anonymous_shadow_payload(observation))
+    except OutboundRejected as error:
+        # OutboundRejected messages are fixed codes defined in this module, never
+        # OCR text, filenames, paths, values, or an upstream exception string.
+        return ShadowPreparation("needs_review", str(error))
 
 
 def _private_literals(observation: OcrObservation, amount_map: LocalAmountMap) -> tuple[str, ...]:
@@ -227,33 +267,41 @@ class FinalOutboundGate:
     def _validate(self, payload: object) -> None:
         if type(payload) is not dict or set(payload) != {"schema_version", "unit_ref", "mode", "state", "structure_state", "competing_structure", "regions", "relations"}:
             raise OutboundRejected("forbidden_or_unknown_field")
-        if (payload["schema_version"] != _VERSION or payload["mode"] != "shadow_only"
-                or payload["state"] != "shadow_ready" or type(payload["unit_ref"]) is not str
+        if (type(payload["schema_version"]) is not str or type(payload["mode"]) is not str
+                or type(payload["state"]) is not str or payload["schema_version"] != _VERSION
+                or payload["mode"] != "shadow_only" or payload["state"] != "shadow_ready"
+                or type(payload["unit_ref"]) is not str
                 or not _UNIT_REF.fullmatch(payload["unit_ref"])):
             raise OutboundRejected("invalid_payload_header")
-        if payload["structure_state"] != "unresolved" or type(payload["competing_structure"]) is not bool:
+        if (type(payload["structure_state"]) is not str or payload["structure_state"] != "unresolved"
+                or type(payload["competing_structure"]) is not bool):
             raise OutboundRejected("invalid_structure_state")
         regions = payload["regions"]
         relations = payload["relations"]
-        if type(regions) is not list or not 1 <= len(regions) <= _MAX_REGIONS or type(relations) is not list:
+        if (type(regions) is not list or not 1 <= len(regions) <= _MAX_REGIONS
+                or type(relations) is not list or len(relations) > len(regions) * (len(regions) - 1) // 2):
             raise OutboundRejected("invalid_payload_collections")
         ids: set[str] = set()
         amount_ids: set[str] = set()
-        for region in regions:
+        for index, region in enumerate(regions):
             if type(region) is not dict or set(region) != {"id", "kind", "context", "amount_id", "geometry", "confidence", "status"}:
                 raise OutboundRejected("forbidden_or_unknown_field")
             identifier = region["id"]
-            if type(identifier) is not str or not _REGION_ID.fullmatch(identifier) or identifier in ids:
+            if (type(identifier) is not str or identifier != f"region_{_alpha(index)}"
+                    or not _REGION_ID.fullmatch(identifier) or identifier in ids):
                 raise OutboundRejected("invalid_region_id")
             ids.add(identifier)
-            if (region["kind"] not in {"numeric_evidence", "context_anchor"}
+            if (type(region["kind"]) is not str or type(region["context"]) is not str
+                    or type(region["confidence"]) is not str or type(region["status"]) is not str
+                    or region["kind"] not in {"numeric_evidence", "context_anchor"}
                     or region["context"] not in {"payment", "excluded"}
                     or region["confidence"] not in {"high", "medium", "low"}
                     or region["status"] != "observed"):
                 raise OutboundRejected("invalid_semantic_category")
             amount_id = region["amount_id"]
             if region["kind"] == "numeric_evidence":
-                if type(amount_id) is not str or not _AMOUNT_ID.fullmatch(amount_id) or amount_id in amount_ids:
+                if (type(amount_id) is not str or amount_id != f"amount_{_alpha(len(amount_ids))}"
+                        or not _AMOUNT_ID.fullmatch(amount_id) or amount_id in amount_ids):
                     raise OutboundRejected("invalid_amount_id")
                 amount_ids.add(amount_id)
             elif amount_id is not None:
@@ -263,14 +311,22 @@ class FinalOutboundGate:
                 raise OutboundRejected("invalid_geometry")
             if not all(type(value) is float and math.isfinite(value) and 0 <= value <= 1 for value in geometry.values()):
                 raise OutboundRejected("invalid_geometry")
+        seen_relations: set[tuple[str, str, str]] = set()
         for relation in relations:
             if type(relation) is not dict or set(relation) != {"left", "right", "kind"}:
                 raise OutboundRejected("forbidden_or_unknown_field")
             if (type(relation["left"]) is not str or type(relation["right"]) is not str
+                    or type(relation["kind"]) is not str
                     or relation["left"] not in ids or relation["right"] not in ids
                     or relation["left"] == relation["right"]
                     or relation["kind"] not in {"row", "column", "overlap"}):
                 raise OutboundRejected("invalid_relation")
+            key = (relation["left"], relation["right"], relation["kind"])
+            if key in seen_relations:
+                raise OutboundRejected("duplicate_relation")
+            seen_relations.add(key)
+        if not amount_ids:
+            raise OutboundRejected("amount_not_observed")
 
 
 @dataclass(frozen=True)
@@ -285,4 +341,10 @@ class GeminiFreeTierShadowPolicy:
             raise OutboundRejected("free_tier_route_disabled")
         if type(build) is not AnonymousShadowBuild or type(observation) is not OcrObservation:
             raise OutboundRejected("invalid_shadow_handoff")
+        if type(build._source_fingerprint) is not str or type(build._unit_ref) is not str:
+            raise OutboundRejected("invalid_shadow_handoff")
+        if not secrets.compare_digest(build._source_fingerprint, _observation_fingerprint(observation)):
+            raise OutboundRejected("shadow_source_mismatch")
+        if type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref:
+            raise OutboundRejected("shadow_unit_mismatch")
         return FinalOutboundGate().serialize(build.payload, _private_literals(observation, build.amount_map))
