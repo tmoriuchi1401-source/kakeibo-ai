@@ -27,6 +27,10 @@ def safe_build():
     return build_anonymous_shadow_payload(observation([row("領収金額 4321円")]))
 
 
+def large_amount_build():
+    return build_anonymous_shadow_payload(observation([row("領収金額 38430円")]))
+
+
 def response(build, *, decision="select", amount_id="amount_A", confidence="high", **extra):
     value = {"schema_version": "medical-anonymous-shadow-response-v1",
              "unit_ref": build.payload["unit_ref"], "decision": decision,
@@ -163,6 +167,20 @@ def test_inbound_gate_rejects_unknown_text_and_real_amount_echoes():
     with pytest.raises(InboundRejected) as raised:
         FinalInboundGate().accept(build, response(build, amount_id="4321"))
     assert "4321" not in str(raised.value)
+
+
+@pytest.mark.parametrize("surface", [
+    "38430", "38,430", "38.430", "３８４３０", "3 8 4 3 0", "\\u0033\\u0038\\u0034\\u0033\\u0030",
+])
+def test_final_gates_reject_normalized_real_amount_surfaces(surface):
+    build = large_amount_build()
+    raw = response(build, amount_id=surface)
+    with pytest.raises(InboundRejected):
+        FinalInboundGate().accept(build, raw)
+    payload = build.payload
+    payload["unit_ref"] = "unit_38430abcdefghijklmnopqrst"
+    with pytest.raises(OutboundRejected, match="private_numeric_literal_detected"):
+        FinalOutboundGate().serialize(payload, private_amounts=(38430,))
 
 
 @pytest.mark.parametrize("extra", [

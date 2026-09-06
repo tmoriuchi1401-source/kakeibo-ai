@@ -29,6 +29,7 @@ _REGION_ID = re.compile(r"region_[A-Z]+\Z")
 _AMOUNT_ID = re.compile(r"amount_[A-Z]+\Z")
 _MAX_REGIONS = 128
 _MAX_RESPONSE_BYTES = 4096
+_NUMERIC_SURFACE = re.compile(r"(?<![A-Za-z0-9])[0-9０-９][0-9０-９,，.．\s]*")
 
 
 class OutboundRejected(ValueError):
@@ -264,7 +265,10 @@ def build_anonymous_shadow_payload(observation: OcrObservation) -> AnonymousShad
         _private_literals(observation, amount_map),
     )
     # Gate the builder's own output as a regression tripwire before a caller gets it.
-    FinalOutboundGate().serialize(result.payload, _private_literals(observation, result.amount_map))
+    FinalOutboundGate().serialize(
+        result.payload, _private_literals(observation, result.amount_map),
+        private_amounts=tuple(value for _, value in result.amount_map._values),
+    )
     return result
 
 
@@ -288,10 +292,33 @@ def _private_literals(observation: OcrObservation, amount_map: LocalAmountMap) -
     return tuple(values)
 
 
+def _decode_json_unicode_escapes(text: str) -> str:
+    """Decode only JSON-style codepoint escapes for a local leakage scan."""
+    return re.sub(r"\\+u([0-9a-fA-F]{4})", lambda match: chr(int(match.group(1), 16)), text)
+
+
+def _reject_numeric_amount_surface(
+    text: str, amounts: tuple[int, ...], error_type: type[ValueError], reason: str,
+) -> None:
+    """Reject amount digits despite grouping, Unicode digits, whitespace, or escaping."""
+    if (type(text) is not str or type(amounts) is not tuple
+            or not all(type(amount) is int and amount >= 0 for amount in amounts)):
+        raise error_type("invalid_private_scan")
+    targets = {str(amount) for amount in amounts}
+    normalized = unicodedata.normalize("NFKC", _decode_json_unicode_escapes(text))
+    for match in _NUMERIC_SURFACE.finditer(normalized):
+        digits = "".join(character for character in match.group() if "0" <= character <= "9")
+        if digits in targets:
+            raise error_type(reason)
+
+
 class FinalOutboundGate:
     """Independent exact-schema and final-bytes gate for a future client boundary."""
 
-    def serialize(self, payload: object, private_literals: tuple[str, ...] = ()) -> bytes:
+    def serialize(
+        self, payload: object, private_literals: tuple[str, ...] = (), *,
+        private_amounts: tuple[int, ...] = (),
+    ) -> bytes:
         self._validate(payload)
         try:
             encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
@@ -306,6 +333,8 @@ class FinalOutboundGate:
             escaped = json.dumps(literal, ensure_ascii=True)[1:-1]
             if escaped and escaped in text:
                 raise OutboundRejected("private_literal_detected")
+        _reject_numeric_amount_surface(text, private_amounts, OutboundRejected,
+                                       "private_numeric_literal_detected")
         return encoded
 
     def _validate(self, payload: object) -> None:
@@ -391,7 +420,10 @@ class GeminiFreeTierShadowPolicy:
             raise OutboundRejected("shadow_source_mismatch")
         if type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref:
             raise OutboundRejected("shadow_unit_mismatch")
-        return FinalOutboundGate().serialize(build.payload, _private_literals(observation, build.amount_map))
+        return FinalOutboundGate().serialize(
+            build.payload, _private_literals(observation, build.amount_map),
+            private_amounts=tuple(value for _, value in build.amount_map._values),
+        )
 
 
 def _response_binding(build: AnonymousShadowBuild) -> str:
@@ -450,6 +482,10 @@ class FinalInboundGate:
         try:
             text = response_bytes.decode("utf-8")
             _reject_response_literal(text, build._response_private_literals)
+            _reject_numeric_amount_surface(
+                text, tuple(value for _, value in build.amount_map._values), InboundRejected,
+                "private_response_numeric_literal",
+            )
             parsed = json.loads(text, object_pairs_hook=_strict_response_object,
                                 parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
         except InboundRejected:

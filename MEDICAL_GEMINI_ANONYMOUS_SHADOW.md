@@ -59,7 +59,9 @@ opaque IDs in their builder-defined sequence, finite normalized geometry, bounde
 unique relations, and relation references immediately before canonical JSON bytes
 are made. It rejects extra/missing fields, subclasses and unexpected types. It
 also scans those final bytes against locally supplied raw OCR literals and amount
-renderings, providing a regression tripwire beyond schema validation. The policy
+renderings, including normalized ASCII/full-width digits, comma or dot grouping,
+whitespace-separated digits, and JSON Unicode escapes. This provides a regression
+tripwire beyond schema validation. The policy
 also verifies the generated opaque unit reference before preflight bytes are
 exposed to any future sender; no sender is implemented in this phase.
 
@@ -103,7 +105,8 @@ fingerprint, outbound `unit_ref`, and canonical anonymous request. It is never
 placed on the outbound payload or response. The response must also echo the
 unique random `unit_ref`, so a response built for another request is rejected.
 The gate scans raw response bytes for locally retained OCR literals and concrete
-amount renderings before parsing, including JSON-escaped text.
+amount renderings before parsing, including JSON-escaped text and normalized
+full-width/grouped/whitespace numeric surfaces.
 
 Only a returned `AcceptedAnonymousResponse` with the matching private binding
 can enter `rehydrate_anonymous_response`. That is the sole inbound call site for
