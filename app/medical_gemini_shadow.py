@@ -23,14 +23,20 @@ from .medical_receipt_privacy import _StructuredOcrToken, _compact_ocr_token, _p
 
 
 _VERSION = "medical-anonymous-shadow-v1"
+_RESPONSE_VERSION = "medical-anonymous-shadow-response-v1"
 _UNIT_REF = re.compile(r"unit_[A-Za-z0-9_-]{24,64}\Z")
 _REGION_ID = re.compile(r"region_[A-Z]+\Z")
 _AMOUNT_ID = re.compile(r"amount_[A-Z]+\Z")
 _MAX_REGIONS = 128
+_MAX_RESPONSE_BYTES = 4096
 
 
 class OutboundRejected(ValueError):
     """A fixed, data-free failure for unsafe local-to-provider handoff."""
+
+
+class InboundRejected(ValueError):
+    """A fixed, data-free failure for unsafe provider-response handoff."""
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,7 @@ class AnonymousShadowBuild:
     amount_map: LocalAmountMap = field(repr=False)
     _source_fingerprint: str = field(repr=False)
     _unit_ref: str = field(repr=False)
+    _response_private_literals: tuple[str, ...] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,37 @@ class ShadowPreparation:
     status: Literal["shadow_ready", "needs_review"]
     reason_code: str
     build: AnonymousShadowBuild | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class AcceptedAnonymousResponse:
+    """Validated provider semantics only; no raw response text is retained."""
+
+    decision: Literal["select", "abstain", "unresolved"]
+    amount_id: str | None
+    confidence: Literal["high", "medium", "low"] | None
+    _binding: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class LocalResponseResult:
+    """Local-only rehydration result; it never grants business confirmation."""
+
+    status: Literal["needs_review"]
+    decision: Literal["select", "abstain", "unresolved"]
+    amount: int | None = field(repr=False)
+
+
+@dataclass(frozen=True)
+class InboundShadowResult:
+    """Data-free public shadow result, including synthetic transport failures."""
+
+    status: Literal["needs_review"]
+    reason_code: Literal[
+        "accepted_shadow_response", "malformed_response", "synthetic_timeout",
+        "synthetic_quota_failure", "synthetic_api_failure", "synthetic_parser_failure",
+    ]
+    local_result: LocalResponseResult | None = field(default=None, repr=False)
 
 
 def _alpha(index: int) -> str:
@@ -220,7 +258,11 @@ def build_anonymous_shadow_payload(observation: OcrObservation) -> AnonymousShad
         "regions": regions,
         "relations": relations,
     }
-    result = AnonymousShadowBuild(payload, LocalAmountMap(tuple(values)), _observation_fingerprint(observation), unit_ref)
+    amount_map = LocalAmountMap(tuple(values))
+    result = AnonymousShadowBuild(
+        payload, amount_map, _observation_fingerprint(observation), unit_ref,
+        _private_literals(observation, amount_map),
+    )
     # Gate the builder's own output as a regression tripwire before a caller gets it.
     FinalOutboundGate().serialize(result.payload, _private_literals(observation, result.amount_map))
     return result
@@ -240,7 +282,9 @@ def _private_literals(observation: OcrObservation, amount_map: LocalAmountMap) -
     """Private material used only by final-byte defense in depth."""
     values = [region.text for region in observation.regions if region.text.strip()]
     for _, amount in amount_map._values:
-        values.extend((str(amount), f"{amount}円", f"¥{amount}"))
+        grouped = f"{amount:,}"
+        values.extend((str(amount), f"{amount}円", f"¥{amount}", grouped,
+                       f"{grouped}円", f"¥{grouped}"))
     return tuple(values)
 
 
@@ -348,3 +392,133 @@ class GeminiFreeTierShadowPolicy:
         if type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref:
             raise OutboundRejected("shadow_unit_mismatch")
         return FinalOutboundGate().serialize(build.payload, _private_literals(observation, build.amount_map))
+
+
+def _response_binding(build: AnonymousShadowBuild) -> str:
+    """Local request/response binding; its digest is never put on either wire."""
+    try:
+        if (type(build) is not AnonymousShadowBuild or type(build.payload) is not dict
+                or type(build.amount_map) is not LocalAmountMap
+                or type(build._source_fingerprint) is not str or type(build._unit_ref) is not str
+                or type(build._response_private_literals) is not tuple
+                or not all(type(value) is str for value in build._response_private_literals)):
+            raise InboundRejected("invalid_request_binding")
+        FinalOutboundGate()._validate(build.payload)
+        if build.payload["unit_ref"] != build._unit_ref:
+            raise InboundRejected("invalid_request_binding")
+        wire_ids = tuple(region["amount_id"] for region in build.payload["regions"]
+                         if region["kind"] == "numeric_evidence")
+        if wire_ids != build.amount_map.ids:
+            raise InboundRejected("invalid_request_binding")
+        digest = hashlib.sha256()
+        digest.update(build._source_fingerprint.encode("ascii"))
+        digest.update(build._unit_ref.encode("ascii"))
+        digest.update(json.dumps(build.payload, ensure_ascii=True, sort_keys=True,
+                                 separators=(",", ":"), allow_nan=False).encode("ascii"))
+        return digest.hexdigest()
+    except InboundRejected:
+        raise
+    except Exception as error:
+        raise InboundRejected("invalid_request_binding") from error
+
+
+def _reject_response_literal(text: str, private_literals: tuple[str, ...]) -> None:
+    for literal in private_literals:
+        # Scan both literal UTF-8 and JSON-escaped form before parsing. The schema
+        # has no free-text destination, so this is defense in depth for regressions.
+        escaped = json.dumps(literal, ensure_ascii=True)[1:-1]
+        if literal and (literal in text or escaped in text):
+            raise InboundRejected("private_response_literal")
+
+
+def _strict_response_object(pairs: list[tuple[object, object]]) -> dict:
+    result: dict = {}
+    for key, value in pairs:
+        if type(key) is not str or key in result:
+            raise InboundRejected("duplicate_or_invalid_response_key")
+        result[key] = value
+    return result
+
+
+class FinalInboundGate:
+    """Strict synthetic-response boundary. It performs no network operation."""
+
+    def accept(self, build: AnonymousShadowBuild, response_bytes: object) -> AcceptedAnonymousResponse:
+        binding = _response_binding(build)
+        if type(response_bytes) is not bytes or not 0 < len(response_bytes) <= _MAX_RESPONSE_BYTES:
+            raise InboundRejected("malformed_response")
+        try:
+            text = response_bytes.decode("utf-8")
+            _reject_response_literal(text, build._response_private_literals)
+            parsed = json.loads(text, object_pairs_hook=_strict_response_object,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        except InboundRejected:
+            raise
+        except Exception as error:
+            raise InboundRejected("malformed_response") from error
+        if type(parsed) is not dict or set(parsed) != {
+            "schema_version", "unit_ref", "decision", "amount_id", "confidence",
+        }:
+            raise InboundRejected("forbidden_or_unknown_response_field")
+        if (type(parsed["schema_version"]) is not str or parsed["schema_version"] != _RESPONSE_VERSION
+                or type(parsed["unit_ref"]) is not str or parsed["unit_ref"] != build._unit_ref
+                or not _UNIT_REF.fullmatch(parsed["unit_ref"])
+                or type(parsed["decision"]) is not str
+                or parsed["decision"] not in {"select", "abstain", "unresolved"}):
+            raise InboundRejected("invalid_response_header_or_binding")
+        decision = parsed["decision"]
+        amount_id = parsed["amount_id"]
+        confidence = parsed["confidence"]
+        if decision == "select":
+            if (type(amount_id) is not str or not _AMOUNT_ID.fullmatch(amount_id)
+                    or amount_id not in build.amount_map.ids
+                    or type(confidence) is not str or confidence not in {"high", "medium", "low"}):
+                raise InboundRejected("invalid_selection")
+        elif amount_id is not None or confidence is not None:
+            raise InboundRejected("conflicting_response")
+        return AcceptedAnonymousResponse(decision, amount_id, confidence, binding)
+
+
+def rehydrate_anonymous_response(
+    build: AnonymousShadowBuild, response: AcceptedAnonymousResponse,
+) -> LocalResponseResult:
+    """Resolve an amount only after a complete, bound inbound validation."""
+    binding = _response_binding(build)
+    if (type(response) is not AcceptedAnonymousResponse or type(response._binding) is not str
+            or not secrets.compare_digest(response._binding, binding)):
+        raise InboundRejected("invalid_response_binding")
+    if response.decision == "select":
+        if (type(response.amount_id) is not str or response.amount_id not in build.amount_map.ids
+                or response.confidence not in {"high", "medium", "low"}):
+            raise InboundRejected("invalid_selection")
+        # This is the only inbound call site of LocalAmountMap.resolve. The output
+        # remains needs_review and is not passed to the production resolver.
+        return LocalResponseResult("needs_review", response.decision,
+                                   build.amount_map.resolve(response.amount_id))
+    if response.amount_id is not None or response.confidence is not None:
+        raise InboundRejected("conflicting_response")
+    return LocalResponseResult("needs_review", response.decision, None)
+
+
+def receive_synthetic_shadow_response(
+    build: AnonymousShadowBuild,
+    response_bytes: bytes | None = None,
+    *,
+    synthetic_failure: Literal["timeout", "quota_failure", "api_failure", "parser_failure"] | None = None,
+) -> InboundShadowResult:
+    """Synthetic-only convenience boundary; every failure is data-free review."""
+    failure_codes = {
+        "timeout": "synthetic_timeout",
+        "quota_failure": "synthetic_quota_failure",
+        "api_failure": "synthetic_api_failure",
+        "parser_failure": "synthetic_parser_failure",
+    }
+    if synthetic_failure is not None:
+        return InboundShadowResult("needs_review", failure_codes.get(synthetic_failure, "malformed_response"))
+    try:
+        accepted = FinalInboundGate().accept(build, response_bytes)
+        return InboundShadowResult("needs_review", "accepted_shadow_response",
+                                   rehydrate_anonymous_response(build, accepted))
+    except Exception:
+        # Do not expose parser, provider, OCR, response, or local amount details.
+        return InboundShadowResult("needs_review", "malformed_response")

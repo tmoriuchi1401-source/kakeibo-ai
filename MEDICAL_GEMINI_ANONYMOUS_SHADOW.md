@@ -74,3 +74,41 @@ Production receipt OCR, resolver, Gemini adapter, requirements, and persistence
 are unchanged.  The maintenance review point is this policy class: a Free Tier
 specification change stops the route by keeping `enabled=False`; it cannot change
 to paid behavior through configuration.
+
+## Synthetic response boundary
+
+This phase still has no provider client, SDK use, API key, HTTP operation, or
+production caller. `FinalInboundGate` accepts synthetic UTF-8 JSON bytes only;
+it is intentionally not a Gemini parser. Its exact allowlist schema is:
+
+```text
+{
+  schema_version: "medical-anonymous-shadow-response-v1",
+  unit_ref: "the outbound random unit_ref",
+  decision: "select" | "abstain" | "unresolved",
+  amount_id: "amount_A" | null,
+  confidence: "high" | "medium" | "low" | null
+}
+```
+
+Only `select` may contain an amount ID and confidence; both values must be null
+for `abstain` and `unresolved`. The amount ID must be one of that request's
+existing IDs. There are no explanation, markdown, reasoning, OCR, amount,
+metadata, filename, path, Drive ID, page, relation extension, arbitrary text,
+or nested fields. Duplicate JSON keys are rejected during parsing, and response
+size is bounded.
+
+The local response binding is a SHA-256 digest of the build's private source
+fingerprint, outbound `unit_ref`, and canonical anonymous request. It is never
+placed on the outbound payload or response. The response must also echo the
+unique random `unit_ref`, so a response built for another request is rejected.
+The gate scans raw response bytes for locally retained OCR literals and concrete
+amount renderings before parsing, including JSON-escaped text.
+
+Only a returned `AcceptedAnonymousResponse` with the matching private binding
+can enter `rehydrate_anonymous_response`. That is the sole inbound call site for
+`LocalAmountMap.resolve`; its result remains local and `needs_review`, and does
+not call or replace the production resolver. `receive_synthetic_shadow_response`
+turns malformed/empty response, unknown IDs, schema/parser errors, and synthetic
+timeout/quota/API/parser failures into data-free `needs_review` results. No
+exception, report, or repr contains source OCR or actual amounts.
