@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 
 from app.medical_gemini_shadow import (
-    FinalInboundGate, FinalOutboundGate, GeminiFreeTierShadowPolicy, InboundRejected,
-    LocalAmountMap, OutboundRejected, build_anonymous_shadow_payload,
-    prepare_anonymous_shadow, receive_synthetic_shadow_response,
-    rehydrate_anonymous_response,
+    FakeAnonymousShadowTransport, FinalInboundGate, FinalOutboundGate,
+    GeminiFreeTierShadowPolicy, InboundRejected, LocalAmountMap,
+    MedicalAnonymousShadowTransportPolicy, OutboundRejected, TransportResponse,
+    ValidatedAnonymousBytes, build_anonymous_shadow_payload, prepare_anonymous_shadow,
+    receive_synthetic_shadow_response, rehydrate_anonymous_response,
+    run_fake_shadow_transport,
 )
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 
@@ -249,3 +251,128 @@ def test_rehydration_rejects_unvalidated_or_wrong_binding_without_map_access(mon
     with pytest.raises(InboundRejected):
         rehydrate_anonymous_response(other, accepted)
     assert calls == []
+
+
+def enabled_transport_policy():
+    return MedicalAnonymousShadowTransportPolicy.from_setting("true")
+
+
+def test_transport_kill_switch_is_default_false_unset_and_malformed_without_invocation():
+    build = safe_build()
+    source = observation([row("領収金額 4321円")])
+    for policy in (MedicalAnonymousShadowTransportPolicy(),
+                   MedicalAnonymousShadowTransportPolicy.from_setting(None),
+                   MedicalAnonymousShadowTransportPolicy.from_setting("TRUE"),
+                   MedicalAnonymousShadowTransportPolicy.from_setting(True)):
+        fake = FakeAnonymousShadowTransport(TransportResponse("ok", "application/json", response(build)))
+        result = run_fake_shadow_transport(build, source, fake, policy)
+        assert result.reason_code == "disabled"
+        assert result.local_result is None
+        assert fake.invocations == 0
+        assert "4321" not in repr(result)
+
+
+def test_transport_policy_is_dedicated_and_fixed_to_no_feature_free_tier_route():
+    policy = enabled_transport_policy()
+    assert policy.transport_enabled
+    assert policy.model == "gemini-3.1-flash-lite"
+    assert not any((policy.allow_tools, policy.allow_grounding, policy.allow_caching,
+                    policy.allow_batch, policy.allow_priority, policy.allow_retry,
+                    policy.allow_fallback))
+    assert not MedicalAnonymousShadowTransportPolicy(enabled=True, model="gemini-latest").transport_enabled
+    assert not MedicalAnonymousShadowTransportPolicy(enabled=True, allow_retry=True).transport_enabled
+
+
+def test_enabled_fake_transport_receives_only_validated_bytes_and_one_invocation():
+    build = safe_build()
+    fake = FakeAnonymousShadowTransport(TransportResponse("ok", "application/json", response(build)))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == "accepted_shadow_response"
+    assert fake.invocations == 1
+    assert len(fake.received) == 1 and type(fake.received[0]) is ValidatedAnonymousBytes
+    assert "4321" not in repr(fake.received[0])
+    with pytest.raises(TypeError):
+        fake.send(build)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        fake.send(observation([row("領収金額 4321円")]))  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("status,reason", [
+    ("timeout", "timeout"), ("quota", "quota"), ("authentication", "authentication"),
+    ("unavailable", "unavailable"), ("transport_error", "transport_error"),
+])
+def test_transport_failures_are_data_free_and_never_retry(status, reason):
+    build = safe_build()
+    fake = FakeAnonymousShadowTransport(TransportResponse(status))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == reason
+    assert result.local_result is None and fake.invocations == 1
+    assert "4321" not in repr(result)
+
+
+def test_transport_exception_is_redacted_and_never_retried():
+    build = safe_build()
+    fake = FakeAnonymousShadowTransport(failure=RuntimeError("領収金額 4321円 C:/private/receipt.pdf"))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == "transport_error" and fake.invocations == 1
+    assert "4321" not in repr(result)
+    assert "receipt" not in repr(result)
+
+
+@pytest.mark.parametrize("content_type,body,reason", [
+    ("text/html", b"<html>private</html>", "invalid_content_type"),
+    (None, b"{}", "invalid_content_type"),
+    ("application/json; charset=latin-1", b"{}", "invalid_content_type"),
+    ("application/json", b"{" + b" " * 4096 + b"}", "response_too_large"),
+    ("application/json", b'\xff', "invalid_utf8"),
+    ("application/json", b"```json\n{}\n```", "malformed_response"),
+    ("application/json", b"explanation {}", "malformed_response"),
+    ("application/json", b"{} trailing", "malformed_response"),
+])
+def test_transport_response_format_boundary_fails_closed(content_type, body, reason):
+    build = safe_build()
+    fake = FakeAnonymousShadowTransport(TransportResponse("ok", content_type, body))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == reason and result.local_result is None
+    assert fake.invocations == 1
+
+
+def test_transport_response_privacy_duplicate_binding_and_rehydration_boundaries(monkeypatch):
+    build = safe_build()
+    source = observation([row("領収金額 4321円")])
+    calls = []
+    monkeypatch.setattr(LocalAmountMap, "resolve", lambda *args: calls.append(args))
+    duplicate = (
+        b'{"schema_version":"medical-anonymous-shadow-response-v1","unit_ref":"'
+        + build.payload["unit_ref"].encode("ascii")
+        + b'","decision":"select","amount_id":"amount_A","amount_id":"amount_A","confidence":"high"}'
+    )
+    cases = [
+        response(build, explanation="領収金額 4321円"),
+        response(build, amount_id="4321"),
+        response(build, unit_ref="unit_abcdefghijklmnopqrstuvwxyz"),
+        duplicate,
+    ]
+    for body in cases:
+        fake = FakeAnonymousShadowTransport(TransportResponse("ok", "application/json", body))
+        result = run_fake_shadow_transport(build, source, fake, enabled_transport_policy())
+        assert result.reason_code in {"privacy_rejected", "binding_rejected", "validation_rejected",
+                                      "malformed_response"}
+        assert result.local_result is None and fake.invocations == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize("surface", ["38,430", "38.430", "３８４３０", "3 8 4 3 0",
+                                    "\\u0033\\u0038\\u0034\\u0033\\u0030"])
+def test_transport_gate_rejects_amount_representation_variants_before_semantics(surface):
+    build = large_amount_build()
+    fake = FakeAnonymousShadowTransport(
+        TransportResponse("ok", "application/json", response(build, amount_id=surface)))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 38430円")]), fake, enabled_transport_policy())
+    assert result.reason_code == "privacy_rejected"
+    assert result.local_result is None and fake.invocations == 1

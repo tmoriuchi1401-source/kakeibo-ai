@@ -115,3 +115,56 @@ not call or replace the production resolver. `receive_synthetic_shadow_response`
 turns malformed/empty response, unknown IDs, schema/parser errors, and synthetic
 timeout/quota/API/parser failures into data-free `needs_review` results. No
 exception, report, or repr contains source OCR or actual amounts.
+
+## Synthetic transport boundary and kill switch
+
+There is still **no network implementation**. `FakeAnonymousShadowTransport` is
+only a test double: it has no HTTP, SDK, URL, header, key, retry, telemetry, or
+model call. The future transport protocol accepts only a
+`ValidatedAnonymousBytes` wrapper. `FinalOutboundGate.validate_for_transport`
+creates that wrapper after canonical serialization and the final private-literal
+and numeric scans. Normal callers have no supported API to hand an observation,
+raw dict, `LocalAmountMap`, image/PDF, filename, path, Drive ID, page number,
+metadata, actual amount, or production state to transport.
+
+Python is not a capability-secure runtime: hostile code executing in the same
+process can inspect private attributes or module globals. The wrapper therefore
+prevents accidental architectural bypasses and is enforced with exact runtime
+type checks, but is not a sandbox against arbitrary in-process code. A real
+deployment must additionally keep untrusted plugins/code out of this process.
+
+`MedicalAnonymousShadowTransportPolicy` is independent from generic Gemini and
+production settings. It is default false; `from_setting` enables only the exact
+local value `"true"`, while unset, booleans, and malformed values are disabled.
+`run_fake_shadow_transport` checks this kill switch before source binding, byte
+preparation, or transport invocation. A real caller must retain that ordering
+before API-key lookup as well. Disabled results are data-free `needs_review` and
+the transport callback is not invoked.
+
+The policy freezes the candidate model to exact stable
+`gemini-3.1-flash-lite`; aliases such as `latest` are not allowed. It represents
+the required no-tools, no-grounding, no-caching, no-batch, no-priority, no-retry,
+and no-fallback rules locally. This is not proof of Free Tier at runtime: billing,
+quota, and account tier must still be independently verified before any real
+request, as documented in the preflight review.
+
+## Transport response format gate
+
+Before `FinalInboundGate` sees a response, `TransportResponseGate` accepts a
+minimal synthetic `TransportResponse` only when its status is `ok`, its MIME is
+exactly `application/json` or `application/json; charset=utf-8`, its body is
+nonempty bytes at most 4 KiB, and strict UTF-8 decoding succeeds. Missing MIME,
+other MIME/charset values, oversized bodies, and replacement decoding are
+rejected. The gate scans raw decoded bytes for private OCR literals and concrete
+amount surfaces before parsing; then it requires one complete JSON document using
+duplicate-key rejection. Markdown fences, prose prefixes/suffixes, and trailing
+garbage fail before semantic parsing.
+
+Only opaque `ValidatedTransportResponse` bytes are passed to the strict semantic
+inbound gate. Fixed data-free result codes cover `disabled`, `timeout`, `quota`,
+`authentication`, `unavailable`, `transport_error`, `invalid_content_type`,
+`response_too_large`, `invalid_utf8`, `malformed_response`, `privacy_rejected`,
+`binding_rejected`, and `validation_rejected`. Raw exceptions, request/response
+bodies, headers, keys, OCR, amounts, paths, and filenames are never put in a
+result or repr. Each request has exactly one fake transport invocation; no retry,
+model/provider fallback, paid route, or production apply path exists.

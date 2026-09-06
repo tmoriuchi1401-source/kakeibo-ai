@@ -14,7 +14,7 @@ import math
 import re
 import secrets
 import unicodedata
-from typing import Literal
+from typing import Literal, Protocol
 
 from .medical_layout_shadow import PageFrame, observe_layout
 from .medical_ocr_observation_shadow import OcrObservation
@@ -30,6 +30,9 @@ _AMOUNT_ID = re.compile(r"amount_[A-Z]+\Z")
 _MAX_REGIONS = 128
 _MAX_RESPONSE_BYTES = 4096
 _NUMERIC_SURFACE = re.compile(r"(?<![A-Za-z0-9])[0-9０-９][0-9０-９,，.．\s]*")
+_TRANSPORT_CAPABILITY = object()
+_FREE_TIER_MODEL = "gemini-3.1-flash-lite"
+_JSON_CONTENT_TYPES = frozenset({"application/json", "application/json; charset=utf-8"})
 
 
 class OutboundRejected(ValueError):
@@ -38,6 +41,85 @@ class OutboundRejected(ValueError):
 
 class InboundRejected(ValueError):
     """A fixed, data-free failure for unsafe provider-response handoff."""
+
+
+class TransportResponseRejected(ValueError):
+    """A fixed, data-free failure before semantic inbound parsing."""
+
+
+class ValidatedAnonymousBytes:
+    """Opaque canonical bytes issued only by the final outbound gate.
+
+    This is a normal-code boundary, not cryptographic capability security: Python
+    code in the same process can introspect private names.  The transport accepts
+    this exact type only, so raw observations and mappings have no supported path.
+    """
+
+    __slots__ = ("__bytes",)
+
+    def __init__(self, value: bytes, token: object) -> None:
+        if token is not _TRANSPORT_CAPABILITY or type(value) is not bytes:
+            raise TypeError("validated_anonymous_bytes_required")
+        self.__bytes = value
+
+    def __repr__(self) -> str:
+        return "ValidatedAnonymousBytes()"
+
+    def _for_transport(self) -> bytes:
+        return self.__bytes
+
+
+class ValidatedTransportResponse:
+    """Opaque response bytes that passed transport-format and privacy checks."""
+
+    __slots__ = ("__bytes",)
+
+    def __init__(self, value: bytes, token: object) -> None:
+        if token is not _TRANSPORT_CAPABILITY or type(value) is not bytes:
+            raise TypeError("validated_transport_response_required")
+        self.__bytes = value
+
+    def __repr__(self) -> str:
+        return "ValidatedTransportResponse()"
+
+    def _for_inbound_gate(self) -> bytes:
+        return self.__bytes
+
+
+@dataclass(frozen=True)
+class TransportResponse:
+    """Minimal synthetic transport result; body stays hidden from repr."""
+
+    status: Literal["ok", "timeout", "quota", "authentication", "unavailable", "transport_error"]
+    content_type: str | None = None
+    body: bytes | None = field(default=None, repr=False)
+
+
+class AnonymousShadowTransport(Protocol):
+    """The future sender's only supported input is validated anonymous bytes."""
+
+    def send(self, request: ValidatedAnonymousBytes) -> TransportResponse: ...
+
+
+@dataclass
+class FakeAnonymousShadowTransport:
+    """Synthetic test double. It has no network, key, model, or HTTP behavior."""
+
+    response: TransportResponse | None = None
+    failure: Exception | None = field(default=None, repr=False)
+    invocations: int = 0
+    received: list[ValidatedAnonymousBytes] = field(default_factory=list, repr=False)
+
+    def send(self, request: ValidatedAnonymousBytes) -> TransportResponse:
+        if type(request) is not ValidatedAnonymousBytes:
+            raise TypeError("validated_anonymous_bytes_required")
+        self.invocations += 1
+        self.received.append(request)
+        if self.failure is not None:
+            raise self.failure
+        if type(self.response) is not TransportResponse:
+            raise RuntimeError("synthetic_transport_response_missing")
+        return self.response
 
 
 @dataclass(frozen=True)
@@ -104,6 +186,9 @@ class InboundShadowResult:
     reason_code: Literal[
         "accepted_shadow_response", "malformed_response", "synthetic_timeout",
         "synthetic_quota_failure", "synthetic_api_failure", "synthetic_parser_failure",
+        "disabled", "timeout", "quota", "authentication", "unavailable",
+        "transport_error", "invalid_content_type", "response_too_large", "invalid_utf8",
+        "privacy_rejected", "binding_rejected", "validation_rejected",
     ]
     local_result: LocalResponseResult | None = field(default=None, repr=False)
 
@@ -337,6 +422,16 @@ class FinalOutboundGate:
                                        "private_numeric_literal_detected")
         return encoded
 
+    def validate_for_transport(
+        self, payload: object, private_literals: tuple[str, ...] = (), *,
+        private_amounts: tuple[int, ...] = (),
+    ) -> ValidatedAnonymousBytes:
+        """Issue the only supported request wrapper for a future transport."""
+        return ValidatedAnonymousBytes(
+            self.serialize(payload, private_literals, private_amounts=private_amounts),
+            _TRANSPORT_CAPABILITY,
+        )
+
     def _validate(self, payload: object) -> None:
         if type(payload) is not dict or set(payload) != {"schema_version", "unit_ref", "mode", "state", "structure_state", "competing_structure", "regions", "relations"}:
             raise OutboundRejected("forbidden_or_unknown_field")
@@ -426,6 +521,59 @@ class GeminiFreeTierShadowPolicy:
         )
 
 
+@dataclass(frozen=True)
+class MedicalAnonymousShadowTransportPolicy:
+    """Dedicated default-false gate and fixed Free-Tier transport constraints.
+
+    ``from_setting`` deliberately parses an explicit local setting without reading
+    environment variables.  A future caller must check this policy before key
+    lookup, outbound preparation, or transport invocation.
+    """
+
+    enabled: bool = False
+    model: str = _FREE_TIER_MODEL
+    allow_tools: bool = False
+    allow_grounding: bool = False
+    allow_caching: bool = False
+    allow_batch: bool = False
+    allow_priority: bool = False
+    allow_retry: bool = False
+    allow_fallback: bool = False
+
+    @classmethod
+    def from_setting(cls, value: object | None) -> "MedicalAnonymousShadowTransportPolicy":
+        # Only this exact opt-in spelling enables the isolated shadow route.
+        return cls(enabled=value == "true")
+
+    @property
+    def transport_enabled(self) -> bool:
+        return (
+            type(self.enabled) is bool and self.enabled
+            and type(self.model) is str and self.model == _FREE_TIER_MODEL
+            and all(type(value) is bool and not value for value in (
+                self.allow_tools, self.allow_grounding, self.allow_caching,
+                self.allow_batch, self.allow_priority, self.allow_retry,
+                self.allow_fallback,
+            ))
+        )
+
+
+def _validated_request_for_transport(
+    build: AnonymousShadowBuild, observation: OcrObservation,
+) -> ValidatedAnonymousBytes:
+    """Bind source locally, then wrap bytes issued by the final outbound gate."""
+    if type(build) is not AnonymousShadowBuild or type(observation) is not OcrObservation:
+        raise OutboundRejected("invalid_shadow_handoff")
+    if (type(build._source_fingerprint) is not str or type(build._unit_ref) is not str
+            or not secrets.compare_digest(build._source_fingerprint, _observation_fingerprint(observation))
+            or type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref):
+        raise OutboundRejected("invalid_shadow_handoff")
+    return FinalOutboundGate().validate_for_transport(
+        build.payload, _private_literals(observation, build.amount_map),
+        private_amounts=tuple(value for _, value in build.amount_map._values),
+    )
+
+
 def _response_binding(build: AnonymousShadowBuild) -> str:
     """Local request/response binding; its digest is never put on either wire."""
     try:
@@ -513,6 +661,102 @@ class FinalInboundGate:
         elif amount_id is not None or confidence is not None:
             raise InboundRejected("conflicting_response")
         return AcceptedAnonymousResponse(decision, amount_id, confidence, binding)
+
+    def accept_transport_validated(
+        self, build: AnonymousShadowBuild, response: object,
+    ) -> AcceptedAnonymousResponse:
+        if type(response) is not ValidatedTransportResponse:
+            raise InboundRejected("invalid_transport_response")
+        return self.accept(build, response._for_inbound_gate())
+
+
+class TransportResponseGate:
+    """Format, privacy, and whole-JSON boundary before semantic response parsing."""
+
+    def validate(self, build: AnonymousShadowBuild, response: object) -> ValidatedTransportResponse:
+        try:
+            _response_binding(build)
+            if type(response) is not TransportResponse or response.status != "ok":
+                raise TransportResponseRejected("transport_error")
+            if type(response.content_type) is not str or response.content_type not in _JSON_CONTENT_TYPES:
+                raise TransportResponseRejected("invalid_content_type")
+            if type(response.body) is not bytes:
+                raise TransportResponseRejected("malformed_response")
+            if not 0 < len(response.body) <= _MAX_RESPONSE_BYTES:
+                raise TransportResponseRejected("response_too_large")
+            try:
+                text = response.body.decode("utf-8")
+            except UnicodeDecodeError as error:
+                raise TransportResponseRejected("invalid_utf8") from error
+            try:
+                _reject_response_literal(text, build._response_private_literals)
+                _reject_numeric_amount_surface(
+                    text, tuple(value for _, value in build.amount_map._values), InboundRejected,
+                    "private_response_numeric_literal",
+                )
+            except InboundRejected as error:
+                raise TransportResponseRejected("privacy_rejected") from error
+            try:
+                # json.loads consumes one complete JSON document; fencing, prefixes,
+                # suffixes, and trailing garbage fail here. Duplicate keys fail too.
+                json.loads(text, object_pairs_hook=_strict_response_object,
+                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+            except InboundRejected as error:
+                raise TransportResponseRejected("malformed_response") from error
+            except Exception as error:
+                raise TransportResponseRejected("malformed_response") from error
+            return ValidatedTransportResponse(response.body, _TRANSPORT_CAPABILITY)
+        except TransportResponseRejected:
+            raise
+        except InboundRejected as error:
+            raise TransportResponseRejected("binding_rejected") from error
+        except Exception as error:
+            raise TransportResponseRejected("validation_rejected") from error
+
+
+def run_fake_shadow_transport(
+    build: AnonymousShadowBuild,
+    observation: OcrObservation,
+    transport: AnonymousShadowTransport,
+    policy: MedicalAnonymousShadowTransportPolicy = MedicalAnonymousShadowTransportPolicy(),
+) -> InboundShadowResult:
+    """Synthetic-only one-shot orchestration; this function never performs I/O.
+
+    It deliberately checks the dedicated kill switch before source binding and
+    byte preparation.  It does not know keys, URLs, headers, models beyond policy,
+    retry, fallback, or any production component.
+    """
+    if type(policy) is not MedicalAnonymousShadowTransportPolicy or not policy.transport_enabled:
+        return InboundShadowResult("needs_review", "disabled")
+    try:
+        request = _validated_request_for_transport(build, observation)
+    except Exception:
+        return InboundShadowResult("needs_review", "validation_rejected")
+    try:
+        # Exactly one call site and one invocation: no retry or fallback.
+        response = transport.send(request)
+    except Exception:
+        return InboundShadowResult("needs_review", "transport_error")
+    if type(response) is not TransportResponse:
+        return InboundShadowResult("needs_review", "transport_error")
+    if response.status != "ok":
+        failures = {
+            "timeout": "timeout", "quota": "quota", "authentication": "authentication",
+            "unavailable": "unavailable", "transport_error": "transport_error",
+        }
+        return InboundShadowResult("needs_review", failures.get(response.status, "transport_error"))
+    try:
+        checked = TransportResponseGate().validate(build, response)
+        accepted = FinalInboundGate().accept_transport_validated(build, checked)
+        return InboundShadowResult("needs_review", "accepted_shadow_response",
+                                   rehydrate_anonymous_response(build, accepted))
+    except TransportResponseRejected as error:
+        return InboundShadowResult("needs_review", str(error))
+    except InboundRejected as error:
+        code = "binding_rejected" if "binding" in str(error) else "validation_rejected"
+        return InboundShadowResult("needs_review", code)
+    except Exception:
+        return InboundShadowResult("needs_review", "validation_rejected")
 
 
 def rehydrate_anonymous_response(
