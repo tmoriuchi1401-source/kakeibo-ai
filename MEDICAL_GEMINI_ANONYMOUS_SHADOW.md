@@ -151,11 +151,13 @@ request, as documented in the preflight review.
 ## Transport response format gate
 
 Before `FinalInboundGate` sees a response, `TransportResponseGate` accepts a
-minimal synthetic `TransportResponse` only when its status is `ok`, its MIME is
-exactly `application/json` or `application/json; charset=utf-8`, its body is
-nonempty bytes at most 4 KiB, and strict UTF-8 decoding succeeds. Missing MIME,
-other MIME/charset values, oversized bodies, and replacement decoding are
-rejected. The gate scans raw decoded bytes for private OCR literals and concrete
+minimal synthetic `TransportResponse` only when its status is `ok` and its HTTP
+Content-Type semantically parses as `application/json`. Type/subtype and the
+optional `charset` parameter are case-insensitive; the optional charset may be a
+quoted string but must normalize to UTF-8. Unknown, duplicate, malformed, or
+non-UTF-8 parameters fail closed. Its body must be nonempty bytes at most 4 KiB,
+and strict UTF-8 decoding must succeed. Missing MIME, other media types/charset
+values, oversized bodies, and replacement decoding are rejected. The gate scans raw decoded bytes for private OCR literals and concrete
 amount surfaces before parsing; then it requires one complete JSON document using
 duplicate-key rejection. Markdown fences, prose prefixes/suffixes, and trailing
 garbage fail before semantic parsing.

@@ -378,6 +378,47 @@ def test_transport_response_format_boundary_fails_closed(content_type, body, rea
     assert fake.invocations == 1
 
 
+@pytest.mark.parametrize("content_type", [
+    "application/json",
+    "application/json; charset=utf-8",
+    "application/json; charset=UTF-8",
+    "application/json;charset=utf-8",
+    'Application/JSON; Charset="utf-8"',
+])
+def test_transport_content_type_semantic_json_utf8_variants_are_accepted(content_type):
+    build = safe_build()
+    fake = FakeAnonymousShadowTransport(TransportResponse("ok", content_type, response(build)))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == "accepted_shadow_response"
+    assert result.local_result is not None and fake.invocations == 1
+
+
+@pytest.mark.parametrize("content_type", [
+    "text/plain",
+    "text/json",
+    "application/xml",
+    "application/json; charset=shift_jis",
+    "application/json; charset=iso-8859-1",
+    "application/jsonx",
+    "application/json; charset=utf-8evil",
+    "application/json; charset=utf-8; charset=UTF-8",
+    "application/json; boundary=untrusted",
+    "application/json; charset=utf-8; boundary=untrusted",
+    "application/json; charset",
+    "application/json; charset=\"utf-8\";",
+    "application/json\nX-Injected: value",
+])
+def test_transport_content_type_malformed_or_unallowlisted_variants_fail_closed(content_type):
+    build = safe_build()
+    # Invalid bytes demonstrate that MIME rejection happens before UTF-8 parsing.
+    fake = FakeAnonymousShadowTransport(TransportResponse("ok", content_type, b"\xff"))
+    result = run_fake_shadow_transport(
+        build, observation([row("領収金額 4321円")]), fake, enabled_transport_policy())
+    assert result.reason_code == "invalid_content_type"
+    assert result.local_result is None and fake.invocations == 1
+
+
 def test_transport_response_privacy_duplicate_binding_and_rehydration_boundaries(monkeypatch):
     build = safe_build()
     source = observation([row("領収金額 4321円")])

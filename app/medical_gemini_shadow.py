@@ -36,7 +36,7 @@ _MAX_RESPONSE_BYTES = 4096
 _NUMERIC_SURFACE = re.compile(r"(?<![A-Za-z0-9])[0-9０-９][0-9０-９,，.．\s]*")
 _TRANSPORT_CAPABILITY = object()
 _FREE_TIER_MODEL = "gemini-3.1-flash-lite"
-_JSON_CONTENT_TYPES = frozenset({"application/json", "application/json; charset=utf-8"})
+_HTTP_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 _GEMINI_GENERATE_CONTENT_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "gemini-3.1-flash-lite:generateContent"
@@ -235,6 +235,46 @@ def _strict_json_loads(raw: bytes) -> object:
     if type(raw) is not bytes:
         raise ValueError()
     return json.loads(raw.decode("utf-8"), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+
+
+def _is_allowed_json_content_type(value: object) -> bool:
+    """Accept only semantic ``application/json`` with an optional UTF-8 charset.
+
+    HTTP media types and parameter names are case-insensitive.  This deliberately
+    does not use prefix matching or accept arbitrary extension parameters: every
+    present parameter must be the sole ``charset`` parameter and must normalize
+    to UTF-8.  Invalid syntax, duplicate parameters, quoted escapes, and header
+    control characters therefore fail closed without exposing the input value.
+    """
+    if type(value) is not str or "\r" in value or "\n" in value:
+        return False
+    parts = value.split(";")
+    media_type = parts[0].strip(" \t")
+    if media_type.casefold() != "application/json":
+        return False
+    seen: set[str] = set()
+    for raw_parameter in parts[1:]:
+        parameter = raw_parameter.strip(" \t")
+        if not parameter or parameter.count("=") != 1:
+            return False
+        raw_name, raw_value = parameter.split("=", 1)
+        name = raw_name.strip(" \t").casefold()
+        parameter_value = raw_value.strip(" \t")
+        if not _HTTP_TOKEN.fullmatch(raw_name.strip(" \t")) or not parameter_value:
+            return False
+        if parameter_value.startswith('"') or parameter_value.endswith('"'):
+            if (len(parameter_value) < 2 or not parameter_value.startswith('"')
+                    or not parameter_value.endswith('"')):
+                return False
+            parameter_value = parameter_value[1:-1]
+            if "\\" in parameter_value or '"' in parameter_value:
+                return False
+        elif not _HTTP_TOKEN.fullmatch(parameter_value):
+            return False
+        if name in seen or name != "charset" or parameter_value.casefold() != "utf-8":
+            return False
+        seen.add(name)
+    return True
 
 
 def _extract_gemini_response_text(raw: bytes) -> bytes:
@@ -885,7 +925,7 @@ class TransportResponseGate:
             _response_binding(build)
             if type(response) is not TransportResponse or response.status != "ok":
                 raise TransportResponseRejected("transport_error")
-            if type(response.content_type) is not str or response.content_type not in _JSON_CONTENT_TYPES:
+            if not _is_allowed_json_content_type(response.content_type):
                 raise TransportResponseRejected("invalid_content_type")
             if type(response.body) is not bytes:
                 raise TransportResponseRejected("malformed_response")
