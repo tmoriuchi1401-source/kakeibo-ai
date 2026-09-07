@@ -247,6 +247,13 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
                    if (relation := _strong_relation(label, item.region)) is not None]
         if not related:
             continue
+        # A same-value observation with only an uncertain relation is still
+        # an unresolved competitor.  It must block the group; otherwise a
+        # strong duplicate could incorrectly turn incomplete geometry into a
+        # complete positive.
+        if uncertain_positive:
+            competitor_blocks += 1
+            continue
         relations = {relation for _, relation in related}
         if len(relations) != 1:
             competitor_blocks += 1

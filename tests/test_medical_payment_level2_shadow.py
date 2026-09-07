@@ -110,6 +110,17 @@ def test_uncertain_positive_relation_never_creates_candidate():
     assert result.payment_role_evidence_completeness == "unresolved"
 
 
+def test_uncertain_equal_value_duplicate_blocks_strong_duplicate():
+    source = observation(region("支払額", 100, 100, 80, 20),
+                         region("1234", 100, 120 + 0.75 * 20, 80, 20),
+                         region("1234", 100, 120 + 2.5 * 20, 80, 20))
+    result = evaluate_level2_payment_shadow(source)
+    assert not result.candidates
+    assert result.blocked_competitor_count >= 1
+    assert result.unresolved_competitor_count >= 1
+    assert result.payment_role_evidence_completeness == "unresolved"
+
+
 @pytest.mark.parametrize("competitor_gap", [2.1892, 2.6364])
 def test_materialization_boundary_variants_both_retain_uncertain_competitor(competitor_gap):
     source = observation(region("領収金額", 100, 100, 100, 20),
