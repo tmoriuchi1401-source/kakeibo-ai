@@ -1,4 +1,4 @@
-"""Anonymous, shadow-only medical payloads; this module never sends a request.
+"""Minimal v2 medical shadow boundary; live I/O requires explicit injection.
 
 The input observation is private local OCR evidence.  The only value that may
 cross the prospective Gemini boundary is the JSON returned by
@@ -10,29 +10,34 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
-import math
 import os
 import re
 import secrets
 import socket
+import string
+import threading
 import unicodedata
 from typing import Callable, Literal, Protocol
 from urllib.error import HTTPError
-from urllib.request import Request as UrlRequest, urlopen
+from urllib.request import (
+    Request as UrlRequest, OpenerDirector, HTTPSHandler, HTTPRedirectHandler,
+    HTTPDefaultErrorHandler, HTTPErrorProcessor,
+)
 
-from .medical_layout_shadow import PageFrame, observe_layout
 from .medical_ocr_observation_shadow import OcrObservation
 from .medical_payment_evidence import _NUMERIC_RUN, _scope
-from .medical_receipt_privacy import _StructuredOcrToken, _compact_ocr_token, _payment_labels_on_line, _structured_amount
+from .medical_receipt_privacy import _compact_ocr_token, _payment_labels_on_line, _structured_amount
 
 
-_VERSION = "medical-anonymous-shadow-v1"
-_RESPONSE_VERSION = "medical-anonymous-shadow-response-v1"
-_UNIT_REF = re.compile(r"unit_[A-Za-z0-9_-]{24,64}\Z")
-_REGION_ID = re.compile(r"region_[A-Z]+\Z")
-_AMOUNT_ID = re.compile(r"amount_[A-Z]+\Z")
+_VERSION = "medical-anonymous-shadow-v2"
+_RESPONSE_VERSION = "medical-anonymous-shadow-response-v2"
+_UNIT_REF = re.compile(r"unit_[A-Za-z]{32}\Z")
+_MAX_CANDIDATES = 4
+_AMOUNT_ID = re.compile(r"candidate_[A-Za-z]{32}\Z")
 _MAX_REGIONS = 128
 _MAX_RESPONSE_BYTES = 4096
+_MAX_ENVELOPE_BYTES = 32768
+_MAX_USED_REQUESTS = 4096
 _NUMERIC_SURFACE = re.compile(r"(?<![A-Za-z0-9])[0-9０-９][0-9０-９,，.．\s]*")
 _TRANSPORT_CAPABILITY = object()
 _FREE_TIER_MODEL = "gemini-3.1-flash-lite"
@@ -45,6 +50,10 @@ _HTTP_TIMEOUT_SECONDS = 10
 _STATIC_SHADOW_INSTRUCTION = (
     "Return only one JSON object matching the supplied response schema. "
     "Use only the anonymous JSON evidence in the adjacent part. "
+    "Candidate IDs carry no rank, confidence, geometry, or comparative evidence. "
+    "If there is exactly one candidate, select it or abstain. If there are multiple "
+    "candidates, return abstain or unresolved with null amount_id and confidence. "
+    "For select, put the candidate_id in amount_id. Echo the unit_ref. "
     "Do not include explanation, markdown, reasoning, metadata, or extra fields."
 )
 _SHADOW_RESPONSE_SCHEMA = {
@@ -90,27 +99,93 @@ class _ApiKeyHandle:
         return self.__value
 
 
+class _SingleUse:
+    """Shared by copied wrappers; claiming is atomic and is never undone."""
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._used = False
+
+    def claim(self) -> bool:
+        with self._lock:
+            if self._used:
+                return False
+            self._used = True
+            return True
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce__(self):
+        raise TypeError("capability_not_serializable")
+
+    def __repr__(self) -> str:
+        return "SingleUse()"
+
+
+class _ReplayRegistry:
+    """Process-local, bounded, non-evicting replay ledger. Full means fail closed."""
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._units: set[str] = set()
+        self._sources: set[str] = set()
+
+    def claim(self, unit: str, source: str | None) -> bool:
+        with self._lock:
+            if (unit in self._units or (source is not None and source in self._sources)
+                    or len(self._units) >= _MAX_USED_REQUESTS):
+                return False
+            self._units.add(unit)
+            if source is not None:
+                self._sources.add(source)
+            return True
+
+
+_REPLAY_REGISTRY = _ReplayRegistry()
+
+
 class ValidatedAnonymousBytes:
-    """Opaque canonical bytes issued only by the final outbound gate.
+    """Gate-issued v2 bytes with shared, local-only send/HTTP capabilities.
 
-    This is a normal-code boundary, not cryptographic capability security: Python
-    code in the same process can introspect private names.  The transport accepts
-    this exact type only, so raw observations and mappings have no supported path.
+    This prevents accidental reuse, not hostile introspection in the same Python
+    process. Copies share guards. Rebuilding the same source is also refused by
+    the process-local replay ledger after its first attempted send.
     """
+    __slots__ = ("__bytes", "__source", "__send_use", "__http_use")
 
-    __slots__ = ("__bytes",)
-
-    def __init__(self, value: bytes, token: object) -> None:
+    def __init__(self, value: bytes, token: object, *, source: str | None = None,
+                 send_use: _SingleUse | None = None, http_use: _SingleUse | None = None) -> None:
         if token is not _TRANSPORT_CAPABILITY or type(value) is not bytes:
             raise TypeError("validated_anonymous_bytes_required")
         self.__bytes = value
+        self.__source = source
+        self.__send_use = send_use if send_use is not None else _SingleUse()
+        self.__http_use = http_use if http_use is not None else _SingleUse()
 
     def __repr__(self) -> str:
         return "ValidatedAnonymousBytes()"
 
+    def __reduce__(self):
+        raise TypeError("capability_not_serializable")
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
     def _for_transport(self) -> bytes:
         return self.__bytes
 
+    def _http_guard(self) -> _SingleUse:
+        return self.__http_use
+
+    def _claim_send(self) -> bool:
+        payload = _strict_json_loads(self.__bytes)
+        return (self.__send_use.claim()
+                and _REPLAY_REGISTRY.claim(payload["unit_ref"], self.__source))
 
 class ValidatedTransportResponse:
     """Opaque response bytes that passed transport-format and privacy checks."""
@@ -133,8 +208,12 @@ class ValidatedTransportResponse:
 class TransportResponse:
     """Minimal synthetic transport result; body stays hidden from repr."""
 
-    status: Literal["ok", "timeout", "quota", "authentication", "unavailable", "transport_error", "malformed_response"]
-    content_type: str | None = None
+    status: Literal[
+        "ok", "timeout", "quota", "authentication", "unavailable", "transport_error",
+        "malformed_response", "invalid_content_type", "response_too_large",
+        "invalid_utf8", "redirect_rejected", "request_reused", "validation_rejected",
+    ]
+    content_type: str | None = field(default=None, repr=False)
     body: bytes | None = field(default=None, repr=False)
 
 
@@ -156,6 +235,8 @@ class FakeAnonymousShadowTransport:
     def send(self, request: ValidatedAnonymousBytes) -> TransportResponse:
         if type(request) is not ValidatedAnonymousBytes:
             raise TypeError("validated_anonymous_bytes_required")
+        if not request._claim_send():
+            return TransportResponse("request_reused")
         self.invocations += 1
         self.received.append(request)
         if self.failure is not None:
@@ -174,6 +255,7 @@ class HttpRequest:
     headers: tuple[tuple[str, str], ...] = field(repr=False)
     body: bytes = field(repr=False)
     timeout_seconds: int
+    _attempt: _SingleUse = field(default_factory=_SingleUse, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -181,8 +263,9 @@ class HttpResponse:
     """Minimal executor output; no response headers beyond Content-Type survive."""
 
     status_code: int
-    content_type: str | None = None
+    content_type: str | None = field(default=None, repr=False)
     body: bytes = field(default=b"", repr=False)
+    failure: str | None = field(default=None, repr=False)
 
 
 class HttpExecutor(Protocol):
@@ -202,39 +285,85 @@ class EnvironmentMedicalShadowApiKeyProvider:
     """Lazy environment boundary. Nothing reads it until transport preflight."""
 
     getenv: Callable[[str], str | None] = field(default=os.getenv, repr=False)
-    variable_name: str = "MEDICAL_GEMINI_SHADOW_API_KEY"
+    variable_name: str = field(default="MEDICAL_GEMINI_SHADOW_API_KEY", init=False, repr=False)
 
     def get(self) -> str | None:
         value = self.getenv(self.variable_name)
         return value if type(value) is str and value.strip() else None
 
 
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """Never constructs a redirected request or passes credentials to a new URL."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise HTTPError(req.full_url, code, "redirect_rejected", {}, None)
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        # Do not read Location, resolve a URL, drain a body, or invoke parent.open.
+        raise HTTPError(req.full_url, code, "redirect_rejected", {}, fp)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _isolated_http_opener():
+    # Explicit handlers: no global opener, proxy, auth retry, cookies or HTTP
+    # downgrade. HTTPSHandler performs one HTTP request; redirects are rejected.
+    opener = OpenerDirector()
+    for handler in (HTTPSHandler(debuglevel=0), _RejectRedirectHandler(),
+                    HTTPDefaultErrorHandler(), HTTPErrorProcessor()):
+        opener.add_handler(handler)
+    return opener
+
+
 class UrllibHttpExecutor:
-    """One-shot stdlib REST executor, never instantiated automatically.
+    """At most one HTTP attempt per request capability, with bounded reads.
 
-    ``urlopen`` has one bounded socket timeout (10 seconds) covering connection
-    and reads. It has no retry configuration, retry adapter, SDK, tracing, or log.
+    A failed attempt consumes the capability. No redirect, proxy/auth handler,
+    retry or fallback can initiate another HTTP request. DNS/TCP address probes
+    are not additional HTTP requests. Only explicit callers create this executor.
     """
-
     def execute(self, request: HttpRequest) -> HttpResponse:
-        if type(request) is not HttpRequest or request.method != "POST":
-            raise TypeError("invalid_http_request")
+        if (type(request) is not HttpRequest or request.method != "POST"
+                or request.url != _GEMINI_GENERATE_CONTENT_URL
+                or request.timeout_seconds != _HTTP_TIMEOUT_SECONDS):
+            return HttpResponse(0, failure="transport_error")
+        if not request._attempt.claim():
+            return HttpResponse(0, failure="request_reused")
         try:
             wire_request = UrlRequest(request.url, data=request.body, method="POST",
                                       headers=dict(request.headers))
-            with urlopen(wire_request, timeout=request.timeout_seconds) as handle:  # noqa: S310
-                return HttpResponse(handle.status, handle.headers.get("Content-Type"), handle.read())
+            with _isolated_http_opener().open(wire_request, timeout=request.timeout_seconds) as handle:
+                status = handle.status
+                if type(status) is not int or not 200 <= status < 300:
+                    return HttpResponse(status if type(status) is int else 0)
+                content_types = handle.headers.get_all("Content-Type", [])
+                if (len(content_types) != 1
+                        or not _is_allowed_json_content_type(content_types[0])):
+                    return HttpResponse(status, failure="invalid_content_type")
+                # No compression decoder (nor decompression bomb) on this route.
+                encodings = handle.headers.get_all("Content-Encoding", [])
+                if encodings and encodings != ["identity"]:
+                    return HttpResponse(status, failure="malformed_response")
+                body = handle.read(_MAX_ENVELOPE_BYTES + 1)
+                if type(body) is not bytes or len(body) > _MAX_ENVELOPE_BYTES:
+                    return HttpResponse(status, failure="response_too_large")
+                return HttpResponse(status, "application/json", body)
         except HTTPError as error:
-            # HTTP status is useful for fixed mapping; error body is deliberately
-            # discarded, so a provider's diagnostic text cannot leave this layer.
-            return HttpResponse(error.code, error.headers.get("Content-Type") if error.headers else None)
-
+            status = error.code
+            try:
+                error.close()  # Never read/log the error body or its raw headers.
+            except Exception:
+                pass
+            return HttpResponse(status if type(status) is int else 0)
+        except (TimeoutError, socket.timeout):
+            return HttpResponse(0, failure="timeout")
+        except Exception:
+            return HttpResponse(0, failure="transport_error")
 
 def _strict_json_loads(raw: bytes) -> object:
     """Decode provider wrapper strictly without retaining it outside transport."""
     if type(raw) is not bytes:
         raise ValueError()
-    return json.loads(raw.decode("utf-8"), parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=_strict_response_object, parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
 
 
 def _is_allowed_json_content_type(value: object) -> bool:
@@ -247,6 +376,8 @@ def _is_allowed_json_content_type(value: object) -> bool:
     control characters therefore fail closed without exposing the input value.
     """
     if type(value) is not str or "\r" in value or "\n" in value:
+        return False
+    if len(value) > 1024 or not value.isascii():
         return False
     parts = value.split(";")
     media_type = parts[0].strip(" \t")
@@ -290,14 +421,15 @@ def _extract_gemini_response_text(raw: bytes) -> bytes:
         if type(content) is not dict:
             raise ValueError()
         parts = content.get("parts")
-        if type(parts) is not list or len(parts) != 1 or type(parts[0]) is not dict:
+        if (type(parts) is not list or len(parts) != 1 or type(parts[0]) is not dict
+                or set(parts[0]) != {"text"}):
             raise ValueError()
         text = parts[0].get("text")
         if type(text) is not str:
             raise ValueError()
         return text.encode("utf-8")
     except Exception as error:
-        raise ValueError("invalid_provider_response") from error
+        raise ValueError("invalid_provider_response") from None
 
 
 class MedicalGeminiShadowTransport:
@@ -326,7 +458,7 @@ class MedicalGeminiShadowTransport:
             if FinalOutboundGate().serialize(payload) != wire:
                 raise ValueError()
         except Exception as error:
-            raise OutboundRejected("invalid_validated_anonymous_bytes") from error
+            raise OutboundRejected("invalid_validated_anonymous_bytes") from None
         # Only constant protocol fields surround the prevalidated anonymous bytes.
         body = json.dumps({
             "contents": [{"role": "user", "parts": [
@@ -342,32 +474,55 @@ class MedicalGeminiShadowTransport:
         return HttpRequest(
             "POST", _GEMINI_GENERATE_CONTENT_URL,
             (("Content-Type", "application/json"), ("x-goog-api-key", key._for_header())),
-            body, _HTTP_TIMEOUT_SECONDS,
+            body, _HTTP_TIMEOUT_SECONDS, request._http_guard(),
         )
 
     def send(self, request: ValidatedAnonymousBytes, key: _ApiKeyHandle) -> TransportResponse:
+        if type(request) is not ValidatedAnonymousBytes or type(key) is not _ApiKeyHandle:
+            return TransportResponse("validation_rejected")
         try:
-            http_response = self._executor.execute(self.build_request(request, key))
+            http_request = self.build_request(request, key)
+            if not request._claim_send():
+                return TransportResponse("request_reused")
+            http_response = self._executor.execute(http_request)
         except (TimeoutError, socket.timeout):
             return TransportResponse("timeout")
         except Exception:
             return TransportResponse("transport_error")
         if type(http_response) is not HttpResponse or type(http_response.status_code) is not int:
             return TransportResponse("transport_error")
-        if http_response.status_code in {401, 403}:
+        status = http_response.status_code
+        if 300 <= status < 400:
+            return TransportResponse("redirect_rejected")
+        if status in {401, 403}:
             return TransportResponse("authentication")
-        if http_response.status_code == 404:
+        if status == 404:
             return TransportResponse("unavailable")
-        if http_response.status_code == 429:
+        if status == 429:
             return TransportResponse("quota")
-        if not 200 <= http_response.status_code < 300:
-            return TransportResponse("unavailable" if http_response.status_code >= 500 else "transport_error")
+        if http_response.failure is not None:
+            allowed = {"invalid_content_type", "response_too_large", "timeout",
+                       "transport_error", "request_reused", "malformed_response"}
+            return TransportResponse(http_response.failure if http_response.failure in allowed
+                                     else "transport_error")
+        if not 200 <= status < 300:
+            return TransportResponse("unavailable" if status >= 500 else "transport_error")
+        # Recheck injected executors before any envelope semantic parsing.
+        if not _is_allowed_json_content_type(http_response.content_type):
+            return TransportResponse("invalid_content_type")
+        if type(http_response.body) is not bytes or len(http_response.body) > _MAX_ENVELOPE_BYTES:
+            return TransportResponse("response_too_large")
         try:
-            return TransportResponse("ok", http_response.content_type,
-                                     _extract_gemini_response_text(http_response.body))
+            http_response.body.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return TransportResponse("invalid_utf8")
+        try:
+            candidate = _extract_gemini_response_text(http_response.body)
         except Exception:
             return TransportResponse("malformed_response")
-
+        if not 0 < len(candidate) <= _MAX_RESPONSE_BYTES:
+            return TransportResponse("response_too_large")
+        return TransportResponse("ok", "application/json", candidate)
 
 @dataclass(frozen=True)
 class LocalAmountMap:
@@ -395,6 +550,9 @@ class AnonymousShadowBuild:
     _source_fingerprint: str = field(repr=False)
     _unit_ref: str = field(repr=False)
     _response_private_literals: tuple[str, ...] = field(repr=False)
+    _integrity: str = field(repr=False)
+    _send_use: _SingleUse = field(default_factory=_SingleUse, repr=False, compare=False)
+    _http_use: _SingleUse = field(default_factory=_SingleUse, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -435,40 +593,15 @@ class InboundShadowResult:
         "synthetic_quota_failure", "synthetic_api_failure", "synthetic_parser_failure",
         "disabled", "timeout", "quota", "authentication", "unavailable",
         "transport_error", "invalid_content_type", "response_too_large", "invalid_utf8",
+        "redirect_rejected", "request_reused",
         "privacy_rejected", "binding_rejected", "validation_rejected",
     ]
     local_result: LocalResponseResult | None = field(default=None, repr=False)
 
 
-def _alpha(index: int) -> str:
-    """A, B, ..., Z, AA: opaque labels, never derived from an amount."""
-    result = ""
-    index += 1
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        result = chr(65 + remainder) + result
-    return result
-
-
-def _confidence(value: float | None) -> Literal["high", "medium", "low"]:
-    if value is None or value < 0.7:
-        return "low"
-    if value < 0.9:
-        return "medium"
-    return "high"
-
-
-def _geometry(observation: OcrObservation, ordinal: int) -> dict[str, float]:
-    box = observation.regions[ordinal].bbox
-    if box is None:
-        raise OutboundRejected("unsafe_observation")
-    x, y, width, height = box
-    result = {"x": x / observation.width, "y": y / observation.height,
-              "width": width / observation.width, "height": height / observation.height}
-    if not all(type(v) is float and math.isfinite(v) and 0 <= v <= 1 for v in result.values()):
-        raise OutboundRejected("unsafe_geometry")
-    return result
-
+def _opaque_id(prefix: str) -> str:
+    # Letter-only CSPRNG IDs avoid accidental concrete amount digit surfaces.
+    return prefix + "".join(secrets.choice(string.ascii_letters) for _ in range(32))
 
 def _local_scope(text: str) -> str:
     compact = _compact_ocr_token(unicodedata.normalize("NFKC", text))
@@ -492,117 +625,63 @@ def _observation_fingerprint(observation: OcrObservation) -> str:
         raise OutboundRejected("invalid_observation_fingerprint") from error
 
 
-def _layout(observation: OcrObservation):
-    tokens = []
-    for region in observation.regions:
-        box = region.bbox
-        if box is None or region.confidence is None:
-            raise OutboundRejected("unsafe_observation")
-        x, y, width, height = box
-        tokens.append(_StructuredOcrToken(
-            # The source PDF ordinal is intentionally not layout data or wire data.
-            # This one-unit graph has a local page coordinate of one.
-            region.text, 1, x, y, width, height, region.confidence * 100,
-            (region.ordinal, 0, 0, 0),
-        ))
-    layout = observe_layout(tuple(tokens), (PageFrame(1, observation.width, observation.height),),
-                            expected_pages=1, observation_complete=observation.complete)
-    if "observation_incomplete" in layout.issues:
-        raise OutboundRejected("unsafe_layout")
-    return layout
+def _build_integrity(payload: dict, amount_map: LocalAmountMap, fingerprint: str,
+                     literals: tuple[str, ...]) -> str:
+    # Seals mutable payload, private correspondence AND literal scan context.
+    raw = json.dumps([payload, amount_map._values, fingerprint, literals],
+                     ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(raw.encode("ascii")).hexdigest()
 
 
 def build_anonymous_shadow_payload(observation: OcrObservation) -> AnonymousShadowBuild:
-    """Create a safe representation for exactly one image/PDF page.
+    """Build v2 from explicit payment candidates; every other field stays local.
 
-    This is intentionally more conservative than local evidence collection:
-    numeric text without an explicit, allowlisted payment/excluded context,
-    possible-payment context, multiple numeric runs, or malformed numbers
-    produces no payload.  Nothing in this function authorizes a network call.
+    No layout calculation: excluded/unrelated/anchor regions cannot influence the
+    wire representation. Potential-payment numeric ambiguity is withheld locally.
+    A candidate must have complete, high-confidence, single-amount evidence.
+    Nothing here resolves a production payment or authorizes communication.
     """
-    if type(observation) is not OcrObservation or not observation.complete:
+    if (type(observation) is not OcrObservation or observation.issues
+            or type(observation.page) is not int or observation.page < 1
+            or not observation.regions or len(observation.regions) > _MAX_REGIONS):
         raise OutboundRejected("observation_incomplete")
-    if not 1 <= observation.page or not observation.regions or len(observation.regions) > _MAX_REGIONS:
-        raise OutboundRejected("invalid_unit")
-
-    layout = _layout(observation)
-    included: dict[int, dict] = {}
-    values: list[tuple[str, int]] = []
+    values = []
     for region in observation.regions:
-        raw_runs = tuple(_NUMERIC_RUN.finditer(unicodedata.normalize("NFKC", region.text)))
         scope = _local_scope(region.text)
-        if scope == "possible_payment_region":
+        runs = tuple(_NUMERIC_RUN.finditer(unicodedata.normalize("NFKC", region.text)))
+        if scope == "possible_payment_region" and runs:
             raise OutboundRejected("ambiguous_semantic_context")
-        if not raw_runs:
-            # Label-only anchors are useful only where their category is explicit.
-            if scope in {"payment_region", "excluded"}:
-                included[region.ordinal] = {
-                    "kind": "context_anchor",
-                    "context": "payment" if scope == "payment_region" else "excluded",
-                    "amount_id": None,
-                }
+        # Anchors and excluded/unassigned regions never contribute evidence.
+        if scope != "payment_region" or not runs:
             continue
-        if scope == "unassigned" or len(raw_runs) != 1:
+        if (region.issues or region.confidence is None or region.confidence < .9
+                or region.bbox is None):
+            raise OutboundRejected("candidate_quality_insufficient")
+        if len(runs) != 1:
             raise OutboundRejected("ambiguous_numeric_context")
-        amount = _structured_amount(raw_runs[0].group().strip())
+        amount = _structured_amount(runs[0].group().strip())
         if amount is None:
             raise OutboundRejected("malformed_numeric")
-        amount_id = f"amount_{_alpha(len(values))}"
-        values.append((amount_id, amount))
-        included[region.ordinal] = {
-            "kind": "numeric_evidence",
-            "context": "payment" if scope == "payment_region" else "excluded",
-            "amount_id": amount_id,
-        }
-    if not values:
-        raise OutboundRejected("amount_not_observed")
-
-    region_ids = {ordinal: f"region_{_alpha(index)}" for index, ordinal in enumerate(sorted(included))}
-    regions = []
-    for ordinal in sorted(included):
-        item = included[ordinal]
-        regions.append({
-            "id": region_ids[ordinal], "kind": item["kind"], "context": item["context"],
-            "amount_id": item["amount_id"], "geometry": _geometry(observation, ordinal),
-            "confidence": _confidence(observation.regions[ordinal].confidence), "status": "observed",
-        })
-    relations = [
-        {"left": region_ids[relation.left], "right": region_ids[relation.right], "kind": relation.axis}
-        for relation in layout.relations
-        if relation.left in region_ids and relation.right in region_ids
-    ]
-    competing = any(
-        hypothesis.label in region_ids and hypothesis.numeric in region_ids
-        and "competing_relationships" in hypothesis.issues
-        for hypothesis in layout.hypotheses
-    )
-    unit_ref = "unit_" + secrets.token_urlsafe(24)
-    payload = {
-        "schema_version": _VERSION,
-        # This random value is generated for this handoff only.  It is not a receipt,
-        # filename, page ordinal, path, Drive ID, image digest, or persistent key.
-        "unit_ref": unit_ref,
-        "mode": "shadow_only",
-        "state": "shadow_ready",
-        # The local geometry is only an observation.  It never establishes a
-        # payment role, so unresolved state is explicit even in a safe payload.
-        "structure_state": "unresolved",
-        "competing_structure": competing,
-        "regions": regions,
-        "relations": relations,
-    }
-    amount_map = LocalAmountMap(tuple(values))
-    result = AnonymousShadowBuild(
-        payload, amount_map, _observation_fingerprint(observation), unit_ref,
-        _private_literals(observation, amount_map),
-    )
-    # Gate the builder's own output as a regression tripwire before a caller gets it.
-    FinalOutboundGate().serialize(
-        result.payload, _private_literals(observation, result.amount_map),
-        private_amounts=tuple(value for _, value in result.amount_map._values),
-    )
-    return result
-
+        values.append(amount)
+    if not 1 <= len(values) <= _MAX_CANDIDATES:
+        raise OutboundRejected("candidate_count_out_of_bounds")
+    # Canonicalize only locally, then CSPRNG shuffle. No scan-order mapping is
+    # exported. No duplicate-value flag or value-based deduplication is exported.
+    values.sort()
+    secrets.SystemRandom().shuffle(values)
+    ids = [_opaque_id("candidate_") for _ in values]
+    if len(set(ids)) != len(ids):
+        raise OutboundRejected("random_id_collision")
+    unit_ref = _opaque_id("unit_")
+    payload = {"schema_version": _VERSION, "unit_ref": unit_ref,
+               "candidates": [{"candidate_id": identifier} for identifier in ids]}
+    amount_map = LocalAmountMap(tuple(zip(ids, values)))
+    literals = _private_literals(observation, amount_map)
+    fingerprint = _observation_fingerprint(observation)
+    FinalOutboundGate().serialize(payload, literals,
+                                  private_amounts=tuple(values))
+    return AnonymousShadowBuild(payload, amount_map, fingerprint, unit_ref, literals,
+                                _build_integrity(payload, amount_map, fingerprint, literals))
 
 def prepare_anonymous_shadow(observation: OcrObservation) -> ShadowPreparation:
     """Turn every local semanticization failure into data-free needs_review."""
@@ -672,77 +751,32 @@ class FinalOutboundGate:
     def validate_for_transport(
         self, payload: object, private_literals: tuple[str, ...] = (), *,
         private_amounts: tuple[int, ...] = (),
+        _source: str | None = None, _send_use: _SingleUse | None = None,
+        _http_use: _SingleUse | None = None,
     ) -> ValidatedAnonymousBytes:
         """Issue the only supported request wrapper for a future transport."""
         return ValidatedAnonymousBytes(
             self.serialize(payload, private_literals, private_amounts=private_amounts),
-            _TRANSPORT_CAPABILITY,
+            _TRANSPORT_CAPABILITY, source=_source, send_use=_send_use, http_use=_http_use,
         )
 
     def _validate(self, payload: object) -> None:
-        if type(payload) is not dict or set(payload) != {"schema_version", "unit_ref", "mode", "state", "structure_state", "competing_structure", "regions", "relations"}:
+        if type(payload) is not dict or set(payload) != {"schema_version", "unit_ref", "candidates"}:
             raise OutboundRejected("forbidden_or_unknown_field")
-        if (type(payload["schema_version"]) is not str or type(payload["mode"]) is not str
-                or type(payload["state"]) is not str or payload["schema_version"] != _VERSION
-                or payload["mode"] != "shadow_only" or payload["state"] != "shadow_ready"
-                or type(payload["unit_ref"]) is not str
-                or not _UNIT_REF.fullmatch(payload["unit_ref"])):
+        if (type(payload["schema_version"]) is not str or payload["schema_version"] != _VERSION
+                or type(payload["unit_ref"]) is not str or not _UNIT_REF.fullmatch(payload["unit_ref"])):
             raise OutboundRejected("invalid_payload_header")
-        if (type(payload["structure_state"]) is not str or payload["structure_state"] != "unresolved"
-                or type(payload["competing_structure"]) is not bool):
-            raise OutboundRejected("invalid_structure_state")
-        regions = payload["regions"]
-        relations = payload["relations"]
-        if (type(regions) is not list or not 1 <= len(regions) <= _MAX_REGIONS
-                or type(relations) is not list or len(relations) > len(regions) * (len(regions) - 1) // 2):
-            raise OutboundRejected("invalid_payload_collections")
-        ids: set[str] = set()
-        amount_ids: set[str] = set()
-        for index, region in enumerate(regions):
-            if type(region) is not dict or set(region) != {"id", "kind", "context", "amount_id", "geometry", "confidence", "status"}:
+        candidates = payload["candidates"]
+        if type(candidates) is not list or not 1 <= len(candidates) <= _MAX_CANDIDATES:
+            raise OutboundRejected("candidate_count_out_of_bounds")
+        seen = set()
+        for candidate in candidates:
+            if type(candidate) is not dict or set(candidate) != {"candidate_id"}:
                 raise OutboundRejected("forbidden_or_unknown_field")
-            identifier = region["id"]
-            if (type(identifier) is not str or identifier != f"region_{_alpha(index)}"
-                    or not _REGION_ID.fullmatch(identifier) or identifier in ids):
-                raise OutboundRejected("invalid_region_id")
-            ids.add(identifier)
-            if (type(region["kind"]) is not str or type(region["context"]) is not str
-                    or type(region["confidence"]) is not str or type(region["status"]) is not str
-                    or region["kind"] not in {"numeric_evidence", "context_anchor"}
-                    or region["context"] not in {"payment", "excluded"}
-                    or region["confidence"] not in {"high", "medium", "low"}
-                    or region["status"] != "observed"):
-                raise OutboundRejected("invalid_semantic_category")
-            amount_id = region["amount_id"]
-            if region["kind"] == "numeric_evidence":
-                if (type(amount_id) is not str or amount_id != f"amount_{_alpha(len(amount_ids))}"
-                        or not _AMOUNT_ID.fullmatch(amount_id) or amount_id in amount_ids):
-                    raise OutboundRejected("invalid_amount_id")
-                amount_ids.add(amount_id)
-            elif amount_id is not None:
-                raise OutboundRejected("invalid_anchor")
-            geometry = region["geometry"]
-            if type(geometry) is not dict or set(geometry) != {"x", "y", "width", "height"}:
-                raise OutboundRejected("invalid_geometry")
-            if not all(type(value) is float and math.isfinite(value) and 0 <= value <= 1 for value in geometry.values()):
-                raise OutboundRejected("invalid_geometry")
-        seen_relations: set[tuple[str, str, str]] = set()
-        for relation in relations:
-            if type(relation) is not dict or set(relation) != {"left", "right", "kind"}:
-                raise OutboundRejected("forbidden_or_unknown_field")
-            if (type(relation["left"]) is not str or type(relation["right"]) is not str
-                    or type(relation["kind"]) is not str
-                    or relation["left"] not in ids or relation["right"] not in ids
-                    or relation["left"] == relation["right"]
-                    or relation["kind"] not in {"row", "column", "overlap"}):
-                raise OutboundRejected("invalid_relation")
-            key = (relation["left"], relation["right"], relation["kind"])
-            if key in seen_relations:
-                raise OutboundRejected("duplicate_relation")
-            seen_relations.add(key)
-        if not amount_ids:
-            raise OutboundRejected("amount_not_observed")
-
+            identifier = candidate["candidate_id"]
+            if type(identifier) is not str or not _AMOUNT_ID.fullmatch(identifier) or identifier in seen:
+                raise OutboundRejected("invalid_candidate_id")
+            seen.add(identifier)
 
 @dataclass(frozen=True)
 class GeminiFreeTierShadowPolicy:
@@ -754,19 +788,7 @@ class GeminiFreeTierShadowPolicy:
     def prepare(self, build: AnonymousShadowBuild, observation: OcrObservation) -> bytes:
         if type(self.enabled) is not bool or self.tier != "free" or not self.enabled:
             raise OutboundRejected("free_tier_route_disabled")
-        if type(build) is not AnonymousShadowBuild or type(observation) is not OcrObservation:
-            raise OutboundRejected("invalid_shadow_handoff")
-        if type(build._source_fingerprint) is not str or type(build._unit_ref) is not str:
-            raise OutboundRejected("invalid_shadow_handoff")
-        if not secrets.compare_digest(build._source_fingerprint, _observation_fingerprint(observation)):
-            raise OutboundRejected("shadow_source_mismatch")
-        if type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref:
-            raise OutboundRejected("shadow_unit_mismatch")
-        return FinalOutboundGate().serialize(
-            build.payload, _private_literals(observation, build.amount_map),
-            private_amounts=tuple(value for _, value in build.amount_map._values),
-        )
-
+        return _validated_request_for_transport(build, observation)._for_transport()
 
 @dataclass(frozen=True)
 class MedicalAnonymousShadowTransportPolicy:
@@ -790,7 +812,7 @@ class MedicalAnonymousShadowTransportPolicy:
     @classmethod
     def from_setting(cls, value: object | None) -> "MedicalAnonymousShadowTransportPolicy":
         # Only this exact opt-in spelling enables the isolated shadow route.
-        return cls(enabled=value == "true")
+        return cls(enabled=type(value) is str and value == "true")
 
     @property
     def transport_enabled(self) -> bool:
@@ -815,9 +837,14 @@ def _validated_request_for_transport(
             or not secrets.compare_digest(build._source_fingerprint, _observation_fingerprint(observation))
             or type(build.payload) is not dict or build.payload.get("unit_ref") != build._unit_ref):
         raise OutboundRejected("invalid_shadow_handoff")
+    try:
+        _response_binding(build)
+    except Exception:
+        raise OutboundRejected("invalid_shadow_handoff") from None
     return FinalOutboundGate().validate_for_transport(
         build.payload, _private_literals(observation, build.amount_map),
         private_amounts=tuple(value for _, value in build.amount_map._values),
+        _source=build._source_fingerprint, _send_use=build._send_use, _http_use=build._http_use,
     )
 
 
@@ -833,9 +860,13 @@ def _response_binding(build: AnonymousShadowBuild) -> str:
         FinalOutboundGate()._validate(build.payload)
         if build.payload["unit_ref"] != build._unit_ref:
             raise InboundRejected("invalid_request_binding")
-        wire_ids = tuple(region["amount_id"] for region in build.payload["regions"]
-                         if region["kind"] == "numeric_evidence")
+        wire_ids = tuple(candidate["candidate_id"] for candidate in build.payload["candidates"])
         if wire_ids != build.amount_map.ids:
+            raise InboundRejected("invalid_request_binding")
+        if (type(build._integrity) is not str or not secrets.compare_digest(
+                build._integrity, _build_integrity(build.payload, build.amount_map,
+                                                   build._source_fingerprint,
+                                                   build._response_private_literals))):
             raise InboundRejected("invalid_request_binding")
         digest = hashlib.sha256()
         digest.update(build._source_fingerprint.encode("ascii"))
@@ -886,7 +917,7 @@ class FinalInboundGate:
         except InboundRejected:
             raise
         except Exception as error:
-            raise InboundRejected("malformed_response") from error
+            raise InboundRejected("malformed_response") from None
         if type(parsed) is not dict or set(parsed) != {
             "schema_version", "unit_ref", "decision", "amount_id", "confidence",
         }:
@@ -901,6 +932,8 @@ class FinalInboundGate:
         amount_id = parsed["amount_id"]
         confidence = parsed["confidence"]
         if decision == "select":
+            if len(build.amount_map.ids) != 1:
+                raise InboundRejected("insufficient_selection_evidence")
             if (type(amount_id) is not str or not _AMOUNT_ID.fullmatch(amount_id)
                     or amount_id not in build.amount_map.ids
                     or type(confidence) is not str or confidence not in {"high", "medium", "low"}):
@@ -934,7 +967,7 @@ class TransportResponseGate:
             try:
                 text = response.body.decode("utf-8")
             except UnicodeDecodeError as error:
-                raise TransportResponseRejected("invalid_utf8") from error
+                raise TransportResponseRejected("invalid_utf8") from None
             try:
                 _reject_response_literal(text, build._response_private_literals)
                 _reject_numeric_amount_surface(
@@ -942,16 +975,16 @@ class TransportResponseGate:
                     "private_response_numeric_literal",
                 )
             except InboundRejected as error:
-                raise TransportResponseRejected("privacy_rejected") from error
+                raise TransportResponseRejected("privacy_rejected") from None
             try:
                 # json.loads consumes one complete JSON document; fencing, prefixes,
                 # suffixes, and trailing garbage fail here. Duplicate keys fail too.
                 json.loads(text, object_pairs_hook=_strict_response_object,
                            parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
             except InboundRejected as error:
-                raise TransportResponseRejected("malformed_response") from error
+                raise TransportResponseRejected("malformed_response") from None
             except Exception as error:
-                raise TransportResponseRejected("malformed_response") from error
+                raise TransportResponseRejected("malformed_response") from None
             return ValidatedTransportResponse(response.body, _TRANSPORT_CAPABILITY)
         except TransportResponseRejected:
             raise
@@ -990,6 +1023,9 @@ def run_fake_shadow_transport(
         failures = {
             "timeout": "timeout", "quota": "quota", "authentication": "authentication",
             "unavailable": "unavailable", "transport_error": "transport_error",
+            "redirect_rejected": "redirect_rejected", "request_reused": "request_reused",
+            "invalid_content_type": "invalid_content_type", "response_too_large": "response_too_large",
+            "invalid_utf8": "invalid_utf8",
         }
         return InboundShadowResult("needs_review", failures.get(response.status, "transport_error"))
     try:
@@ -1035,6 +1071,9 @@ def run_real_shadow_transport(
         failures = {
             "timeout": "timeout", "quota": "quota", "authentication": "authentication",
             "unavailable": "unavailable", "transport_error": "transport_error",
+            "redirect_rejected": "redirect_rejected", "request_reused": "request_reused",
+            "invalid_content_type": "invalid_content_type", "response_too_large": "response_too_large",
+            "invalid_utf8": "invalid_utf8",
             "malformed_response": "malformed_response",
         }
         return InboundShadowResult("needs_review", failures.get(response.status, "transport_error"))
@@ -1062,6 +1101,8 @@ def rehydrate_anonymous_response(
             or not secrets.compare_digest(response._binding, binding)):
         raise InboundRejected("invalid_response_binding")
     if response.decision == "select":
+        if len(build.amount_map.ids) != 1:
+            raise InboundRejected("insufficient_selection_evidence")
         if (type(response.amount_id) is not str or response.amount_id not in build.amount_map.ids
                 or response.confidence not in {"high", "medium", "low"}):
             raise InboundRejected("invalid_selection")

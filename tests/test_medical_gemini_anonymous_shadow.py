@@ -18,6 +18,22 @@ from app.medical_gemini_shadow import (
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 
 
+@pytest.fixture(autouse=True)
+def isolated_shadow(monkeypatch):
+    # Every case gets a fresh PROCESS ledger; tests within a case must not reset
+    # it unless comparing independent failure fixtures.
+    monkeypatch.setattr(shadow, "_REPLAY_REGISTRY", shadow._ReplayRegistry())
+    monkeypatch.setattr(shadow, "_isolated_http_opener",
+                        lambda: pytest.fail("real HTTP opener forbidden"))
+    import os
+    original = os._Environ.__getitem__
+    def no_real_key(self, key):
+        if "API_KEY" in str(key).upper():
+            pytest.fail("real API key access forbidden")
+        return original(self, key)
+    monkeypatch.setattr(os._Environ, "__getitem__", no_real_key)
+
+
 def observation(rows, *, page=1):
     image = ReceiptImage("synthetic_local_unit", page, b"synthetic-only-image")
     return make_observation(image, "synthetic", ("a" * 64,), 100, 100, rows)
@@ -36,8 +52,10 @@ def large_amount_build():
     return build_anonymous_shadow_payload(observation([row("領収金額 38430円")]))
 
 
-def response(build, *, decision="select", amount_id="amount_A", confidence="high", **extra):
-    value = {"schema_version": "medical-anonymous-shadow-response-v1",
+def response(build, *, decision="select", amount_id="first_candidate", confidence="high", **extra):
+    if amount_id == "first_candidate":
+        amount_id = build.amount_map.ids[0]
+    value = {"schema_version": "medical-anonymous-shadow-response-v2",
              "unit_ref": build.payload["unit_ref"], "decision": decision,
              "amount_id": amount_id, "confidence": confidence}
     value.update(extra)
@@ -47,39 +65,37 @@ def response(build, *, decision="select", amount_id="amount_A", confidence="high
 def test_safe_payload_has_only_allowlisted_semantics_and_local_amount_mapping():
     build = safe_build()
     payload = build.payload
-    assert set(payload) == {"schema_version", "unit_ref", "mode", "state", "structure_state", "competing_structure", "regions", "relations"}
-    assert payload["structure_state"] == "unresolved"
-    numeric = payload["regions"][0]
-    assert numeric["amount_id"] == "amount_A"
-    assert build.amount_map.resolve("amount_A") == 4321
+    assert set(payload) == {"schema_version", "unit_ref", "candidates"}
+    assert payload["schema_version"] == "medical-anonymous-shadow-v2"
+    candidate = payload["candidates"][0]
+    assert set(candidate) == {"candidate_id"}
+    assert build.amount_map.resolve(candidate["candidate_id"]) == 4321
     wire = GeminiFreeTierShadowPolicy(enabled=True).prepare(build, observation([row("領収金額 4321円")]))
     assert b"4321" not in wire and "領収金額".encode("unicode_escape") not in wire
     assert json.loads(wire)["unit_ref"] == payload["unit_ref"]
-
 
 def test_gate_rejects_raw_text_forbidden_fields_unknowns_and_final_byte_leakage():
     payload = safe_build().payload
     payload["raw_ocr_text"] = "SYNTHETIC_PRIVATE"
     with pytest.raises(OutboundRejected): FinalOutboundGate().serialize(payload, ("SYNTHETIC_PRIVATE",))
     payload = safe_build().payload
-    payload["regions"][0]["geometry"]["metadata"] = "SYNTHETIC_PRIVATE"
+    payload["candidates"][0]["geometry"] = {"x": .1}
     with pytest.raises(OutboundRejected): FinalOutboundGate().serialize(payload)
     payload = safe_build().payload
-    payload["unit_ref"] = "unit_SYNTHETIC_PRIVATE_abcdefghijklmnop"
-    with pytest.raises(OutboundRejected): FinalOutboundGate().serialize(payload, ("SYNTHETIC_PRIVATE",))
+    with pytest.raises(OutboundRejected, match="private_literal_detected"):
+        FinalOutboundGate().serialize(payload, (payload["unit_ref"],))
     payload = safe_build().payload
-    payload["regions"][0]["amount_id"] = "amount_SYNTHETIC_PRIVATE"
-    with pytest.raises(OutboundRejected, match="invalid_amount_id"):
+    payload["candidates"][0]["candidate_id"] = "candidate_short"
+    with pytest.raises(OutboundRejected, match="invalid_candidate_id"):
         FinalOutboundGate().serialize(payload)
     payload = safe_build().payload
-    payload["regions"][0]["confidence"] = 1
-    with pytest.raises(OutboundRejected, match="invalid_semantic_category"):
+    payload["candidates"][0]["confidence"] = "high"
+    with pytest.raises(OutboundRejected):
         FinalOutboundGate().serialize(payload)
-
 
 @pytest.mark.parametrize("text,reason", [
     ("支払 4321円", "ambiguous_semantic_context"),
-    ("4321円", "ambiguous_numeric_context"),
+    ("4321円", "candidate_count_out_of_bounds"),
     ("領収金額 4321円 7654円", "ambiguous_numeric_context"),
     ("領収金額 4.321円", "malformed_numeric"),
 ])
@@ -90,13 +106,13 @@ def test_ambiguous_or_malformed_local_semantics_fail_closed(text, reason):
 
 def test_incomplete_observation_and_page_mixing_are_not_payload_inputs():
     incomplete = observation([row("領収金額 4321円", confidence=None)])
-    with pytest.raises(OutboundRejected, match="observation_incomplete"):
+    with pytest.raises(OutboundRejected, match="candidate_quality_insufficient"):
         build_anonymous_shadow_payload(incomplete)
     first = safe_build()
-    second = build_anonymous_shadow_payload(observation([row("小計 7654円")], page=2))
+    second = build_anonymous_shadow_payload(observation([row("領収金額 7654円")], page=2))
     assert first.payload["unit_ref"] != second.payload["unit_ref"]
-    assert first.amount_map.resolve("amount_A") == 4321
-    assert second.amount_map.resolve("amount_A") == 7654
+    assert first.amount_map.resolve(first.amount_map.ids[0]) == 4321
+    assert second.amount_map.resolve(second.amount_map.ids[0]) == 7654
 
 
 def test_preparation_returns_data_free_needs_review_and_binds_the_source_observation():
@@ -105,11 +121,11 @@ def test_preparation_returns_data_free_needs_review_and_binds_the_source_observa
     assert withheld.build is None
     assert "4321" not in repr(withheld)
     build = safe_build()
-    with pytest.raises(OutboundRejected, match="shadow_source_mismatch"):
+    with pytest.raises(OutboundRejected, match="invalid_shadow_handoff"):
         GeminiFreeTierShadowPolicy(enabled=True).prepare(
             build, observation([row("領収金額 7654円")]))
     build.payload["unit_ref"] = "unit_abcdefghijklmnopqrstuvwxyz"
-    with pytest.raises(OutboundRejected, match="shadow_unit_mismatch"):
+    with pytest.raises(OutboundRejected, match="invalid_shadow_handoff"):
         GeminiFreeTierShadowPolicy(enabled=True).prepare(
             build, observation([row("領収金額 4321円")]))
 
@@ -146,7 +162,7 @@ def test_valid_synthetic_response_is_bound_and_rehydrated_only_locally(monkeypat
     assert result.local_result is not None
     assert result.local_result.decision == "select"
     assert result.local_result.amount == 4321
-    assert calls == ["amount_A"]
+    assert calls == [build.amount_map.ids[0]]
     assert "4321" not in repr(result)
 
 
@@ -183,9 +199,10 @@ def test_final_gates_reject_normalized_real_amount_surfaces(surface):
     with pytest.raises(InboundRejected):
         FinalInboundGate().accept(build, raw)
     payload = build.payload
-    payload["unit_ref"] = "unit_38430abcdefghijklmnopqrst"
+    # v2 random IDs contain no digits; numeric surface scanner remains active.
     with pytest.raises(OutboundRejected, match="private_numeric_literal_detected"):
-        FinalOutboundGate().serialize(payload, private_amounts=(38430,))
+        shadow._reject_numeric_amount_surface(surface, (38430,), OutboundRejected,
+                                              "private_numeric_literal_detected")
 
 
 @pytest.mark.parametrize("extra", [
@@ -217,7 +234,7 @@ def test_inbound_gate_rejects_unknown_ids_and_response_for_another_request():
 def test_inbound_gate_rejects_duplicate_conflicting_invalid_and_oversized_responses():
     build = safe_build()
     duplicate = (
-        '{"schema_version":"medical-anonymous-shadow-response-v1","unit_ref":"'
+        '{"schema_version":"medical-anonymous-shadow-response-v2","unit_ref":"'
         + build.payload["unit_ref"]
         + '","decision":"select","amount_id":"amount_A","amount_id":"amount_A","confidence":"high"}'
     ).encode("ascii")
@@ -425,7 +442,7 @@ def test_transport_response_privacy_duplicate_binding_and_rehydration_boundaries
     calls = []
     monkeypatch.setattr(LocalAmountMap, "resolve", lambda *args: calls.append(args))
     duplicate = (
-        b'{"schema_version":"medical-anonymous-shadow-response-v1","unit_ref":"'
+        b'{"schema_version":"medical-anonymous-shadow-response-v2","unit_ref":"'
         + build.payload["unit_ref"].encode("ascii")
         + b'","decision":"select","amount_id":"amount_A","amount_id":"amount_A","confidence":"high"}'
     )
@@ -436,6 +453,8 @@ def test_transport_response_privacy_duplicate_binding_and_rehydration_boundaries
         duplicate,
     ]
     for body in cases:
+        shadow._REPLAY_REGISTRY = shadow._ReplayRegistry()
+        build = safe_build()
         fake = FakeAnonymousShadowTransport(TransportResponse("ok", "application/json", body))
         result = run_fake_shadow_transport(build, source, fake, enabled_transport_policy())
         assert result.reason_code in {"privacy_rejected", "binding_rejected", "validation_rejected",
@@ -460,7 +479,7 @@ def test_real_transport_kill_switch_precedes_key_request_build_and_network(monke
     build = safe_build()
     transport, executor, provider = real_transport(
         HttpResponse(200, "application/json", gemini_envelope(response(build).decode("utf-8"))))
-    monkeypatch.setattr(shadow, "urlopen", lambda *args, **kwargs: pytest.fail("network attempted"))
+    monkeypatch.setattr(shadow, "_isolated_http_opener", lambda *args, **kwargs: pytest.fail("network attempted"))
     result = run_real_shadow_transport(
         build, observation([row("領収金額 4321円")]), transport,
         MedicalAnonymousShadowTransportPolicy())
@@ -482,7 +501,7 @@ def test_real_transport_uses_fake_executor_fixed_endpoint_wrapper_and_secret_hea
     key = "synthetic-secret-not-in-body"
     transport, executor, provider = real_transport(
         HttpResponse(200, "application/json", gemini_envelope(response(build).decode("utf-8"))), key)
-    monkeypatch.setattr(shadow, "urlopen", lambda *args, **kwargs: pytest.fail("network attempted"))
+    monkeypatch.setattr(shadow, "_isolated_http_opener", lambda *args, **kwargs: pytest.fail("network attempted"))
     result = run_real_shadow_transport(
         build, observation([row("領収金額 4321円")]), transport, enabled_transport_policy())
     assert result.reason_code == "accepted_shadow_response"
@@ -546,8 +565,8 @@ def test_real_transport_exception_mapping_is_data_free_and_not_retried(failure, 
     ("text/html", "{}", "invalid_content_type"),
     ("application/json", "```json\\n{}\\n```", "malformed_response"),
     ("application/json", "{} trailing", "malformed_response"),
-    ("application/json", '{"schema_version":"medical-anonymous-shadow-response-v1",'
-     '"schema_version":"medical-anonymous-shadow-response-v1"}', "malformed_response"),
+    ("application/json", '{"schema_version":"medical-anonymous-shadow-response-v2",'
+     '"schema_version":"medical-anonymous-shadow-response-v2"}', "malformed_response"),
 ])
 def test_real_transport_reuses_response_format_boundary(content_type, text, reason):
     build = safe_build()
@@ -559,16 +578,22 @@ def test_real_transport_reuses_response_format_boundary(content_type, text, reas
 
 def test_real_transport_reuses_privacy_binding_schema_and_rehydration_boundaries(monkeypatch):
     build = safe_build()
+    original_unit_ref = build.payload["unit_ref"]
     source = observation([row("領収金額 4321円")])
     calls = []
     monkeypatch.setattr(LocalAmountMap, "resolve", lambda *args: calls.append(args))
     for text, reason in (
         (response(build, explanation="領収金額 4321円").decode("utf-8"), "privacy_rejected"),
         (response(build, unit_ref="unit_abcdefghijklmnopqrstuvwxyz").decode("utf-8"), "binding_rejected"),
-        (json.dumps({"schema_version": "medical-anonymous-shadow-response-v1",
+        (json.dumps({"schema_version": "medical-anonymous-shadow-response-v2",
                      "unit_ref": build.payload["unit_ref"], "decision": "select",
                      "amount_id": "amount_B", "confidence": "high"}), "validation_rejected"),
     ):
+        shadow._REPLAY_REGISTRY = shadow._ReplayRegistry()
+        new_build = safe_build()
+        if reason != "binding_rejected":
+            text = text.replace(original_unit_ref, new_build.payload["unit_ref"])
+        build = new_build
         transport, executor, _ = real_transport(HttpResponse(200, "application/json", gemini_envelope(text)))
         result = run_real_shadow_transport(build, source, transport, enabled_transport_policy())
         assert result.reason_code == reason and len(executor.calls) == 1

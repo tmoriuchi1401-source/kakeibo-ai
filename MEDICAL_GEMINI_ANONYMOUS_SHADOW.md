@@ -1,223 +1,195 @@
-# Anonymous Gemini Free Tier shadow boundary
+# Minimal anonymous medical Gemini shadow boundary (v2)
 
-This is a local, shadow-only preparation layer.  It has no Gemini SDK import,
-API key handling, request code, retry, fallback, billing setting, or production
-caller.  `GeminiFreeTierShadowPolicy` accepts only the literal `free` tier and
-is disabled by default.  If Free Tier terms, quota, rate limits, credentials, or
-provider behavior become unacceptable, leave it disabled: there is no paid tier
-or automatic provider fallback in this design.  A future client must convert any
-provider/quota failure to local `needs_review`, with no retry to a paid service.
+This is an isolated, default-disabled shadow route. No production pipeline,
+resolver, CLI, persistence, or background job calls it. A successful response
+still returns local `needs_review`; it never confirms or applies a payment.
 
-## Local input and page isolation
+**v2 is a local-only hardening checkpoint for adversarial re-review, not approval
+to send medical-derived data.** Prior synthetic connectivity results used v1.
+No real v2 Gemini request or model-accuracy evaluation is part of this phase.
+Neither anonymization, Free Tier eligibility, provider retention, product
+improvement use, nor billing can be guaranteed by the code.
 
-`build_anonymous_shadow_payload` accepts one complete `OcrObservation`, which is
-already one immutable image / one rendered PDF page.  It never accepts a list of
-observations or a PDF/document envelope.  Source unit/page identity, image digest,
-filename, path, Drive ID, model provenance, OCR text, OCR tokens, original
-polygons, confidence scores, and the actual amounts remain local.  The wire-only
-`unit_ref` is fresh random opaque data per build and is not derived from source
-metadata.  Amount correspondence is held in `LocalAmountMap`; response handling
-must use that local map and must never add it to the payload.
-
-`prepare_anonymous_shadow` is the fail-closed local entrypoint. It turns every
-unsafe/ambiguous semanticization failure into a data-free `needs_review` result;
-only `shadow_ready` contains a private build. A private SHA-256 fingerprint binds
-that build to the exact local observation before `prepare` serializes bytes. The
-fingerprint is neither an input field nor wire data, so a different source cannot
-substitute its literals for final-byte scanning.
-
-## Allowlist wire schema
-
-The only allowed serialized object is:
+## Closed, candidate-only v2 wire schema
 
 ```text
 {
-  schema_version: "medical-anonymous-shadow-v1",
-  unit_ref: "unit_<random>",
-  mode: "shadow_only",
-  state: "shadow_ready",
-  structure_state: "unresolved",
-  competing_structure: boolean,
-  regions: [{id, kind, context, amount_id, geometry, confidence, status}],
-  relations: [{left, right, kind}]
+  schema_version: "medical-anonymous-shadow-v2",
+  unit_ref: "unit_<32 random letters>",
+  candidates: [
+    {candidate_id: "candidate_<32 random letters>"}
+  ]
 }
 ```
 
-`kind` is `numeric_evidence` or `context_anchor`; `context` is `payment` or
-`excluded`; `amount_id` is an opaque `amount_A`-style ID only on numeric evidence;
-`geometry` has exactly normalized `x/y/width/height`; confidence is only
-`high/medium/low`; relations are only row/column/overlap between included opaque
-region IDs. `structure_state` is always `unresolved`, and `competing_structure`
-is an allowlisted boolean. There is no free text, raw OCR field, arbitrary
-metadata map, provider prompt, page number, receipt identifier, extension field,
-or unknown semantic label.
+One to four candidates are allowed. No other field is accepted, including old
+v1 fields. Request and response versions both change to v2; v1 has no live
+compatibility route.
 
-## Fail-closed outbound gate
+Coordinates, width, height, area, page size/number, source ordinal, confidence,
+context enums, anchors, excluded regions, full relation graphs, and
+observed/shadow_ready/unresolved/competing evidence fields are absent from the
+wire. There is no field for OCR, an actual amount, a patient or facility name,
+diagnosis, medication, filename, path, Drive ID, source digest or local map.
 
-`FinalOutboundGate` independently validates exact keys, native types, enum values,
-opaque IDs in their builder-defined sequence, finite normalized geometry, bounded
-unique relations, and relation references immediately before canonical JSON bytes
-are made. It rejects extra/missing fields, subclasses and unexpected types. It
-also scans those final bytes against locally supplied raw OCR literals and amount
-renderings, including normalized ASCII/full-width digits, comma or dot grouping,
-whitespace-separated digits, and JSON Unicode escapes. This provides a regression
-tripwire beyond schema validation. The policy
-also verifies the generated opaque unit reference before preflight bytes are
-exposed to any future sender; no sender is implemented in this phase.
+Candidate selection is local:
+- Only a single well-formed amount in explicit payment context is a candidate.
+- Candidate evidence must be complete and have confidence at least 0.9.
+- Numeric possible-payment ambiguity is withheld, not sent as competing state.
+- Excluded/unassigned regions and nonnumeric anchors contribute no wire evidence.
+  This includes unrelated numeric text with no payment context; this route is
+  not a complete receipt/payment resolver.
+- Zero candidates or more than four, incomplete global observations, excessive
+  input regions, or unsafe candidate evidence produce local withholding.
 
-Local semanticization recognizes only explicit existing payment/excluded context.
-Possible-payment context, unassigned numeric text, multiple numeric runs,
-malformed amounts, invalid/incomplete OCR, invalid geometry, or unresolved layout
-produce no payload and must remain `needs_review`.  This intentionally favors
-withholding an ambiguous observation over exposing source text to a Free Tier
-service that may retain inputs for service improvement.
+No layout graph is computed. A source observation is still one local image/page
+DTO, but the code cannot authenticate the upstream provenance or detect a
+dishonestly assembled multi-page observation. Local size/quality limits and
+private-literal collision rejection remain fail-closed admission rules.
 
-Production receipt OCR, resolver, Gemini adapter, requirements, and persistence
-are unchanged.  The maintenance review point is this policy class: a Free Tier
-specification change stops the route by keeping `enabled=False`; it cannot change
-to paid behavior through configuration.
+## Random identifiers, ordering and non-interference
 
-## Synthetic response boundary
+The builder sorts amounts only locally, then shuffles them using
+`secrets.SystemRandom` and assigns independent CSPRNG candidate identifiers.
+Identifiers and order do not encode the original OCR ordinal, value rank or
+reading order. Candidate IDs and unit_ref contain only letters after their
+fixed prefix, reducing accidental numeric-literal collisions.
 
-This phase still has no provider client, SDK use, API key, HTTP operation, or
-production caller. `FinalInboundGate` accepts synthetic UTF-8 JSON bytes only;
-it is intentionally not a Gemini parser. Its exact allowlist schema is:
+Tests fix the entropy stream ONLY in test code to demonstrate byte-for-byte
+non-interference under input permutations, geometry/page/quality changes within
+admission limits, and addition of irrelevant excluded/anchor/unrelated regions.
+Production builds always use fresh entropy, so their literal bytes should not
+be compared for this non-interference property.
+
+`LocalAmountMap` retains the private ID-to-amount correspondence. The build seals
+its canonical payload, source fingerprint, map and private-literal scan context
+with a local integrity digest. A mutated payload/map/scan context is rejected
+before transport or rehydration. These local hashes are never sent.
+
+**Residual disclosure:** exact admitted candidate count (1–4), the existence of a
+payment-candidate task, traffic timing and the authenticated provider project
+remain observable. Random IDs remove persistent labels, not all linkability.
+Repeated structures after removal of random IDs still share cardinality. There
+is no differential privacy or population-level anonymity claim.
+
+## Conservative selection capability
+
+The v2 payload has no comparative evidence. The static instruction asks the
+model to select only when there is exactly one candidate, or to abstain. With
+multiple candidates it must abstain or return unresolved. The local inbound
+gate independently rejects any multi-candidate select, even for an existing ID.
+
+Single-candidate selection is structurally supported and rehydrates locally;
+it is not independent proof that the amount is correct. Real model selection
+accuracy, and parity with v1, are unmeasured. v1 multi-candidate selection
+capability is intentionally not preserved at the expense of exposing layout.
+If useful decisions require identifying structure, reconsider the Free Tier
+design rather than silently restoring it.
+
+## Outbound gate and one-use capabilities
+
+Only `FinalOutboundGate.validate_for_transport` issues
+`ValidatedAnonymousBytes`. The build-bound preparation path verifies the source
+and integrity seal and runs final exact-schema/private-literal/numeric scans.
+Transport revalidates canonical v2 bytes; raw dicts and OCR DTOs are rejected.
+
+A local atomic send capability is shared across wrappers created from the same
+build, including copies. A separate shared HTTP capability prevents reusing
+constructed/copied HTTP requests. Claiming happens before invocation and is
+never undone after timeout, HTTP failure or validation rejection.
+
+A process-local, lock-protected replay registry also rejects reused unit_ref
+and an identical source fingerprint rebuilt with fresh identifiers. It holds
+at most 4096 used request references, never evicts them, and refuses further
+sends when full. It stores no raw OCR, payload or amount. It is not persisted.
+
+Limitations: process restart loses the ledger; a changed observation may have a
+different fingerprint. This is not cross-process or durable receipt deduplication.
+Hostile Python code in the same process can introspect private attributes;
+these are accidental-reuse guards, not a sandbox. Any future invocation workflow
+still needs explicit authorization and a bounded lifecycle. The policy remains
+default false and is never automatically enabled or loaded from configuration.
+
+## Fixed transport and redirect prohibition
+
+The only endpoint remains HTTPS POST to
+`generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent`.
+The lazy environment provider can only read `MEDICAL_GEMINI_SHADOW_API_KEY`;
+its variable is not a configurable generic-key fallback. The key enters only
+the `x-goog-api-key` header, not body/query/repr.
+
+The executor constructs a private `OpenerDirector` with explicit HTTPS, error
+and rejecting redirect handlers. It does not use a global opener or install
+proxy, authentication-retry, cookie, HTTP downgrade or alternate-provider
+handlers. All 301/302/303/307/308 responses are rejected before Location parsing,
+body draining, method conversion, credential forwarding or a second open.
+All remaining non-success statuses fail closed as well.
+
+The HTTP request capability is consumed before open. There is at most one
+HTTP request attempt on this path, including failures. Mocked HTTPSConnection
+tests exercise the real urllib handler chain and count `request()` calls.
+DNS/TCP address probes are not additional HTTP requests. Socket timeout is 10
+seconds; this is not a whole-operation wall-clock deadline.
+
+There are no retries, fallback, tools, function calls, grounding/search, URL
+context, code execution, upload/multimodal, cache, batch, priority or retrieval.
+
+## Bounded, ordered response validation
+
+1. HTTP status: error/redirect bodies are closed without reading.
+2. Exactly one Content-Type header, semantically application/json; optional
+   case-insensitive UTF-8 charset, quoted or unquoted, only. Unknown/duplicate/
+   malformed parameters, non-ASCII or oversized Content-Type, other charsets and
+   other media types are rejected. Compressed responses are rejected.
+3. Read at most **32768 + 1 bytes** of the provider envelope. Overflow is
+   `response_too_large`; never read the full oversized body into memory.
+4. Strict envelope UTF-8, then whole envelope JSON with duplicate-key rejection.
+5. Extract exactly one candidate with one text-only part; no function-call part.
+6. Candidate must be nonempty and at most **4096 UTF-8 bytes**.
+7. Existing independent candidate MIME/size/strict UTF-8 and privacy scan.
+8. Whole candidate JSON with duplicate-key rejection.
+9. Exact v2 response schema, request binding and known candidate ID checks.
+10. Single-candidate select only; local rehydration after integrity/binding checks.
+
+Injected fake HTTP executors are rechecked for status, MIME and envelope size
+before parsing. The production executor performs MIME checking before any body
+read. Metadata never becomes a prompt, follow-up message or returned result.
+
+## Response schema and safe local results
 
 ```text
 {
-  schema_version: "medical-anonymous-shadow-response-v1",
-  unit_ref: "the outbound random unit_ref",
+  schema_version: "medical-anonymous-shadow-response-v2",
+  unit_ref: "the request unit_ref",
   decision: "select" | "abstain" | "unresolved",
-  amount_id: "amount_A" | null,
+  amount_id: "the selected candidate_id" | null,
   confidence: "high" | "medium" | "low" | null
 }
 ```
 
-Only `select` may contain an amount ID and confidence; both values must be null
-for `abstain` and `unresolved`. The amount ID must be one of that request's
-existing IDs. There are no explanation, markdown, reasoning, OCR, amount,
-metadata, filename, path, Drive ID, page, relation extension, arbitrary text,
-or nested fields. Duplicate JSON keys are rejected during parsing, and response
-size is bounded.
+The historic field name `amount_id` is retained on the response only; its value
+is now the random request-scoped candidate_id. Select requires the sole known
+candidate and a confidence enum. Abstain/unresolved require both fields null.
+There are no explanations, metadata or arbitrary text fields. Provider
+confidence is never a production authorization.
 
-The local response binding is a SHA-256 digest of the build's private source
-fingerprint, outbound `unit_ref`, and canonical anonymous request. It is never
-placed on the outbound payload or response. The response must also echo the
-unique random `unit_ref`, so a response built for another request is rejected.
-The gate scans raw response bytes for locally retained OCR literals and concrete
-amount renderings before parsing, including JSON-escaped text and normalized
-full-width/grouped/whitespace numeric surfaces.
+Data-free outcomes include `redirect_rejected`, `request_reused`,
+`invalid_content_type`, `response_too_large`, `invalid_utf8`,
+`malformed_response`, `privacy_rejected`, `binding_rejected`,
+`validation_rejected` and the existing fixed HTTP/timeout mappings.
+Request URL/body/headers, response body/Content-Type/failure metadata, private
+maps, capabilities and API key values are repr-hidden. No logging is added.
 
-Only a returned `AcceptedAnonymousResponse` with the matching private binding
-can enter `rehydrate_anonymous_response`. That is the sole inbound call site for
-`LocalAmountMap.resolve`; its result remains local and `needs_review`, and does
-not call or replace the production resolver. `receive_synthetic_shadow_response`
-turns malformed/empty response, unknown IDs, schema/parser errors, and synthetic
-timeout/quota/API/parser failures into data-free `needs_review` results. No
-exception, report, or repr contains source OCR or actual amounts.
+## Local verification and next boundary
 
-## Synthetic transport boundary and kill switch
+Dedicated privacy tests cover minimization, non-interference, ordering, residual
+cardinality, v1 rejection, integrity seals and conservative selection. Dedicated
+transport tests cover redirect credential isolation, one HTTP attempt, bounded
+reads, parse ordering, copy/concurrency/rebuild replay and safe repr. Existing
+anonymous-shadow regression tests retain strict schema/UTF-8/privacy/duplicate/
+binding/rehydration/no-retry/production-isolation coverage.
 
-There is still **no network implementation**. `FakeAnonymousShadowTransport` is
-only a test double: it has no HTTP, SDK, URL, header, key, retry, telemetry, or
-model call. The future transport protocol accepts only a
-`ValidatedAnonymousBytes` wrapper. `FinalOutboundGate.validate_for_transport`
-creates that wrapper after canonical serialization and the final private-literal
-and numeric scans. Normal callers have no supported API to hand an observation,
-raw dict, `LocalAmountMap`, image/PDF, filename, path, Drive ID, page number,
-metadata, actual amount, or production state to transport.
-
-Python is not a capability-secure runtime: hostile code executing in the same
-process can inspect private attributes or module globals. The wrapper therefore
-prevents accidental architectural bypasses and is enforced with exact runtime
-type checks, but is not a sandbox against arbitrary in-process code. A real
-deployment must additionally keep untrusted plugins/code out of this process.
-
-`MedicalAnonymousShadowTransportPolicy` is independent from generic Gemini and
-production settings. It is default false; `from_setting` enables only the exact
-local value `"true"`, while unset, booleans, and malformed values are disabled.
-`run_fake_shadow_transport` checks this kill switch before source binding, byte
-preparation, or transport invocation. A real caller must retain that ordering
-before API-key lookup as well. Disabled results are data-free `needs_review` and
-the transport callback is not invoked.
-
-The policy freezes the candidate model to exact stable
-`gemini-3.1-flash-lite`; aliases such as `latest` are not allowed. It represents
-the required no-tools, no-grounding, no-caching, no-batch, no-priority, no-retry,
-and no-fallback rules locally. This is not proof of Free Tier at runtime: billing,
-quota, and account tier must still be independently verified before any real
-request, as documented in the preflight review.
-
-## Transport response format gate
-
-Before `FinalInboundGate` sees a response, `TransportResponseGate` accepts a
-minimal synthetic `TransportResponse` only when its status is `ok` and its HTTP
-Content-Type semantically parses as `application/json`. Type/subtype and the
-optional `charset` parameter are case-insensitive; the optional charset may be a
-quoted string but must normalize to UTF-8. Unknown, duplicate, malformed, or
-non-UTF-8 parameters fail closed. Its body must be nonempty bytes at most 4 KiB,
-and strict UTF-8 decoding must succeed. Missing MIME, other media types/charset
-values, oversized bodies, and replacement decoding are rejected. The gate scans raw decoded bytes for private OCR literals and concrete
-amount surfaces before parsing; then it requires one complete JSON document using
-duplicate-key rejection. Markdown fences, prose prefixes/suffixes, and trailing
-garbage fail before semantic parsing.
-
-Only opaque `ValidatedTransportResponse` bytes are passed to the strict semantic
-inbound gate. Fixed data-free result codes cover `disabled`, `timeout`, `quota`,
-`authentication`, `unavailable`, `transport_error`, `invalid_content_type`,
-`response_too_large`, `invalid_utf8`, `malformed_response`, `privacy_rejected`,
-`binding_rejected`, and `validation_rejected`. Raw exceptions, request/response
-bodies, headers, keys, OCR, amounts, paths, and filenames are never put in a
-result or repr. Each request has exactly one fake transport invocation; no retry,
-model/provider fallback, paid route, or production apply path exists.
-
-## Explicit real-transport implementation (still disabled)
-
-Code now contains `MedicalGeminiShadowTransport`, but no application, CLI,
-pipeline, resolver, background job, or test constructs it with a live executor.
-**No real Gemini request has been sent.** The class requires explicit injection
-of both an `HttpExecutor` and an `ApiKeyProvider`; it never creates a default
-executor. `UrllibHttpExecutor` is a small standard-library REST implementation,
-available only when a future explicitly constructs and injects it. Tests inject a
-recording fake executor and patch the stdlib `urlopen` entrypoint to fail if touched.
-There is no Gemini SDK use, dependency addition, HTTP debug logging, tracing, or
-automatic retry in this route.
-
-The only endpoint is the fixed HTTPS POST path
-`v1beta/models/gemini-3.1-flash-lite:generateContent` at the Gemini API host.
-The model is not configurable and aliases/alternate models are rejected by the
-dedicated transport policy. A bounded 10-second stdlib socket timeout covers both
-connection and reads. Exactly one executor call is possible for a logical shadow
-request; 429, 5xx, timeout, connection/TLS/DNS exceptions, and malformed provider
-envelopes have fixed data-free outcomes with no retry, provider fallback, model
-fallback, or paid route.
-
-`run_real_shadow_transport` preserves the required ordering: (1) default-false
-kill switch, (2) fixed no-feature policy, (3) transport-only API-key availability,
-(4) `ValidatedAnonymousBytes` preparation, (5) fixed request construction, (6)
-one executor call, then (7) the existing response gates. A missing key returns
-`authentication` before byte preparation or executor invocation. The lazy
-`EnvironmentMedicalShadowApiKeyProvider` reads only
-`MEDICAL_GEMINI_SHADOW_API_KEY` when this ordering reaches key preflight; this
-phase never invoked it against the real environment. The key is sent only in the
-`x-goog-api-key` header, never a query string, body, repr, result, or exception.
-
-The request body has exactly a constant Gemini protocol wrapper: one static
-instruction plus the already validated canonical anonymous JSON as a separate
-text part. It has no interpolated OCR, amounts, metadata, filename, path, image,
-or local map. It requests `application/json` and supplies the narrow five-field
-response JSON schema; `candidateCount` is one and temperature is zero. There are
-no tools, function calls, grounding/search, URL context, code execution, file or
-multimodal input, cache, batch, priority, thinking output, retrieval, or system
-data. API-side structured output is only defense in depth: local MIME, UTF-8,
-size, JSON, privacy, semantic-schema, binding, and rehydration checks remain final
-authority. Provider response metadata and HTTP error bodies are discarded.
-
-This design does **not** programmatically guarantee Free Tier. It fixes the
-model and excludes optional/paid-like features, retry, and fallback, but account,
-billing, quota, and provider tier remain external facts. Before a separately
-approved real-shadow request, a human must confirm the dedicated Free-only
-project/key and current model eligibility, keep the kill switch explicitly
-enabled only for that request, confirm logging/telemetry controls, and retain
-production isolation. A successful shadow response remains local `needs_review`
-only and cannot save, apply, override, or fail a production result.
+All tests use synthetic observations and fake keys/executors or mocked
+HTTPSConnection. Run without pytest cache/bytecode writes and with network and
+real-key reads blocked. Next step is local-only adversarial re-review. No
+medical-derived Free Tier send or production use is authorized by this checkpoint.
