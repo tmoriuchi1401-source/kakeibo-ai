@@ -60,6 +60,88 @@ class RegionMembership:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class TableEnvelope:
+    table_id: int
+    page: int
+    left: float
+    top: float
+    right: float
+    bottom: float
+    certainty: str  # strong / partial
+    supporting_primitives: int
+    provenance: str = "connected_stroked_line_network"
+
+
+@dataclass(frozen=True)
+class HorizontalBand:
+    table_id: int
+    page: int
+    left: float
+    right: float
+    top: float
+    bottom: float
+    certainty: str  # strong / partial
+    supporting_primitives: int
+    provenance: str = "paired_horizontal_strokes"
+
+
+@dataclass(frozen=True)
+class VerticalPartition:
+    table_id: int
+    page: int
+    x: float
+    top: float
+    bottom: float
+    certainty: str  # strong = full table height; partial = local only
+    supporting_primitives: int
+    provenance: str = "vertical_stroke_span"
+
+
+@dataclass(frozen=True)
+class PartitionLane:
+    table_id: int
+    page: int
+    left: float
+    right: float
+    top: float
+    bottom: float
+    certainty: str
+    provenance: str = "strong_table_envelope_and_full_height_dividers"
+
+
+@dataclass(frozen=True)
+class SectionSeparator:
+    page: int
+    left: float
+    right: float
+    y: float
+    certainty: str  # strong / partial; never a semantic section name
+    table_id: int | None = None
+    provenance: str = "horizontal_stroked_separator"
+
+
+@dataclass(frozen=True)
+class TableStructureEvidence:
+    snapshot_id: str
+    coordinate_snapshot_id: str
+    coordinate_status: str
+    pages: tuple[PageBoundaryEvidence, ...]
+    tables: tuple[TableEnvelope, ...] = field(repr=False)
+    bands: tuple[HorizontalBand, ...] = field(repr=False)
+    partitions: tuple[VerticalPartition, ...] = field(repr=False)
+    lanes: tuple[PartitionLane, ...] = field(repr=False)
+    separators: tuple[SectionSeparator, ...] = field(repr=False)
+    source: str = "pdf_stroked_drawing_primitives"
+
+
+@dataclass(frozen=True)
+class StructureMembership:
+    status: str
+    reason: str
+    scope_id: int | None = None
+
+
 def _axis(segment, tolerance=1e-6):
     if abs(segment.x1-segment.x2) <= tolerance:
         return "vertical"
@@ -137,15 +219,13 @@ def _canonical_point(matrix, crop_box, x, y):
     return transformed_x-crop_box[0], crop_box[3]-transformed_y
 
 
-def inspect_pdf_boundaries(path, snapshot_id: str, coordinate_frame: CoordinateFrame):
-    """Read-only stroked-path extraction in the coordinate frame's canonical space."""
+def _stroked_segments_from_pdf(path):
+    """Return canonicalized stroked paths without looking at any text token."""
     from pypdf import PdfReader
     from pypdf.generic import ContentStream
-    if coordinate_frame.snapshot_id != snapshot_id:
-        return StructuralBoundaryEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", ())
     reader = PdfReader(path)
     if reader.is_encrypted:
-        return StructuralBoundaryEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", ())
+        return None
     segments = []
     for number, page in enumerate(reader.pages, 1):
         media = (float(page.mediabox.left), float(page.mediabox.bottom),
@@ -198,6 +278,16 @@ def inspect_pdf_boundaries(path, snapshot_id: str, coordinate_frame: CoordinateF
                 path_parts, current, start = [], None, None
             # All remaining graphics/text operators intentionally leave the
             # current stroked path untouched unless listed above.
+    return tuple(segments)
+
+
+def inspect_pdf_boundaries(path, snapshot_id: str, coordinate_frame: CoordinateFrame):
+    """Read-only stroked-path extraction in the coordinate frame's canonical space."""
+    if coordinate_frame.snapshot_id != snapshot_id:
+        return StructuralBoundaryEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", (), ())
+    segments = _stroked_segments_from_pdf(path)
+    if segments is None:
+        return StructuralBoundaryEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", (), ())
     return regions_from_segments(snapshot_id, coordinate_frame, segments)
 
 
@@ -228,3 +318,217 @@ def membership(token: PositionedText, evidence: StructuralBoundaryEvidence, *, u
                or region.bottom <= token.y)]
     return RegionMembership("boundary_crossing" if overlap else "outside",
                             reason="bbox_crosses_region_boundary" if overlap else "outside_known_regions")
+
+
+def _touches(first, second, tolerance=1e-6):
+    """Whether two observed stroke segments meet or intersect; no gap bridging."""
+    first_left, first_right = sorted((first.x1, first.x2))
+    first_top, first_bottom = sorted((first.y1, first.y2))
+    second_left, second_right = sorted((second.x1, second.x2))
+    second_top, second_bottom = sorted((second.y1, second.y2))
+    return (max(first_left, second_left) <= min(first_right, second_right)+tolerance
+            and max(first_top, second_top) <= min(first_bottom, second_bottom)+tolerance)
+
+
+def _components(segments, tolerance=1e-6):
+    """Connected drawing topology, scoped per page and without inferred joins."""
+    grouped = defaultdict(list)
+    for segment in segments:
+        grouped[segment.page].append(segment)
+    result = []
+    for page, page_segments in grouped.items():
+        parent = list(range(len(page_segments)))
+        def find(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+        def join(first, second):
+            first, second = find(first), find(second)
+            if first != second:
+                parent[second] = first
+        for first, segment in enumerate(page_segments):
+            for second in range(first):
+                if _touches(segment, page_segments[second], tolerance):
+                    join(first, second)
+        members = defaultdict(list)
+        for index, segment in enumerate(page_segments):
+            members[find(index)].append(segment)
+        result.extend((page, tuple(member)) for member in members.values())
+    return tuple(result)
+
+
+def _exact_cover(spans, start, end, tolerance):
+    """An outer edge must be observed as the edge, not merely crossed by a line."""
+    return any(abs(left-start) <= tolerance and abs(right-end) <= tolerance for left, right in spans)
+
+
+def _table_complete(vertical, horizontal, left, top, right, bottom, tolerance):
+    return (_exact_cover(vertical.get(left, ()), top, bottom, tolerance)
+            and _exact_cover(vertical.get(right, ()), top, bottom, tolerance)
+            and _exact_cover(horizontal.get(top, ()), left, right, tolerance)
+            and _exact_cover(horizontal.get(bottom, ()), left, right, tolerance))
+
+
+def structure_from_segments(snapshot_id: str, coordinate_frame: CoordinateFrame, segments,
+                            *, tolerance=1e-6) -> TableStructureEvidence:
+    """Derive only drawing-topology evidence, before any label/value observation.
+
+    An envelope is strong only with a directly observed closed outer boundary.
+    Partial networks retain their observed scope but never create membership
+    authority.  Vertical partitions may be local; only full-height dividers make
+    partition lanes.  Horizontal separators have no semantic names.
+    """
+    segments = tuple(segment for segment in segments if all(math.isfinite(value) for value in
+                     (segment.x1, segment.y1, segment.x2, segment.y2)))
+    page_ids = sorted({segment.page for segment in segments})
+    if coordinate_frame.status != "verified":
+        pages = tuple(PageBoundaryEvidence(page, "coordinate_unavailable", "coordinate_frame_unverified",
+                                           0, 0, False) for page in page_ids)
+        return TableStructureEvidence(snapshot_id, coordinate_frame.snapshot_id,
+                                      coordinate_frame.status, pages, (), (), (), (), ())
+    tables, bands, partitions, lanes, separators, pages = [], [], [], [], [], []
+    next_table_id = 1
+    components = _components(segments, tolerance)
+    by_page = defaultdict(list)
+    for page, component in components:
+        by_page[page].append(component)
+    for page in page_ids:
+        page_tables_before = len(tables)
+        page_segments = tuple(segment for component in by_page[page] for segment in component)
+        for component in by_page[page]:
+            vertical = _merged_spans(component, "vertical", tolerance)
+            horizontal = _merged_spans(component, "horizontal", tolerance)
+            xs, ys = sorted(vertical), sorted(horizontal)
+            # An isolated horizontal stroke is a real separator observation but
+            # does not invent a table or a band scope.
+            if len(xs) < 2 or len(ys) < 2:
+                for y, spans in horizontal.items():
+                    for left, right in spans:
+                        separators.append(SectionSeparator(page, left, right, y, "partial"))
+                continue
+            left, right, top, bottom = xs[0], xs[-1], ys[0], ys[-1]
+            complete = _table_complete(vertical, horizontal, left, top, right, bottom, tolerance)
+            certainty = "strong" if complete else "partial"
+            table = TableEnvelope(next_table_id, page, left, top, right, bottom,
+                                  certainty, len(component))
+            tables.append(table)
+            full_horizontals = [y for y, spans in horizontal.items()
+                                if _covers(spans, left, right, tolerance)]
+            for band_top, band_bottom in zip(sorted(full_horizontals), sorted(full_horizontals)[1:]):
+                if band_top < band_bottom:
+                    bands.append(HorizontalBand(table.table_id, page, left, right, band_top, band_bottom,
+                                                certainty, 2))
+            for y, spans in horizontal.items():
+                if y in (top, bottom):
+                    continue
+                for span_left, span_right in spans:
+                    separator_certainty = "strong" if _covers(((span_left, span_right),), left, right, tolerance) else "partial"
+                    separators.append(SectionSeparator(page, span_left, span_right, y,
+                                                       separator_certainty, table.table_id))
+            full_dividers = []
+            for x, spans in vertical.items():
+                if x in (left, right):
+                    continue
+                for span_top, span_bottom in spans:
+                    divider_certainty = ("strong" if complete and _covers(((span_top, span_bottom),), top, bottom, tolerance)
+                                          else "partial")
+                    partitions.append(VerticalPartition(table.table_id, page, x, span_top, span_bottom,
+                                                        divider_certainty, 1))
+                    if divider_certainty == "strong":
+                        full_dividers.append(x)
+            if complete:
+                lane_edges = [left, *sorted(set(full_dividers)), right]
+                for lane_left, lane_right in zip(lane_edges, lane_edges[1:]):
+                    if lane_left < lane_right:
+                        lanes.append(PartitionLane(table.table_id, page, lane_left, lane_right,
+                                                   top, bottom, "strong"))
+            next_table_id += 1
+        page_tables = tables[page_tables_before:]
+        if any(table.certainty == "strong" for table in page_tables):
+            status, reason = "constructed", "strong_table_envelope"
+        elif page_tables or page_segments:
+            status, reason = "partial", "partial_drawing_topology"
+        else:
+            status, reason = "unavailable", "no_axis_aligned_stroked_primitives"
+        pages.append(PageBoundaryEvidence(page, status, reason, len(page_segments),
+                                          len(page_tables), bool(page_segments)))
+    return TableStructureEvidence(snapshot_id, coordinate_frame.snapshot_id,
+                                  coordinate_frame.status, tuple(pages), tuple(tables), tuple(bands),
+                                  tuple(partitions), tuple(lanes), tuple(separators))
+
+
+def inspect_pdf_structure(path, snapshot_id: str, coordinate_frame: CoordinateFrame):
+    """Read-only structure extraction; inputs do not include text or candidates."""
+    if coordinate_frame.snapshot_id != snapshot_id:
+        return TableStructureEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", (), (), (), (), (), ())
+    segments = _stroked_segments_from_pdf(path)
+    if segments is None:
+        return TableStructureEvidence(snapshot_id, coordinate_frame.snapshot_id, "unknown", (), (), (), (), (), ())
+    return structure_from_segments(snapshot_id, coordinate_frame, segments)
+
+
+def _inside(box, token, uncertainty=0.0):
+    return (box.left <= token.x-uncertainty and token.x+token.width+uncertainty <= box.right
+            and box.top <= token.y-uncertainty and token.y+token.height+uncertainty <= box.bottom)
+
+
+def _overlaps(box, token):
+    return not (token.x+token.width <= box.left or box.right <= token.x
+                or token.y+token.height <= box.top or box.bottom <= token.y)
+
+
+def table_membership(token: PositionedText, evidence: TableStructureEvidence, *, uncertainty=0.0):
+    if evidence.coordinate_status != "verified":
+        return StructureMembership("structure_incomplete", "coordinate_frame_unverified")
+    if not math.isfinite(uncertainty) or uncertainty < 0:
+        return StructureMembership("structure_incomplete", "bbox_uncertainty_unknown")
+    tables = [table for table in evidence.tables if table.page == token.page]
+    strong = [table for table in tables if table.certainty == "strong"]
+    inside = [table for table in strong if _inside(table, token)]
+    if len(inside) == 1:
+        table = inside[0]
+        return StructureMembership("inside_table_envelope" if _inside(table, token, uncertainty) else "boundary_sensitive",
+                                   "strong_closed_table_envelope", table.table_id)
+    if len(inside) > 1:
+        return StructureMembership("ambiguous", "multiple_table_envelopes")
+    if any(_overlaps(table, token) for table in strong):
+        return StructureMembership("boundary_crossing", "bbox_crosses_table_envelope")
+    if any(_inside(table, token) or _overlaps(table, token) for table in tables):
+        return StructureMembership("structure_incomplete", "partial_table_envelope")
+    return StructureMembership("outside_known_structure" if tables else "structure_incomplete",
+                               "outside_table_envelopes" if tables else "table_envelope_unavailable")
+
+
+def band_membership(token: PositionedText, evidence: TableStructureEvidence, table: StructureMembership,
+                    *, uncertainty=0.0):
+    if table.status != "inside_table_envelope" or table.scope_id is None:
+        return StructureMembership("structure_incomplete", "table_membership_" + table.status)
+    bands = [band for band in evidence.bands if band.table_id == table.scope_id]
+    inside = [band for band in bands if _inside(band, token)]
+    if len(inside) == 1:
+        band = inside[0]
+        return StructureMembership("inside_exactly_one_band" if _inside(band, token, uncertainty) else "boundary_sensitive",
+                                   "bounded_horizontal_band", band.table_id)
+    if len(inside) > 1:
+        return StructureMembership("intersects_multiple_bands", "multiple_horizontal_bands", table.scope_id)
+    if any(_overlaps(band, token) for band in bands):
+        return StructureMembership("intersects_multiple_bands", "bbox_crosses_horizontal_band", table.scope_id)
+    return StructureMembership("structure_incomplete", "horizontal_band_unavailable", table.scope_id)
+
+
+def partition_membership(token: PositionedText, evidence: TableStructureEvidence, table: StructureMembership,
+                         *, uncertainty=0.0):
+    if table.status != "inside_table_envelope" or table.scope_id is None:
+        return StructureMembership("structure_incomplete", "table_membership_" + table.status)
+    lanes = [lane for lane in evidence.lanes if lane.table_id == table.scope_id]
+    if not lanes:
+        return StructureMembership("structure_incomplete", "vertical_partition_unavailable", table.scope_id)
+    inside = [lane for lane in lanes if _inside(lane, token)]
+    if len(inside) == 1:
+        lane = inside[0]
+        return StructureMembership("inside_exactly_one_partition" if _inside(lane, token, uncertainty) else "boundary_sensitive",
+                                   "strong_vertical_partition_lane", lane.table_id)
+    if len(inside) > 1 or any(_overlaps(lane, token) for lane in lanes):
+        return StructureMembership("crosses_partition", "bbox_crosses_vertical_partition", table.scope_id)
+    return StructureMembership("structure_incomplete", "vertical_partition_scope_incomplete", table.scope_id)
