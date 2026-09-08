@@ -157,6 +157,32 @@ python -m app.cli card-gmail-import --max-results 100
 伝票番号を `aupay:<伝票番号>` という取込IDにするため、同じメールを何度検索しても
 二重登録されない。必須項目が欠けるメールは自動登録せず `needs_review` として集計する。
 
+次の保存候補を、GmailとSheetsの読み取りだけで評価するには:
+
+```bash
+python -m app.cli card-gmail-write-plan-preview --max-results 5000
+```
+
+write-planのtransaction schemaは `schema_version`, `source`, `source_record_id`,
+`transaction_date`, `merchant`, `amount_yen`, `payment_method`, `identity`,
+`business_fingerprint`, `memo` である。identityはRFC Message-IDのハッシュと明細番号
+からなるカードメール固有キーで、同じメールの再処理と期間重複取得を吸収する。
+日付・店舗・金額・支払方法・会員・明細番号から作るbusiness fingerprintは監査と
+collision検知に使い、同日同額の別取引を自動重複扱いしない。不明な必須項目やidentity
+collisionはinsertせずreview/rejectedとして停止する。
+
+別Message-IDで同じ明細が再送された場合もsource identityは変更しない。日付・金額・
+merchant・会員区分・メール内明細番号を含むbusiness fingerprintが完全一致し、
+Message-ID由来部分だけが異なる明細を `probable_resend` として束ね、全source identityを
+evidenceとして保持しながらcanonical 1件だけをwrite-plan候補へ投影する。明細番号が
+異なる同日同額同merchant取引は別取引のまま保持する。
+
+既存カードCSVとは日付・金額・正規化merchantで比較し、一意なら
+`cross_source_strong_match`、候補が複数またはmerchant不一致なら
+`cross_source_ambiguous`、候補なしなら `cross_source_no_match` とする。これはpreview
+evidenceであり、この段階では自動duplicate authorityではない。Gmail読み取りは間隔を
+空け、429、一時的rate-limit 403、一時的5xxだけを指数backoff付きで最大6回試行する。
+
 ## 取込データの統合・重複排除
 
 書き込まずに候補件数だけ確認する:

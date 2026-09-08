@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,6 +19,7 @@ from googleapiclient.errors import HttpError
 from .aupay_card_pipeline import AuPayCardPipeline
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
+from .transaction_plan import build_write_plan
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 
@@ -230,6 +232,39 @@ def _card_mail_reason(error: ValueError) -> str:
     return "parse_failed"
 
 
+def _transient_gmail_error(error: HttpError) -> bool:
+    status = int(getattr(error.resp, "status", 0) or 0)
+    if status == 429 or 500 <= status <= 599:
+        return True
+    if status != 403:
+        return False
+    try:
+        payload = json.loads(error.content.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    reasons = {
+        item.get("reason", "")
+        for item in payload.get("error", {}).get("errors", [])
+        if isinstance(item, dict)
+    }
+    return bool(reasons & {"rateLimitExceeded", "userRateLimitExceeded", "backendError"})
+
+
+def _execute_gmail(request_factory, *, sleeper=time.sleep, max_attempts: int = 6,
+                   base_delay: float = 0.5):
+    """Execute a Gmail read with bounded retry for transient errors only."""
+    retries = 0
+    for attempt in range(max_attempts):
+        try:
+            return request_factory().execute(), retries
+        except HttpError as exc:
+            if not _transient_gmail_error(exc) or attempt + 1 >= max_attempts:
+                raise
+            sleeper(base_delay * (2 ** attempt))
+            retries += 1
+    raise RuntimeError("gmail_retry_exhausted")
+
+
 def gmail_service(token_json: str):
     info = json.loads(token_json)
     creds = Credentials.from_authorized_user_info(info, scopes=[GMAIL_READONLY])
@@ -312,23 +347,27 @@ class AuPayCardMailPipeline:
             "parse_failed": 0,
             "gmail_list_failed": 0,
             "gmail_read_failed": 0,
+            "gmail_retry_count": 0,
         }
 
     @classmethod
-    def _collect(cls, service, query: str, max_results: int) -> tuple[list[dict], dict[str, int]]:
+    def _collect(cls, service, query: str, max_results: int, *,
+                 sleeper=None, request_interval: float = 0.25) -> tuple[list[dict], dict[str, int]]:
         if max_results <= 0:
             raise ValueError("max_resultsは1以上にしてください")
+        sleeper = sleeper or time.sleep
         summary = cls._empty_summary()
         transactions: list[dict] = []
         seen_message_ids: set[str] = set()
         page_token = None
         while summary["found"] < max_results:
             try:
-                list_response = service.users().messages().list(
+                list_response, retries = _execute_gmail(lambda: service.users().messages().list(
                     userId="me", q=query,
                     maxResults=min(100, max_results - summary["found"]),
                     pageToken=page_token,
-                ).execute()
+                ), sleeper=sleeper)
+                summary["gmail_retry_count"] += retries
             except HttpError:
                 summary["gmail_list_failed"] += 1
                 break
@@ -349,9 +388,10 @@ class AuPayCardMailPipeline:
                     continue
                 seen_message_ids.add(gmail_message_id)
                 try:
-                    response = service.users().messages().get(
+                    response, retries = _execute_gmail(lambda: service.users().messages().get(
                         userId="me", id=gmail_message_id, format="raw",
-                    ).execute()
+                    ), sleeper=sleeper)
+                    summary["gmail_retry_count"] += retries
                     raw_mime = _decode_gmail_raw(response.get("raw", ""))
                     parsed = parse_aupay_card_raw(raw_mime)
                 except HttpError:
@@ -366,6 +406,8 @@ class AuPayCardMailPipeline:
                 summary["parsed_messages"] += 1
                 summary["parsed_transactions"] += len(parsed)
                 transactions.extend(parsed)
+                if request_interval > 0:
+                    sleeper(request_interval)
             page_token = list_response.get("nextPageToken")
             if not page_token:
                 break
@@ -374,6 +416,34 @@ class AuPayCardMailPipeline:
     def preview_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
         """Read and parse Gmail messages without accessing Sheets or writing data."""
         _, summary = self._collect(gmail_service(token_json), query, max_results)
+        return summary
+
+    def preview_write_plan(self, token_json: str, query: str, max_results: int = 100) -> dict:
+        """Collect Gmail and read existing imports, returning a write-free plan summary."""
+        if self.db is None:
+            raise ValueError("write-plan previewにはread-only SheetsDBが必要です")
+        transactions, collection = self._collect(gmail_service(token_json), query, max_results)
+        plan = build_write_plan(transactions, self.db.get("取込データ!A2:L"))
+        same_day_groups = plan["same_day_same_amount_groups"]
+        summary = dict(collection)
+        summary.update({
+            "input_mail_count": collection["found"],
+            "parsed_transaction_count": collection["parsed_transactions"],
+            "unique_transaction_count": plan["unique_transactions"],
+            "duplicate_count": plan["summary"]["duplicate"],
+            "needs_review_count": collection["needs_review"] + plan["summary"]["needs_review"],
+            "rejected_count": plan["summary"]["rejected"],
+            "identity_collisions": plan["identity_collisions"],
+            "same_day_same_amount_group_count": len(same_day_groups),
+            "same_day_same_amount_samples": same_day_groups[:5],
+            "write_plan_inserts": plan["unique_transactions"],
+            "canonical_transaction_count": plan["reconciliation"]["summary"]["canonical_transactions"],
+            "probable_resend_groups": plan["reconciliation"]["summary"]["probable_resend_groups"],
+            "probable_resend_records": plan["reconciliation"]["summary"]["probable_resend_records"],
+            "cross_source_strong_match": plan["reconciliation"]["summary"]["cross_source_strong_match"],
+            "cross_source_ambiguous": plan["reconciliation"]["summary"]["cross_source_ambiguous"],
+            "cross_source_no_match": plan["reconciliation"]["summary"]["cross_source_no_match"],
+        })
         return summary
 
     def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:

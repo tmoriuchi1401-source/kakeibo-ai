@@ -9,7 +9,11 @@ from googleapiclient.errors import HttpError
 from httplib2 import Response
 
 from app import cli
-from app.aupay_mail_pipeline import AuPayCardMailPipeline, parse_aupay_card_raw
+from app.aupay_mail_pipeline import (
+    AuPayCardMailPipeline,
+    _execute_gmail,
+    parse_aupay_card_raw,
+)
 from app.settings import Settings
 
 
@@ -276,6 +280,7 @@ def test_default_card_gmail_query_matches_sender_domain_with_bounded_date(monkey
 
 
 def test_gmail_read_error_is_counted_without_upstream_detail(monkeypatch):
+    monkeypatch.setattr("app.aupay_mail_pipeline.time.sleep", lambda _: None)
     class FailingRequest:
         def execute(self):
             raise HttpError(Response({"status": "429"}), b"sensitive upstream detail")
@@ -308,6 +313,7 @@ def test_gmail_read_error_is_counted_without_upstream_detail(monkeypatch):
 
 
 def test_import_fails_closed_when_gmail_read_is_incomplete(monkeypatch):
+    monkeypatch.setattr("app.aupay_mail_pipeline.time.sleep", lambda _: None)
     class FailingRequest:
         def execute(self):
             raise HttpError(Response({"status": "429"}), b"sensitive upstream detail")
@@ -338,3 +344,51 @@ def test_import_fails_closed_when_gmail_read_is_incomplete(monkeypatch):
 
     assert db.rows == []
     assert db.append_calls == []
+
+
+def test_transient_retry_succeeds_with_bounded_backoff():
+    calls = []
+    sleeps = []
+    class Flaky:
+        def execute(self):
+            calls.append(1)
+            if len(calls) < 3:
+                raise HttpError(Response({"status": "429"}), b"rate limited")
+            return {"ok": True}
+    result, retries = _execute_gmail(lambda: Flaky(), sleeper=sleeps.append)
+    assert result == {"ok": True}
+    assert retries == 2
+    assert sleeps == [0.5, 1.0]
+
+
+def test_transient_retry_stops_at_limit():
+    calls = []
+    class Failing:
+        def execute(self):
+            calls.append(1)
+            raise HttpError(Response({"status": "503"}), b"temporary")
+    with pytest.raises(HttpError):
+        _execute_gmail(lambda: Failing(), sleeper=lambda _: None, max_attempts=3)
+    assert len(calls) == 3
+
+
+def test_permanent_error_is_not_retried():
+    calls = []
+    class Permanent:
+        def execute(self):
+            calls.append(1)
+            raise HttpError(Response({"status": "401"}), b"permanent")
+    with pytest.raises(HttpError):
+        _execute_gmail(lambda: Permanent(), sleeper=lambda _: None)
+    assert len(calls) == 1
+
+
+def test_second_detail_missing_required_field_fails_closed():
+    malformed_second = """No.002--------
+▼ご利用日
+2026年8月9日
+▼ご利用金額
+500円
+"""
+    with pytest.raises(ValueError, match="No.002"):
+        parse_aupay_card_raw(raw_message(detail(1, "匿名店舗", 1200), malformed_second))
