@@ -43,9 +43,10 @@ class Snapshot:
     token_ids: tuple[str, ...]
     facts: tuple[ProductionFact, ...] = field(repr=False)
     identity_ambiguous: frozenset[str]
+    parser_mode: str = "pdf"
 
 
-def observe_tokens(tokens, *, local_key=None):
+def observe_tokens(tokens, *, local_key=None, parser_mode="pdf", snapshot_context=None):
     """Run the unchanged PDF parser against exactly this immutable token snapshot.
 
     Explicitly reusing a private key allows repeat comparison of identical input.
@@ -53,6 +54,8 @@ def observe_tokens(tokens, *, local_key=None):
     Occurrence is combined with page, geometry, normalized text and full snapshot.
     """
     tokens = tuple(tokens)
+    if parser_mode not in {"pdf", "ocr"}:
+        raise ValueError("unsupported_parser_mode")
     key = secrets.token_bytes(32) if local_key is None else local_key
     if not isinstance(key, bytes) or len(key) < 32:
         raise ValueError("local_key_too_short")
@@ -69,17 +72,20 @@ def observe_tokens(tokens, *, local_key=None):
         content.append((token.page, occurrences[token.page], token.x, token.y,
                         token.width, token.height, unicodedata.normalize("NFC", token.text),
                         token.text, token.confidence))
-    snapshot_id = digest(("payroll-pdf-evidence-v1", content))
+    # Context is an already-private diagnostic binding (for example an opaque
+    # source ID and OCR configuration).  Production never supplies or reads it.
+    snapshot_id = digest(("payroll-pdf-evidence-v2", parser_mode, snapshot_context, content))
     token_ids = tuple(digest((snapshot_id, record)) for record in content)
     physical_keys = [(t.page, t.x, t.y, t.width, t.height,
                       unicodedata.normalize("NFC", t.text)) for t in tokens]
     repeats = Counter(physical_keys)
-    items = parse_positioned_items(tokens, ocr=False)
+    items = parse_positioned_items(tokens, ocr=parser_mode == "ocr")
     facts = tuple(ProductionFact(i.page, i.x, i.y, i.raw_item_name, i.raw_value,
                                  i.needs_review, i.review_reason_code,
                                  i.standard_item_candidate is not None) for i in items)
     return Snapshot(snapshot_id, tokens, token_ids, facts,
-                    frozenset(ref for ref, p in zip(token_ids, physical_keys) if repeats[p] > 1))
+                    frozenset(ref for ref, p in zip(token_ids, physical_keys) if repeats[p] > 1),
+                    parser_mode)
 
 
 @dataclass(frozen=True)

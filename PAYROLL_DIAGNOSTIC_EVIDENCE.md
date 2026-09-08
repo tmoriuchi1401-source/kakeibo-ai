@@ -26,8 +26,39 @@ An ownership-eligible diagnostic snapshot requires the exact same PDF bytes,
 complete page scope, deterministic repeated extraction, physical occurrence
 provenance, and an extraction mode that is demonstrably the parser input mode.
 For embedded text, matching pypdf visitor occurrences provide this contract.
-An OCR snapshot may be reproducible but remains ownership-ineligible when its
-parser mode/provenance has not been represented by the ownership observer.
+`payroll_ocr_snapshot_bridge` adds a diagnostic-only OCR contract. It binds a
+private snapshot to an HMAC of the exact PDF bytes, page count, renderer and
+actual raster dimensions, resize decision, OCR engine/version/language/config,
+extraction version, and a repeated-run identity. The byte HMAC and all token
+objects remain in memory; its safe report has only opaque IDs and counts.
+
+The bridge reproduces the token-producing portion of the local OCR path and
+then compares its complete token tuple with a new call to the unchanged
+production extractor. It invokes the unchanged parser with `ocr=True` only
+after that equality check. Thus an OCR parser-mode fact is an observer fact for
+the same token universe, never a claim that OCR tokens are PDF visitor tokens
+or that they are production success/adoption evidence beyond this diagnostic
+scope.
+
+OCR token locators are snapshot-scoped HMACs over page occurrence, pixel bbox,
+original and NFC-normalized representation, confidence, and the OCR
+block/paragraph/line/word provenance. Array position is not identity. Same
+text at distinct physical locations stays distinct; an otherwise
+indistinguishable duplicate remains explicitly ambiguous.
+
+The current renderer transform is verified only for unrotated, MediaBox-equal
+CropBox, UserUnit=1 pages whose actual bitmap dimensions bind the recorded
+PDFium scale. It maps the OCR image's top-left `left/top/width/height` envelope
+back to canonical PDF top-left coordinates and records one-pixel-equivalent
+uncertainty. Rotation, CropBox divergence, UserUnit scaling, incomplete pages,
+or a dimension mismatch are not normalized by guesswork and remain
+unknown/unsupported. Existing visitor provenance is never reused for OCR.
+
+An OCR snapshot is ownership-ready only when all byte/materialization, page
+scope, rerun, physical identity (unique or explicit ambiguity), coordinate,
+and parser-mode checks are complete. An ownership aggregate is not produced
+when any check is incomplete. This is diagnostic-only; it neither changes nor
+authorizes production OCR policy or adoption.
 `minimum_pdf_text=0` forces the PDF-text branch even for image-only PDFs; it is
 appropriate for synthetic visitor tests, not proof that production's OCR
 fallback was attempted.

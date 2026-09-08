@@ -202,7 +202,8 @@ def test_production_modules_do_not_depend_on_observer():
     for path in root.glob("*.py"):
         if path.name in {"payroll_pdf_diagnostics.py", "payroll_diagnostic_evidence.py",
                          "payroll_coordinate_diagnostics.py", "payroll_boundary_diagnostics.py",
-                         "payroll_ownership_provenance.py", "payroll_extraction_path_diagnostics.py"}:
+                         "payroll_ownership_provenance.py", "payroll_extraction_path_diagnostics.py",
+                         "payroll_ocr_snapshot_bridge.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):

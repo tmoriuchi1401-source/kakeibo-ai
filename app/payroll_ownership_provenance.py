@@ -58,18 +58,6 @@ def _signature(fact):
             fact.reason, fact.mapped)
 
 
-def _replayed_fact(tokens, fact):
-    """Look up the exact production-visible result after an observer replay."""
-    target = _signature(fact)
-    for item in parse_positioned_items(tuple(tokens), ocr=False):
-        observed = type(fact)(item.page, item.x, item.y, item.raw_item_name, item.raw_value,
-                              item.needs_review, item.review_reason_code,
-                              item.standard_item_candidate is not None)
-        if _signature(observed) == target:
-            return observed
-    return None
-
-
 def reconstruct_consumption(snapshot, *, source_snapshot_id=None,
                             page_scope_complete=True, success_set_complete=True):
     """Prove consumption only through parser counterfactual replay.
@@ -81,11 +69,21 @@ def reconstruct_consumption(snapshot, *, source_snapshot_id=None,
     """
     source_matches = source_snapshot_id in (None, snapshot.snapshot_id)
     fact_type = type(snapshot.facts[0]) if snapshot.facts else None
+    ocr_mode = getattr(snapshot, "parser_mode", "pdf") == "ocr"
+    def replayed(tokens, fact):
+        target = _signature(fact)
+        for item in parse_positioned_items(tuple(tokens), ocr=ocr_mode):
+            observed = type(fact)(item.page, item.x, item.y, item.raw_item_name, item.raw_value,
+                                  item.needs_review, item.review_reason_code,
+                                  item.standard_item_candidate is not None)
+            if _signature(observed) == target:
+                return observed
+        return None
     replayed_facts = (() if fact_type is None else tuple(
         fact_type(item.page, item.x, item.y, item.raw_item_name, item.raw_value,
                   item.needs_review, item.review_reason_code,
                   item.standard_item_candidate is not None)
-        for item in parse_positioned_items(snapshot.tokens, ocr=False)))
+        for item in parse_positioned_items(snapshot.tokens, ocr=ocr_mode)))
     # Facts supplied from another parse/materialization are not a complete
     # success set merely because their fields happen to look plausible.
     facts_match = (len(snapshot.facts) == len(replayed_facts)
@@ -109,7 +107,7 @@ def reconstruct_consumption(snapshot, *, source_snapshot_id=None,
         necessary = []
         for index, token_id in possible:
             replay_tokens = snapshot.tokens[:index] + snapshot.tokens[index + 1:]
-            if _replayed_fact(replay_tokens, fact) is None:
+            if replayed(replay_tokens, fact) is None:
                 necessary.append(token_id)
         if len(necessary) == 1 and necessary[0] not in snapshot.identity_ambiguous:
             mappings.append(ConsumptionMapping(occurrence, necessary[0], "unique_parser_counterfactual"))
