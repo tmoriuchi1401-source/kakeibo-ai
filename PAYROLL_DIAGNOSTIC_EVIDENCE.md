@@ -14,6 +14,24 @@ object identity, array index alone nor text alone is used. A private evaluation
 key is random by default; explicit reuse supports repeat comparison. These are
 not permanent IDs across documents, extraction changes or reordered tokens.
 
+## Extraction-path snapshot contract
+
+`payroll_extraction_path_diagnostics` is a local, read-only observer for one
+caller-supplied PDF materialization. It reports keyed source identity, byte
+length, page count, and anonymous counts for the embedded-text/visitor and
+local-OCR paths. It never exports source text, OCR text, coordinates, paths, or
+the local key.
+
+An ownership-eligible diagnostic snapshot requires the exact same PDF bytes,
+complete page scope, deterministic repeated extraction, physical occurrence
+provenance, and an extraction mode that is demonstrably the parser input mode.
+For embedded text, matching pypdf visitor occurrences provide this contract.
+An OCR snapshot may be reproducible but remains ownership-ineligible when its
+parser mode/provenance has not been represented by the ownership observer.
+`minimum_pdf_text=0` forces the PDF-text branch even for image-only PDFs; it is
+appropriate for synthetic visitor tests, not proof that production's OCR
+fallback was attempted.
+
 Same text at distinct locations has distinct locators. Coincident normalized-
 identical occurrences remain physically ambiguous even though locators differ.
 Keep snapshots, tokens and keys in memory/private storage; never serialize their
