@@ -215,6 +215,46 @@ def column_section_gate(snapshot, label, candidate, boundaries):
     return Gate("pass", "known_column_section", ("label_selected_region", "bounded_bbox_uncertainty"))
 
 
+def structural_column_section_gate(snapshot, label_id, candidate_id, coordinate_frame,
+                                   structural_boundaries):
+    """Evaluate only independently observed stroked-table regions.
+
+    This is deliberately an observer bridge: it maps snapshot occurrences to the
+    already-normalized diagnostic frame, then asks whether both bboxes have one
+    robust, identical structural region.  It never creates regions from either
+    token and has no production caller.
+    """
+    from .payroll_boundary_diagnostics import membership
+
+    if coordinate_frame is None or structural_boundaries is None:
+        return Gate("unknown", "column_section_unknown")
+    if (coordinate_frame.snapshot_id != snapshot.snapshot_id
+            or structural_boundaries.snapshot_id != snapshot.snapshot_id
+            or structural_boundaries.coordinate_snapshot_id != snapshot.snapshot_id):
+        return Gate("unknown", "coordinate_boundary_snapshot_mismatch")
+    if coordinate_frame.status != "verified" or structural_boundaries.coordinate_status != "verified":
+        return Gate("unknown", "coordinate_prerequisite_unverified")
+    try:
+        label_index = snapshot.token_ids.index(label_id)
+        candidate_index = snapshot.token_ids.index(candidate_id)
+        label = coordinate_frame.normalized_tokens[label_index]
+        candidate = coordinate_frame.normalized_tokens[candidate_index]
+    except (ValueError, IndexError):
+        return Gate("unknown", "normalized_token_snapshot_mismatch")
+    label_region = membership(label, structural_boundaries)
+    candidate_region = membership(candidate, structural_boundaries)
+    if label_region.status != "exactly_one":
+        return Gate("unknown", "label_" + label_region.reason)
+    if candidate_region.status == "boundary_crossing":
+        return Gate("fail", "candidate_" + candidate_region.reason)
+    if candidate_region.status != "exactly_one":
+        return Gate("unknown", "candidate_" + candidate_region.reason)
+    if label_region.region != candidate_region.region:
+        return Gate("fail", "unexpected_column_or_section")
+    return Gate("pass", "same_closed_structural_region",
+                ("candidate_independent_stroked_boundary",))
+
+
 @dataclass(frozen=True)
 class OperatorConfirmation:
     """Explicit local annotation, never synthesized by geometry. Do not put in Git."""
@@ -243,7 +283,7 @@ class CandidateRecord:
 
 
 def evaluate_candidate(snapshot, label_id, candidate_id, *, frame=None, boundaries=None,
-                       confirmation=None):
+                       coordinate_frame=None, structural_boundaries=None, confirmation=None):
     """Evaluate evidence, never return an authoritative value or updated item.
 
     Geometry currently uses the existing observer window, not a newly approved
@@ -277,6 +317,9 @@ def evaluate_candidate(snapshot, label_id, candidate_id, *, frame=None, boundari
     if frame is not None and frame.snapshot_id == snapshot.snapshot_id:
         coordinates = Gate({"verified": "pass", "unsupported": "fail", "unknown": "unknown"}[frame.status], frame.reason)
     columns = column_section_gate(snapshot, label, value, boundaries)
+    if structural_boundaries is not None:
+        columns = structural_column_section_gate(snapshot, label_id, candidate_id,
+                                                 coordinate_frame, structural_boundaries)
     import re
     candidates = [ref for ref, t in refs.items() if t.page == label.page
                   and (amounts(t.text) or re.fullmatch(r"\s*[+-]?\d+(?:[,.]\d+)*(?:円|時間|日)?\s*", t.text))
