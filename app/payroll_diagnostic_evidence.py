@@ -160,27 +160,9 @@ def inspect_pdf_frame(path, snapshot):
     Validate against the existing extractor's raw tm/bbox convention. A mismatch
     does not repair coordinates; it invalidates this evidence.
     """
-    from pypdf import PdfReader
-    reader = PdfReader(path)
-    observed, matrices, axes, rotations, units = [], [], [], [], []
-    if reader.is_encrypted:
-        return FrameEvidence(snapshot.snapshot_id, "unknown", "encrypted_pdf")
-    for number, page in enumerate(reader.pages, 1):
-        height = float(page.mediabox.height)
-        def visitor(value, cm, tm, font, font_size):
-            value = value.strip()
-            if not value:
-                return
-            size = float(font_size or 10)
-            observed.append(PositionedText(value, number, float(tm[4]), height-float(tm[5]),
-                                           max(size, len(value)*size*.55), size, 100.0))
-            matrices.append(tuple(cm))
-            axes.append(tuple(tm[:4]))
-            rotations.append(int(page.get("/Rotate", 0)))
-            units.append(float(page.get("/UserUnit", 1)))
-        page.extract_text(visitor_text=visitor)
-    return frame_evidence(snapshot, matrices, text_axes=axes, page_rotations=rotations,
-                          user_units=units, extraction_matches=tuple(observed) == snapshot.tokens)
+    from .payroll_coordinate_diagnostics import inspect_pdf_coordinate_frame
+    normalized = inspect_pdf_coordinate_frame(path, snapshot.snapshot_id, snapshot.tokens)
+    return FrameEvidence(snapshot.snapshot_id, normalized.status, normalized.reason)
 
 
 @dataclass(frozen=True)
