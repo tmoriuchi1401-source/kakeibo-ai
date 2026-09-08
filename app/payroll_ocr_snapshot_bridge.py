@@ -1,4 +1,4 @@
-"""Diagnostic-only bridge from an image-only PDF to OCR ownership evidence.
+"""Diagnostic-only bridge from a PDF or PNG to OCR ownership evidence.
 
 All snapshots are private, in-memory objects.  The public report contains only
 opaque IDs and aggregate statuses.  This module deliberately has no production
@@ -22,7 +22,7 @@ from .payroll_ocr import PositionedText, extract_payroll_text
 from .payroll_parser import parse_positioned_items
 
 
-EXTRACTION_VERSION = "diagnostic-ocr-snapshot-bridge-v1"
+EXTRACTION_VERSION = "diagnostic-ocr-snapshot-bridge-v2"
 RENDER_SCALE = 3.0
 OCR_LANGUAGE = "jpn+eng"
 OCR_CONFIG = "--psm 6"
@@ -130,7 +130,29 @@ def _source_id(key: bytes, source_bytes: bytes) -> str:
     return hmac.new(key, b"payroll-ocr-source-v1\x00" + source_bytes, hashlib.sha256).hexdigest()
 
 
+def _input_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return "pdf"
+    if suffix == ".png":
+        return "png"
+    raise ValueError("unsupported_diagnostic_input")
+
+
 def _page_metadata(path: Path):
+    """Return source-frame metadata without rendering or changing source bytes."""
+    if _input_kind(path) == "png":
+        from PIL import Image
+        with Image.open(path) as image:
+            if image.format != "PNG":
+                raise ValueError("png_format_mismatch")
+            width, height = image.size
+        if width <= 0 or height <= 0:
+            raise ValueError("invalid_image_dimensions")
+        # PNG has one native, top-left pixel frame.  The tuple shape deliberately
+        # matches the PDF metadata shape but is interpreted only by the PNG path.
+        return ((1, (0.0, 0.0, float(width), float(height)),
+                 (0.0, 0.0, float(width), float(height)), 0, 1.0),)
     from pypdf import PdfReader
     reader = PdfReader(path)
     if reader.is_encrypted:
@@ -154,16 +176,29 @@ def _engine_details():
 
 def _run_local_ocr(path: Path, metadata, *, timeout_seconds: int):
     """Reproduce only the token-producing portion of the production OCR path."""
-    import pypdfium2 as pdfium
     import pytesseract
-    from PIL import ImageEnhance, ImageOps
+    from PIL import Image, ImageEnhance, ImageOps
 
-    document = pdfium.PdfDocument(str(path))
-    if len(document) != len(metadata):
-        raise ValueError("renderer_page_count_mismatch")
+    input_kind = _input_kind(path)
     tokens, provenance, pages = [], [], []
-    for number, page in enumerate(document, 1):
-        raster = page.render(scale=RENDER_SCALE).to_pil()
+    if input_kind == "pdf":
+        import pypdfium2 as pdfium
+        document = pdfium.PdfDocument(str(path))
+        if len(document) != len(metadata):
+            raise ValueError("renderer_page_count_mismatch")
+        rendered = ((number, page.render(scale=RENDER_SCALE).to_pil(), RENDER_SCALE)
+                    for number, page in enumerate(document, 1))
+    else:
+        if len(metadata) != 1:
+            raise ValueError("image_page_count_mismatch")
+        with Image.open(path) as source:
+            if source.format != "PNG":
+                raise ValueError("png_format_mismatch")
+            # copy() loads exactly the supplied PNG raster; no EXIF transpose,
+            # crop, or rotation is applied before the tracked OCR preprocessing.
+            raster = source.copy()
+        rendered = ((1, raster, 1.0),)
+    for number, raster, render_scale in rendered:
         raster_width, raster_height = raster.width, raster.height
         image = ImageEnhance.Contrast(ImageOps.grayscale(raster)).enhance(CONTRAST)
         resize = 2 if image.width < 1800 else 1
@@ -171,7 +206,7 @@ def _run_local_ocr(path: Path, metadata, *, timeout_seconds: int):
             image = image.resize((image.width*2, image.height*2))
         _, media, crop, rotation, user_unit = metadata[number-1]
         pages.append(RasterPage(number, raster_width, raster_height, image.width, image.height,
-                                RENDER_SCALE, resize, rotation, crop == media, user_unit))
+                                render_scale, resize, rotation, crop == media, user_unit))
         data = pytesseract.image_to_data(image, lang=OCR_LANGUAGE, config=OCR_CONFIG,
                                          timeout=timeout_seconds,
                                          output_type=pytesseract.Output.DICT)
@@ -188,7 +223,7 @@ def _run_local_ocr(path: Path, metadata, *, timeout_seconds: int):
     return tuple(tokens), tuple(provenance), tuple(pages)
 
 
-def _coordinate_frame(snapshot_id: str, tokens, raster_pages, metadata):
+def _coordinate_frame(snapshot_id: str, tokens, raster_pages, metadata, *, input_kind="pdf"):
     """Verify the declared renderer mapping, otherwise preserve uncertainty.
 
     PDFium documents scale in PDF canvas units.  The bridge accepts only the
@@ -214,6 +249,15 @@ def _coordinate_frame(snapshot_id: str, tokens, raster_pages, metadata):
         width, height = media[2]-media[0], media[3]-media[1]
         if width <= 0 or height <= 0 or not all(math.isfinite(v) for v in media):
             return unknown("invalid_page_box")
+        if input_kind == "png":
+            # Native image pixels are the source coordinate authority.  OCR sees
+            # only grayscale/contrast (geometry preserving) plus this recorded
+            # integer resize; any crop/rotation would fail the metadata checks.
+            if page.render_scale != 1 or page.raster_width != width or page.raster_height != height:
+                return unknown("native_image_dimensions_do_not_bind_source_frame")
+            if page.ocr_width != page.raster_width*page.resize_factor or page.ocr_height != page.raster_height*page.resize_factor:
+                return unknown("ocr_preprocessing_dimensions_unbound")
+            continue
         # PDFium's scale is pixels per PDF canvas unit.  A one-pixel rounding
         # allowance avoids upgrading a materially different raster.
         if abs(page.raster_width-width*page.render_scale) > 1 or abs(page.raster_height-height*page.render_scale) > 1:
@@ -230,9 +274,14 @@ def _coordinate_frame(snapshot_id: str, tokens, raster_pages, metadata):
         values = (token.x/factor, token.y/factor, token.width/factor, token.height/factor)
         if not all(math.isfinite(value) for value in values) or values[2] <= 0 or values[3] <= 0:
             return unknown("invalid_ocr_bbox")
+        if (token.x < 0 or token.y < 0 or token.x+token.width > page.ocr_width
+                or token.y+token.height > page.ocr_height):
+            return unknown("ocr_bbox_outside_preprocessed_image")
         normalized.append(PositionedText(token.text, token.page, *values, token.confidence))
     uncertainty = max(1/(page.render_scale*page.resize_factor) for page in raster_pages) if raster_pages else None
-    return OcrCoordinateFrame(snapshot_id, "verified", "pdfium_scale_bound_unrotated_media_frame",
+    reason = ("native_image_pixel_frame_bound" if input_kind == "png"
+              else "pdfium_scale_bound_unrotated_media_frame")
+    return OcrCoordinateFrame(snapshot_id, "verified", reason,
                               uncertainty=uncertainty, normalized_tokens=tuple(normalized))
 
 
@@ -295,12 +344,18 @@ def capture_ocr_ownership_snapshot(path, *, local_key=None, timeout_seconds=30):
     source_bytes = path.read_bytes()
     source_id = _source_id(key, source_bytes)
     try:
+        input_kind = _input_kind(path)
         metadata = _page_metadata(path)
         renderer_version, engine_version = _engine_details()
+        renderer = ("pypdfium2.render(scale=3)" if input_kind == "pdf"
+                    else "PIL.Image.open(native_png_pixels)")
+        if input_kind == "png":
+            from PIL import __version__ as pillow_version
+            renderer_version = str(pillow_version)
         source = SourceBinding(source_id, len(metadata), len(source_bytes), EXTRACTION_VERSION,
-                               "pypdfium2.render(scale=3)", renderer_version,
+                               renderer, renderer_version,
                                "tesseract", engine_version, OCR_LANGUAGE, OCR_CONFIG,
-                               True, "same_pdf_bytes_bound")
+                               True, "same_source_bytes_bound")
         tokens, provenance, pages = _run_local_ocr(path, metadata, timeout_seconds=timeout_seconds)
     except Exception:
         empty = SourceBinding(source_id, 0, len(source_bytes), EXTRACTION_VERSION, "unavailable", "unavailable",
@@ -315,7 +370,7 @@ def capture_ocr_ownership_snapshot(path, *, local_key=None, timeout_seconds=30):
                          and all(token.page == detail.page for token, detail in zip(tokens, provenance)))
     ambiguity = _physical_ambiguity(snapshot, provenance) if physical_complete else frozenset(snapshot.token_ids)
     snapshot = replace(snapshot, identity_ambiguous=ambiguity)
-    frame = _coordinate_frame(snapshot.snapshot_id, tokens, pages, metadata)
+    frame = _coordinate_frame(snapshot.snapshot_id, tokens, pages, metadata, input_kind=input_kind)
     scope = len(pages) == source.page_count and {page.page for page in pages} == set(range(1, source.page_count+1))
     try:
         second_tokens, second_provenance, second_pages = _run_local_ocr(path, metadata, timeout_seconds=timeout_seconds)

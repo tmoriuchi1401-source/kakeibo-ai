@@ -26,8 +26,9 @@ An ownership-eligible diagnostic snapshot requires the exact same PDF bytes,
 complete page scope, deterministic repeated extraction, physical occurrence
 provenance, and an extraction mode that is demonstrably the parser input mode.
 For embedded text, matching pypdf visitor occurrences provide this contract.
-`payroll_ocr_snapshot_bridge` adds a diagnostic-only OCR contract. It binds a
-private snapshot to an HMAC of the exact PDF bytes, page count, renderer and
+`payroll_ocr_snapshot_bridge` adds a diagnostic-only OCR contract for PDF and
+direct PNG input. It binds a private snapshot to an HMAC of the exact source
+bytes, page count, renderer and
 actual raster dimensions, resize decision, OCR engine/version/language/config,
 extraction version, and a repeated-run identity. The byte HMAC and all token
 objects remain in memory; its safe report has only opaque IDs and counts.
@@ -46,7 +47,14 @@ block/paragraph/line/word provenance. Array position is not identity. Same
 text at distinct physical locations stays distinct; an otherwise
 indistinguishable duplicate remains explicitly ambiguous.
 
-The current renderer transform is verified only for unrotated, MediaBox-equal
+For direct PNG, the source coordinate authority is the decoded native image
+pixel frame (top-left origin), bound to actual image dimensions and the exact
+geometry-preserving OCR preprocessing. Grayscale and contrast leave geometry
+unchanged; any integer resize is recorded and reversed for the normalized
+observer frame. The PNG path performs no PDF conversion, crop, rotation, or
+visitor-provenance reuse. A dimension or bbox mismatch remains unknown.
+
+The PDF renderer transform is verified only for unrotated, MediaBox-equal
 CropBox, UserUnit=1 pages whose actual bitmap dimensions bind the recorded
 PDFium scale. It maps the OCR image's top-left `left/top/width/height` envelope
 back to canonical PDF top-left coordinates and records one-pixel-equivalent

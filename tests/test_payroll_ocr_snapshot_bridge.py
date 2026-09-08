@@ -48,6 +48,17 @@ def test_rotation_crop_and_bbox_uncertainty_are_not_silently_promoted():
     cropped = ((1, (0, 0, 200, 100), (10, 0, 200, 100), 0, 1),)
     cropped_pages = (replace(PAGES[0], crop_matches_media=False),)
     assert _coordinate_frame("synthetic", TOKENS, cropped_pages, cropped).status == "unsupported"
+    native = ((1, (0, 0, 300, 100), (0, 0, 300, 100), 0, 1),)
+    native_pages = (RasterPage(1, 300, 100, 600, 200, 1, 2, 0, True, 1),)
+    assert _coordinate_frame("synthetic", TOKENS, native_pages, native, input_kind="png").status == "verified"
+    cropped_native = (replace(native_pages[0], crop_matches_media=False),)
+    cropped_metadata = ((1, (0, 0, 300, 100), (10, 0, 300, 100), 0, 1),)
+    assert _coordinate_frame("synthetic", TOKENS, cropped_native, cropped_metadata,
+                             input_kind="png").status == "unsupported"
+    rotated_native = (replace(native_pages[0], page_rotation=90),)
+    rotated_metadata = ((1, (0, 0, 300, 100), (0, 0, 300, 100), 90, 1),)
+    assert _coordinate_frame("synthetic", TOKENS, rotated_native, rotated_metadata,
+                             input_kind="png").status == "unsupported"
 
 
 def test_same_text_different_physical_token_and_indistinguishable_duplicate():
@@ -128,3 +139,27 @@ def test_actual_local_ocr_rerun_uses_same_production_token_universe(tmp_path):
     assert result.parser_mode.status == "established"
     assert result.coordinate_frame.status == "verified"
     assert result.ownership_ready
+
+
+def test_actual_direct_png_uses_native_pixel_frame_and_unchanged_ocr_parser(tmp_path):
+    """PNG input remains direct: no PDF materialization or visitor provenance."""
+    from PIL import Image, ImageDraw
+    image = Image.new("L", (300, 100), 255)
+    ImageDraw.Draw(image).text((30, 30), "SYNTHETIC", fill=0)
+    path = tmp_path / "synthetic.png"
+    image.save(path, "PNG")
+    before = parse_positioned_items((), ocr=True)
+    result = capture_ocr_ownership_snapshot(path, local_key=KEY)
+    repeated = capture_ocr_ownership_snapshot(path, local_key=KEY)
+    assert result.source.complete and result.source.page_count == 1
+    assert result.raster_pages[0].raster_width == 300
+    assert result.raster_pages[0].raster_height == 100
+    assert result.raster_pages[0].resize_factor == 2
+    assert result.rerun_stable
+    assert result.source.source_id == repeated.source.source_id
+    assert result.snapshot.snapshot_id == repeated.snapshot.snapshot_id
+    assert result.parser_mode.status == "established"
+    assert result.coordinate_frame.status == "verified"
+    assert result.coordinate_frame.reason == "native_image_pixel_frame_bound"
+    assert result.ownership_ready
+    assert parse_positioned_items((), ocr=True) == before
