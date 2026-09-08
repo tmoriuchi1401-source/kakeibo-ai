@@ -1,7 +1,7 @@
 # Payroll diagnostic evidence contract
 
 This opt-in observer has no production caller, persistence or adoption API.
-Production modules must not import either diagnostic module; the invariant suite
+Production modules must not import diagnostic modules; the invariant suite
 checks static imports. `shadow_eligible` is an evaluation classification only.
 
 ## Snapshot and identity
@@ -21,15 +21,26 @@ dataclasses. Export only CandidateRecord.safe_dict(), which contains keyed IDs,
 statuses, reasons and fixed evidence descriptions, not text, values or geometry.
 Do not log source-bearing library exceptions with private data or paths.
 
-## Consumption ledger
+## Consumption provenance
 
 Every successful parser item is included, even if its scalar value is None.
-Exactly one same-page raw_value occurrence establishes use. Multiple matches
-establish possible use only. Missing/ambiguous correspondence makes the ledger
-incomplete; absence from that ledger never means unused. Distinct unused requires
-a complete ledger for all successful results. Other review labels competing for
-the candidate are checked separately; lack of successful consumption does not
-prove semantic ownership. No production algorithm is replayed to guess a token.
+`payroll_ownership_provenance` performs a diagnostic-only counterfactual replay
+of the unchanged parser: it removes one candidate physical token at a time and
+recognizes consumption only when exactly one removal makes the same parser fact
+disappear. This is observation of the parser's decision, not a replacement
+pairing algorithm.
+
+`definitely_used` requires a unique snapshot identity and unique necessary-token
+counterfactual. `definitely_unused` requires the same extraction snapshot,
+complete page scope and success enumeration, a complete mapping for every
+successful pair, unique physical identity, physical exclusion from all consumed
+tokens, and no fallback-claim competition. It means only “not consumed by a
+production successful pair”; it does not approve a fallback, semantics, column,
+geometry, numeric validity, or adoption. Missing/ambiguous correspondence makes
+the ledger incomplete; absence from that ledger never means unused. Coincident
+duplicates remain `ownership_ambiguous`; stale/materialization-mismatched input
+and incomplete mappings remain `ledger_incomplete`; two fallback labels claiming
+one otherwise-unused physical token are `candidate_competed`.
 
 This ledger describes the unchanged parse_positioned_items output for this
 snapshot, not Sheets, reconciliation, or a different preview's post-processing.

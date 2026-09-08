@@ -201,7 +201,8 @@ def test_production_modules_do_not_depend_on_observer():
     root = Path(__file__).resolve().parents[1] / "app"
     for path in root.glob("*.py"):
         if path.name in {"payroll_pdf_diagnostics.py", "payroll_diagnostic_evidence.py",
-                         "payroll_coordinate_diagnostics.py", "payroll_boundary_diagnostics.py"}:
+                         "payroll_coordinate_diagnostics.py", "payroll_boundary_diagnostics.py",
+                         "payroll_ownership_provenance.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
@@ -210,8 +211,10 @@ def test_production_modules_do_not_depend_on_observer():
                 assert "payroll_diagnostic_evidence" not in (node.module or "")
                 assert "payroll_coordinate_diagnostics" not in (node.module or "")
                 assert "payroll_boundary_diagnostics" not in (node.module or "")
+                assert "payroll_ownership_provenance" not in (node.module or "")
             elif isinstance(node, ast.Import):
                 assert all("payroll_pdf_diagnostics" not in alias.name for alias in node.names)
                 assert all("payroll_diagnostic_evidence" not in alias.name for alias in node.names)
                 assert all("payroll_coordinate_diagnostics" not in alias.name for alias in node.names)
                 assert all("payroll_boundary_diagnostics" not in alias.name for alias in node.names)
+                assert all("payroll_ownership_provenance" not in alias.name for alias in node.names)
