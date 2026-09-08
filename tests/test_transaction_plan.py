@@ -13,13 +13,12 @@ def row(identity, merchant="店", amount=1000, date="2026-08-08", memo="メー�
             "memo": memo}
 
 
-def test_normalized_schema_is_stable_and_materializable():
+def test_normalized_raw_schema_is_stable_but_not_materializable():
     tx = normalize_card_transaction(row("aupaycard-mail:abc:001"))
     assert tx.identity == "aupaycard-mail:abc:001"
     assert tx.source == "au PAYカード"
     assert tx.amount_yen == 1000
-    assert len(tx.to_import_row()) == 12
-    assert tx.to_import_row()[10] == tx.business_fingerprint
+    assert not hasattr(tx, "to_import_row")
 
 
 def test_existing_identity_is_duplicate_and_reprocessing_input_is_duplicate():

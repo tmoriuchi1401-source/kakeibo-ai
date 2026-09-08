@@ -146,41 +146,19 @@ def test_raw_parser_fails_closed_for_html_only_message():
         parse_aupay_card_raw(message.as_bytes())
 
 
-def test_gmail_import_writes_existing_card_transaction_contract(monkeypatch):
+def test_legacy_raw_gmail_import_is_disabled_before_api_or_sheet_access(monkeypatch):
     raw = raw_message(detail(1, "匿名店舗", 1200))
     service = service_for(raw)
     monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
     db = CardDB()
 
-    result = AuPayCardMailPipeline(db).import_gmail("token", "card-query")
+    with pytest.raises(RuntimeError, match="raw_card_gmail_import_disabled"):
+        AuPayCardMailPipeline(db).import_gmail("token", "card-query", max_results=2612)
 
-    assert result["new"] == 1
-    assert result["parsed_transactions"] == 1
-    assert service.messages_api.list_calls[0]["q"] == "card-query"
-    assert service.messages_api.get_calls == [
-        {"userId": "me", "id": "gmail-unit-1", "format": "raw"}
-    ]
-    assert db.rows[0][2:10] == [
-        "au PAYカード", db.rows[0][0], "2026-08-08", "匿名店舗", 1200,
-        "メール通知", "unclassified_card", "",
-    ]
-    assert "unit-card-message" not in str(db.rows)
-
-
-def test_same_gmail_notification_is_idempotent(monkeypatch):
-    raw = raw_message(detail(1, "匿名店舗", 1200))
-    db = CardDB()
-    first = service_for(raw)
-    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: first)
-    assert AuPayCardMailPipeline(db).import_gmail("token", "card-query")["new"] == 1
-
-    second = service_for(raw)
-    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: second)
-    result = AuPayCardMailPipeline(db).import_gmail("token", "card-query")
-
-    assert result["new"] == 0
-    assert result["unchanged"] == 1
-    assert len(db.rows) == 1
+    assert service.messages_api.list_calls == []
+    assert service.messages_api.get_calls == []
+    assert db.rows == []
+    assert db.append_calls == []
 
 
 def test_missing_rfc_message_id_fails_closed_without_sheet_write(monkeypatch):
@@ -188,7 +166,7 @@ def test_missing_rfc_message_id_fails_closed_without_sheet_write(monkeypatch):
     monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
     db = CardDB()
 
-    result = AuPayCardMailPipeline(db).import_gmail("token", "card-query")
+    result = AuPayCardMailPipeline().preview_gmail("token", "card-query")
 
     assert result["needs_review"] == 1
     assert result["missing_message_id"] == 1
@@ -222,21 +200,15 @@ def test_malformed_and_non_card_mail_are_counted_without_body_output(monkeypatch
     assert "匿名店舗" not in str(result)
 
 
-def test_existing_amazon_and_autocharge_classification_is_preserved(monkeypatch):
+def test_parser_preserves_merchants_for_downstream_classification():
     raw = raw_message(
         detail(1, "AMAZON.CO.JP", 1200),
         detail(2, "au PAY 残高オートチャージ", 3000),
     )
-    service = service_for(raw)
-    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
-    db = CardDB()
+    rows = parse_aupay_card_raw(raw)
 
-    result = AuPayCardMailPipeline(db).import_gmail("token", "card-query")
-
-    assert result["amazon_unmatched"] == 1
-    assert result["aupay_charge"] == 1
-    assert [row[8] for row in db.rows] == [
-        "amazon_unmatched", "transfer_aupay_charge",
+    assert [row["merchant"] for row in rows] == [
+        "AMAZON.CO.JP", "au PAY 残高オートチャージ",
     ]
 
 
@@ -260,6 +232,53 @@ def test_preview_cli_is_read_only_and_prints_only_summary(monkeypatch, capsys):
     cli.main()
 
     assert capsys.readouterr().out.strip() == "{'found': 1, 'parsed_transactions': 1, 'needs_review': 0}"
+
+
+def test_apply_plan_preview_cli_uses_read_only_sheet_service(monkeypatch, capsys):
+    read_service = object()
+    db = object()
+
+    class Settings:
+        gmail_token_json = "token"
+        aupay_card_gmail_query = "card-query"
+        spreadsheet_id = "sheet-id"
+
+        def validate(self, **kwargs):
+            assert kwargs == {"need_gmail": True, "need_sheet": True}
+
+    class PreviewPipeline:
+        def __init__(self, actual_db):
+            assert actual_db is db
+
+        def preview_apply_plan(self, token, query, max_results):
+            assert (token, query, max_results) == ("token", "card-query", 5000)
+            return {"apply_plan_status": "blocked", "apply_candidate_count": 0}
+
+    monkeypatch.setattr(cli, "Settings", Settings)
+    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: read_service)
+    monkeypatch.setattr(
+        cli, "SheetsDB",
+        lambda spreadsheet_id, service: db
+        if (spreadsheet_id, service) == ("sheet-id", read_service) else None,
+    )
+    monkeypatch.setattr(cli, "AuPayCardMailPipeline", PreviewPipeline)
+    monkeypatch.setattr(
+        sys, "argv", ["app.cli", "card-gmail-apply-plan-preview", "--max-results", "5000"],
+    )
+
+    cli.main()
+
+    assert "'apply_plan_status': 'blocked'" in capsys.readouterr().out
+
+
+def test_raw_import_cli_is_rejected_before_settings_or_google_access(monkeypatch):
+    monkeypatch.setattr(
+        cli, "Settings", lambda: pytest.fail("Settings must not be loaded"),
+    )
+    monkeypatch.setattr(sys, "argv", ["app.cli", "card-gmail-import"])
+
+    with pytest.raises(RuntimeError, match="raw_card_gmail_import_disabled"):
+        cli.main()
 
 
 def test_card_gmail_query_is_configurable_without_changing_wallet_query(monkeypatch):
@@ -312,7 +331,7 @@ def test_gmail_read_error_is_counted_without_upstream_detail(monkeypatch):
     assert "sensitive upstream detail" not in str(result)
 
 
-def test_import_fails_closed_when_gmail_read_is_incomplete(monkeypatch):
+def test_preview_marks_collection_incomplete_when_gmail_read_fails(monkeypatch):
     monkeypatch.setattr("app.aupay_mail_pipeline.time.sleep", lambda _: None)
     class FailingRequest:
         def execute(self):
@@ -337,13 +356,10 @@ def test_import_fails_closed_when_gmail_read_is_incomplete(monkeypatch):
     monkeypatch.setattr(
         "app.aupay_mail_pipeline.gmail_service", lambda _: FailingRawService(),
     )
-    db = CardDB()
+    result = AuPayCardMailPipeline().preview_gmail("token", "card-query")
 
-    with pytest.raises(RuntimeError, match="gmail_collection_incomplete"):
-        AuPayCardMailPipeline(db).import_gmail("token", "card-query")
-
-    assert db.rows == []
-    assert db.append_calls == []
+    assert result["gmail_read_failed"] == 1
+    assert result["collection_complete"] is False
 
 
 def test_transient_retry_succeeds_with_bounded_backoff():

@@ -112,6 +112,7 @@ def main():
     cgp=sub.add_parser("card-gmail-preview"); cgp.add_argument("--max-results",type=int,default=100)
     cgi=sub.add_parser("card-gmail-import"); cgi.add_argument("--max-results",type=int,default=100)
     cgpw=sub.add_parser("card-gmail-write-plan-preview"); cgpw.add_argument("--max-results",type=int,default=100)
+    cgpa=sub.add_parser("card-gmail-apply-plan-preview"); cgpa.add_argument("--max-results",type=int,default=100)
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
     aci=sub.add_parser("aupay-csv-import"); aci.add_argument("csv")
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -263,14 +264,17 @@ def main():
             s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
         ))
     elif args.cmd=="card-gmail-import":
-        s,db,_=make(False); s.validate(need_gmail=True)
-        print(AuPayCardMailPipeline(db).import_gmail(
-            s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
-        ))
+        raise RuntimeError("raw_card_gmail_import_disabled_use_canonical_apply_plan")
     elif args.cmd=="card-gmail-write-plan-preview":
         s=Settings(); s.validate(need_gmail=True, need_sheet=True)
         db=SheetsDB(s.spreadsheet_id, service=read_only_sheets_service())
         print(AuPayCardMailPipeline(db).preview_write_plan(
+            s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
+        ))
+    elif args.cmd=="card-gmail-apply-plan-preview":
+        s=Settings(); s.validate(need_gmail=True, need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id, service=read_only_sheets_service())
+        print(AuPayCardMailPipeline(db).preview_apply_plan(
             s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
         ))
     elif args.cmd=="aupay-csv-preview":

@@ -146,9 +146,8 @@ python -m app.cli card-eml-import "【ご利用詳細】au PAY カード.eml"
 python -m app.cli card-gmail-preview --max-results 100
 ```
 
-確認後に次を実行すると、Gmailを変更せず、既存の「取込データ」へカード明細を
-冪等に取り込む。RFC Message-IDまたは必須明細項目がないメールは取込せず、件数と
-reason codeだけを返す。
+旧raw Gmail import経路は安全境界で無効化されており、次のコマンドは書込み前に
+明示的に拒否される。raw transactionはproduction apply authorityではない。
 
 ```bash
 python -m app.cli card-gmail-import --max-results 100
@@ -182,6 +181,18 @@ evidenceとして保持しながらcanonical 1件だけをwrite-plan候補へ投
 `cross_source_ambiguous`、候補なしなら `cross_source_no_match` とする。これはpreview
 evidenceであり、この段階では自動duplicate authorityではない。Gmail読み取りは間隔を
 空け、429、一時的rate-limit 403、一時的5xxだけを指数backoff付きで最大6回試行する。
+
+reconciliation済みcanonical projectionのproduction apply候補を安全に評価するには:
+
+```bash
+python -m app.cli card-gmail-apply-plan-preview --max-results 5000
+```
+
+このapply-plan previewもGmail/Sheetsの読み取りだけを行い、writerは呼ばない。
+collection途中終了、Gmail read failure、parser review、identity collision、reconciliation
+不整合、またはCSV evidenceがambiguousならplan全体をblockedにしてcandidateを空にする。
+strong matchはevidenceのままでduplicate authorityにはせず、no-matchと同様にgate通過時の
+canonical候補になれる。将来のexecutor境界はsafe plan型と明示的なapply指定を必須とする。
 
 ## 取込データの統合・重複排除
 

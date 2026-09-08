@@ -33,12 +33,6 @@ class Transaction:
     business_fingerprint: str
     memo: str = ""
 
-    def to_import_row(self, *, status: str = "unclassified_card", note: str = "") -> list:
-        return [self.identity, "", self.source, self.source_record_id,
-                self.transaction_date, self.merchant, self.amount_yen,
-                self.payment_method, status, "", self.business_fingerprint,
-                note or self.memo]
-
 
 @dataclass(frozen=True)
 class PlanItem:
@@ -58,6 +52,7 @@ class ReconciledTransaction:
     canonical: Transaction
     state: str
     source_identities: tuple[str, ...]
+    existing_source_identities: tuple[str, ...]
     cross_source: CrossSourceEvidence
 
 
@@ -122,6 +117,9 @@ def _cross_source_evidence(tx: Transaction, existing_rows: list[list]) -> CrossS
 def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | None = None) -> dict:
     """Project source records into deterministic, evidence-preserving candidates."""
     existing_rows = existing_rows or []
+    existing_identities = {
+        _text(row[0]) for row in existing_rows if row and _text(row[0])
+    }
     rejected = 0
     by_identity: dict[str, list[Transaction]] = {}
     for raw in raw_rows:
@@ -181,6 +179,10 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
                 canonical=canonical,
                 state="probable_resend" if probable else ("needs_review" if len(rows) > 1 else "new"),
                 source_identities=projected_identities,
+                existing_source_identities=tuple(
+                    identity for identity in projected_identities
+                    if identity in existing_identities
+                ),
                 cross_source=_cross_source_evidence(canonical, existing_rows),
             ))
         if probable:
@@ -209,6 +211,9 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
             "needs_review": len(review),
             "rejected": rejected,
             "identity_collisions": collisions,
+            "existing_identity_duplicates": sum(
+                bool(item.existing_source_identities) for item in reconciled
+            ),
             **cross_counts,
         },
     }

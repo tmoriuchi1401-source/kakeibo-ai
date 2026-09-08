@@ -16,10 +16,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .aupay_card_pipeline import AuPayCardPipeline
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
-from .transaction_plan import build_write_plan
+from .transaction_plan import build_write_plan, reconcile_transactions
+from .aupay_card_apply_plan import build_canonical_apply_plan
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 
@@ -330,7 +330,7 @@ class AuPayCardMailPipeline:
         self.db = db
 
     @staticmethod
-    def _empty_summary() -> dict[str, int]:
+    def _empty_summary() -> dict:
         return {
             "found": 0,
             "fetched": 0,
@@ -348,11 +348,14 @@ class AuPayCardMailPipeline:
             "gmail_list_failed": 0,
             "gmail_read_failed": 0,
             "gmail_retry_count": 0,
+            "listing_complete": False,
+            "collection_truncated": False,
+            "collection_complete": False,
         }
 
     @classmethod
     def _collect(cls, service, query: str, max_results: int, *,
-                 sleeper=None, request_interval: float = 0.25) -> tuple[list[dict], dict[str, int]]:
+                 sleeper=None, request_interval: float = 0.25) -> tuple[list[dict], dict]:
         if max_results <= 0:
             raise ValueError("max_resultsは1以上にしてください")
         sleeper = sleeper or time.sleep
@@ -373,6 +376,7 @@ class AuPayCardMailPipeline:
                 break
             messages = list_response.get("messages", [])
             if not messages:
+                summary["listing_complete"] = True
                 break
             for item in messages:
                 if summary["found"] >= max_results:
@@ -410,7 +414,17 @@ class AuPayCardMailPipeline:
                     sleeper(request_interval)
             page_token = list_response.get("nextPageToken")
             if not page_token:
+                summary["listing_complete"] = True
                 break
+            if summary["found"] >= max_results:
+                summary["collection_truncated"] = True
+                break
+        summary["collection_complete"] = bool(
+            summary["listing_complete"]
+            and not summary["collection_truncated"]
+            and not summary["gmail_list_failed"]
+            and not summary["gmail_read_failed"]
+        )
         return transactions, summary
 
     def preview_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
@@ -446,13 +460,19 @@ class AuPayCardMailPipeline:
         })
         return summary
 
-    def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
-        """Read card detail messages and idempotently import their parsed transactions."""
+    def preview_apply_plan(self, token_json: str, query: str, max_results: int = 100) -> dict:
+        """Return only an anonymized, write-free canonical apply-plan summary."""
         if self.db is None:
-            raise ValueError("カードGmail取込にはSheetsDBが必要です")
-        transactions, summary = self._collect(gmail_service(token_json), query, max_results)
-        if summary["gmail_list_failed"] or summary["gmail_read_failed"]:
-            raise RuntimeError("gmail_collection_incomplete")
-        imported = AuPayCardPipeline(self.db).import_transactions(transactions)
-        summary.update(imported)
-        return summary
+            raise ValueError("apply-plan previewにはread-only SheetsDBが必要です")
+        transactions, collection = self._collect(gmail_service(token_json), query, max_results)
+        reconciliation = reconcile_transactions(
+            transactions, self.db.get("取込データ!A2:L"),
+        )
+        plan = build_canonical_apply_plan(collection, reconciliation)
+        result = dict(collection)
+        result.update(plan.summary())
+        return result
+
+    def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:
+        """Reject the legacy raw-to-Sheets production path before any API access."""
+        raise RuntimeError("raw_card_gmail_import_disabled_use_canonical_apply_plan")
