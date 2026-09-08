@@ -16,7 +16,7 @@ def token(text, x=0, y=0, width=40, height=10):
 @pytest.mark.parametrize("tokens,reason", [
     ((token("基本給"), token("1,234", 45)), None),
     ((token("基本給"), token("1,234", 0, 20)), "vertical_candidate_exists"),
-    ((token("基本給"), token("1,234", 100, 20)), "adjacent_column_candidate"),
+    ((token("基本給"), token("1,234", 100, 20)), "off_column_y_neighbor"),
     ((token("基本給"), token("時間外手当", 15), token("1,234", 20, 20)),
      "candidate_shared_with_other_label"),
     ((token("基本給"), token("1,234", 0, 20), token("2,345", 20, 25)),
