@@ -189,10 +189,22 @@ python -m app.cli card-gmail-apply-plan-preview --max-results 5000
 ```
 
 このapply-plan previewもGmail/Sheetsの読み取りだけを行い、writerは呼ばない。
-collection途中終了、Gmail read failure、parser review、identity collision、reconciliation
-不整合、またはCSV evidenceがambiguousならplan全体をblockedにしてcandidateを空にする。
-strong matchはevidenceのままでduplicate authorityにはせず、no-matchと同様にgate通過時の
-canonical候補になれる。将来のexecutor境界はsafe plan型と明示的なapply指定を必須とする。
+collection途中終了、Gmail list/read failure、identity collision、reconciliation不整合は
+global blockerとしてplan全体のcandidateを空にする。return、CSV ambiguous、exact既存Gmail
+identity、item-level reviewはcanonical item単位でwithholdし、安全gateを通過したpurchaseと
+同じplan内で監査できる。strong matchはevidenceのままでduplicate authorityにはせず、
+no-matchと同様にcandidateになれる。candidate、withheld、duplicate、reviewの排他的statusと
+canonical総数のaccounting invariantもsummaryへ出力する。将来のexecutor境界はsafe plan型と
+明示的なapply指定を必須とする。
+
+カードメールの明細parseはmail-level resultの中でaccepted itemとprivacy-safeなreview
+itemを分離する。正額は `purchase` として正数を保持し、対象明細block自身が
+`-<金額>円(返品)` の形式と返品evidenceを持つ場合だけ `return` として負号を保持する。
+メール内に返品という語があるだけでは、同居する正額明細をreturnへ変更しない。
+未知の負額形式や必須field欠落はitem番号・reason code・field reasonだけをreview evidence
+として保持し、merchantや本文は保存しない。正常な兄弟明細はreconciliation inputへ残る。
+partial parse reviewは別manifestへ隔離し、return canonicalは全件 `withheld_return` として
+candidateから除外するため、いずれもproduction writerへは到達しない。
 
 ## 取込データの統合・重複排除
 

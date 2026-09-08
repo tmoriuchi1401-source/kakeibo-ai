@@ -7,10 +7,11 @@ from app.transaction_plan import (
 )
 
 
-def row(identity, merchant="店", amount=1000, date="2026-08-08", memo="メール明細No.001"):
+def row(identity, merchant="店", amount=1000, date="2026-08-08", memo="メール明細No.001",
+        transaction_kind="purchase"):
     return {"import_id": identity, "date": date, "merchant": merchant,
             "amount": amount, "payment_type": "メール通知", "member": "本会員",
-            "memo": memo}
+            "memo": memo, "transaction_kind": transaction_kind}
 
 
 def test_normalized_raw_schema_is_stable_but_not_materializable():
@@ -110,3 +111,42 @@ def test_reconciliation_is_deterministic_across_input_order():
     forward = reconcile_transactions(rows)
     reverse = reconcile_transactions(list(reversed(rows)))
     assert forward["transactions"] == reverse["transactions"]
+
+
+def test_purchase_and_return_same_absolute_amount_are_distinct():
+    result = reconcile_transactions([
+        row(mail_id("a"), amount=1000, transaction_kind="purchase"),
+        row(mail_id("b"), amount=-1000, transaction_kind="return"),
+    ])
+
+    assert result["summary"]["canonical_transactions"] == 2
+    assert result["summary"]["purchase_canonical_transactions"] == 1
+    assert result["summary"]["return_canonical_transactions"] == 1
+    assert result["summary"]["probable_resend_groups"] == 0
+    assert {item.canonical.transaction_kind for item in result["transactions"]} == {
+        "purchase", "return",
+    }
+
+
+def test_return_resend_pair_has_one_signed_canonical_transaction():
+    rows = [
+        row(mail_id("b"), amount=-1000, transaction_kind="return"),
+        row(mail_id("a"), amount=-1000, transaction_kind="return"),
+    ]
+
+    forward = reconcile_transactions(rows)
+    reverse = reconcile_transactions(list(reversed(rows)))
+
+    assert forward == reverse
+    assert forward["summary"]["probable_resend_groups"] == 1
+    assert forward["summary"]["return_canonical_transactions"] == 1
+    assert forward["transactions"][0].canonical.amount_yen == -1000
+
+
+def test_negative_without_explicit_return_kind_is_rejected():
+    result = reconcile_transactions([
+        row(mail_id("a"), amount=-1000, transaction_kind="purchase"),
+    ])
+
+    assert result["summary"]["rejected"] == 1
+    assert result["summary"]["canonical_transactions"] == 0

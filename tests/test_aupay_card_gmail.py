@@ -13,6 +13,7 @@ from app.aupay_mail_pipeline import (
     AuPayCardMailPipeline,
     _execute_gmail,
     parse_aupay_card_raw,
+    parse_aupay_card_raw_partial,
 )
 from app.settings import Settings
 
@@ -23,6 +24,17 @@ def detail(number, merchant, amount, date="2026年8月8日"):
 {date}
 ▼ご利用金額
 {amount:,}円
+▼ご利用先
+{merchant}
+"""
+
+
+def return_detail(number, merchant, amount, date="2026年8月8日", marker="返品"):
+    return f"""No.{number:03d}--------
+▼ご利用日
+{date}
+▼ご利用金額
+-{amount:,}円({marker})
 ▼ご利用先
 {merchant}
 """
@@ -119,6 +131,77 @@ def test_raw_parser_preserves_multiple_card_details():
     ]
     assert rows[0]["import_id"].startswith("aupaycard-mail:")
     assert rows[0]["import_id"] != rows[1]["import_id"]
+    assert [row["transaction_kind"] for row in rows] == ["purchase", "purchase"]
+
+
+def test_partial_parser_preserves_signed_return_semantics():
+    result = parse_aupay_card_raw_partial(raw_message(
+        return_detail(1, "匿名返品先", 1200),
+    ))
+
+    assert result.status == "accepted"
+    assert result.review_items == ()
+    assert result.accepted_items[0].transaction_kind == "return"
+    assert result.accepted_items[0].amount_yen == -1200
+    with pytest.raises(ValueError, match="partial parse reconciliation"):
+        parse_aupay_card_raw(raw_message(return_detail(1, "匿名返品先", 1200)))
+
+
+def test_partial_parser_accepts_purchase_and_return_in_one_mail():
+    result = parse_aupay_card_raw_partial(raw_message(
+        detail(1, "匿名購入先", 1200),
+        return_detail(2, "匿名返品先", 500),
+    ))
+
+    assert result.status == "accepted"
+    assert [(item.transaction_kind, item.amount_yen) for item in result.accepted_items] == [
+        ("purchase", 1200), ("return", -500),
+    ]
+
+
+def test_partial_parser_keeps_valid_item_when_sibling_is_malformed():
+    malformed = """No.002--------
+▼ご利用日
+2026年8月9日
+▼ご利用金額
+500円
+"""
+    result = parse_aupay_card_raw_partial(raw_message(
+        detail(1, "匿名購入先", 1200), malformed,
+    ))
+
+    assert result.status == "partial"
+    assert len(result.accepted_items) == 1
+    assert result.accepted_items[0].item_number == 1
+    assert len(result.review_items) == 1
+    review = result.review_items[0]
+    assert review.item_number == 2
+    assert review.reason == "line_item_required_field_invalid"
+    assert review.field_reasons == ("merchant_missing",)
+    assert review.evidence_classifications == ("merchant_field_unusable",)
+    assert "匿名購入先" not in str(review)
+
+
+def test_unknown_negative_format_remains_line_item_review():
+    result = parse_aupay_card_raw_partial(raw_message(
+        return_detail(1, "匿名調整先", 1200, marker="調整"),
+    ))
+
+    assert result.status == "rejected"
+    assert result.accepted_items == ()
+    assert result.review_items[0].field_reasons == ("amount_unknown_negative_format",)
+    assert result.review_items[0].evidence_classifications == (
+        "negative_amount", "deterministic_return_evidence_unavailable",
+    )
+
+
+def test_return_word_does_not_change_positive_item_to_return():
+    positive_with_return_word = detail(1, "匿名購入先", 1200) + "備考: 返品\n"
+    result = parse_aupay_card_raw_partial(raw_message(positive_with_return_word))
+
+    assert result.status == "accepted"
+    assert result.accepted_items[0].transaction_kind == "purchase"
+    assert result.accepted_items[0].amount_yen == 1200
 
 
 def test_raw_parser_accepts_multipart_message_when_plain_part_is_present():
@@ -198,6 +281,47 @@ def test_malformed_and_non_card_mail_are_counted_without_body_output(monkeypatch
     assert result["non_card_notice"] == 1
     assert result["parsed_transactions"] == 0
     assert "匿名店舗" not in str(result)
+
+
+def test_gmail_preview_reports_partial_mail_without_dropping_valid_sibling(monkeypatch):
+    malformed = """No.002--------
+▼ご利用日
+2026年8月9日
+▼ご利用金額
+500円
+"""
+    service = service_for(raw_message(detail(1, "匿名購入先", 1200), malformed))
+    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
+
+    result = AuPayCardMailPipeline().preview_gmail("token", "card-query")
+
+    assert result["accepted_messages"] == 0
+    assert result["partial_messages"] == 1
+    assert result["accepted_line_items"] == 1
+    assert result["review_line_items"] == 1
+    assert result["purchase_line_items"] == 1
+    assert result["return_line_items"] == 0
+    assert result["parser_review_mail_count"] == 1
+    assert result["needs_review"] == 1
+    assert result["parsed_transactions"] == 1
+    assert "匿名購入先" not in str(result)
+
+
+def test_gmail_preview_counts_known_return_as_accepted_but_not_review(monkeypatch):
+    service = service_for(raw_message(
+        detail(1, "匿名購入先", 1200),
+        return_detail(2, "匿名返品先", 500),
+    ))
+    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
+
+    result = AuPayCardMailPipeline().preview_gmail("token", "card-query")
+
+    assert result["accepted_messages"] == 1
+    assert result["partial_messages"] == 0
+    assert result["accepted_line_items"] == 2
+    assert result["purchase_line_items"] == 1
+    assert result["return_line_items"] == 1
+    assert result["parser_review_mail_count"] == 0
 
 
 def test_parser_preserves_merchants_for_downstream_classification():

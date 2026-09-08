@@ -56,6 +56,58 @@ class AuPayNotice:
         return f"aupay:{self.slip_number}"
 
 
+@dataclass(frozen=True)
+class ParsedCardLineItem:
+    item_number: int
+    date: str
+    merchant: str
+    amount_yen: int
+    transaction_kind: str
+    payment_method: str
+    member: str
+    source_record_id: str
+
+    def to_reconciliation_input(self) -> dict:
+        return {
+            "date": self.date,
+            "merchant": self.merchant,
+            "amount": self.amount_yen,
+            "transaction_kind": self.transaction_kind,
+            "payment_type": self.payment_method,
+            "member": self.member,
+            "memo": f"メール明細No.{self.item_number:03d}",
+            "occurrence": self.item_number,
+            "import_id": self.source_record_id,
+        }
+
+
+@dataclass(frozen=True)
+class CardLineItemReview:
+    item_number: int
+    reason: str
+    field_reasons: tuple[str, ...]
+    evidence_classifications: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CardMailParseResult:
+    accepted_items: tuple[ParsedCardLineItem, ...] = ()
+    review_items: tuple[CardLineItemReview, ...] = ()
+    mail_rejection_reason: str = ""
+    mail_evidence_classifications: tuple[str, ...] = ()
+
+    @property
+    def status(self) -> str:
+        if self.mail_rejection_reason or (self.review_items and not self.accepted_items):
+            return "rejected"
+        if self.review_items:
+            return "partial"
+        return "accepted"
+
+    def reconciliation_inputs(self) -> list[dict]:
+        return [item.to_reconciliation_input() for item in self.accepted_items]
+
+
 def _text(value: str) -> str:
     value = html.unescape(value or "")
     value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
@@ -127,56 +179,120 @@ def parse_eml(path: str) -> AuPayNotice:
     return parse_aupay_notice("\n".join(parts))
 
 
-def parse_aupay_card_raw(raw_mime: bytes) -> list[dict]:
-    """Parse one raw au PAY card usage-detail MIME message.
-
-    The RFC Message-ID is deliberately required: card detail numbers are only
-    unique within a message, so accepting a message without it would make
-    retries unsafe.
-    """
+def parse_aupay_card_raw_partial(raw_mime: bytes) -> CardMailParseResult:
+    """Parse independent line items without granting production authority."""
     if not isinstance(raw_mime, bytes) or not raw_mime:
-        raise ValueError("カードメールのraw MIMEがありません")
+        return CardMailParseResult(
+            mail_rejection_reason="invalid_raw_mime",
+            mail_evidence_classifications=("raw_mime_unavailable",),
+        )
     message = BytesParser(policy=policy.default).parsebytes(raw_mime)
     subject = str(message.get("subject", ""))
     if "au PAY カード" not in unicodedata.normalize("NFKC", subject):
-        raise ValueError("au PAYカード利用詳細メールではありません")
+        return CardMailParseResult(
+            mail_rejection_reason="non_card_notice",
+            mail_evidence_classifications=("subject_not_card_detail",),
+        )
     message_id = str(message.get("Message-ID", "")).strip()
     if not message_id:
-        raise ValueError("メールにMessage-IDがないため安全に一意キーを作れません")
+        return CardMailParseResult(
+            mail_rejection_reason="missing_message_id",
+            mail_evidence_classifications=("stable_source_identity_unavailable",),
+        )
     body = message.get_body(preferencelist=("plain",))
     if body is None:
-        raise ValueError("メールにtext/plain本文がありません")
+        return CardMailParseResult(
+            mail_rejection_reason="missing_plain_text",
+            mail_evidence_classifications=("authoritative_plain_part_unavailable",),
+        )
     text = unicodedata.normalize("NFKC", body.get_content())
     member_match = re.search(r"(本会員|家族会員)さま\s*ご利用分", text)
     member = member_match.group(1) if member_match else ""
     blocks = re.split(r"(?m)^\s*No\.(\d+)\s*-+\s*$", text)
+    if len(blocks) == 1:
+        return CardMailParseResult(
+            mail_rejection_reason="missing_card_details",
+            mail_evidence_classifications=("line_item_delimiter_unavailable",),
+        )
     source_hash = hashlib.sha256(message_id.encode("utf-8")).hexdigest()[:24]
-    rows = []
+    accepted: list[ParsedCardLineItem] = []
+    review: list[CardLineItemReview] = []
     for i in range(1, len(blocks), 2):
-        number, block = blocks[i], blocks[i + 1]
+        number, block = int(blocks[i]), blocks[i + 1]
         date_raw = _field(block, ["▼ご利用日"], r"\d{4}年\d{1,2}月\d{1,2}日")
-        amount_raw = _field(block, ["▼ご利用金額"], r"[0-9,]+円")
         merchant = _field(block, ["▼ご利用先"], r"[^\r\n]+")
-        if not (date_raw and amount_raw and merchant):
-            raise ValueError(f"カードメール明細No.{number}の必須項目を抽出できません")
-        date = datetime.strptime(date_raw, "%Y年%m月%d日").strftime("%Y-%m-%d")
-        amount = int(re.sub(r"\D", "", amount_raw))
-        if amount <= 0:
-            raise ValueError(f"カードメール明細No.{number}の金額が0以下です")
-        import_id = f"aupaycard-mail:{source_hash}:{int(number):03d}"
-        rows.append({
-            "date": date,
-            "merchant": merchant.strip(),
-            "amount": amount,
-            "payment_type": "メール通知",
-            "member": member,
-            "memo": f"メール明細No.{int(number):03d}",
-            "occurrence": int(number),
-            "import_id": import_id,
-        })
-    if not rows:
-        raise ValueError("カードメールに利用明細がありません")
-    return rows
+        purchase_raw = _field(block, ["▼ご利用金額"], r"[0-9,]+円")
+        return_raw = _field(block, ["▼ご利用金額"], r"-[0-9,]+円\s*\(返品\)")
+        negative_raw = _field(block, ["▼ご利用金額"], r"-[^\r\n]+")
+        field_reasons: list[str] = []
+        evidence: list[str] = []
+        try:
+            date = datetime.strptime(date_raw, "%Y年%m月%d日").strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            date = ""
+            field_reasons.append("transaction_date_missing_or_invalid")
+            evidence.append("transaction_date_field_unusable")
+        if not merchant.strip():
+            field_reasons.append("merchant_missing")
+            evidence.append("merchant_field_unusable")
+
+        amount = 0
+        transaction_kind = ""
+        if purchase_raw:
+            amount = int(re.sub(r"\D", "", purchase_raw))
+            transaction_kind = "purchase"
+        elif return_raw and "返品" in block:
+            amount = -int(re.sub(r"\D", "", return_raw))
+            transaction_kind = "return"
+        elif negative_raw:
+            field_reasons.append("amount_unknown_negative_format")
+            evidence.extend(("negative_amount", "deterministic_return_evidence_unavailable"))
+        else:
+            field_reasons.append("amount_missing_or_invalid")
+            evidence.append("amount_field_unusable")
+        if amount == 0 and transaction_kind:
+            field_reasons.append("amount_zero")
+            evidence.append("zero_amount")
+
+        if field_reasons:
+            review.append(CardLineItemReview(
+                item_number=number,
+                reason="line_item_required_field_invalid",
+                field_reasons=tuple(dict.fromkeys(field_reasons)),
+                evidence_classifications=tuple(dict.fromkeys(evidence)),
+            ))
+            continue
+        accepted.append(ParsedCardLineItem(
+            item_number=number,
+            date=date,
+            merchant=merchant.strip(),
+            amount_yen=amount,
+            transaction_kind=transaction_kind,
+            payment_method="メール通知",
+            member=member,
+            source_record_id=f"aupaycard-mail:{source_hash}:{number:03d}",
+        ))
+    return CardMailParseResult(tuple(accepted), tuple(review))
+
+
+def parse_aupay_card_raw(raw_mime: bytes) -> list[dict]:
+    """Compatibility wrapper retaining the original all-or-nothing contract."""
+    result = parse_aupay_card_raw_partial(raw_mime)
+    if result.mail_rejection_reason:
+        messages = {
+            "invalid_raw_mime": "カードメールのraw MIMEがありません",
+            "non_card_notice": "au PAYカード利用詳細メールではありません",
+            "missing_message_id": "メールにMessage-IDがないため安全に一意キーを作れません",
+            "missing_plain_text": "メールにtext/plain本文がありません",
+            "missing_card_details": "カードメールに利用明細がありません",
+        }
+        raise ValueError(messages[result.mail_rejection_reason])
+    if result.review_items:
+        number = result.review_items[0].item_number
+        raise ValueError(f"カードメール明細No.{number:03d}の必須項目を抽出できません")
+    if any(item.transaction_kind == "return" for item in result.accepted_items):
+        raise ValueError("返品明細はpartial parse reconciliation経路でのみ扱えます")
+    return result.reconciliation_inputs()
 
 
 def parse_aupay_card_eml(path: str) -> list[dict]:
@@ -337,6 +453,14 @@ class AuPayCardMailPipeline:
             "duplicate_gmail_message": 0,
             "parsed_messages": 0,
             "parsed_transactions": 0,
+            "accepted_messages": 0,
+            "partial_messages": 0,
+            "review_only_messages": 0,
+            "accepted_line_items": 0,
+            "review_line_items": 0,
+            "purchase_line_items": 0,
+            "return_line_items": 0,
+            "parser_review_mail_count": 0,
             "needs_review": 0,
             "missing_message_id": 0,
             "missing_plain_text": 0,
@@ -385,6 +509,7 @@ class AuPayCardMailPipeline:
                 gmail_message_id = str(item.get("id") or "").strip()
                 if not gmail_message_id:
                     summary["needs_review"] += 1
+                    summary["parser_review_mail_count"] += 1
                     summary["invalid_raw_mime"] += 1
                     continue
                 if gmail_message_id in seen_message_ids:
@@ -397,18 +522,49 @@ class AuPayCardMailPipeline:
                     ), sleeper=sleeper)
                     summary["gmail_retry_count"] += retries
                     raw_mime = _decode_gmail_raw(response.get("raw", ""))
-                    parsed = parse_aupay_card_raw(raw_mime)
+                    parsed_result = parse_aupay_card_raw_partial(raw_mime)
                 except HttpError:
                     summary["needs_review"] += 1
                     summary["gmail_read_failed"] += 1
                     continue
                 except ValueError as exc:
                     summary["needs_review"] += 1
+                    summary["parser_review_mail_count"] += 1
                     summary[_card_mail_reason(exc)] += 1
                     continue
                 summary["fetched"] += 1
-                summary["parsed_messages"] += 1
+                if parsed_result.mail_rejection_reason:
+                    summary["needs_review"] += 1
+                    summary["parser_review_mail_count"] += 1
+                    summary[parsed_result.mail_rejection_reason] += 1
+                    summary["review_only_messages"] += 1
+                    if request_interval > 0:
+                        sleeper(request_interval)
+                    continue
+                parsed = parsed_result.reconciliation_inputs()
+                if parsed:
+                    summary["parsed_messages"] += 1
                 summary["parsed_transactions"] += len(parsed)
+                summary["accepted_line_items"] += len(parsed)
+                summary["review_line_items"] += len(parsed_result.review_items)
+                summary["purchase_line_items"] += sum(
+                    item.transaction_kind == "purchase"
+                    for item in parsed_result.accepted_items
+                )
+                summary["return_line_items"] += sum(
+                    item.transaction_kind == "return"
+                    for item in parsed_result.accepted_items
+                )
+                if parsed_result.review_items:
+                    summary["needs_review"] += 1
+                    summary["parser_review_mail_count"] += 1
+                    summary["missing_required_fields"] += 1
+                    if parsed:
+                        summary["partial_messages"] += 1
+                    else:
+                        summary["review_only_messages"] += 1
+                else:
+                    summary["accepted_messages"] += 1
                 transactions.extend(parsed)
                 if request_interval > 0:
                     sleeper(request_interval)

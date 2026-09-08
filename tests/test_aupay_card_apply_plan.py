@@ -1,6 +1,7 @@
 import pytest
 
 from app.aupay_card_apply_plan import (
+    CanonicalApplyCandidate,
     CanonicalApplyPlan,
     build_canonical_apply_plan,
     require_executable_apply_plan,
@@ -12,12 +13,14 @@ def mail_id(char, number=1):
     return f"aupaycard-mail:{char * 24}:{number:03d}"
 
 
-def row(identity, merchant="店", amount=1000, date="2026-08-08", number=1):
+def row(identity, merchant="店", amount=1000, date="2026-08-08", number=1,
+        transaction_kind="purchase"):
     return {
         "import_id": identity,
         "date": date,
         "merchant": merchant,
         "amount": amount,
+        "transaction_kind": transaction_kind,
         "payment_type": "メール通知",
         "member": "本会員",
         "memo": f"メール明細No.{number:03d}",
@@ -56,6 +59,25 @@ def test_raw_and_reconciled_objects_are_not_executor_authority():
         require_executable_apply_plan(reconciled, apply=True)
     with pytest.raises(TypeError):
         CanonicalApplyPlan()
+    with pytest.raises(TypeError):
+        CanonicalApplyCandidate()
+    with pytest.raises(TypeError, match="projection_only"):
+        CanonicalApplyCandidate._from_canonical(reconciled, authority=object())
+
+
+def test_return_and_ambiguous_reconciled_items_cannot_bypass_plan_projection():
+    returned = reconcile_transactions([
+        row(mail_id("r"), amount=-1000, transaction_kind="return"),
+    ])["transactions"][0]
+    ambiguous = reconcile_transactions(
+        [row(mail_id("a"))],
+        [csv_row("aupaycard:1"), csv_row("aupaycard:2")],
+    )["transactions"][0]
+
+    with pytest.raises(TypeError, match="projection_only"):
+        CanonicalApplyCandidate._from_canonical(returned, authority=object())
+    with pytest.raises(TypeError, match="projection_only"):
+        CanonicalApplyCandidate._from_canonical(ambiguous, authority=object())
 
 
 def test_noncanonical_resend_is_not_projected_and_pair_yields_one_candidate():
@@ -72,6 +94,8 @@ def test_noncanonical_resend_is_not_projected_and_pair_yields_one_candidate():
 
 @pytest.mark.parametrize("collection_summary, reason", [
     (collection(collection_complete=False), "collection_incomplete"),
+    (collection(collection_complete=True, listing_complete=False), "gmail_listing_incomplete"),
+    (collection(collection_complete=False, gmail_list_failed=1), "gmail_list_failure"),
     (collection(collection_complete=False, gmail_read_failed=1), "gmail_read_failure"),
     (collection(collection_complete=False, collection_truncated=True), "collection_truncated"),
 ])
@@ -81,17 +105,25 @@ def test_collection_failures_block_all_candidates(collection_summary, reason):
     assert result.status == "blocked"
     assert result.candidates == ()
     assert reason in result.blocked_reasons
+    assert dict(result.item_status_counts) == {"withheld_global_failure": 1}
+    assert result.global_withheld_count == 1
 
 
-def test_parser_review_blocks_plan_without_silent_partial_apply():
+def test_parser_line_review_is_manifested_without_hiding_safe_canonical_item():
     result = plan(
         [row(mail_id("a"))],
-        collection_summary=collection(needs_review=8),
+        collection_summary=collection(
+            needs_review=1,
+            parser_review_mail_count=1,
+            review_line_items=1,
+        ),
     )
 
-    assert result.parser_review_count == 8
-    assert result.candidates == ()
-    assert "parser_review_present" in result.blocked_reasons
+    assert result.status == "ready_with_withheld"
+    assert result.parser_review_count == 1
+    assert result.parser_review_line_item_count == 1
+    assert len(result.candidates) == 1
+    assert result.blocked_reasons == ()
 
 
 def test_identity_collision_blocks_plan():
@@ -105,6 +137,18 @@ def test_identity_collision_blocks_plan():
     assert "identity_collision" in result.blocked_reasons
 
 
+def test_reconciliation_invariant_failure_blocks_all_candidates():
+    reconciled = reconcile_transactions([row(mail_id("a"))])
+    reconciled["summary"]["canonical_transactions"] = 2
+
+    result = build_canonical_apply_plan(collection(), reconciled)
+
+    assert result.status == "blocked"
+    assert result.candidates == ()
+    assert "reconciliation_inconsistent" in result.blocked_reasons
+    assert result.global_withheld_count == 1
+
+
 def test_rejected_required_field_blocks_plan():
     bad = row(mail_id("a"))
     bad["amount"] = 0
@@ -115,7 +159,7 @@ def test_rejected_required_field_blocks_plan():
     assert "reconciliation_rejected_transaction" in result.blocked_reasons
 
 
-def test_cross_source_ambiguous_blocks_and_is_never_a_candidate():
+def test_cross_source_ambiguous_is_withheld_and_is_never_a_candidate():
     result = plan(
         [row(mail_id("a"))],
         [csv_row("aupaycard:1"), csv_row("aupaycard:2")],
@@ -123,8 +167,11 @@ def test_cross_source_ambiguous_blocks_and_is_never_a_candidate():
 
     assert result.withheld_ambiguous_count == 1
     assert result.eligible_canonical_count == 0
+    assert result.status == "ready_with_withheld"
     assert result.candidates == ()
-    assert "cross_source_ambiguous" in result.blocked_reasons
+    assert result.blocked_reasons == ()
+    assert dict(result.item_status_counts) == {"withheld_cross_source_ambiguous": 1}
+    assert dict(result.item_withheld_reason_counts) == {"cross_source_ambiguous": 1}
 
 
 def test_cross_source_strong_match_remains_candidate_and_evidence_only():
@@ -149,10 +196,12 @@ def test_exact_existing_sheet_identity_is_authoritative_duplicate():
     existing = [[identity, "", "au PAYカード", identity, "2026-08-08", "店", 1000]]
     result = plan([row(identity)], existing)
 
-    assert result.status == "ready"
+    assert result.status == "ready_with_withheld"
     assert result.existing_identity_duplicate_count == 1
+    assert result.duplicate_existing_identity_count == 1
     assert result.eligible_canonical_count == 0
     assert result.candidates == ()
+    assert dict(result.item_status_counts) == {"duplicate_existing_identity": 1}
 
 
 def test_plan_is_deterministic_across_input_order():
@@ -185,3 +234,57 @@ def test_executor_requires_explicit_apply_even_for_ready_safe_plan():
     with pytest.raises(RuntimeError, match="explicit_apply_required"):
         require_executable_apply_plan(result, apply=False)
     assert require_executable_apply_plan(result, apply=True) is result
+
+
+def test_return_is_withheld_without_becoming_apply_candidate():
+    result = plan([
+        row(mail_id("a"), amount=-1000, transaction_kind="return"),
+    ])
+
+    assert result.status == "ready_with_withheld"
+    assert result.return_transaction_count == 1
+    assert result.withheld_return_count == 1
+    assert result.eligible_canonical_count == 0
+    assert result.candidates == ()
+    assert result.blocked_reasons == ()
+    assert dict(result.item_status_counts) == {"withheld_return": 1}
+    assert dict(result.item_withheld_reason_counts) == {
+        "return_requires_accounting_policy": 1,
+    }
+
+
+def test_mixed_plan_projects_safe_purchase_and_manifests_withheld_items():
+    rows = [
+        row(mail_id("a"), merchant="安全な購入", amount=1200),
+        row(mail_id("b"), merchant="返品", amount=-500, transaction_kind="return"),
+        row(mail_id("c"), merchant="曖昧", amount=900),
+        row(mail_id("d"), merchant="登録済み", amount=700),
+    ]
+    existing = [
+        csv_row("aupaycard:csv-a", merchant="別候補A", amount=900),
+        csv_row("aupaycard:csv-b", merchant="別候補B", amount=900),
+        [mail_id("d"), "", "au PAYカード", mail_id("d"),
+         "2026-08-08", "登録済み", 700],
+    ]
+
+    result = plan(rows, existing)
+
+    assert result.status == "ready_with_withheld"
+    assert [candidate.identity for candidate in result.candidates] == [mail_id("a")]
+    assert dict(result.item_status_counts) == {
+        "duplicate_existing_identity": 1,
+        "eligible": 1,
+        "withheld_cross_source_ambiguous": 1,
+        "withheld_return": 1,
+    }
+    assert result.canonical_accounting_valid
+    assert (
+        len(result.candidates)
+        + result.withheld_return_count
+        + result.withheld_ambiguous_count
+        + result.duplicate_existing_identity_count
+        + result.withheld_review_count
+        + result.invalid_item_count
+        + result.global_withheld_count
+        == result.canonical_transaction_count
+    )

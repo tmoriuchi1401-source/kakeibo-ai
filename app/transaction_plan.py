@@ -28,6 +28,7 @@ class Transaction:
     transaction_date: str
     merchant: str
     amount_yen: int
+    transaction_kind: str
     payment_method: str
     identity: str
     business_fingerprint: str
@@ -67,16 +68,23 @@ def normalize_card_transaction(raw: dict) -> Transaction:
         raise ValueError("amount_invalid") from exc
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         raise ValueError("date_invalid")
-    if not merchant or not source_id or amount <= 0:
+    if not merchant or not source_id or amount == 0:
         raise ValueError("required_field_missing")
+    kind = _text(raw.get("transaction_kind")) or "purchase"
+    if kind not in {"purchase", "return"}:
+        raise ValueError("transaction_kind_invalid")
+    if (kind == "purchase" and amount < 0) or (kind == "return" and amount > 0):
+        raise ValueError("transaction_kind_amount_mismatch")
     payment = _text(raw.get("payment_type")) or "メール通知"
     memo = _text(raw.get("memo"))
     # The business fingerprint is evidence/audit metadata, not a duplicate
     # key: same-day same-amount purchases must remain separate transactions.
-    business = "|".join((date, merchant, str(amount), payment, _text(raw.get("member")), memo))
+    business = "|".join((
+        date, merchant, str(amount), kind, payment, _text(raw.get("member")), memo,
+    ))
     fingerprint = hashlib.sha256(business.encode("utf-8")).hexdigest()[:24]
-    return Transaction(1, "au PAYカード", source_id, date, merchant, amount,
-                       payment, source_id, fingerprint, memo)
+    return Transaction(2, "au PAYカード", source_id, date, merchant, amount,
+                       kind, payment, source_id, fingerprint, memo)
 
 
 def normalized_merchant(value: object) -> str:
@@ -135,7 +143,7 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
     unique: list[Transaction] = []
     review: list[Transaction] = []
     for rows in by_identity.values():
-        variants = {(x.transaction_date, x.merchant, x.amount_yen,
+        variants = {(x.transaction_date, x.merchant, x.amount_yen, x.transaction_kind,
                      x.payment_method, x.business_fingerprint) for x in rows}
         if len(variants) > 1:
             collisions += 1
@@ -172,7 +180,8 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
         for projected_rows in groups:
             projected_identities = tuple(sorted(x.identity for x in projected_rows))
             canonical = min(projected_rows, key=lambda x: (
-                x.transaction_date, x.amount_yen, normalized_merchant(x.merchant),
+                x.transaction_date, x.amount_yen, x.transaction_kind,
+                normalized_merchant(x.merchant),
                 x.payment_method, x.memo, x.identity,
             ))
             reconciled.append(ReconciledTransaction(
@@ -211,6 +220,12 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
             "needs_review": len(review),
             "rejected": rejected,
             "identity_collisions": collisions,
+            "purchase_canonical_transactions": sum(
+                item.canonical.transaction_kind == "purchase" for item in reconciled
+            ),
+            "return_canonical_transactions": sum(
+                item.canonical.transaction_kind == "return" for item in reconciled
+            ),
             "existing_identity_duplicates": sum(
                 bool(item.existing_source_identities) for item in reconciled
             ),
@@ -250,6 +265,8 @@ def build_write_plan(raw_rows: list[dict], existing_rows: list[list] | None = No
             items.append(PlanItem(tx, "probable_resend", "business_fingerprint_match"))
         elif tx.identity in existing or prior:
             items.append(PlanItem(tx, "duplicate", "existing_identity" if tx.identity in existing else "input_identity"))
+        elif tx.transaction_kind == "return":
+            items.append(PlanItem(tx, "reject", "return_requires_dedicated_apply_semantics"))
         elif tx.identity in canonical_ids:
             items.append(PlanItem(tx, "insert", "new_identity"))
         else:
