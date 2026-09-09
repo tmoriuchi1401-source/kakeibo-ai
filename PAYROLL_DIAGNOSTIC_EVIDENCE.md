@@ -176,6 +176,57 @@ already-closed success was also reproduced. Ownership states were unchanged:
 new ambiguity or competition was introduced. These counts establish diagnostic
 evidence closure only, not ownership adoption readiness.
 
+### Candidate enumeration closure
+
+`capture_candidate_enumeration` installs a context-local private observer around
+one call to the unchanged `parse_positioned_items`. The parser emits only the
+intermediate collections it already computed; the observer does not generate a
+second candidate set and nothing in production reads the trace. With no observer,
+the hook is a no-op and the public signature and returned `PayrollItem` values are
+unchanged.
+
+The production candidate universe is bounded by its actual generator stages. A
+parser-created logical label is either explicitly excluded or paired against the
+same-page value pool. The primary path records horizontal candidates before OCR
+ownership filtering, then the active horizontal, OCR-below, OCR-above, or PDF
+logical-row set before winner selection. PDF summary recovery is a distinct
+post-primary generator. PDF label deduplication and OCR result deduplication are
+post-generation reductions whose removed-to-retained relations must remain
+accounted. Review and non-success candidates stay in this universe; they are not
+promoted to adoption relevance.
+
+Closure requires all of the following for one immutable snapshot:
+
+1. The token, logical-label, value-pool, page and parser-mode scope is complete.
+2. Every mode-applicable generator path emits a terminal coverage record.
+3. Every label and same-page value is either in a pre-selection candidate or has
+   an explicit parser exclusion such as grammar, geometry, or ownership rejection.
+4. Pre-selection candidates remain recorded even when shadowed, filtered,
+   ambiguous, review-only, or subsequently deduplicated.
+5. Every candidate resolves to all label-component physical IDs and one value
+   physical ID in the same snapshot.
+6. Dedup/pruning retains an explicit removed-to-retained candidate relation.
+7. Candidate identity is a deterministic digest of snapshot, generator path,
+   ordered physical label components and physical value occurrence; raw text,
+   list indexes, object addresses and temporary paths are not identity inputs.
+8. A second observer replay reproduces paths, candidate identities, exclusions,
+   reductions and production-visible result structure exactly.
+9. A missing ledger candidate, omitted path, stale snapshot, incomplete physical
+   lineage, or unaccounted reduction fails verification closed.
+
+The anonymous five-PNG replay contained 20 parser candidates across 1,063 OCR
+tokens and 1,039 explicit input/relation exclusions (not a token partition). All
+OCR generator and dedup paths were
+covered, both observer replays agreed, and ownership assessments were unchanged.
+Each of the five successful mappings had exactly one candidate in its claim-local
+universe and exactly one selected relation, with complete physical provenance.
+The remaining three PNGs contained no successful mappings and zero generated
+candidates, but their zero-candidate universes still closed through complete path
+coverage and exclusions. The 98 review/non-success ground-truth dependencies were
+unchanged and were not omitted from candidate accounting. This closes candidate
+enumeration evidence only; it does not re-evaluate adoption readiness or resolve
+field authority, review isolation, or portable logical-field identity.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

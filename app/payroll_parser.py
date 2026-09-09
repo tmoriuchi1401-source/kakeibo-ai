@@ -1,10 +1,38 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date
 
 from .payroll_models import PayrollItem
 from .payroll_ocr import PositionedText
+
+
+_candidate_trace_observer: ContextVar[object | None] = ContextVar(
+    "payroll_candidate_trace_observer", default=None,
+)
+
+
+@contextmanager
+def _diagnostic_candidate_observer(observer):
+    """Install a private read-only parser observer for one diagnostic replay."""
+    token = _candidate_trace_observer.set(observer)
+    try:
+        yield
+    finally:
+        _candidate_trace_observer.reset(token)
+
+
+def _emit_candidate_trace(event: str, **payload) -> None:
+    """Expose computed parser intermediates without feeding data back into it."""
+    observer = _candidate_trace_observer.get()
+    if observer is not None:
+        observer(event, payload)
+
+
+def _candidate_trace_enabled() -> bool:
+    return _candidate_trace_observer.get() is not None
 
 
 STANDARD_NAMES = {
@@ -300,6 +328,11 @@ def _deduplicate_pdf_labels(entries):
                           and existing[0].raw_value == item.raw_value), None)
         if duplicate is None:
             deduplicated.append((item, label, number, ambiguous))
+    if _candidate_trace_enabled():
+        _emit_candidate_trace(
+            "dedup_complete", generator_path="pdf_label_dedup",
+            before=tuple(entries), after=tuple(deduplicated),
+        )
     return deduplicated
 
 
@@ -308,12 +341,15 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
     used_numbers = {id(number) for item, _label, number, _ambiguous in entries
                     if number is not None and item.value is not None}
     proposals = []
+    trace_candidates = _candidate_trace_enabled()
+    scopes = [] if trace_candidates else None
     labels = [entry[1] for entry in entries]
     for entry in entries:
         item, label, _number, _ambiguous = entry
         if compact(item.raw_item_name) not in SUMMARY_LABELS or item.value is not None:
             continue
         matches = []
+        rejected = [] if trace_candidates else None
         for number in tokens:
             values = amounts(number.text)
             vertical_gap = number.y - (label.y + label.height)
@@ -333,6 +369,10 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
                 )
                 if not competing:
                     matches.append((number, values[0]))
+                elif trace_candidates:
+                    rejected.append((number, values[0], "competing_summary_label"))
+        if trace_candidates:
+            scopes.append((entry, tuple(matches), tuple(rejected)))
         if len(matches) == 1:
             proposals.append((entry, matches[0][0], matches[0][1]))
 
@@ -353,6 +393,12 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
               if len(matches) == 1}
     if set(totals) == {"gross_pay", "total_deductions", "net_pay"}:
         if totals["gross_pay"] - totals["total_deductions"] != totals["net_pay"]:
+            if trace_candidates:
+                _emit_candidate_trace(
+                    "summary_complete", generator_path="pdf_summary_below",
+                    scopes=tuple(scopes), proposals=tuple(proposals), accepted=(),
+                    rejected_reason="summary_arithmetic_mismatch",
+                )
             return entries
 
     for entry, number, value in accepted:
@@ -362,6 +408,12 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
         item.confidence = min(item.confidence, number.confidence)
         item.needs_review = False
         item.review_reason_code = None
+    if trace_candidates:
+        _emit_candidate_trace(
+            "summary_complete", generator_path="pdf_summary_below",
+            scopes=tuple(scopes), proposals=tuple(proposals),
+            accepted=tuple(accepted), rejected_reason=None,
+        )
     return entries
 
 
@@ -755,6 +807,8 @@ def _logical_pdf_value_pairs(
                 page_evidence[row[0].page] = page_evidence.get(row[0].page, 0) + 1
 
     result: dict[tuple[int, str, float, float], PositionedText] = {}
+    trace_candidates = _candidate_trace_enabled()
+    generated = [] if trace_candidates else None
     for page, pairs in page_pairs.items():
         # One matching row can be accidental. Require a repeated page structure.
         if page_evidence.get(page, 0) < 2:
@@ -771,12 +825,23 @@ def _logical_pdf_value_pairs(
                 if (distance <= LOGICAL_ROW_MAX_X_GAP
                         and margin >= LOGICAL_ROW_MIN_X_MARGIN):
                     proposed.setdefault(label_index, []).append(value)
+                    if trace_candidates:
+                        generated.append((labels[label_index], value))
             for label_index, matched_values in proposed.items():
                 # A label and a value may each participate in at most one pairing.
                 if len(matched_values) != 1:
                     continue
                 label = labels[label_index]
                 result[(label.page, label.text.strip(), label.x, label.y)] = matched_values[0]
+    if trace_candidates:
+        _emit_candidate_trace(
+            "logical_path_complete", generator_path="pdf_logical_row",
+            page_pairs=tuple(
+                (page, tuple((tuple(labels), tuple(values)) for labels, values in pairs))
+                for page, pairs in sorted(page_pairs.items())
+            ),
+            generated=tuple(generated), accepted=tuple(sorted(result.items())),
+        )
     return result
 
 
@@ -787,6 +852,17 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         (token, values) for token in tokens
         if ocr and (values := _ocr_dot_amounts(token))
     ]
+    trace_candidates = _candidate_trace_enabled()
+    if trace_candidates:
+        _emit_candidate_trace(
+            "run_start", tokens=tokens, parser_mode="ocr" if ocr else "pdf",
+            expected_paths=(
+                ("horizontal", "ocr_below", "ocr_above", "ocr_result_dedup")
+                if ocr else
+                ("horizontal", "pdf_logical_row", "pdf_label_dedup", "pdf_summary_below")
+            ),
+            comma_money=tuple(money), ocr_dot_money=tuple(ocr_dot_money),
+        )
     exact_reconstruction_parts: dict[int, tuple[PositionedText, ...]] = {}
     if ocr:
         labels = _ocr_label_tokens(tokens)
@@ -806,6 +882,8 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             token for token in tokens
             if not amounts(token.text) and not _is_explicit_attendance_quantity(token.text)
         ]
+    if trace_candidates:
+        _emit_candidate_trace("label_pool", labels=tuple(labels))
     logical_values = {} if ocr else _logical_pdf_value_pairs(tokens)
     entries = []
     sensitive = ("殿", "社員番号", "株式会社", "銀行", "支店", "本部", "センタ")
@@ -813,10 +891,22 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
     short_ocr_fragments = {"給与", "出勤", "手当", "保険", "控除", "支給"}
     for label in labels:
         name = label.text.strip()
-        if (len(name) < 2 or re.fullmatch(r"[\d\W]+", name) or
-                any(term in name for term in sensitive + ignored) or
-                _is_non_item_heading(name) or
-                (ocr and compact(name) in short_ocr_fragments and candidate(name) is None)):
+        exclusion_reason = None
+        if len(name) < 2:
+            exclusion_reason = "label_too_short"
+        elif re.fullmatch(r"[\d\W]+", name):
+            exclusion_reason = "label_nonword_or_numeric"
+        elif any(term in name for term in sensitive + ignored):
+            exclusion_reason = "label_sensitive_or_ignored"
+        elif _is_non_item_heading(name):
+            exclusion_reason = "label_non_item_heading"
+        elif ocr and compact(name) in short_ocr_fragments and candidate(name) is None:
+            exclusion_reason = "ocr_short_fragment"
+        if exclusion_reason:
+            if trace_candidates:
+                _emit_candidate_trace(
+                    "label_excluded", label=label, reason=exclusion_reason,
+                )
             continue
         attendance_type = _attendance_value_type(name) if section_for(name) == "attendance" else None
         same_page = [(number, vals) for number, vals in money if number.page == label.page]
@@ -860,7 +950,31 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                       or logical_candidate)
         chosen = candidates[0] if candidates else None
         plausible_name = _is_plausible_item_label(name)
-        if not plausible_name: continue
+        if not plausible_name:
+            if trace_candidates:
+                _emit_candidate_trace(
+                    "label_excluded", label=label, reason="label_not_plausible",
+                )
+            continue
+        active_path = (
+            "horizontal" if horizontal else
+            "ocr_below" if ocr and below else
+            "ocr_above" if ocr and above else
+            "pdf_logical_row" if logical_candidate else None
+        )
+        if trace_candidates:
+            _emit_candidate_trace(
+                "candidate_scope", label=label, same_page=tuple(same_page),
+                paths={
+                    "horizontal": tuple(horizontal),
+                    "ocr_below": tuple(below) if ocr else (),
+                    "ocr_above": tuple(above) if ocr else (),
+                    "pdf_logical_row": tuple(logical_candidate) if not ocr else (),
+                },
+                horizontal_in_range=tuple(horizontal_in_range),
+                active_path=active_path, active_candidates=tuple(candidates), chosen=chosen,
+                ownership_rejected=ownership_rejected,
+            )
         ambiguous = len(candidates) > 1 and abs(candidates[1][2] - candidates[0][2]) < max(label.width, 12)
         exact_label_override = bool(
             ocr and chosen is not None and not ambiguous
@@ -913,6 +1027,14 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             review_reason_code=review_reason_code,
         )
         entries.append((item, label, number, ambiguous))
+        if trace_candidates:
+            _emit_candidate_trace(
+                "selection_complete", label=label, item=item, chosen=chosen,
+                active_path=active_path, review=not confirmed,
+            )
+    if trace_candidates:
+        for path in (("horizontal", "ocr_below", "ocr_above") if ocr else ("horizontal",)):
+            _emit_candidate_trace("path_complete", generator_path=path)
     if not ocr:
         entries = _deduplicate_pdf_labels(entries)
         entries = _pair_pdf_summary_values_below(entries, tokens)
@@ -927,6 +1049,8 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             item.column = min(range(len(xs)), key=lambda i: abs(xs[i] - (item.x or 0)))
     _mark_ytd_block(tokens, result)
     if not ocr:
+        if trace_candidates:
+            _emit_candidate_trace("run_complete", result=tuple(result))
         return result
     unique = {}
     for item in result:
@@ -943,4 +1067,10 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
                           and abs((existing.y or 0) - (item.y or 0)) <= 12), None)
         if duplicate is None:
             deduplicated.append(item)
+    if trace_candidates:
+        _emit_candidate_trace(
+            "dedup_complete", generator_path="ocr_result_dedup",
+            before=tuple(items), after=tuple(deduplicated),
+        )
+        _emit_candidate_trace("run_complete", result=tuple(deduplicated))
     return deduplicated

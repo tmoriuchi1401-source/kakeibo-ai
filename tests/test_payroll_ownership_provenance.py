@@ -5,8 +5,9 @@ from app.payroll_ocr import PositionedText
 from app import payroll_parser
 from app.payroll_diagnostic_evidence import observe_tokens
 from app.payroll_ownership_provenance import (
-    CandidateClaim, assess_ownership, diagnose_incomplete_ownership,
-    reconstruct_consumption, trace_incomplete_ownership,
+    CandidateClaim, assess_ownership, capture_candidate_enumeration,
+    diagnose_incomplete_ownership, reconstruct_consumption,
+    trace_incomplete_ownership, verify_candidate_enumeration,
 )
 from app.payroll_parser import parse_positioned_items
 
@@ -273,3 +274,158 @@ def test_diagnostic_provenance_failure_is_isolated_from_production_parser(monkey
         payroll_parser, "_ocr_parser_labels_with_components", broken_provenance,
     )
     assert parse_positioned_items(tokens, ocr=True) == before
+
+
+def candidate_snapshot(tokens, parser_mode="ocr"):
+    return observe_tokens(
+        tuple(tokens), local_key=KEY, parser_mode=parser_mode,
+        snapshot_context=("candidate-enumeration-test", parser_mode),
+    )
+
+
+def test_candidate_enumeration_closes_actual_generator_scope_and_replay():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30),
+        token("1,234", 40, 20, width=30),
+        token("2,345", 300, 300, width=30),
+    ))
+    ledger = capture_candidate_enumeration(observed)
+    assert ledger.complete
+    assert ledger.safe_dict()["generator_path_coverage"] == {
+        "horizontal": True,
+        "ocr_below": True,
+        "ocr_above": True,
+        "ocr_result_dedup": True,
+    }
+    assert dict(ledger.exclusion_counts)["outside_pairing_geometry"] == 1
+    assert verify_candidate_enumeration(observed, ledger).complete
+
+
+def test_candidate_enumeration_detects_hidden_candidate_omitted_from_ledger():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30),
+        token("1,234", 40, 20, width=30),
+        token("2,345", 90, 20, width=30),
+    ))
+    ledger = capture_candidate_enumeration(observed)
+    assert len(ledger.candidates) == 2
+    omitted = replace(ledger, candidates=ledger.candidates[:-1])
+    verification = verify_candidate_enumeration(observed, omitted)
+    assert not verification.complete
+    assert verification.hidden_candidate_detected
+
+
+def test_candidate_enumeration_fails_when_generator_path_is_omitted():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+    ))
+    ledger = capture_candidate_enumeration(observed)
+    omitted = replace(
+        ledger,
+        observed_paths=tuple(path for path in ledger.observed_paths
+                             if path != "ocr_above"),
+    )
+    assert not omitted.complete
+    assert not verify_candidate_enumeration(observed, omitted).complete
+
+
+def test_preselection_keeps_pruned_review_candidates_and_physical_duplicates_distinct():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30),
+        token("1,234", 40, 20, width=30),
+        token("1,234", 45, 20, width=30),
+    ))
+    ledger = capture_candidate_enumeration(observed)
+    candidates = [candidate for candidate in ledger.candidates
+                  if candidate.generator_path == "horizontal"]
+    assert ledger.complete
+    assert len(candidates) == 2
+    assert len({candidate.candidate_id for candidate in candidates}) == 2
+    assert len({candidate.value_token_id for candidate in candidates}) == 2
+    assert all(candidate.review_or_non_success for candidate in candidates)
+    # Production still identifies its first geometric choice even though the
+    # close runner-up makes the resulting item review-only.
+    assert sum(candidate.selected for candidate in candidates) == 1
+
+
+def test_candidate_pruning_keeps_ownership_rejected_relation_in_ledger():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30),
+        token("所得税", 55, 20, width=30),
+        token("1,234", 100, 20, width=30),
+    ))
+    ledger = capture_candidate_enumeration(observed)
+    candidates = [candidate for candidate in ledger.candidates
+                  if candidate.generator_path == "horizontal"]
+    assert ledger.complete
+    assert len(candidates) == 2
+    assert sum(candidate.selected for candidate in candidates) == 1
+    assert sum(not candidate.active for candidate in candidates) == 1
+    assert dict(ledger.exclusion_counts)["horizontal_ownership_rejected"] == 1
+
+
+def test_pdf_candidate_dedup_preserves_removed_to_retained_relation():
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30),
+        token("基本給", 1, 20, width=30),
+        token("1,234", 40, 20, width=30),
+    ), parser_mode="pdf")
+    ledger = capture_candidate_enumeration(observed)
+    assert ledger.complete
+    assert len(ledger.reductions) == 1
+    relation = ledger.reductions[0]
+    assert relation.generator_path == "pdf_label_dedup"
+    assert relation.complete
+    assert relation.removed_candidate_id != relation.retained_candidate_id
+
+
+def test_candidate_enumeration_rejects_stale_snapshot_ledger():
+    first = candidate_snapshot((
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+    ))
+    second = candidate_snapshot((
+        token("基本給", 0, 20, width=30), token("2,345", 40, 20),
+    ))
+    verification = verify_candidate_enumeration(
+        second, capture_candidate_enumeration(first),
+    )
+    assert not verification.complete
+    assert verification.reason_code == "candidate_snapshot_mismatch"
+
+
+def test_candidate_identity_ignores_label_iteration_order(monkeypatch):
+    observed = candidate_snapshot((
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+        token("所得税", 0, 100, width=30), token("2,345", 40, 100),
+    ))
+    baseline = capture_candidate_enumeration(observed)
+    original = payroll_parser._ocr_label_tokens
+
+    def reversed_labels(tokens):
+        return list(reversed(original(tokens)))
+
+    monkeypatch.setattr(payroll_parser, "_ocr_label_tokens", reversed_labels)
+    perturbed = capture_candidate_enumeration(observed)
+    assert {item.candidate_id for item in baseline.candidates} == {
+        item.candidate_id for item in perturbed.candidates
+    }
+
+
+def test_candidate_observer_does_not_exclude_review_candidates_or_change_output():
+    tokens = (
+        token("基本給", 0, 20, width=30),
+        token("1,234", 40, 20, width=30),
+        token("2,345", 45, 20, width=30),
+    )
+    before = parse_positioned_items(tokens, ocr=True)
+    observed = candidate_snapshot(tokens)
+    claims = tuple(CandidateClaim("all", token_id) for token_id in observed.token_ids)
+    ownership_before = assess_ownership(
+        observed, reconstruct_consumption(observed), claims,
+    )
+    ledger = capture_candidate_enumeration(observed)
+    assert any(candidate.review_or_non_success for candidate in ledger.candidates)
+    assert parse_positioned_items(tokens, ocr=True) == before
+    assert assess_ownership(
+        observed, reconstruct_consumption(observed), claims,
+    ) == ownership_before

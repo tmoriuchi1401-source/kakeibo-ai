@@ -7,10 +7,12 @@ success set and every consumption mapping are complete.
 """
 from collections import Counter
 from dataclasses import dataclass, field
+import hashlib
+import json
 
 from .payroll_parser import (
-    _ocr_dot_amounts, _ocr_parser_labels_with_components, amounts, compact,
-    parse_positioned_items,
+    _diagnostic_candidate_observer, _ocr_dot_amounts,
+    _ocr_parser_labels_with_components, amounts, compact, parse_positioned_items,
 )
 
 
@@ -171,6 +173,387 @@ class OwnershipInstrumentationDiagnostic:
             "successful_mapping_complete_count": self.successful_mapping_complete_count,
             "successful_mapping_blockers": dict(sorted(blockers.items())),
         }
+
+
+@dataclass(frozen=True)
+class EnumeratedParserCandidate:
+    """One parser-generated label/value relation with stable physical lineage."""
+    candidate_id: str
+    generator_path: str
+    label_component_ids: tuple[str, ...] = field(repr=False)
+    value_token_id: str | None = field(repr=False)
+    active: bool = False
+    selected: bool = False
+    review_or_non_success: bool = False
+    provenance_complete: bool = False
+
+
+@dataclass(frozen=True)
+class CandidateReductionRelation:
+    """A diagnostic relation for a production dedup/pruning operation."""
+    generator_path: str
+    removed_candidate_id: str
+    retained_candidate_id: str | None
+    complete: bool
+
+
+@dataclass(frozen=True)
+class CandidateEnumerationLedger:
+    """Snapshot-bound observation of the production candidate universe."""
+    snapshot_id: str = field(repr=False)
+    parser_mode: str
+    token_count: int
+    expected_paths: tuple[str, ...]
+    observed_paths: tuple[str, ...]
+    candidates: tuple[EnumeratedParserCandidate, ...] = field(repr=False)
+    reductions: tuple[CandidateReductionRelation, ...] = field(repr=False)
+    exclusion_counts: tuple[tuple[str, int], ...]
+    input_scope_token_ids: tuple[str, ...] = field(repr=False)
+    domain_excluded_token_ids: tuple[str, ...] = field(repr=False)
+    eligible_label_count: int
+    accounted_label_count: int
+    scope_candidate_ids: tuple[str, ...] = field(repr=False)
+    run_complete: bool
+    result_signature: tuple = field(repr=False)
+
+    @property
+    def complete(self):
+        candidate_ids = {candidate.candidate_id for candidate in self.candidates}
+        return bool(
+            self.run_complete
+            and set(self.expected_paths) == set(self.observed_paths)
+            and self.eligible_label_count == self.accounted_label_count
+            and len(set(self.input_scope_token_ids)
+                    | set(self.domain_excluded_token_ids)) == self.token_count
+            and not (set(self.input_scope_token_ids)
+                     & set(self.domain_excluded_token_ids))
+            and candidate_ids == set(self.scope_candidate_ids)
+            and all(candidate.provenance_complete for candidate in self.candidates)
+            and all(relation.complete for relation in self.reductions)
+        )
+
+    def safe_dict(self):
+        return {
+            "parser_mode": self.parser_mode,
+            "token_count": self.token_count,
+            "candidate_count": len(self.candidates),
+            "generator_path_coverage": {
+                path: path in self.observed_paths for path in self.expected_paths
+            },
+            "exclusion_counts": dict(self.exclusion_counts),
+            "eligible_label_count": self.eligible_label_count,
+            "accounted_label_count": self.accounted_label_count,
+            "input_token_scope_closed": (
+                len(set(self.input_scope_token_ids)
+                    | set(self.domain_excluded_token_ids)) == self.token_count
+                and not (set(self.input_scope_token_ids)
+                         & set(self.domain_excluded_token_ids))
+            ),
+            "preselection_closed": (
+                {candidate.candidate_id for candidate in self.candidates}
+                == set(self.scope_candidate_ids)
+            ),
+            "reduction_count": len(self.reductions),
+            "reduction_accounting_complete": all(
+                relation.complete for relation in self.reductions
+            ),
+            "physical_provenance_complete": all(
+                candidate.provenance_complete for candidate in self.candidates
+            ),
+            "complete": self.complete,
+        }
+
+
+@dataclass(frozen=True)
+class CandidateEnumerationVerification:
+    complete: bool
+    reason_code: str
+    replay_deterministic: bool
+    hidden_candidate_detected: bool
+
+
+def _candidate_identity(snapshot_id, path, label_ids, value_id):
+    payload = json.dumps(
+        ("payroll-parser-candidate-v1", snapshot_id, path, label_ids, value_id),
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _capture_candidate_enumeration(snapshot):
+    """Observe the production generator; never recreate its candidate semantics."""
+    events = []
+    with _diagnostic_candidate_observer(
+        lambda event, payload: events.append((event, payload))
+    ):
+        result = tuple(parse_positioned_items(
+            snapshot.tokens,
+            ocr=getattr(snapshot, "parser_mode", "pdf") == "ocr",
+        ))
+
+    token_ids_by_object = {
+        id(token): token_id
+        for token_id, token in zip(snapshot.token_ids, snapshot.tokens)
+    }
+    label_components = {}
+    if getattr(snapshot, "parser_mode", "pdf") == "ocr":
+        for label, indexes in _ocr_parser_labels_with_components(snapshot.tokens):
+            key = (label.page, label.x, label.y, label.width, compact(label.text))
+            label_components.setdefault(key, set()).add(tuple(
+                snapshot.token_ids[index] for index in indexes
+                if 0 <= index < len(snapshot.token_ids)
+            ))
+    else:
+        for token_id, token in zip(snapshot.token_ids, snapshot.tokens):
+            key = (token.page, token.x, token.y, token.width, compact(token.text))
+            label_components.setdefault(key, set()).add((token_id,))
+
+    def label_ids(label):
+        key = (label.page, label.x, label.y, label.width, compact(label.text))
+        options = {parts for parts in label_components.get(key, set()) if parts}
+        return next(iter(options)) if len(options) == 1 else ()
+
+    def make_candidate(path, label, number, *, active=False, selected=False,
+                       review=False):
+        components = tuple(label_ids(label))
+        value_id = token_ids_by_object.get(id(number)) if number is not None else None
+        identifier = _candidate_identity(
+            snapshot.snapshot_id, path, components, value_id,
+        )
+        complete = bool(
+            components and value_id
+            and value_id not in snapshot.identity_ambiguous
+            and not any(part in snapshot.identity_ambiguous for part in components)
+        )
+        return EnumeratedParserCandidate(
+            identifier, path, components, value_id, active, selected, review, complete,
+        )
+
+    start = next((payload for event, payload in events if event == "run_start"), {})
+    expected_paths = tuple(start.get("expected_paths", ()))
+    observed_paths = {
+        payload["generator_path"]
+        for event, payload in events
+        if event in {"path_complete", "logical_path_complete", "summary_complete",
+                     "dedup_complete"}
+        and payload.get("generator_path")
+    }
+    excluded_labels = [payload for event, payload in events if event == "label_excluded"]
+    scopes = [payload for event, payload in events if event == "candidate_scope"]
+    pool = next((payload for event, payload in events if event == "label_pool"), {})
+    eligible_label_count = len(tuple(pool.get("labels", ()))) - len(excluded_labels)
+    exclusions = Counter(payload.get("reason", "label_excluded")
+                         for payload in excluded_labels)
+    input_scope_token_ids = set()
+    for label in tuple(pool.get("labels", ())):
+        input_scope_token_ids.update(label_ids(label))
+    for key in ("comma_money", "ocr_dot_money"):
+        for number, _values in start.get(key, ()):
+            value_id = token_ids_by_object.get(id(number))
+            if value_id:
+                input_scope_token_ids.add(value_id)
+    candidates_by_id = {}
+    scope_candidate_ids = set()
+    selected_by_item = {}
+
+    selection_by_label = {
+        id(payload["label"]): payload
+        for event, payload in events if event == "selection_complete"
+    }
+    for scope in scopes:
+        label = scope["label"]
+        active_path = scope.get("active_path")
+        chosen = scope.get("chosen")
+        review = bool(selection_by_label.get(id(label), {}).get("review", True))
+        path_numbers = set()
+        for path, entries in scope.get("paths", {}).items():
+            for number, _values, _distance in entries:
+                path_numbers.add(id(number))
+                selected = bool(path == active_path and chosen is not None
+                                and number is chosen[0])
+                candidate = make_candidate(
+                    path, label, number, active=path == active_path,
+                    selected=selected, review=review,
+                )
+                candidates_by_id[candidate.candidate_id] = candidate
+                scope_candidate_ids.add(candidate.candidate_id)
+        accepted_horizontal = {
+            id(entry[0]) for entry in scope.get("paths", {}).get("horizontal", ())
+        }
+        # The production ownership guard runs after horizontal geometry has
+        # generated a relation. Keep rejected relations in the pre-selection
+        # universe instead of reducing them to token-level exclusion only.
+        for number, _values, _distance in scope.get("horizontal_in_range", ()):
+            if id(number) in accepted_horizontal:
+                continue
+            candidate = make_candidate(
+                "horizontal", label, number, review=True,
+            )
+            candidates_by_id[candidate.candidate_id] = candidate
+            scope_candidate_ids.add(candidate.candidate_id)
+        raw_horizontal = {id(entry[0]) for entry in scope.get("horizontal_in_range", ())}
+        for number, _values in scope.get("same_page", ()):
+            value_id = token_ids_by_object.get(id(number))
+            if value_id:
+                input_scope_token_ids.add(value_id)
+            if id(number) in path_numbers:
+                continue
+            reason = ("horizontal_ownership_rejected"
+                      if id(number) in raw_horizontal else "outside_pairing_geometry")
+            exclusions[reason] += 1
+
+    # Logical-row generation records candidates before its uniqueness pruning.
+    for event, payload in events:
+        if event != "logical_path_complete":
+            continue
+        accepted_numbers = {id(number) for _key, number in payload.get("accepted", ())}
+        for label, number in payload.get("generated", ()):
+            candidate = make_candidate(
+                "pdf_logical_row", label, number,
+                active=id(number) in accepted_numbers,
+            )
+            existing = candidates_by_id.get(candidate.candidate_id)
+            if existing is None:
+                candidates_by_id[candidate.candidate_id] = candidate
+            scope_candidate_ids.add(candidate.candidate_id)
+            if id(number) not in accepted_numbers:
+                exclusions["logical_uniqueness_pruned"] += 1
+
+    # Summary recovery is a distinct post-primary production generator path.
+    for event, payload in events:
+        if event != "summary_complete":
+            continue
+        proposed = {(id(entry[1]), id(number))
+                    for entry, number, _value in payload.get("proposals", ())}
+        accepted = {(id(entry[1]), id(number))
+                    for entry, number, _value in payload.get("accepted", ())}
+        for entry, matches, rejected in payload.get("scopes", ()):
+            label = entry[1]
+            for number, _value in matches:
+                pair = (id(label), id(number))
+                candidate = make_candidate(
+                    "pdf_summary_below", label, number,
+                    active=pair in proposed, selected=pair in accepted,
+                    review=pair not in accepted,
+                )
+                candidates_by_id[candidate.candidate_id] = candidate
+                scope_candidate_ids.add(candidate.candidate_id)
+            for number, _value, reason in rejected:
+                candidate = make_candidate(
+                    "pdf_summary_below", label, number, review=True,
+                )
+                candidates_by_id[candidate.candidate_id] = candidate
+                scope_candidate_ids.add(candidate.candidate_id)
+                exclusions[reason] += 1
+
+    # Bind selected parser items to the candidate that produced them, then retain
+    # an explicit removed->retained relation through production deduplication.
+    for event, payload in events:
+        if event != "selection_complete" or payload.get("chosen") is None:
+            continue
+        chosen = payload["chosen"]
+        path = payload.get("active_path")
+        candidate = make_candidate(
+            path, payload["label"], chosen[0], active=True, selected=True,
+            review=bool(payload.get("review")),
+        )
+        selected_by_item[id(payload["item"])] = candidate.candidate_id
+    for event, payload in events:
+        if event == "summary_complete":
+            for entry, number, _value in payload.get("accepted", ()):
+                candidate = make_candidate(
+                    "pdf_summary_below", entry[1], number,
+                    active=True, selected=True, review=False,
+                )
+                selected_by_item[id(entry[0])] = candidate.candidate_id
+
+    reductions = []
+    for event, payload in events:
+        if event != "dedup_complete":
+            continue
+        path = payload["generator_path"]
+        before = tuple(payload.get("before", ()))
+        after = tuple(payload.get("after", ()))
+        before_items = tuple(entry[0] if isinstance(entry, tuple) else entry
+                             for entry in before)
+        after_items = tuple(entry[0] if isinstance(entry, tuple) else entry
+                            for entry in after)
+        retained_objects = {id(item) for item in after_items}
+        for removed in (item for item in before_items if id(item) not in retained_objects):
+            removed_id = selected_by_item.get(id(removed))
+            retained = next((item for item in after_items
+                             if compact(item.raw_item_name) == compact(removed.raw_item_name)
+                             and item.raw_value == removed.raw_value), None)
+            retained_id = selected_by_item.get(id(retained)) if retained is not None else None
+            reductions.append(CandidateReductionRelation(
+                path, removed_id or "unresolved", retained_id,
+                bool(removed_id and retained_id),
+            ))
+
+    run_complete = any(event == "run_complete" for event, _payload in events)
+    domain_excluded_token_ids = set(snapshot.token_ids) - input_scope_token_ids
+    if domain_excluded_token_ids:
+        exclusions["outside_label_value_candidate_grammars"] += len(
+            domain_excluded_token_ids
+        )
+    signature = tuple(_parser_item_signature(item) for item in result)
+    return CandidateEnumerationLedger(
+        snapshot.snapshot_id, getattr(snapshot, "parser_mode", "pdf"),
+        len(snapshot.token_ids), tuple(expected_paths), tuple(sorted(observed_paths)),
+        tuple(sorted(candidates_by_id.values(), key=lambda item: item.candidate_id)),
+        tuple(sorted(reductions, key=lambda item: (
+            item.generator_path, item.removed_candidate_id,
+        ))),
+        tuple(sorted(exclusions.items())), tuple(sorted(input_scope_token_ids)),
+        tuple(sorted(domain_excluded_token_ids)), eligible_label_count, len(scopes),
+        tuple(sorted(scope_candidate_ids)), run_complete, signature,
+    )
+
+
+def capture_candidate_enumeration(snapshot):
+    """Return a diagnostic-only ledger of the actual production candidate paths."""
+    return _capture_candidate_enumeration(snapshot)
+
+
+def verify_candidate_enumeration(snapshot, ledger):
+    """Replay the parser and fail closed on stale, omitted, or hidden candidates."""
+    parser_mode = getattr(snapshot, "parser_mode", "pdf")
+    if (ledger.snapshot_id != snapshot.snapshot_id
+            or ledger.token_count != len(snapshot.token_ids)
+            or ledger.parser_mode != parser_mode):
+        return CandidateEnumerationVerification(
+            False, "candidate_snapshot_mismatch", False, False,
+        )
+    fresh = _capture_candidate_enumeration(snapshot)
+    replay_same = (
+        ledger.expected_paths == fresh.expected_paths
+        and ledger.observed_paths == fresh.observed_paths
+        and ledger.candidates == fresh.candidates
+        and ledger.reductions == fresh.reductions
+        and ledger.exclusion_counts == fresh.exclusion_counts
+        and ledger.input_scope_token_ids == fresh.input_scope_token_ids
+        and ledger.domain_excluded_token_ids == fresh.domain_excluded_token_ids
+        and ledger.scope_candidate_ids == fresh.scope_candidate_ids
+        and ledger.result_signature == fresh.result_signature
+    )
+    if not ledger.complete:
+        return CandidateEnumerationVerification(
+            False, "candidate_enumeration_ledger_incomplete", replay_same,
+            set(fresh.scope_candidate_ids) - {
+                candidate.candidate_id for candidate in ledger.candidates
+            } != set(),
+        )
+    if not replay_same:
+        hidden = bool(
+            set(fresh.scope_candidate_ids)
+            - {candidate.candidate_id for candidate in ledger.candidates}
+        )
+        return CandidateEnumerationVerification(
+            False, "candidate_enumeration_replay_mismatch", False, hidden,
+        )
+    return CandidateEnumerationVerification(
+        True, "candidate_enumeration_closed", True, False,
+    )
 
 
 _INCOMPLETE_REASON_CONTRACT = {
