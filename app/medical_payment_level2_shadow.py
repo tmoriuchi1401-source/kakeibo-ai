@@ -78,6 +78,32 @@ MalformedTargetRelationFlag = Literal[
     "BLOCKER_TARGET_UNRELATED",
 ]
 
+TextAffixStructureFlag = Literal[
+    "ALPHABETIC_PREFIX",
+    "ALPHABETIC_SUFFIX",
+    "KANA_KANJI_PREFIX",
+    "KANA_KANJI_SUFFIX",
+    "NUMERIC_SURROUNDED_BY_TEXT",
+    "SEPARATOR_BOUNDARY",
+    "SINGLE_TOKEN_MIXED_TEXT_NUMERIC",
+    "MULTI_TOKEN_TEXT_NUMERIC_STRUCTURE",
+]
+
+MalformedNeighborhoodFlag = Literal[
+    "SAME_ROW_NON_PAYMENT_TEXT",
+    "LABEL_LOCAL_BLOCK_PROXY",
+    "TARGET_LOCAL_BLOCK_PROXY",
+    "DIRECT_PAYMENT_LABEL_CONNECTION",
+    "TARGET_LOCAL_INDEPENDENT",
+]
+
+PaymentConnectivity = Literal[
+    "PAYMENT_LABEL_AND_VALID_TARGET",
+    "PAYMENT_LABEL_ONLY",
+    "VALID_TARGET_ONLY",
+    "NO_LOCAL_PAYMENT_CONNECTION",
+]
+
 
 @dataclass(frozen=True)
 class MalformedNumericBlockerDiagnostic:
@@ -103,6 +129,9 @@ class MalformedNumericBlockerDiagnostic:
         "TEXT_AFFIXED_NUMERIC",
         "OTHER_UNKNOWN",
     ]
+    text_affix_structure_flags: tuple[TextAffixStructureFlag, ...] = ()
+    neighborhood_flags: tuple[MalformedNeighborhoodFlag, ...] = ()
+    payment_connectivity: PaymentConnectivity = "NO_LOCAL_PAYMENT_CONNECTION"
 
 
 @dataclass(frozen=True)
@@ -190,6 +219,42 @@ class Level2ShadowEvaluation:
                     "BLOCKER_TARGET_SAME_ROW",
                     "BLOCKER_TARGET_SAME_COLUMN",
                     "BLOCKER_TARGET_UNRELATED",
+                )
+            },
+            **{
+                f"malformed_affix_{category.lower()}": sum(
+                    category in item.text_affix_structure_flags
+                    for item in self.malformed_blockers)
+                for category in (
+                    "ALPHABETIC_PREFIX",
+                    "ALPHABETIC_SUFFIX",
+                    "KANA_KANJI_PREFIX",
+                    "KANA_KANJI_SUFFIX",
+                    "NUMERIC_SURROUNDED_BY_TEXT",
+                    "SEPARATOR_BOUNDARY",
+                    "SINGLE_TOKEN_MIXED_TEXT_NUMERIC",
+                    "MULTI_TOKEN_TEXT_NUMERIC_STRUCTURE",
+                )
+            },
+            **{
+                f"malformed_neighborhood_{category.lower()}": sum(
+                    category in item.neighborhood_flags for item in self.malformed_blockers)
+                for category in (
+                    "SAME_ROW_NON_PAYMENT_TEXT",
+                    "LABEL_LOCAL_BLOCK_PROXY",
+                    "TARGET_LOCAL_BLOCK_PROXY",
+                    "DIRECT_PAYMENT_LABEL_CONNECTION",
+                    "TARGET_LOCAL_INDEPENDENT",
+                )
+            },
+            **{
+                f"malformed_connectivity_{category.lower()}": sum(
+                    item.payment_connectivity == category for item in self.malformed_blockers)
+                for category in (
+                    "PAYMENT_LABEL_AND_VALID_TARGET",
+                    "PAYMENT_LABEL_ONLY",
+                    "VALID_TARGET_ONLY",
+                    "NO_LOCAL_PAYMENT_CONNECTION",
                 )
             },
             "payment_role_evidence_complete": int(
@@ -402,10 +467,108 @@ def _malformed_parser_rejection_class(region: TextRegion) -> str:
     return "OTHER_UNKNOWN"
 
 
+def _is_kana_or_kanji(value: str) -> bool:
+    name = unicodedata.name(value, "")
+    return ("HIRAGANA" in name or "KATAKANA" in name
+            or "CJK UNIFIED IDEOGRAPH" in name)
+
+
+def _text_affix_structure_flags(region: TextRegion) -> tuple[TextAffixStructureFlag, ...]:
+    """Describe mixed text/numeric shape without retaining any source substring."""
+    text = unicodedata.normalize("NFKC", region.text).strip()
+    numeric_positions = [index for index, value in enumerate(text) if value.isdecimal()]
+    if not numeric_positions:
+        return ()
+    prefix = text[:numeric_positions[0]]
+    suffix = text[numeric_positions[-1] + 1:]
+    has_text = any(value.isalpha() for value in text)
+    flags: list[TextAffixStructureFlag] = []
+    if any(value.isascii() and value.isalpha() for value in prefix):
+        flags.append("ALPHABETIC_PREFIX")
+    if any(value.isascii() and value.isalpha() for value in suffix):
+        flags.append("ALPHABETIC_SUFFIX")
+    if any(_is_kana_or_kanji(value) for value in prefix):
+        flags.append("KANA_KANJI_PREFIX")
+    if any(_is_kana_or_kanji(value) for value in suffix):
+        flags.append("KANA_KANJI_SUFFIX")
+    if any(value.isalpha() for value in prefix) and any(value.isalpha() for value in suffix):
+        flags.append("NUMERIC_SURROUNDED_BY_TEXT")
+    if any(
+        (left.isdecimal() and not right.isalnum() and not right.isspace())
+        or (right.isdecimal() and not left.isalnum() and not left.isspace())
+        for left, right in zip(text, text[1:])
+    ):
+        flags.append("SEPARATOR_BOUNDARY")
+    if has_text and not any(value.isspace() for value in text):
+        flags.append("SINGLE_TOKEN_MIXED_TEXT_NUMERIC")
+    if has_text and len(text.split()) > 1:
+        flags.append("MULTI_TOKEN_TEXT_NUMERIC_STRUCTURE")
+    return tuple(flags)
+
+
+def _same_row(left: TextRegion, right: TextRegion) -> bool:
+    lb, rb = _safe_box(left), _safe_box(right)
+    if lb is None or rb is None:
+        return False
+    _, ly, _, lh = lb
+    _, ry, _, rh = rb
+    overlap = min(ly + lh, ry + rh) - max(ly, ry)
+    return overlap >= _UNCERTAIN_ALIGNMENT * min(lh, rh)
+
+
+def _malformed_neighborhood_flags(
+    label: TextRegion,
+    related: list[tuple[_Numeric, str]],
+    blocker: TextRegion,
+    regions: tuple[TextRegion, ...],
+) -> tuple[MalformedNeighborhoodFlag, ...]:
+    """Report geometry proxies only; OCR regions carry no native block identity."""
+    label_local = _blocking_relation(label, blocker) is not None
+    target_local = any(_blocking_relation(blocker, item.region) is not None
+                       for item, _ in related)
+    excluded = {label.ordinal, blocker.ordinal, *(item.ordinal for item, _ in related)}
+    same_row_non_payment = any(
+        other.ordinal not in excluded
+        and _same_row(blocker, other)
+        and bool(_compact_ocr_token(other.text))
+        and not _is_possible_payment(other)
+        and _exact_strong_structured_label_match(other.text) is None
+        for other in regions
+    )
+    flags: list[MalformedNeighborhoodFlag] = []
+    if same_row_non_payment:
+        flags.append("SAME_ROW_NON_PAYMENT_TEXT")
+    if label_local:
+        flags.extend(("LABEL_LOCAL_BLOCK_PROXY", "DIRECT_PAYMENT_LABEL_CONNECTION"))
+    if target_local:
+        flags.append("TARGET_LOCAL_BLOCK_PROXY")
+    if label_local and not target_local:
+        flags.append("TARGET_LOCAL_INDEPENDENT")
+    return tuple(flags)
+
+
+def _malformed_payment_connectivity(
+    label: TextRegion,
+    related: list[tuple[_Numeric, str]],
+    blocker: TextRegion,
+) -> PaymentConnectivity:
+    label_local = _blocking_relation(label, blocker) is not None
+    target_local = any(_blocking_relation(blocker, item.region) is not None
+                       for item, _ in related)
+    if label_local and target_local:
+        return "PAYMENT_LABEL_AND_VALID_TARGET"
+    if label_local:
+        return "PAYMENT_LABEL_ONLY"
+    if target_local:
+        return "VALID_TARGET_ONLY"
+    return "NO_LOCAL_PAYMENT_CONNECTION"
+
+
 def _build_malformed_blocker_diagnostics(
     label: TextRegion,
     related: list[tuple[_Numeric, str]],
     blockers: list[TextRegion],
+    regions: tuple[TextRegion, ...],
 ) -> tuple[MalformedNumericBlockerDiagnostic, ...]:
     return tuple(
         MalformedNumericBlockerDiagnostic(
@@ -415,6 +578,10 @@ def _build_malformed_blocker_diagnostics(
             document_role_signal=_malformed_document_role_signal(blocker),  # type: ignore[arg-type]
             target_relation_flags=_malformed_target_relation_flags(related, blocker),
             parser_rejection_class=_malformed_parser_rejection_class(blocker),  # type: ignore[arg-type]
+            text_affix_structure_flags=_text_affix_structure_flags(blocker),
+            neighborhood_flags=_malformed_neighborhood_flags(
+                label, related, blocker, regions),
+            payment_connectivity=_malformed_payment_connectivity(label, related, blocker),
         )
         for blocker in blockers
     )
@@ -521,7 +688,8 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
             competitor_blocks += 1
             malformed_blocked_groups += 1
             malformed_diagnostics.extend(
-                _build_malformed_blocker_diagnostics(label, related, effective_malformed))
+                _build_malformed_blocker_diagnostics(
+                    label, related, effective_malformed, observation.regions))
             continue
         local_regions = [r for r in observation.regions
                          if r.ordinal not in {label.ordinal, *(i.ordinal for i in group)}
