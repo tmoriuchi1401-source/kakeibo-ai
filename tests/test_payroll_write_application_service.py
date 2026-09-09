@@ -1,6 +1,7 @@
 import pytest
 
 from app import payroll_write_application_service as service
+from app import payroll_ownership_integration as ownership_integration
 from app.payroll_models import PayrollItem, PayrollPreview
 from app.payroll_sheets import PayrollSheetsSnapshot, validate_sheet_schema
 from app.payroll_storage import (
@@ -98,6 +99,9 @@ def test_all_applied_returns_unchanged_writer_result_and_in_memory_observations(
     assert len(result.audit_records) == 2
     assert result.projection_failures == ()
     assert writer.calls == ["header", "items", "header", "items"]
+    assert result.ownership_evidence == (
+        ownership_integration.DISABLED_PAYROLL_OWNERSHIP_EVIDENCE
+    )
 
 
 def test_confirmed_failure_remains_writer_failure_and_is_projected():
@@ -215,3 +219,34 @@ def test_projection_failure_is_reported_separately_from_completed_writer_result(
         assert len(result.materialization_results) == 1
         assert result.audit_records == ()
         assert result.projection_failures[0].stage == "audit_record"
+
+
+def test_disabled_ownership_integration_has_zero_attestor_or_input_side_effect(
+    monkeypatch,
+):
+    class PoisonRequests:
+        def __iter__(self):
+            raise AssertionError("disabled integration consumed requests")
+
+    def forbidden_attestor(*_args, **_kwargs):
+        raise AssertionError("disabled integration called attestor")
+
+    monkeypatch.setattr(
+        ownership_integration,
+        "attest_payroll_write_plan_ownership",
+        forbidden_attestor,
+    )
+    payroll_plans = plans(1)
+    writer = OutcomeWriter()
+    result = service.apply_payroll_write_application(
+        payroll_plans,
+        materialization_plans(payroll_plans),
+        writer,
+        confirmed=True,
+        latest_plans=lambda: payroll_plans,
+        ownership_attestation_requests=PoisonRequests(),
+    )
+    assert result.ownership_evidence == (
+        ownership_integration.DISABLED_PAYROLL_OWNERSHIP_EVIDENCE
+    )
+    assert writer.calls == ["header", "items"]

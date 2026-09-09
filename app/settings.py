@@ -21,6 +21,9 @@ class Settings:
     drive_backup_token_file: str = os.getenv("GOOGLE_DRIVE_BACKUP_TOKEN_FILE", "drive-backup-token.json")
     reconciliation_lookback_months: int = int(os.getenv("RECONCILIATION_LOOKBACK_MONTHS", "6"))
     gmail_token_json: str = os.getenv("GOOGLE_GMAIL_TOKEN_JSON", "")
+    payroll_ownership_attestation_enabled: bool = (
+        os.getenv("PAYROLL_OWNERSHIP_ATTESTATION_ENABLED", "false").strip().lower() == "true"
+    )
     aupay_gmail_query: str = os.getenv("AUPAY_GMAIL_QUERY") or (
         'in:anywhere from:info@wallet.auone.jp '
         'subject:"【au PAY】ご利用のお知らせ" "メールコードP1002" newer_than:30d'

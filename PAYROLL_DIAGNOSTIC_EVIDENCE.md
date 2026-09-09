@@ -303,7 +303,7 @@ candidate set. This contract is a readiness-to-integration boundary, not an
 adoption registry and not a replacement for `PayrollWritePlan`, writer, review,
 duplicate, schema, or apply authority.
 
-### Production integration architecture (not connected)
+### Production integration architecture (connected, default disabled)
 
 Three attachment points were compared. Attesting immediately after storage
 conversion is too early because schema, duplicate, statement review, and active
@@ -323,13 +323,30 @@ an opaque HMAC commitment. The resulting attestation has a deterministic ID and
 no write capability. Failure returns no attestation and never mutates, replaces,
 or invalidates the `PayrollWritePlan`.
 
+`apply_payroll_write_application` invokes the narrow
+`payroll_ownership_integration` bridge at the selected integration point: after
+its existing plan/materialization validation and before the unchanged writer
+call. `ownership_attestation_enabled` defaults to `False`;
+disabled mode does not consume candidate inputs, inspect the key, or call the
+attestor. The matching Settings flag is
+`PAYROLL_OWNERSHIP_ATTESTATION_ENABLED=false`, and no CLI or production caller
+passes it through in this checkpoint. Enabling that setting alone therefore does
+not activate production evaluation or any write behavior.
+
+When a future explicitly approved caller supplies the boolean, typed requests,
+and a local key, results are returned only as `ownership_evidence` sidecar
+metadata. Rejections and internal observer errors do not change the plan, writer
+payload, writer invocation, schema/duplicate/review gates, or apply authority.
+The pure evaluation function permits synthetic ON proof without invoking writer
+or apply code.
+
 Synthetic proof covers authoritative success, fallback and `unknown_with_value`
 rejection, field/value/source/snapshot/employer/parser/candidate mismatches,
 stale versions, review contamination, and identical-claim idempotency. Parser,
 storage candidate, review result, write plan, writer preview, and materialization
-payload are byte-for-byte or structurally identical before and after sidecar
-evaluation. No production module imports or calls the attestor. Actual production
-connection remains a separate approval boundary.
+payload remain byte-for-byte or structurally identical. Production enablement,
+real-data evaluation, and any adoption decision remain a separate approval
+boundary.
 
 ## Independent structure and coordinate evidence
 

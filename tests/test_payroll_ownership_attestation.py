@@ -26,6 +26,10 @@ from app.payroll_storage_preview import build_write_plan
 from app.payroll_write_plan_materialization import (
     payroll_write_plan_to_materialization_plan,
 )
+from app.payroll_ownership_integration import (
+    PayrollOwnershipAttestationRequest,
+    evaluate_payroll_ownership_attestation_integration,
+)
 from app.payroll_writer import preview_payroll_write
 
 
@@ -216,3 +220,121 @@ def test_attestation_is_a_sidecar_and_changes_no_production_visible_value():
     assert plan.model_dump(mode="json") == plan_before
     assert preview_payroll_write([plan]).model_dump(mode="json") == writer_before
     assert payroll_write_plan_to_materialization_plan(plan) == materialization_before
+
+
+def integrated(candidate, plan, **binding_overrides):
+    return evaluate_payroll_ownership_attestation_integration(
+        [plan],
+        [PayrollOwnershipAttestationRequest(
+            statement_id=plan.identity.statement_id,
+            candidate=candidate,
+            binding=binding(candidate, plan, **binding_overrides),
+        )],
+        enabled=True,
+        local_key=KEY,
+    ).records[0].evaluation
+
+
+def test_integration_disabled_preserves_every_production_visible_value():
+    tokens, candidate = ownership_candidate()
+    storage, plan = storage_and_plan()
+    request = PayrollOwnershipAttestationRequest(
+        statement_id=plan.identity.statement_id,
+        candidate=candidate,
+        binding=binding(candidate, plan),
+    )
+    before = (
+        tuple(parse_positioned_items(tokens, ocr=True)),
+        storage.model_dump(mode="json"),
+        storage.statement.needs_review,
+        tuple((item.needs_review, item.review_status) for item in storage.items),
+        plan.model_dump(mode="json"),
+        preview_payroll_write([plan]).model_dump(mode="json"),
+        payroll_write_plan_to_materialization_plan(plan),
+    )
+
+    evidence = evaluate_payroll_ownership_attestation_integration(
+        [plan], [request], enabled=False, local_key=KEY,
+    )
+
+    after = (
+        tuple(parse_positioned_items(tokens, ocr=True)),
+        storage.model_dump(mode="json"),
+        storage.statement.needs_review,
+        tuple((item.needs_review, item.review_status) for item in storage.items),
+        plan.model_dump(mode="json"),
+        preview_payroll_write([plan]).model_dump(mode="json"),
+        payroll_write_plan_to_materialization_plan(plan),
+    )
+    assert evidence.enabled is False
+    assert evidence.status == "disabled"
+    assert evidence.records == ()
+    assert after == before
+
+
+def test_synthetic_enabled_authoritative_standard_claim_attests_without_writer():
+    _tokens, candidate = ownership_candidate()
+    _storage, plan = storage_and_plan()
+
+    result = integrated(candidate, plan)
+
+    assert result.accepted
+    assert result.reason_code == "ownership_write_plan_attestation_closed"
+    assert result.attestation.plan_statement_id == plan.identity.statement_id
+
+
+@pytest.mark.parametrize("change, reason", [
+    ({"employer_scope": "other"}, "ownership_candidate_scope_mismatch"),
+    ({"parser_mode": "pdf"}, "ownership_candidate_scope_mismatch"),
+    ({"snapshot_id": "other"}, "ownership_candidate_scope_mismatch"),
+    ({"enumerated_candidate_id": "hidden"}, "ownership_candidate_scope_mismatch"),
+    ({"source_alignment_closed": False}, "source_alignment_unclosed"),
+    ({"review_authority_contaminated": True}, "review_authority_contamination"),
+])
+def test_synthetic_enabled_scope_hidden_stale_and_review_fail_closed(change, reason):
+    _tokens, candidate = ownership_candidate()
+    _storage, plan = storage_and_plan()
+
+    result = integrated(candidate, plan, **change)
+
+    assert not result.accepted
+    assert result.reason_code == reason
+    assert result.attestation is None
+
+
+@pytest.mark.parametrize("field, value, reason", [
+    ("standard_item_id", "other", "write_plan_field_relation_mismatch"),
+    ("value", 9999, "write_plan_value_mismatch"),
+    ("needs_review", True, "write_plan_review_contamination"),
+])
+def test_synthetic_enabled_plan_field_value_and_review_fail_closed(field, value, reason):
+    _tokens, candidate = ownership_candidate()
+    _storage, plan = storage_and_plan()
+    changed = changed_item_plan(plan, field, value)
+
+    result = integrated(candidate, changed)
+
+    assert not result.accepted
+    assert result.reason_code == reason
+
+
+def test_synthetic_enabled_fallback_unknown_and_stale_evidence_fail_closed():
+    _tokens, candidate = ownership_candidate()
+    _storage, unknown_plan = storage_and_plan(unknown=True)
+    fallback = evaluate_payroll_ownership_attestation_integration(
+        [unknown_plan],
+        [PayrollOwnershipAttestationRequest(
+            statement_id=unknown_plan.identity.statement_id,
+            candidate=None,
+            binding=binding(candidate, unknown_plan),
+        )],
+        enabled=True,
+        local_key=KEY,
+    ).records[0].evaluation
+    assert not fallback.accepted
+    assert fallback.reason_code == "ownership_adoption_candidate_required"
+
+    _storage, plan = storage_and_plan()
+    stale = integrated(replace(candidate, adoption_contract_version="old"), plan)
+    assert not stale.accepted
+    assert stale.reason_code == "adoption_contract_version_stale"

@@ -18,6 +18,12 @@ from .materialization import (
     MaterializationResult,
     build_materialization_audit_record,
 )
+from .payroll_ownership_integration import (
+    DISABLED_PAYROLL_OWNERSHIP_EVIDENCE,
+    PayrollOwnershipAttestationRequest,
+    PayrollOwnershipIntegrationEvidence,
+    evaluate_payroll_ownership_attestation_integration,
+)
 from .payroll_storage_preview import PayrollWritePlan
 from .payroll_write_plan_materialization import (
     payroll_write_plan_to_materialization_plan,
@@ -58,6 +64,9 @@ class PayrollWriteApplicationResult:
     materialization_results: tuple[MaterializationResult, ...]
     audit_records: tuple[MaterializationAuditRecord, ...]
     projection_failures: tuple[PayrollMaterializationProjectionFailure, ...]
+    ownership_evidence: PayrollOwnershipIntegrationEvidence = (
+        DISABLED_PAYROLL_OWNERSHIP_EVIDENCE
+    )
 
 
 def _validate_preview_materialization_inputs(
@@ -111,6 +120,9 @@ def apply_payroll_write_application(
     *,
     confirmed: bool,
     latest_plans: Callable[[], Iterable[PayrollWritePlan]],
+    ownership_attestation_enabled: bool = False,
+    ownership_attestation_requests: Iterable[PayrollOwnershipAttestationRequest] = (),
+    ownership_attestation_key: bytes | None = None,
 ) -> PayrollWriteApplicationResult:
     """Apply existing writer intent and return observation values in memory.
 
@@ -123,11 +135,19 @@ def apply_payroll_write_application(
     plans = _validate_preview_materialization_inputs(
         payroll_plans, materialization_plans,
     )
+    ownership_evidence = evaluate_payroll_ownership_attestation_integration(
+        plans,
+        ownership_attestation_requests,
+        enabled=ownership_attestation_enabled,
+        local_key=ownership_attestation_key,
+    )
     writer_result = apply_payroll_write_plans(
         plans, writer, confirmed=confirmed, latest_plans=latest_plans,
     )
     if not writer_result.results:
-        return PayrollWriteApplicationResult(writer_result, (), (), ())
+        return PayrollWriteApplicationResult(
+            writer_result, (), (), (), ownership_evidence,
+        )
 
     plans_by_statement = {plan.identity.statement_id: plan for plan in plans}
     # Do not create an intent for writer-reported non-ready skips.  The
@@ -155,10 +175,13 @@ def apply_payroll_write_application(
                 reason="payroll_materialization_projection_failed",
                 statement_id=statement_id,
             ) for statement_id in unprojectable_result_ids),
+            ownership_evidence,
         )
     projectable_results = tuple(projectable)
     if not projectable_results:
-        return PayrollWriteApplicationResult(writer_result, (), (), ())
+        return PayrollWriteApplicationResult(
+            writer_result, (), (), (), ownership_evidence,
+        )
 
     projection_batch = writer_result.model_copy(update={"results": projectable_results})
     try:
@@ -183,6 +206,7 @@ def apply_payroll_write_application(
                 stage="materialization_result",
                 reason="payroll_materialization_projection_failed",
             ),),
+            ownership_evidence,
         )
 
     audit_records: list[MaterializationAuditRecord] = []
@@ -206,4 +230,5 @@ def apply_payroll_write_application(
         materialization_results,
         tuple(audit_records),
         tuple(projection_failures),
+        ownership_evidence,
     )

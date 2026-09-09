@@ -203,7 +203,8 @@ def test_production_modules_do_not_depend_on_observer():
         if path.name in {"payroll_pdf_diagnostics.py", "payroll_diagnostic_evidence.py",
                          "payroll_coordinate_diagnostics.py", "payroll_boundary_diagnostics.py",
                          "payroll_ownership_provenance.py", "payroll_extraction_path_diagnostics.py",
-                         "payroll_ocr_snapshot_bridge.py"}:
+                         "payroll_ocr_snapshot_bridge.py",
+                         "payroll_ownership_integration.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
@@ -221,3 +222,27 @@ def test_production_modules_do_not_depend_on_observer():
                 assert all("payroll_boundary_diagnostics" not in alias.name for alias in node.names)
                 assert all("payroll_ownership_provenance" not in alias.name for alias in node.names)
                 assert all("payroll_extraction_path_diagnostics" not in alias.name for alias in node.names)
+
+
+def test_ownership_integration_is_the_only_narrow_production_bridge():
+    import ast
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "app" / "payroll_ownership_integration.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    provenance_imports = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "payroll_ownership_provenance"
+        for alias in node.names
+    }
+    assert provenance_imports == {
+        "PayrollOwnershipAdoptionCandidate",
+        "PayrollOwnershipAttestationEvaluation",
+        "PayrollOwnershipPlanBinding",
+        "attest_payroll_write_plan_ownership",
+    }
+    source = path.read_text(encoding="utf-8-sig")
+    assert "apply_payroll_write_plans" not in source
+    assert "append_header_rows" not in source
+    assert "append_item_rows" not in source
