@@ -68,6 +68,16 @@ MalformedGeometryFlag = Literal[
     "BLOCKER_TO_LABEL_UNCERTAIN",
 ]
 
+MalformedTargetRelationFlag = Literal[
+    "BLOCKER_TO_TARGET_STRONG",
+    "BLOCKER_TO_TARGET_UNCERTAIN",
+    "TARGET_TO_BLOCKER_STRONG",
+    "TARGET_TO_BLOCKER_UNCERTAIN",
+    "BLOCKER_TARGET_SAME_ROW",
+    "BLOCKER_TARGET_SAME_COLUMN",
+    "BLOCKER_TARGET_UNRELATED",
+]
+
 
 @dataclass(frozen=True)
 class MalformedNumericBlockerDiagnostic:
@@ -76,11 +86,21 @@ class MalformedNumericBlockerDiagnostic:
     geometry_flags: tuple[MalformedGeometryFlag, ...]
     context_category: Literal["PAYMENT_CONTEXT", "NO_PAYMENT_CONTEXT", "CONTEXT_UNKNOWN"]
     confidence_band: Literal["HIGH", "MID", "LOW", "UNKNOWN"]
+    document_role_signal: Literal[
+        "EXPLICIT_PAYMENT_CONTEXT",
+        "DATE_LIKE_NUMERIC",
+        "IDENTIFIER_LIKE_NUMERIC",
+        "UNRESOLVED",
+    ]
+    target_relation_flags: tuple[MalformedTargetRelationFlag, ...]
     parser_rejection_class: Literal[
         "MALFORMED_GROUPING",
         "SIGN_OR_PREFIX",
         "OCR_ALPHA_CONTAMINATION",
         "DECIMAL_OR_DOT_LIKE",
+        "SLASH_SEPARATED",
+        "INTERNAL_HYPHENATED",
+        "TEXT_AFFIXED_NUMERIC",
         "OTHER_UNKNOWN",
     ]
 
@@ -143,7 +163,33 @@ class Level2ShadowEvaluation:
                     "SIGN_OR_PREFIX",
                     "OCR_ALPHA_CONTAMINATION",
                     "DECIMAL_OR_DOT_LIKE",
+                    "SLASH_SEPARATED",
+                    "INTERNAL_HYPHENATED",
+                    "TEXT_AFFIXED_NUMERIC",
                     "OTHER_UNKNOWN",
+                )
+            },
+            **{
+                f"malformed_role_{category.lower()}": sum(
+                    item.document_role_signal == category for item in self.malformed_blockers)
+                for category in (
+                    "EXPLICIT_PAYMENT_CONTEXT",
+                    "DATE_LIKE_NUMERIC",
+                    "IDENTIFIER_LIKE_NUMERIC",
+                    "UNRESOLVED",
+                )
+            },
+            **{
+                f"malformed_target_{category.lower()}": sum(
+                    category in item.target_relation_flags for item in self.malformed_blockers)
+                for category in (
+                    "BLOCKER_TO_TARGET_STRONG",
+                    "BLOCKER_TO_TARGET_UNCERTAIN",
+                    "TARGET_TO_BLOCKER_STRONG",
+                    "TARGET_TO_BLOCKER_UNCERTAIN",
+                    "BLOCKER_TARGET_SAME_ROW",
+                    "BLOCKER_TARGET_SAME_COLUMN",
+                    "BLOCKER_TARGET_UNRELATED",
                 )
             },
             "payment_role_evidence_complete": int(
@@ -282,6 +328,61 @@ def _malformed_confidence_band(region: TextRegion) -> str:
     return "LOW"
 
 
+def _numeric_separator_parts(text: str, separator: str) -> tuple[str, ...]:
+    parts = tuple(value.strip() for value in text.split(separator))
+    return parts if len(parts) > 1 and all(value.isdecimal() for value in parts) else ()
+
+
+def _malformed_document_role_signal(region: TextRegion) -> str:
+    if _is_possible_payment(region):
+        return "EXPLICIT_PAYMENT_CONTEXT"
+    text = unicodedata.normalize("NFKC", region.text).strip()
+    slash_parts = _numeric_separator_parts(text, "/")
+    if len(slash_parts) == 3 and tuple(map(len, slash_parts)) in {
+        (4, 1, 1), (4, 1, 2), (4, 2, 1), (4, 2, 2),
+    }:
+        return "DATE_LIKE_NUMERIC"
+    hyphen_parts = _numeric_separator_parts(text, "-")
+    if hyphen_parts and not text.startswith("-"):
+        return "IDENTIFIER_LIKE_NUMERIC"
+    return "UNRESOLVED"
+
+
+def _malformed_target_relation_flags(
+    related: list[tuple[_Numeric, str]],
+    blocker: TextRegion,
+) -> tuple[MalformedTargetRelationFlag, ...]:
+    states: set[str] = set()
+    axes: set[str] = set()
+    for target, _ in related:
+        direct = classify_structural_relation(blocker, target.region)
+        reverse = classify_structural_relation(target.region, blocker)
+        if direct.state in {"STRONG", "UNCERTAIN"}:
+            states.add(f"BLOCKER_TO_TARGET_{direct.state}")
+            if direct.axis is not None:
+                axes.add(direct.axis)
+        if reverse.state in {"STRONG", "UNCERTAIN"}:
+            states.add(f"TARGET_TO_BLOCKER_{reverse.state}")
+            if reverse.axis is not None:
+                axes.add(reverse.axis)
+    ordered: list[MalformedTargetRelationFlag] = []
+    for value in (
+        "BLOCKER_TO_TARGET_STRONG",
+        "BLOCKER_TO_TARGET_UNCERTAIN",
+        "TARGET_TO_BLOCKER_STRONG",
+        "TARGET_TO_BLOCKER_UNCERTAIN",
+    ):
+        if value in states:
+            ordered.append(value)  # type: ignore[arg-type]
+    if "row_right" in axes:
+        ordered.append("BLOCKER_TARGET_SAME_ROW")
+    if "column_below" in axes:
+        ordered.append("BLOCKER_TARGET_SAME_COLUMN")
+    if not states:
+        ordered.append("BLOCKER_TARGET_UNRELATED")
+    return tuple(ordered)
+
+
 def _malformed_parser_rejection_class(region: TextRegion) -> str:
     text = unicodedata.normalize("NFKC", region.text).strip()
     if text.startswith(("+", "-")):
@@ -292,6 +393,12 @@ def _malformed_parser_rejection_class(region: TextRegion) -> str:
         return "DECIMAL_OR_DOT_LIKE"
     if "," in text:
         return "MALFORMED_GROUPING"
+    if _numeric_separator_parts(text, "/"):
+        return "SLASH_SEPARATED"
+    if _numeric_separator_parts(text, "-") and not text.startswith("-"):
+        return "INTERNAL_HYPHENATED"
+    if any(not value.isdecimal() and value not in " +-,./:円¥￥" for value in text):
+        return "TEXT_AFFIXED_NUMERIC"
     return "OTHER_UNKNOWN"
 
 
@@ -305,6 +412,8 @@ def _build_malformed_blocker_diagnostics(
             geometry_flags=_malformed_geometry_flags(label, related, blocker),
             context_category=_malformed_context_category(blocker),  # type: ignore[arg-type]
             confidence_band=_malformed_confidence_band(blocker),  # type: ignore[arg-type]
+            document_role_signal=_malformed_document_role_signal(blocker),  # type: ignore[arg-type]
+            target_relation_flags=_malformed_target_relation_flags(related, blocker),
             parser_rejection_class=_malformed_parser_rejection_class(blocker),  # type: ignore[arg-type]
         )
         for blocker in blockers

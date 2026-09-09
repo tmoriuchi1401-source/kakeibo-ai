@@ -186,6 +186,8 @@ def test_malformed_blocker_diagnostic_records_multiple_geometry_flags_and_catego
             geometry_flags=("BETWEEN_TARGET", "LABEL_TO_BLOCKER_STRONG"),
             context_category="PAYMENT_CONTEXT",
             confidence_band="HIGH",
+            document_role_signal="EXPLICIT_PAYMENT_CONTEXT",
+            target_relation_flags=("BLOCKER_TO_TARGET_STRONG", "BLOCKER_TARGET_SAME_ROW"),
             parser_rejection_class="DECIMAL_OR_DOT_LIKE",
         ),
     )
@@ -200,6 +202,8 @@ def test_reverse_only_non_payment_context_is_observable_without_changing_block()
     assert not result.candidates and result.blocked_competitor_count == 1
     assert diagnostic.geometry_flags == ("BLOCKER_TO_LABEL_STRONG",)
     assert diagnostic.context_category == "NO_PAYMENT_CONTEXT"
+    assert diagnostic.document_role_signal == "UNRESOLVED"
+    assert diagnostic.target_relation_flags == ("BLOCKER_TARGET_UNRELATED",)
     assert diagnostic.parser_rejection_class == "OCR_ALPHA_CONTAMINATION"
 
 
@@ -208,7 +212,10 @@ def test_reverse_only_non_payment_context_is_observable_without_changing_block()
     ("-1234", "SIGN_OR_PREFIX"),
     ("12O4", "OCR_ALPHA_CONTAMINATION"),
     ("1.234", "DECIMAL_OR_DOT_LIKE"),
-    ("12/34", "OTHER_UNKNOWN"),
+    ("12/34", "SLASH_SEPARATED"),
+    ("12-34", "INTERNAL_HYPHENATED"),
+    ("番号12_34", "TEXT_AFFIXED_NUMERIC"),
+    ("12:34", "OTHER_UNKNOWN"),
 ])
 def test_parser_rejection_class_is_data_minimized(bad, expected):
     item = observation(region(bad, 100, 100)).regions[0]
@@ -224,19 +231,62 @@ def test_diagnostic_confidence_bands_do_not_affect_thresholds(confidence, expect
     assert level2._malformed_confidence_band(item) == expected
 
 
+@pytest.mark.parametrize(("text", "expected"), [
+    ("自費 1.234", "EXPLICIT_PAYMENT_CONTEXT"),
+    ("2026/09/09", "DATE_LIKE_NUMERIC"),
+    ("12-34", "IDENTIFIER_LIKE_NUMERIC"),
+    ("12:34", "UNRESOLVED"),
+])
+def test_document_role_signal_uses_only_existing_context_and_numeric_shape(text, expected):
+    item = observation(region(text, 100, 100)).regions[0]
+    assert level2._malformed_document_role_signal(item) == expected
+
+
+def test_true_competitor_and_unrelated_identifier_have_distinct_diagnostic_signals():
+    competitor = observation(region("支払額", 20, 500, 80),
+                             region("自費 1.234", 105, 500, 20),
+                             region("1234円", 140, 500, 60))
+    identifier = observation(region("12-34", 100, 40, 80),
+                             region("支払額", 100, 100, 80),
+                             region("1234円", 220, 100, 80))
+    true_signal = evaluate_level2_payment_shadow(competitor).malformed_blockers[0]
+    unrelated_signal = evaluate_level2_payment_shadow(identifier).malformed_blockers[0]
+    assert true_signal.document_role_signal == "EXPLICIT_PAYMENT_CONTEXT"
+    assert "BLOCKER_TO_TARGET_STRONG" in true_signal.target_relation_flags
+    assert unrelated_signal.document_role_signal == "IDENTIFIER_LIKE_NUMERIC"
+    assert unrelated_signal.target_relation_flags == ("BLOCKER_TARGET_UNRELATED",)
+    assert unrelated_signal.parser_rejection_class == "INTERNAL_HYPHENATED"
+
+
+def test_date_like_reverse_only_blocker_is_observable_but_still_fails_closed():
+    source = observation(region("2026/09/09", 100, 40, 80),
+                         region("支払額", 100, 100, 80),
+                         region("1234円", 220, 100, 80))
+    result = evaluate_level2_payment_shadow(source)
+    diagnostic = result.malformed_blockers[0]
+    assert not result.candidates and result.blocked_competitor_count == 1
+    assert diagnostic.document_role_signal == "DATE_LIKE_NUMERIC"
+    assert diagnostic.parser_rejection_class == "SLASH_SEPARATED"
+
+
+def test_unresolved_role_signal_preserves_fail_closed_block():
+    source = observation(region("12:34", 100, 40, 80),
+                         region("支払額", 100, 100, 80),
+                         region("1234円", 220, 100, 80))
+    result = evaluate_level2_payment_shadow(source)
+    assert not result.candidates and result.blocked_competitor_count == 1
+    assert result.malformed_blockers[0].document_role_signal == "UNRESOLVED"
+
+
 def test_diagnostic_collection_cannot_change_candidate_or_block_semantics(monkeypatch):
     source = observation(region("支払額", 20, 500, 80), region("1.234", 105, 500, 20),
                          region("1234円", 140, 500, 60))
     before = evaluate_level2_payment_shadow(source)
     monkeypatch.setattr(level2, "_build_malformed_blocker_diagnostics", lambda *args: ())
     after = evaluate_level2_payment_shadow(source)
-    semantic = lambda result: (
-        len(result.candidates), result.blocked_competitor_count,
-        result.blocked_negative_context_count, result.ambiguous_count,
-        result.proposal_only_count, result.incomplete_count,
-        result.unresolved_competitor_count, result.payment_role_evidence_completeness,
-    )
-    assert semantic(before) == semantic(after)
+    without_diagnostics = lambda result: replace(
+        result, malformed_blockers=(), malformed_blocked_group_count=0)
+    assert without_diagnostics(before) == without_diagnostics(after)
     assert len(before.malformed_blockers) == 1 and not after.malformed_blockers
 
 
@@ -297,7 +347,18 @@ def test_output_and_repr_are_data_minimized():
         "malformed_confidence_low", "malformed_confidence_unknown",
         "malformed_rejection_malformed_grouping", "malformed_rejection_sign_or_prefix",
         "malformed_rejection_ocr_alpha_contamination",
-        "malformed_rejection_decimal_or_dot_like", "malformed_rejection_other_unknown",
+        "malformed_rejection_decimal_or_dot_like", "malformed_rejection_slash_separated",
+        "malformed_rejection_internal_hyphenated", "malformed_rejection_text_affixed_numeric",
+        "malformed_rejection_other_unknown",
+        "malformed_role_explicit_payment_context", "malformed_role_date_like_numeric",
+        "malformed_role_identifier_like_numeric", "malformed_role_unresolved",
+        "malformed_target_blocker_to_target_strong",
+        "malformed_target_blocker_to_target_uncertain",
+        "malformed_target_target_to_blocker_strong",
+        "malformed_target_target_to_blocker_uncertain",
+        "malformed_target_blocker_target_same_row",
+        "malformed_target_blocker_target_same_column",
+        "malformed_target_blocker_target_unrelated",
         "payment_role_evidence_complete", "materialization_stable", "evaluation_failed"}
 
 
