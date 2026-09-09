@@ -268,6 +268,41 @@ state. It shows that strengthening identity cannot repair missing semantic
 authority: fallback successful occurrences are observations, not production
 ownership adoption claims.
 
+### Limited adoption-candidate contract (design only)
+
+`evaluate_adoption_candidate` accepts exactly one already-closed
+`SuccessfulClaimAuthorityTrace` plus independently verified source and storage
+gates. It returns either an immutable `PayrollOwnershipAdoptionCandidate` or a
+rejection reason. The object contains only opaque evidence references: portable
+claim ID, snapshot and parser mode, employer scope, authoritative standard item
+ID, authority source, physical label/value IDs, enumerated candidate ID,
+generator path, closure status, scope binding, and evidence/readiness contract
+versions. It has no writer, apply, storage mutation, or parser-control method.
+Storage alignment is represented by a typed read-only evidence record containing
+the resolved standard item ID, `uncertain` flag, value-persistability flag, and
+review reason; a caller cannot satisfy the gate with an untyped success boolean.
+
+Candidate creation requires all existing authority gates: standard field
+authority, storage alignment (`uncertain=False` and not `unknown_with_value`),
+source replay closure, complete physical/logical provenance, closed candidate
+enumeration and competition, counterfactual closure, review isolation, portable
+ID integrity, and an exact employer/snapshot/parser-mode scope. The candidate
+ledger is replay-verified before acceptance; any stale or hidden relation is
+rejected. The portable ID is recomputed and compared, so duplicate generation is
+idempotent while a different physical occurrence, snapshot, field, or employer
+cannot reuse the same scope binding. Contract and evidence versions are checked
+explicitly, preventing old evidence from being treated as current.
+
+Fallback `snapshot_success_only`, `unknown_with_value`, missing authority or
+portable ID, review-authority contamination, incomplete provenance, and
+unresolved competition all return no candidate. A snapshot containing the one
+authoritative standard mapping alongside an unrelated fallback still produces
+one candidate only for the standard mapping. The four fallback mappings and the
+98 review/non-success ground-truth-required tokens therefore remain outside the
+candidate set. This contract is a readiness-to-integration boundary, not an
+adoption registry and not a replacement for `PayrollWritePlan`, writer, review,
+duplicate, schema, or apply authority.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

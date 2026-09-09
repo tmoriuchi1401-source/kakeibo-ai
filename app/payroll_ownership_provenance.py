@@ -293,6 +293,11 @@ class SuccessfulClaimAuthorityTrace:
     review_isolation: str
     unresolved_semantic_dependency: str | None
     final_status: str
+    authoritative_standard_item_id: str | None = None
+    physical_label_component_ids: tuple[str, ...] = field(default=(), repr=False)
+    physical_value_id: str | None = field(default=None, repr=False)
+    generator_path: str | None = None
+    enumerated_candidate_id: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -321,6 +326,47 @@ class SuccessfulClaimAuthorityDiagnostic:
                 claim.portable_claim_id is not None for claim in self.claims
             ),
         }
+
+
+@dataclass(frozen=True)
+class PayrollOwnershipAdoptionCandidate:
+    """Evidence-only candidate; it has no writer, apply, or storage capability."""
+    portable_claim_id: str
+    snapshot_id: str
+    parser_mode: str
+    employer_scope: str
+    authoritative_standard_item_id: str
+    authority_source: str
+    physical_label_component_ids: tuple[str, ...] = field(repr=False)
+    physical_value_id: str = field(repr=False)
+    enumerated_candidate_id: str = field(repr=False)
+    generator_path: str
+    evidence_closure_status: str
+    scope_binding: tuple[str, ...] = field(repr=False)
+    readiness_version: str
+    evidence_contract_version: str
+
+
+@dataclass(frozen=True)
+class PayrollOwnershipAdoptionEvaluation:
+    """Fail-closed diagnostic evaluation, not an adoption decision."""
+    accepted: bool
+    reason_code: str
+    candidate: PayrollOwnershipAdoptionCandidate | None = None
+
+
+@dataclass(frozen=True)
+class PayrollStorageAuthorityEvidence:
+    """Read-only proof of the existing storage conversion gate."""
+    standard_item_id: str | None
+    uncertain: bool
+    value_persistable: bool
+    review_reason_code: str | None
+
+
+_ADOPTION_CONTRACT_VERSION = "payroll-ownership-adoption-contract-v1"
+_EVIDENCE_CONTRACT_VERSION = "payroll-ownership-evidence-v1"
+_READINESS_VERSION = "payroll-ownership-readiness-v1"
 
 
 def _stable_claim_digest(payload):
@@ -565,10 +611,132 @@ def analyze_successful_claim_authority(snapshot, provenance, candidate_ledger):
             review_isolation,
             unresolved,
             final_status,
+            item.standard_item_candidate,
+            tuple(mapping.label_component_ids),
+            mapping.value_token_id,
+            relation.generator_path if relation is not None else None,
+            relation.candidate_id if relation is not None else None,
         ))
     return SuccessfulClaimAuthorityDiagnostic(
         snapshot.snapshot_id, True, "successful_claim_authority_analyzed",
         tuple(claims),
+    )
+
+
+def evaluate_adoption_candidate(
+    snapshot, provenance, candidate_ledger, claim, *, employer_scope,
+    expected_employer_scope=None,
+    source_replay_closed=False, storage_evidence=None,
+    review_authority_contaminated=False,
+    evidence_contract_version=_EVIDENCE_CONTRACT_VERSION,
+    readiness_version=_READINESS_VERSION,
+):
+    """Evaluate one already-closed authoritative claim without adopting it.
+
+    All authority is supplied by existing parser/storage evidence.  The return
+    value is an immutable evidence object or a rejection reason; it cannot be
+    passed to a writer and performs no mutation.
+    """
+    def reject(reason):
+        return PayrollOwnershipAdoptionEvaluation(False, reason, None)
+
+    if not employer_scope:
+        return reject("employer_scope_missing")
+    if (expected_employer_scope is not None
+            and employer_scope != expected_employer_scope):
+        return reject("employer_scope_mismatch")
+    if evidence_contract_version != _EVIDENCE_CONTRACT_VERSION:
+        return reject("evidence_contract_version_incompatible")
+    if readiness_version != _READINESS_VERSION:
+        return reject("readiness_version_incompatible")
+    if not source_replay_closed:
+        return reject("source_replay_unclosed")
+    if not isinstance(storage_evidence, PayrollStorageAuthorityEvidence):
+        return reject("storage_authority_evidence_missing")
+    if review_authority_contaminated:
+        return reject("review_authority_contamination")
+    if not isinstance(claim, SuccessfulClaimAuthorityTrace):
+        return reject("authority_trace_required")
+    if claim.final_status != "AUTHORITY_CLOSED":
+        return reject("claim_not_authority_closed")
+    if claim.authority_result != "authoritative_standard_field":
+        return reject("non_authoritative_field")
+    if claim.authority_source != "parser_standard_item_candidate_and_storage_contract":
+        return reject("unknown_authority_source")
+    if claim.review_isolation != "closed" or claim.unresolved_semantic_dependency:
+        return reject("review_or_semantic_dependency_unclosed")
+    if not claim.portable_claim_id:
+        return reject("portable_claim_id_missing")
+    parser_mode = getattr(snapshot, "parser_mode", "pdf")
+    if candidate_ledger.snapshot_id != snapshot.snapshot_id:
+        return reject("snapshot_scope_mismatch")
+    if candidate_ledger.parser_mode != parser_mode:
+        return reject("parser_mode_scope_mismatch")
+    if provenance.snapshot_id != snapshot.snapshot_id:
+        return reject("snapshot_provenance_mismatch")
+    if not provenance.complete:
+        return reject("provenance_incomplete")
+    enumeration = verify_candidate_enumeration(snapshot, candidate_ledger)
+    if not enumeration.complete:
+        return reject("candidate_enumeration_incomplete")
+    if not claim.authoritative_standard_item_id:
+        return reject("standard_item_id_missing")
+    if (storage_evidence.standard_item_id != claim.authoritative_standard_item_id
+            or storage_evidence.uncertain
+            or not storage_evidence.value_persistable
+            or storage_evidence.review_reason_code == "unknown_with_value"):
+        return reject("storage_authority_mismatch")
+    label_ids = tuple(claim.physical_label_component_ids)
+    value_id = claim.physical_value_id
+    candidate_id = claim.enumerated_candidate_id
+    if (not label_ids or value_id is None or candidate_id is None
+            or claim.generator_path is None):
+        return reject("physical_or_candidate_provenance_incomplete")
+    if any(token_id not in snapshot.token_ids for token_id in (*label_ids, value_id)):
+        return reject("physical_scope_mismatch")
+    if any(token_id in snapshot.identity_ambiguous for token_id in (*label_ids, value_id)):
+        return reject("physical_identity_ambiguous")
+    claim_candidates = tuple(
+        candidate for candidate in candidate_ledger.candidates
+        if candidate.label_component_ids == label_ids
+    )
+    if len(claim_candidates) != 1:
+        return reject("unresolved_candidate_competition")
+    relation = claim_candidates[0]
+    if (relation.candidate_id != candidate_id
+            or relation.generator_path != claim.generator_path
+            or relation.value_token_id != value_id
+            or not relation.selected
+            or not relation.provenance_complete):
+        return reject("candidate_relation_mismatch")
+    if claim.portable_claim_id != _portable_production_claim_identity(
+        snapshot.snapshot_id, parser_mode, claim.authoritative_standard_item_id,
+        label_ids, value_id, claim.generator_path, candidate_id,
+        claim.authority_result,
+    ):
+        return reject("portable_claim_id_mismatch")
+    scope_binding = (
+        snapshot.snapshot_id, employer_scope, parser_mode,
+        claim.authoritative_standard_item_id, *label_ids, value_id, candidate_id,
+    )
+    candidate = PayrollOwnershipAdoptionCandidate(
+        claim.portable_claim_id,
+        snapshot.snapshot_id,
+        parser_mode,
+        employer_scope,
+        claim.authoritative_standard_item_id,
+        claim.authority_source,
+        label_ids,
+        value_id,
+        candidate_id,
+        claim.generator_path,
+        "closed",
+        scope_binding,
+        readiness_version,
+        evidence_contract_version,
+    )
+    return PayrollOwnershipAdoptionEvaluation(
+        True, "adoption_candidate_contract_closed", candidate,
     )
 
 

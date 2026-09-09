@@ -1,5 +1,6 @@
 """Synthetic-only tests for diagnostic physical ownership provenance."""
 from dataclasses import replace
+import pytest
 
 from app.payroll_ocr import PositionedText
 from app import payroll_parser
@@ -8,7 +9,9 @@ from app.payroll_ownership_provenance import (
     CandidateClaim, _portable_production_claim_identity,
     analyze_successful_claim_authority, assess_ownership,
     capture_candidate_enumeration, diagnose_incomplete_ownership,
-    reconstruct_consumption, trace_incomplete_ownership,
+    evaluate_adoption_candidate, PayrollStorageAuthorityEvidence,
+    reconstruct_consumption,
+    trace_incomplete_ownership,
     verify_candidate_enumeration,
 )
 from app.payroll_parser import parse_positioned_items
@@ -572,3 +575,118 @@ def test_claim_authority_fails_closed_for_stale_or_semantically_ambiguous_eviden
     result = analyze_successful_claim_authority(observed, provenance, ambiguous)
     assert not result.valid
     assert result.claims == ()
+
+
+def adoption_fixture(include_fallback=False):
+    tokens = [token("基本給", 0, 20, width=30), token("1,234", 40, 20)]
+    if include_fallback:
+        tokens.extend((token("独自手当", 0, 80, width=40), token("2,345", 50, 80)))
+    observed, provenance, ledger, diagnostic = authority_diagnostic(tuple(tokens))
+    claim = next(item for item in diagnostic.claims
+                 if item.authority_result == "authoritative_standard_field")
+    return observed, provenance, ledger, diagnostic, claim
+
+
+def storage_evidence(**overrides):
+    values = dict(
+        standard_item_id="basic_pay", uncertain=False,
+        value_persistable=True, review_reason_code=None,
+    )
+    values.update(overrides)
+    return PayrollStorageAuthorityEvidence(**values)
+
+
+def test_authoritative_standard_mapping_builds_one_read_only_adoption_candidate():
+    observed, provenance, ledger, _diagnostic, claim = adoption_fixture()
+    result = evaluate_adoption_candidate(
+        observed, provenance, ledger, claim,
+        employer_scope="employer-1", expected_employer_scope="employer-1",
+        source_replay_closed=True, storage_evidence=storage_evidence(),
+    )
+    assert result.accepted
+    assert result.reason_code == "adoption_candidate_contract_closed"
+    assert result.candidate.evidence_closure_status == "closed"
+    assert result.candidate.snapshot_id == observed.snapshot_id
+    assert result.candidate.authoritative_standard_item_id == "basic_pay"
+    assert not hasattr(result.candidate, "write")
+
+
+def test_fallback_success_is_rejected_and_unrelated_fallback_does_not_spill_scope():
+    observed, provenance, ledger, diagnostic, claim = adoption_fixture(include_fallback=True)
+    assert sum(item.authority_result == "snapshot_success_only"
+               for item in diagnostic.claims) == 1
+    accepted = evaluate_adoption_candidate(
+        observed, provenance, ledger, claim,
+        employer_scope="employer-1", source_replay_closed=True,
+        storage_evidence=storage_evidence(),
+    )
+    assert accepted.accepted
+    fallback = next(item for item in diagnostic.claims
+                    if item.authority_result == "snapshot_success_only")
+    rejected = evaluate_adoption_candidate(
+        observed, provenance, ledger, fallback,
+        employer_scope="employer-1", source_replay_closed=True,
+        storage_evidence=storage_evidence(),
+    )
+    assert not rejected.accepted
+    assert rejected.reason_code == "claim_not_authority_closed"
+
+
+@pytest.mark.parametrize("kwargs, reason", [
+    ({"source_replay_closed": False, "storage_evidence": storage_evidence()}, "source_replay_unclosed"),
+    ({"source_replay_closed": True, "storage_evidence": storage_evidence(uncertain=True)}, "storage_authority_mismatch"),
+    ({"source_replay_closed": True, "storage_evidence": storage_evidence(),
+      "expected_employer_scope": "other"}, "employer_scope_mismatch"),
+    ({"source_replay_closed": True, "storage_evidence": storage_evidence(),
+      "review_authority_contaminated": True}, "review_authority_contamination"),
+    ({"source_replay_closed": True, "storage_evidence": storage_evidence(),
+      "evidence_contract_version": "old"}, "evidence_contract_version_incompatible"),
+])
+def test_adoption_contract_rejects_scope_authority_and_version_failures(kwargs, reason):
+    observed, provenance, ledger, _diagnostic, claim = adoption_fixture()
+    result = evaluate_adoption_candidate(
+        observed, provenance, ledger, claim, employer_scope="employer-1", **kwargs,
+    )
+    assert not result.accepted
+    assert result.reason_code == reason
+
+
+def test_adoption_contract_rejects_stale_ledgers_physical_mismatch_and_competition():
+    observed, provenance, ledger, _diagnostic, claim = adoption_fixture()
+    stale = replace(provenance, snapshot_id="stale")
+    assert evaluate_adoption_candidate(
+        observed, stale, ledger, claim, employer_scope="employer-1",
+        source_replay_closed=True, storage_evidence=storage_evidence(),
+    ).reason_code == "snapshot_provenance_mismatch"
+
+    wrong_physical = replace(claim, physical_value_id=claim.physical_label_component_ids[0])
+    assert evaluate_adoption_candidate(
+        observed, provenance, ledger, wrong_physical, employer_scope="employer-1",
+        source_replay_closed=True, storage_evidence=storage_evidence(),
+    ).reason_code == "candidate_relation_mismatch"
+
+    duplicate = replace(ledger.candidates[0], candidate_id="d" * 64, selected=False)
+    competed = replace(
+        ledger, candidates=(*ledger.candidates, duplicate),
+        scope_candidate_ids=(*ledger.scope_candidate_ids, duplicate.candidate_id),
+    )
+    assert evaluate_adoption_candidate(
+        observed, provenance, competed, claim, employer_scope="employer-1",
+        source_replay_closed=True, storage_evidence=storage_evidence(),
+    ).reason_code == "candidate_enumeration_incomplete"
+
+
+def test_adoption_candidate_id_is_idempotent_but_scope_bound():
+    observed, provenance, ledger, _diagnostic, claim = adoption_fixture()
+    kwargs = dict(employer_scope="employer-1", source_replay_closed=True,
+                  storage_evidence=storage_evidence())
+    first = evaluate_adoption_candidate(observed, provenance, ledger, claim, **kwargs)
+    second = evaluate_adoption_candidate(observed, provenance, ledger, claim, **kwargs)
+    assert first.candidate == second.candidate
+    other_employer = evaluate_adoption_candidate(
+        observed, provenance, ledger, claim, employer_scope="employer-2",
+        expected_employer_scope="employer-2", source_replay_closed=True,
+        storage_evidence=storage_evidence(),
+    )
+    assert other_employer.accepted
+    assert other_employer.candidate.scope_binding != first.candidate.scope_binding
