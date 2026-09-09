@@ -1,9 +1,10 @@
 # au PAY card production persistence and capability seal
 
-This phase connects the writer contract to production-shaped persistence and a
-real Sheets adapter without granting write capability. There is no CLI command
-for this module, `PRODUCTION_CAPABILITY_ENABLED` is false, and capability
-issuance always fails. No canary or production write can occur in this phase.
+This phase adds a formal one-shot production-canary capability path. There is no
+CLI command and `PRODUCTION_CAPABILITY_ENABLED` remains false, so there is no
+standing production authority. A caller must use the public issuance and
+execution APIs with protected repo-external inputs. This implementation phase
+does not execute a real canary or any production write.
 
 ## Protected audit key
 
@@ -54,22 +55,41 @@ may write the same target concurrently. It supports renewal, expiry, atomic
 stale takeover, crash recovery after expiry, and refuses release by a stale or
 wrong owner token. Backend errors and live-lock contention stop before write.
 
-## Real transport, still unreachable
+## Protected human approval and one-shot capability
+
+`ProtectedCanaryApprovalProvider` reads a repo-external JSON approval envelope.
+It binds a human approval reference, the exact `canonical-item-v1` reference,
+the exact keyed target reference, `batch_size: 1`, and an aware expiry. Issuance
+also recomputes the plan, candidate, and target references, requires a
+`production_canary` run manifest, rejects plans with anything other than one
+candidate, and caps TTL at five minutes.
+
+For the currently approved canary, that protected envelope must name
+`canonical-item-v1:7f95f0a819ad90aeae1e4c1d3ba15011`; issuance recomputes the
+reference from the loaded plan and protected key and rejects any mismatch.
+
+`SqliteCapabilityStore` stores only a token hash and privacy-safe bindings. Its
+atomic state machine is `issued -> claimed -> dispatching -> sealed`. Run IDs
+and candidate/target pairs are unique, so another capability cannot reopen the
+same approved canary. Claim and dispatch are compare-and-set operations. Every
+execution exit attempts reseal; if storage itself fails, a claimed or
+dispatching capability remains non-reusable and therefore fails closed.
+
+## Real transport, capability gated
 
 `SealedSheetsCandidateTransport` has only a one-candidate `write_once` method.
 It validates the exact spreadsheet ID, approved `取込データ` worksheet, exact
-12-column header, candidate authority, purchase kind, and positive amount. Its
-request is fixed to `取込データ!A:L`, uses `RAW` input, and cannot accept an
-arbitrary range. A successful response is only an acknowledgement; the writer
-contract still requires exact post-write read-back before confirmation.
+12-column header, candidate authority, purchase kind, positive amount, matching
+claimed capability, and the durable `write_attempted` journal event. Dispatch
+then atomically consumes the capability before the fixed `取込データ!A:L` RAW
+append. It has no arbitrary-range API. A successful response is only an
+acknowledgement; exact post-write read-back is still required for confirmation.
 
-The transport cannot currently be invoked: the global production flag is
-false, no `ProductionWriteCapability` can be constructed or issued, and the CLI
-does not import this module. `evaluate_capability_seal` also enumerates the
-future gates: explicit capability flag, protected persistent key, healthy
-journal, acquired lease, verified target, valid fixed window, valid executor
-authority, and explicit apply authority. Even if all inputs are marked ready,
-this phase adds the unconditional `production_capability_disabled` blocker.
+Synthetic and real authority are separate public functions.
+`execute_synthetic_one_shot_canary` accepts only `synthetic_only` transports;
+`execute_production_one_shot_canary` accepts only the sealed Sheets transport.
+The latter is the only formal real-transport route and the adapter independently
+checks the capability store and journal immediately before dispatch.
 
 ## Read-only pre-canary artifact
 
@@ -80,8 +100,8 @@ privacy-safe blockers. It does not expose merchant data or the spreadsheet ID
 and always reports zero external writes. Missing key, journal, target, lease, or
 candidate readiness produces a stopped manifest rather than bypassing a gate.
 
-Before a separately approved canary phase, operators still need a provisioned
-production key, an external protected SQLite location (or reviewed remotely
-atomic backend), a persisted fixed real-data run manifest, reviewed Google
-write-scope credentials, and an explicit human-authorized seal-release design.
-Recovery is idempotent read-back, not rollback and not blind retry.
+Before executing a separately authorized canary, operators still need a
+provisioned production key, protected approval file containing the approved
+candidate reference, external protected SQLite location, persisted fixed
+real-data run manifest, exact target reference, and reviewed Google write-scope
+credentials. Recovery is idempotent read-back, not rollback and not blind retry.

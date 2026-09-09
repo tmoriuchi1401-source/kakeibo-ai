@@ -15,17 +15,24 @@ from app.aupay_card_executor import (
     IdentityRead,
 )
 from app.aupay_card_production import (
+    CanaryApproval,
     CapabilitySealChecks,
     PRODUCTION_CAPABILITY_ENABLED,
     ProtectedAuditKeyProvider,
+    ProtectedCanaryApprovalProvider,
     SealedSheetsCandidateTransport,
     SqliteAttemptJournal,
+    SqliteCapabilityStore,
     SqliteLeaseManager,
     SqliteRunManifestStore,
     build_precanary_manifest,
+    canonical_candidate_reference,
     evaluate_capability_seal,
+    execute_synthetic_one_shot_canary,
+    execute_production_one_shot_canary,
     issue_production_write_capability,
     recover_interrupted_attempt,
+    target_binding_reference,
 )
 from app.aupay_card_writer import (
     BatchPolicy,
@@ -82,11 +89,11 @@ def source_window(query=None):
     )
 
 
-def run_manifest(plan, run_id=None):
+def run_manifest(plan, run_id=None, *, mode="synthetic_test"):
     return create_run_manifest(
         plan, source_window=source_window(), plan_created_at=NOW,
         run_id=run_id or str(uuid4()), audit_key=KEY,
-        authority_mode="synthetic_test",
+        authority_mode=mode,
     )
 
 
@@ -136,6 +143,34 @@ class CountingTransport:
     def write_once(self, _candidate):
         self.calls += 1
         raise AssertionError("transport must not be called")
+
+
+class CanaryTransport:
+    synthetic_only = True
+
+    def __init__(self, *, raises=None):
+        self.calls = []
+        self.raises = raises
+
+    def write_once(self, candidate, *, attempt_id):
+        self.calls.append((candidate.identity, attempt_id))
+        if self.raises:
+            raise self.raises
+        from app.aupay_card_writer import WriteDisposition, WriteRequestResult
+        return WriteRequestResult(WriteDisposition.ACKNOWLEDGED, "synthetic_ack")
+
+
+class SequenceReader:
+    def __init__(self, observations):
+        self.observations = list(observations)
+        self.calls = 0
+
+    def read_identities(self, identities):
+        self.calls += 1
+        observation = self.observations.pop(0)
+        if isinstance(observation, Exception):
+            raise observation
+        return {identity: observation for identity in identities}
 
 
 def journal_event(manifest, candidate, attempt_id, stage, state, reason):
@@ -366,9 +401,7 @@ def test_real_sheets_transport_is_sealed_and_has_no_arbitrary_range_api():
     )
 
     assert not PRODUCTION_CAPABILITY_ENABLED
-    with pytest.raises(RuntimeError, match="production_capability_issuance_disabled"):
-        issue_production_write_capability()
-    with pytest.raises(RuntimeError, match="production_capability_issuance_disabled"):
+    with pytest.raises(RuntimeError, match="production_capability_required"):
         transport.write_once(plan.candidates[0])
     with pytest.raises(AttributeError):
         transport.write_range("arbitrary!A1", [["forbidden"]])
@@ -376,7 +409,7 @@ def test_real_sheets_transport_is_sealed_and_has_no_arbitrary_range_api():
     assert db.append_calls == []
 
 
-def test_capability_seal_always_includes_disabled_blocker_and_cli_has_no_wiring():
+def test_capability_seal_requires_every_scoped_gate_and_cli_has_no_wiring():
     all_preconditions = CapabilitySealChecks(
         explicit_capability_flag=True,
         persistent_key_available=True,
@@ -386,10 +419,14 @@ def test_capability_seal_always_includes_disabled_blocker_and_cli_has_no_wiring(
         fixed_source_window_valid=True,
         executor_authority_valid=True,
         explicit_apply_authority=True,
+        human_approval_present=True,
+        exact_candidate_bound=True,
+        exact_target_bound=True,
+        batch_size_one=True,
+        short_ttl_valid=True,
+        one_shot_store_ready=True,
     )
-    assert evaluate_capability_seal(all_preconditions) == (
-        "production_capability_disabled",
-    )
+    assert evaluate_capability_seal(all_preconditions) == ()
 
     import app.cli as cli
     source = inspect.getsource(cli)
@@ -507,3 +544,350 @@ def test_restart_recovery_never_resends_write(tmp_path, mode):
     assert result.state == expected
     assert result.transport_invocation_count == 0
     assert reopened.history(manifest.run_id, attempt_id)[-1].stage == JournalStage.FINAL
+
+
+def _write_approval(path, approval):
+    path.write_text(json.dumps({
+        "approval_reference": approval.approval_reference,
+        "candidate_ref": approval.candidate_ref,
+        "target_ref": approval.target_ref,
+        "batch_size": approval.batch_size,
+        "expires_at": approval.expires_at.isoformat(),
+    }), encoding="utf-8")
+    return ProtectedCanaryApprovalProvider(path, repo_root=repo_guard(path))
+
+
+def canary_components(tmp_path, *, count=1, expires_at=None,
+                      approval_ref="change-42", approval_changes=None):
+    plan = make_plan(count)
+    manifest = run_manifest(plan, mode="production_canary")
+    binding = TargetBinding(expected_spreadsheet_id=SHEET_ID)
+    path = tmp_path / "canary-state.db"
+    journal = SqliteAttemptJournal(path, repo_root=repo_guard(path))
+    store = SqliteCapabilityStore(path, repo_root=repo_guard(path))
+    leases = SqliteLeaseManager(path, repo_root=repo_guard(path), clock=lambda: NOW)
+    key_path = tmp_path / "canary-key.json"
+    key_path.write_text(json.dumps({
+        "key_id": KEY.key_id,
+        "key_b64": base64.b64encode(KEY.secret).decode("ascii"),
+    }), encoding="utf-8")
+    key_provider = ProtectedAuditKeyProvider(key_path, repo_root=repo_guard(key_path))
+    approval = CanaryApproval(
+        approval_reference=approval_ref,
+        candidate_ref=canonical_candidate_reference(plan.candidates[0], KEY),
+        target_ref=target_binding_reference(binding, KEY),
+        batch_size=1,
+        expires_at=expires_at or NOW + timedelta(seconds=60),
+    )
+    if approval_changes:
+        approval = replace(approval, **approval_changes)
+    provider = _write_approval(tmp_path / "canary-approval.json", approval)
+    return plan, manifest, binding, journal, store, leases, key_provider, provider, approval
+
+
+def issue_canary(parts, *, inspector=None, clock=lambda: NOW):
+    plan, manifest, binding, journal, store, _leases, key_provider, provider, _approval = parts
+    return issue_production_write_capability(
+        plan, manifest, binding=binding, inspector=inspector or Inspector(),
+        key_provider=key_provider, journal=journal, capability_store=store,
+        approval_provider=provider, clock=clock,
+    )
+
+
+def run_synthetic_canary(parts, capability, reader, transport, *, clock=lambda: NOW):
+    plan, manifest, binding, journal, store, leases, key_provider, _provider, _approval = parts
+    return execute_synthetic_one_shot_canary(
+        plan, manifest, capability=capability, capability_store=store,
+        binding=binding, inspector=Inspector(), key_provider=key_provider,
+        journal=journal, leases=leases, reader=reader, transport=transport,
+        readback_policy=ReadBackPolicy(1, ()), owner_id="canary-owner",
+        clock=clock, sleeper=lambda _delay: None,
+    )
+
+
+def test_valid_one_shot_capability_issuance_is_exact_and_short_lived(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    plan, manifest, binding, _journal, store, _leases, _key, _provider, approval = parts
+
+    assert capability.run_id == manifest.run_id
+    assert capability.candidate_ref == approval.candidate_ref
+    assert capability.target_ref == target_binding_reference(binding, KEY)
+    assert capability.expires_at - capability.issued_at == timedelta(seconds=60)
+    assert store.state(capability.capability_id) == "issued"
+    assert plan.candidates[0].merchant not in repr(capability)
+
+
+@pytest.mark.parametrize("failure", ["candidate", "target", "batch", "approval", "expired"])
+def test_capability_issuance_rejects_wrong_or_missing_approval_bounds(tmp_path, failure):
+    changes = {
+        "candidate": {"candidate_ref": "canonical-item-v1:" + "0" * 32},
+        "target": {"target_ref": "writer-target-v1:" + "0" * 32},
+        "batch": {"batch_size": 2},
+        "approval": {"approval_reference": ""},
+        "expired": {"expires_at": NOW},
+    }
+    parts = canary_components(tmp_path, approval_changes=changes[failure])
+    with pytest.raises(RuntimeError):
+        issue_canary(parts)
+    assert parts[4].state("missing") is None
+
+
+def test_capability_issuance_rejects_second_candidate_structurally(tmp_path):
+    parts = canary_components(tmp_path, count=2)
+    with pytest.raises(RuntimeError, match="exactly_one_candidate"):
+        issue_canary(parts)
+
+
+def test_expired_issued_capability_is_rejected_and_resealed(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    transport = CanaryTransport()
+    with pytest.raises(RuntimeError, match="production_capability_expired"):
+        run_synthetic_canary(
+            parts, capability, StaticReader(), transport,
+            clock=lambda: NOW + timedelta(seconds=61),
+        )
+    assert transport.calls == []
+    assert parts[4].state(capability.capability_id) == "sealed"
+
+
+def test_successful_synthetic_one_shot_reseals_and_second_write_is_impossible(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    candidate = parts[0].candidates[0]
+    reader = SequenceReader([
+        IdentityRead(),
+        IdentityRead((ExistingCanonicalRecord.from_candidate(candidate),)),
+    ])
+    transport = CanaryTransport()
+    result = run_synthetic_canary(parts, capability, reader, transport)
+
+    assert result.status == "canary_complete"
+    assert result.write_request_count == result.confirmed_count == 1
+    assert len(transport.calls) == 1
+    assert parts[4].state(capability.capability_id) == "sealed"
+
+    with pytest.raises(RuntimeError, match="production_capability_reused"):
+        run_synthetic_canary(
+            parts, capability,
+            SequenceReader([IdentityRead()]), transport,
+        )
+    assert len(transport.calls) == 1
+
+
+def test_fresh_preread_failure_duplicate_and_identity_mismatch_write_zero(tmp_path):
+    failure_parts = canary_components(tmp_path / "failure")
+    failure_capability = issue_canary(failure_parts)
+    failure_transport = CanaryTransport()
+    failure_result = run_synthetic_canary(
+        failure_parts, failure_capability,
+        SequenceReader([TimeoutError("read failed")]), failure_transport,
+    )
+    assert failure_result.write_request_count == 0
+    assert failure_transport.calls == []
+    assert failure_parts[4].state(failure_capability.capability_id) == "sealed"
+
+    duplicate_parts = canary_components(tmp_path / "duplicate")
+    duplicate_capability = issue_canary(duplicate_parts)
+    duplicate_candidate = duplicate_parts[0].candidates[0]
+    duplicate_transport = CanaryTransport()
+    duplicate_result = run_synthetic_canary(
+        duplicate_parts, duplicate_capability,
+        SequenceReader([IdentityRead((
+            ExistingCanonicalRecord.from_candidate(duplicate_candidate),
+        ))]), duplicate_transport,
+    )
+    assert duplicate_result.already_present_count == 1
+    assert duplicate_result.write_request_count == 0
+    assert duplicate_transport.calls == []
+
+    conflict_parts = canary_components(tmp_path / "conflict")
+    conflict_capability = issue_canary(conflict_parts)
+    other_candidate = make_plan(2).candidates[1]
+    conflict_transport = CanaryTransport()
+    conflict_result = run_synthetic_canary(
+        conflict_parts, conflict_capability,
+        SequenceReader([IdentityRead((
+            ExistingCanonicalRecord.from_candidate(other_candidate),
+        ))]), conflict_transport,
+    )
+    assert conflict_result.conflict_count == 1
+    assert conflict_result.write_request_count == 0
+    assert conflict_transport.calls == []
+
+    mismatch_parts = canary_components(tmp_path / "mismatch")
+    mismatch_capability = issue_canary(mismatch_parts)
+    other_plan = make_plan()
+    other_manifest = run_manifest(other_plan, mode="production_canary")
+    mismatch_transport = CanaryTransport()
+    with pytest.raises(RuntimeError, match="capability_run_mismatch|run_manifest_plan_mismatch"):
+        execute_synthetic_one_shot_canary(
+            other_plan, other_manifest, capability=mismatch_capability,
+            capability_store=mismatch_parts[4], binding=mismatch_parts[2],
+            inspector=Inspector(), key_provider=mismatch_parts[6], journal=mismatch_parts[3],
+            leases=mismatch_parts[5], reader=StaticReader(),
+            transport=mismatch_transport, readback_policy=ReadBackPolicy(1, ()),
+            owner_id="canary-owner", clock=lambda: NOW,
+        )
+    assert mismatch_transport.calls == []
+    assert mismatch_parts[4].state(mismatch_capability.capability_id) == "sealed"
+
+
+def test_transport_failure_releases_lease_and_reseals(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    transport = CanaryTransport(raises=TimeoutError("transport timeout"))
+    result = run_synthetic_canary(
+        parts, capability,
+        SequenceReader([IdentityRead(), IdentityRead()]), transport,
+    )
+    assert result.retry_eligible_count == 1
+    assert parts[4].state(capability.capability_id) == "sealed"
+    target_ref = target_binding_reference(parts[2], KEY)
+    probe = parts[5].acquire(target_ref, "probe", parts[1].run_id, 30)
+    assert probe is not None
+    parts[5].release(probe)
+
+
+def test_real_transport_cannot_be_reached_without_claimed_capability(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    db = FakeDB()
+    transport = SealedSheetsCandidateTransport(
+        db, binding=parts[2], inspector=Inspector(), capability=capability,
+        capability_store=parts[4], journal=parts[3],
+        key_provider=parts[6], clock=lambda: NOW,
+    )
+    with pytest.raises(RuntimeError, match="write_attempt_journal_required"):
+        transport.write_once(parts[0].candidates[0], attempt_id=str(uuid4()))
+    assert transport.invocation_count == 0
+    assert db.append_calls == []
+
+
+def test_second_capability_for_same_approved_canary_is_rejected(tmp_path):
+    parts = canary_components(tmp_path)
+    issue_canary(parts)
+    with pytest.raises(RuntimeError, match="canary_capability_already_issued"):
+        issue_canary(parts)
+
+
+def test_protected_approval_must_be_repo_external(tmp_path):
+    approval_path = tmp_path / "repo" / "approval.json"
+    approval_path.parent.mkdir()
+    with pytest.raises(RuntimeError, match="outside_repository"):
+        ProtectedCanaryApprovalProvider(approval_path, repo_root=approval_path.parent)
+
+
+class FailingSheetsRequest:
+    def execute(self):
+        raise TimeoutError("fake Sheets timeout")
+
+
+class FakeSheetsValues:
+    def __init__(self):
+        self.append_calls = 0
+
+    def append(self, **_kwargs):
+        self.append_calls += 1
+        return FailingSheetsRequest()
+
+
+class FakeSheetsService:
+    def __init__(self):
+        self.values_api = FakeSheetsValues()
+
+    def spreadsheets(self):
+        return self
+
+    def values(self):
+        return self.values_api
+
+
+class ProductionShapedFakeDB:
+    def __init__(self):
+        self.svc = FakeSheetsService()
+
+
+def test_real_transport_fake_timeout_is_one_shot_released_and_resealed(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    db = ProductionShapedFakeDB()
+    transport = SealedSheetsCandidateTransport(
+        db, binding=parts[2], inspector=Inspector(), capability=capability,
+        capability_store=parts[4], journal=parts[3],
+        key_provider=parts[6], clock=lambda: NOW,
+    )
+    result = execute_production_one_shot_canary(
+        parts[0], parts[1], capability=capability, capability_store=parts[4],
+        binding=parts[2], inspector=Inspector(), key_provider=parts[6],
+        journal=parts[3], leases=parts[5],
+        reader=SequenceReader([IdentityRead(), IdentityRead()]),
+        transport=transport, readback_policy=ReadBackPolicy(1, ()),
+        owner_id="canary-owner", clock=lambda: NOW,
+    )
+    assert result.retry_eligible_count == 1
+    assert transport.invocation_count == 1
+    assert db.svc.values_api.append_calls == 1
+    assert parts[4].state(capability.capability_id) == "sealed"
+    probe = parts[5].acquire(
+        target_binding_reference(parts[2], KEY), "probe", parts[1].run_id, 30,
+    )
+    assert probe is not None
+    parts[5].release(probe)
+
+
+def test_synthetic_and_real_authority_are_separate_and_reseal_on_rejection(tmp_path):
+    synthetic_parts = canary_components(tmp_path / "synthetic-entry")
+    synthetic_capability = issue_canary(synthetic_parts)
+    real_transport = SealedSheetsCandidateTransport(
+        ProductionShapedFakeDB(), binding=synthetic_parts[2], inspector=Inspector(),
+        capability=synthetic_capability, capability_store=synthetic_parts[4],
+        journal=synthetic_parts[3], key_provider=synthetic_parts[6], clock=lambda: NOW,
+    )
+    with pytest.raises(RuntimeError, match="synthetic_transport_required"):
+        execute_synthetic_one_shot_canary(
+            synthetic_parts[0], synthetic_parts[1], capability=synthetic_capability,
+            capability_store=synthetic_parts[4], binding=synthetic_parts[2],
+            inspector=Inspector(), key_provider=synthetic_parts[6],
+            journal=synthetic_parts[3], leases=synthetic_parts[5],
+            reader=StaticReader(), transport=real_transport,
+            readback_policy=ReadBackPolicy(1, ()), owner_id="owner",
+            clock=lambda: NOW,
+        )
+    assert synthetic_parts[4].state(synthetic_capability.capability_id) == "sealed"
+    assert real_transport.invocation_count == 0
+
+    real_parts = canary_components(tmp_path / "real-entry")
+    real_capability = issue_canary(real_parts)
+    synthetic_transport = CanaryTransport()
+    with pytest.raises(RuntimeError, match="sealed_real_transport_required"):
+        execute_production_one_shot_canary(
+            real_parts[0], real_parts[1], capability=real_capability,
+            capability_store=real_parts[4], binding=real_parts[2],
+            inspector=Inspector(), key_provider=real_parts[6], journal=real_parts[3],
+            leases=real_parts[5], reader=StaticReader(),
+            transport=synthetic_transport, readback_policy=ReadBackPolicy(1, ()),
+            owner_id="owner", clock=lambda: NOW,
+        )
+    assert real_parts[4].state(real_capability.capability_id) == "sealed"
+    assert synthetic_transport.calls == []
+
+
+def test_key_load_exception_still_reseals_without_write(tmp_path):
+    parts = canary_components(tmp_path)
+    capability = issue_canary(parts)
+    missing_key = ProtectedAuditKeyProvider(
+        tmp_path / "missing-key.json", repo_root=repo_guard(tmp_path / "missing-key.json"),
+    )
+    transport = CanaryTransport()
+    with pytest.raises(RuntimeError, match="persistent_audit_key_required"):
+        execute_synthetic_one_shot_canary(
+            parts[0], parts[1], capability=capability, capability_store=parts[4],
+            binding=parts[2], inspector=Inspector(), key_provider=missing_key,
+            journal=parts[3], leases=parts[5], reader=StaticReader(),
+            transport=transport, readback_policy=ReadBackPolicy(1, ()),
+            owner_id="owner", clock=lambda: NOW,
+        )
+    assert parts[4].state(capability.capability_id) == "sealed"
+    assert transport.calls == []

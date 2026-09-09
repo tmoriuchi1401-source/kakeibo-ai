@@ -156,7 +156,9 @@ class ProductionRunManifest:
             raise RuntimeError("run_identifier_invalid") from exc
         self.source_window.validate()
         _aware(self.plan_created_at, "plan_created_at_timezone_required")
-        if self.authority_mode not in {"read_only_preflight", "synthetic_test"}:
+        if self.authority_mode not in {
+            "read_only_preflight", "synthetic_test", "production_canary",
+        }:
             raise RuntimeError("production_run_authority_disabled")
         if self.target_binding_version != TARGET_BINDING_VERSION:
             raise RuntimeError("run_manifest_target_binding_invalid")

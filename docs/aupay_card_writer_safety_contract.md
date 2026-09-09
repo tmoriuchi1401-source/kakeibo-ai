@@ -1,8 +1,9 @@
 # au PAY card production writer safety contract
 
-This phase implements the write-adjacent safety state machine without exposing
-a production writer. `execute_synthetic_write` rejects any transport not marked
-`synthetic_only`; no CLI command imports or invokes it.
+The general writer state machine remains synthetic-only:
+`execute_synthetic_write` rejects any transport not marked `synthetic_only`.
+The production module adds a distinct one-shot canary entry point; no CLI
+command imports or invokes either path.
 
 ## Immutable source population
 
@@ -13,8 +14,9 @@ absolute `after:` and `before:` dates. Relative Gmail operators such as
 `newer_than:1y` are rejected. A changed population produces a different keyed
 plan binding and cannot reuse the run manifest.
 
-Production authority remains disabled: manifests in this phase are limited to
-`read_only_preflight` and `synthetic_test`.
+Standing production authority remains disabled. A `production_canary` manifest
+is valid only as one input to the separately protected, short-lived capability
+path; by itself it grants no transport authority.
 
 ## Target and key binding
 
@@ -74,15 +76,16 @@ being resent.
 schedule capped at 30 seconds per interval. Exhausting the window never causes a
 second write request.
 
-## Production-shaped persistence remains sealed
+## One-shot production capability
 
 The contract now has repo-external protected-key loading, an append-only and
 hash-chained SQLite journal, immutable fixed-run persistence, a cross-process
 SQLite lease, restart recovery, and an exact-target Sheets transport adapter.
-They remain unreachable from the CLI and production capability issuance is
-unconditionally disabled. Details and backend deployment limitations are in
+They remain unreachable from the CLI. Production issuance now requires an exact
+repo-external human approval envelope and creates a five-minute-or-shorter
+SQLite-backed one-shot capability. Details and backend deployment limitations are in
 [`aupay_card_production_persistence.md`](aupay_card_production_persistence.md).
 
-A separately approved phase is still required to provision real secrets and
-durable storage, review write-scope credentials, persist a real fixed run, and
-define the human capability-unseal boundary before a one-item canary.
+A separately approved execution phase is still required to provision real
+secrets and durable storage, review write-scope credentials, persist a real
+fixed run, and supply the protected approval record before a one-item canary.

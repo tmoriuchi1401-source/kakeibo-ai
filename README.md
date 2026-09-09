@@ -208,8 +208,9 @@ previewはplan作成後にSheets identityをもう一度読み、executor直前�
 production writerのwrite-adjacent safety layerは固定source window、target binding、
 persistent HMAC key、attempt journal、exclusive lease、最大100件のbounded batch、
 write前journalとwrite後exact read-backをcontract化している。repo外protected key adapter、
-SQLite durable journal / immutable manifest / cross-process lease、fixed-range Sheets adapterも
-実装済みだが、production capability発行は常に拒否されCLI入口もないため実write不能である。
+SQLite durable journal / immutable manifest / cross-process lease、fixed-range Sheets adapter、
+repo外承認fileと短命one-shot capabilityも実装済みである。standing production flagとCLI入口は
+引き続き存在せず、この実装Phaseでは実writeを行わない。
 永続化とsealの詳細は
 [`docs/aupay_card_production_persistence.md`](docs/aupay_card_production_persistence.md)、基本contractは
 [`docs/aupay_card_writer_safety_contract.md`](docs/aupay_card_writer_safety_contract.md)を参照。
