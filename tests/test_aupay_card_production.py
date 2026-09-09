@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import base64
+import hashlib
 import inspect
 import json
 import sqlite3
@@ -33,6 +34,7 @@ from app.aupay_card_production import (
     issue_production_write_capability,
     recover_interrupted_attempt,
     target_binding_reference,
+    validate_production_approval_preflight,
 )
 from app.aupay_card_writer import (
     BatchPolicy,
@@ -592,6 +594,136 @@ def issue_canary(parts, *, inspector=None, clock=lambda: NOW):
         key_provider=key_provider, journal=journal, capability_store=store,
         approval_provider=provider, clock=clock,
     )
+
+
+def validate_canary(parts, *, manifest=None, key_provider=None,
+                    approval_provider=None, expected_run_id=None,
+                    expected_source_window=None, clock=lambda: NOW):
+    plan, default_manifest, binding, _journal, _store, _leases, default_key, \
+        default_approval, _approval = parts
+    selected_manifest = manifest or default_manifest
+    return validate_production_approval_preflight(
+        plan, selected_manifest, binding=binding, inspector=Inspector(),
+        key_provider=key_provider or default_key,
+        approval_provider=approval_provider or default_approval,
+        expected_run_id=expected_run_id or default_manifest.run_id,
+        expected_source_window=(
+            expected_source_window or default_manifest.source_window
+        ),
+        clock=clock,
+    )
+
+
+def test_valid_approval_dry_validation_has_zero_authority_side_effects(tmp_path):
+    parts = canary_components(tmp_path)
+    result = validate_canary(parts)
+
+    assert result.valid
+    assert result.run_id == parts[1].run_id
+    assert result.candidate_ref == parts[-1].candidate_ref
+    assert result.target_ref == parts[-1].target_ref
+    assert result.batch_size == 1
+    assert result.external_write_count == 0
+    assert result.capability_issued_count == 0
+    assert result.lease_acquired_count == 0
+    assert result.journal_write_count == 0
+    assert result.transport_invocation_count == 0
+    assert parts[0].candidates[0].merchant not in repr(result)
+
+
+def test_approval_dry_validation_rejects_missing_approval_file(tmp_path):
+    parts = canary_components(tmp_path)
+    missing = ProtectedCanaryApprovalProvider(
+        tmp_path / "missing-approval.json",
+        repo_root=repo_guard(tmp_path / "missing-approval.json"),
+    )
+    with pytest.raises(RuntimeError, match="protected_canary_approval_invalid"):
+        validate_canary(parts, approval_provider=missing)
+
+
+def test_approval_dry_validation_rejects_missing_audit_key(tmp_path):
+    parts = canary_components(tmp_path)
+    missing = ProtectedAuditKeyProvider(
+        tmp_path / "missing-key.json",
+        repo_root=repo_guard(tmp_path / "missing-key.json"),
+    )
+    with pytest.raises(RuntimeError, match="persistent_audit_key_required"):
+        validate_canary(parts, key_provider=missing)
+
+
+@pytest.mark.parametrize("failure, reason", [
+    ("reference", "human_approval_reference_required"),
+    ("candidate", "approved_candidate_mismatch"),
+    ("target", "approved_target_mismatch"),
+    ("batch", "production_canary_batch_size_must_be_one"),
+    ("expired", "production_capability_expired"),
+    ("ttl", "production_capability_ttl_too_long"),
+])
+def test_approval_dry_validation_rejects_approval_mismatch(tmp_path, failure, reason):
+    changes = {
+        "reference": {"approval_reference": ""},
+        "candidate": {"candidate_ref": "canonical-item-v1:" + "0" * 32},
+        "target": {"target_ref": "writer-target-v1:" + "0" * 32},
+        "batch": {"batch_size": 2},
+        "expired": {"expires_at": NOW},
+        "ttl": {"expires_at": NOW + timedelta(seconds=301)},
+    }
+    parts = canary_components(tmp_path, approval_changes=changes[failure])
+    with pytest.raises(RuntimeError, match=reason):
+        validate_canary(parts)
+
+
+def test_approval_dry_validation_recomputes_candidate_reference(tmp_path):
+    parts = canary_components(
+        tmp_path, approval_changes={
+            "candidate_ref": "canonical-item-v1:" + "f" * 32,
+        },
+    )
+    with pytest.raises(RuntimeError, match="approved_candidate_mismatch"):
+        validate_canary(parts)
+
+
+def test_approval_dry_validation_rejects_manifest_run_mismatch(tmp_path):
+    parts = canary_components(tmp_path)
+    with pytest.raises(RuntimeError, match="production_preflight_run_mismatch"):
+        validate_canary(parts, expected_run_id=str(uuid4()))
+
+
+def test_approval_dry_validation_rejects_source_window_mismatch(tmp_path):
+    parts = canary_components(tmp_path)
+    different_window = FixedSourceWindow(
+        NOW - timedelta(days=364), NOW, "Asia/Tokyo",
+        "from:kddi-fs.com after:2025/09/10 before:2026/09/09",
+    )
+    with pytest.raises(RuntimeError, match="production_preflight_source_window_mismatch"):
+        validate_canary(parts, expected_source_window=different_window)
+
+
+def test_approval_dry_validation_leaves_sqlite_and_transport_unchanged(tmp_path):
+    parts = canary_components(tmp_path)
+    path = tmp_path / "canary-state.db"
+    with sqlite3.connect(path) as connection:
+        before_counts = tuple(connection.execute(query).fetchone()[0] for query in (
+            "SELECT COUNT(*) FROM production_capabilities",
+            "SELECT COUNT(*) FROM writer_leases",
+            "SELECT COUNT(*) FROM journal_events",
+        ))
+    before_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    transport = CanaryTransport()
+
+    result = validate_canary(parts)
+
+    after_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    with sqlite3.connect(path) as connection:
+        after_counts = tuple(connection.execute(query).fetchone()[0] for query in (
+            "SELECT COUNT(*) FROM production_capabilities",
+            "SELECT COUNT(*) FROM writer_leases",
+            "SELECT COUNT(*) FROM journal_events",
+        ))
+    assert result.valid
+    assert before_counts == after_counts == (0, 0, 0)
+    assert before_hash == after_hash
+    assert transport.calls == []
 
 
 def run_synthetic_canary(parts, capability, reader, transport, *, clock=lambda: NOW):

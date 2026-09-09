@@ -68,6 +68,15 @@ For the currently approved canary, that protected envelope must name
 `canonical-item-v1:7f95f0a819ad90aeae1e4c1d3ba15011`; issuance recomputes the
 reference from the loaded plan and protected key and rejects any mismatch.
 
+`validate_production_approval_preflight` performs the same approval, candidate,
+target, expiry/TTL, and keyed-reference checks without issuing a capability. It
+also requires the caller's expected run UUID and absolute source window to
+match the immutable production manifest. The API has no journal, lease,
+capability-store, or transport argument and does not write the approval file or
+SQLite state. A successful result reports zero capability, lease, journal,
+transport, and external-write counts; capability issuance remains a separate
+explicit operation.
+
 `SqliteCapabilityStore` stores only a token hash and privacy-safe bindings. Its
 atomic state machine is `issued -> claimed -> dispatching -> sealed`. Run IDs
 and candidate/target pairs are unique, so another capability cannot reopen the

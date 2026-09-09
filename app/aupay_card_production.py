@@ -787,6 +787,92 @@ def _aware_time(value: datetime, reason: str) -> datetime:
     return value
 
 
+@dataclass(frozen=True)
+class ProductionApprovalPreflight:
+    """Privacy-safe proof that capability issuance inputs agree, without writes."""
+
+    schema_version: int
+    run_id: str
+    candidate_ref: str
+    target_ref: str
+    approval_reference: str = field(repr=False)
+    source_window_start: str
+    source_window_end: str
+    batch_size: int
+    expires_at: datetime
+    valid: bool = True
+    external_write_count: int = 0
+    capability_issued_count: int = 0
+    lease_acquired_count: int = 0
+    journal_write_count: int = 0
+    transport_invocation_count: int = 0
+
+
+def validate_production_approval_preflight(
+    plan: CanonicalApplyPlan,
+    manifest: ProductionRunManifest,
+    *,
+    binding: TargetBinding,
+    inspector: TargetInspector,
+    key_provider: ProtectedAuditKeyProvider,
+    approval_provider: ProtectedCanaryApprovalProvider,
+    expected_run_id: str,
+    expected_source_window: FixedSourceWindow,
+    clock: Callable[[], datetime] = _utc_now,
+) -> ProductionApprovalPreflight:
+    """Validate exact canary authority without issuing or persisting anything."""
+    now = _aware_time(clock(), "capability_clock_timezone_required")
+    if type(approval_provider) is not ProtectedCanaryApprovalProvider:
+        raise RuntimeError("protected_canary_approval_required")
+    if type(key_provider) is not ProtectedAuditKeyProvider:
+        raise RuntimeError("protected_audit_key_provider_required")
+    try:
+        UUID(expected_run_id)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("production_preflight_run_id_invalid") from exc
+    expected_source_window.validate()
+    approval = approval_provider.load()
+    validate_canonical_apply_plan(plan)
+    key = _load_and_validate_key(key_provider)
+    _validate_manifest(plan, manifest, key)
+    if manifest.authority_mode != "production_canary":
+        raise RuntimeError("production_canary_authority_required")
+    if manifest.run_id != expected_run_id:
+        raise RuntimeError("production_preflight_run_mismatch")
+    if manifest.source_window != expected_source_window:
+        raise RuntimeError("production_preflight_source_window_mismatch")
+    if approval.batch_size != 1:
+        raise RuntimeError("production_canary_batch_size_must_be_one")
+    if len(plan.candidates) != 1 or manifest.candidate_count != 1:
+        raise RuntimeError("production_canary_requires_exactly_one_candidate")
+    if not approval.approval_reference.strip():
+        raise RuntimeError("human_approval_reference_required")
+    expires_at = _aware_time(approval.expires_at, "capability_expiry_timezone_required")
+    ttl = (expires_at - now).total_seconds()
+    if ttl <= 0:
+        raise RuntimeError("production_capability_expired")
+    if ttl > MAX_CANARY_CAPABILITY_TTL_SECONDS:
+        raise RuntimeError("production_capability_ttl_too_long")
+    validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
+    target_ref = target_binding_reference(binding, key)
+    candidate_ref = canonical_candidate_reference(plan.candidates[0], key)
+    if approval.target_ref != target_ref:
+        raise RuntimeError("approved_target_mismatch")
+    if approval.candidate_ref != candidate_ref:
+        raise RuntimeError("approved_candidate_mismatch")
+    return ProductionApprovalPreflight(
+        schema_version=PERSISTENCE_SCHEMA_VERSION,
+        run_id=manifest.run_id,
+        candidate_ref=candidate_ref,
+        target_ref=target_ref,
+        approval_reference=approval.approval_reference.strip(),
+        source_window_start=manifest.source_window.start.isoformat(),
+        source_window_end=manifest.source_window.end.isoformat(),
+        batch_size=approval.batch_size,
+        expires_at=expires_at,
+    )
+
+
 def issue_production_write_capability(
     plan: CanonicalApplyPlan,
     manifest: ProductionRunManifest,
