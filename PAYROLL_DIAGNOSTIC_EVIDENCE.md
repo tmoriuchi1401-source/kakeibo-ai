@@ -146,6 +146,36 @@ called complete. Tokens with traced, explicit parser-domain exclusion may remain
 outside the ownership denominator. No condition authorizes production adoption;
 semantics, column membership, review truth, and policy remain separate gates.
 
+### Diagnostic parser-observation instrumentation
+
+`trace_incomplete_ownership` is an opt-in, snapshot-local observer. Production
+does not import or call it, and its result has no adoption or mutation API. It
+replays `parse_positioned_items` and records a physical occurrence as one of:
+successful `label_component`, successful `value`, successful
+`decision_context`, parser-stage `observed`, explicitly grammar-excluded, or
+redundant only when both a parser-equivalent physical peer and counterfactual
+invariance are present. Parser-output absence alone establishes none of these.
+
+The production OCR label construction and parsing control flow are unchanged.
+An observer-only private helper calls that existing construction and separately
+derives a deterministic tuple of physical component indexes. Production neither
+builds nor reads this tuple. A successful mapping closes only when one logical
+fact occurrence maps to all raw label components, one physical value occurrence,
+and repeatable necessary-token counterfactuals. An unmapped successful item uses
+a snapshot-local fact-occurrence reference; it is not promoted to a standard
+field and supplies no semantic ground truth.
+
+The anonymous five-PNG evaluation traced all 690 ledger-incomplete occurrences.
+The 592 instrumentation-resolvable occurrences closed as observation/exclusion
+or typed successful dependencies, while the 98 review/non-success dependencies
+remained isolated as requiring authoritative ground truth. Instrumentation-
+incomplete remained zero. All four previously unclosed successful logical-label
+relations obtained complete component/value/counterfactual provenance; the one
+already-closed success was also reproduced. Ownership states were unchanged:
+`definitely_used=1`, `definitely_unused=372`, `ledger_incomplete=690`, and no
+new ambiguity or competition was introduced. These counts establish diagnostic
+evidence closure only, not ownership adoption readiness.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

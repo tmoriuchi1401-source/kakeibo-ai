@@ -365,6 +365,57 @@ def _pair_pdf_summary_values_below(entries, tokens: tuple[PositionedText, ...]):
     return entries
 
 
+def _diagnostic_ocr_label_token_groups(
+    tokens: tuple[PositionedText, ...],
+) -> list[tuple[PositionedText, tuple[int, ...]]]:
+    """Return parser labels with their physical OCR components.
+
+    The component relation is diagnostic metadata only.  The production parser
+    continues to consume the same synthesized ``PositionedText`` labels.
+    """
+    # A token containing digits or table borders is a value/cell fragment, not a
+    # safe component of a reconstructed label (plain OCR digits may lack commas).
+    labels = [(index, token) for index, token in enumerate(tokens)
+              if not amounts(token.text)
+              and not re.search(r"\d", token.text)
+              and not any(border in token.text for border in "|｜")]
+    ordered = sorted(labels, key=lambda entry: (
+        entry[1].page, entry[1].y, entry[1].x, entry[0],
+    ))
+    groups: list[list[tuple[int, PositionedText]]] = []
+    for index, token in ordered:
+        if not groups:
+            groups.append([(index, token)])
+            continue
+        previous = groups[-1][-1][1]
+        same_line = (
+            token.page == previous.page
+            and abs(token.y - previous.y) <= max(token.height, previous.height) * .55
+        )
+        gap = token.x - (previous.x + previous.width)
+        close = -max(token.height, previous.height) <= gap <= max(
+            24, max(token.height, previous.height) * 2,
+        )
+        if same_line and close:
+            groups[-1].append((index, token))
+        else:
+            groups.append([(index, token)])
+
+    merged = []
+    for group in groups:
+        indexes = tuple(index for index, _token in group)
+        parts = tuple(token for _index, token in group)
+        text = "".join(token.text.strip() for token in parts)
+        first = parts[0]
+        right = max(token.x + token.width for token in parts)
+        merged.append((PositionedText(
+            text=text, page=first.page, x=first.x, y=min(token.y for token in parts),
+            width=right - first.x, height=max(token.height for token in parts),
+            confidence=min(token.confidence for token in parts),
+        ), indexes))
+    return merged
+
+
 def _ocr_label_tokens(tokens: tuple[PositionedText, ...]) -> list[PositionedText]:
     """Join adjacent OCR words on one line without inventing distant text."""
     # A token containing digits or table borders is a value/cell fragment, not a
@@ -534,6 +585,52 @@ def _ocr_exact_known_label_reconstructions(
             confidence=min(part.confidence for part in parts),
         ), parts))
     return reconstructed
+
+
+def _ocr_parser_labels_with_components(
+    tokens: tuple[PositionedText, ...],
+) -> tuple[tuple[PositionedText, tuple[int, ...]], ...]:
+    """Build the exact OCR labels used by production plus diagnostic lineage."""
+    labels = _ocr_label_tokens(tokens)
+    grouped = _diagnostic_ocr_label_token_groups(tokens)
+    grouped_parts = {
+        (label.page, label.x, label.y, label.width, compact(label.text)): indexes
+        for label, indexes in grouped
+    }
+    labeled = [
+        (label, grouped_parts.get(
+            (label.page, label.x, label.y, label.width, compact(label.text)), (),
+        ))
+        for label in labels
+    ]
+    physical_indexes = {}
+    for index, token in enumerate(tokens):
+        key = (token.page, token.x, token.y, token.width, token.height,
+               token.text, token.confidence)
+        physical_indexes.setdefault(key, []).append(index)
+    for reconstructed, parts in _ocr_exact_known_label_reconstructions(tokens):
+        indexes = tuple(
+            matches[0]
+            for part in parts
+            if len(matches := physical_indexes.get(
+                (part.page, part.x, part.y, part.width, part.height,
+                 part.text, part.confidence),
+                [],
+            )) == 1
+        )
+        if len(indexes) != len(parts):
+            indexes = ()
+        existing_index = next((index for index, (label, _parts) in enumerate(labeled)
+                               if compact(label.text) == compact(reconstructed.text)
+                               and label.page == reconstructed.page
+                               and abs(label.x - reconstructed.x) <= 1
+                               and abs(label.y - reconstructed.y) <= 1
+                               and abs(label.width - reconstructed.width) <= 1), None)
+        if existing_index is None:
+            labeled.append((reconstructed, indexes))
+        else:
+            labeled[existing_index] = (labeled[existing_index][0], indexes)
+    return tuple(labeled)
 
 
 def _safe_low_confidence_exact_ocr_label(

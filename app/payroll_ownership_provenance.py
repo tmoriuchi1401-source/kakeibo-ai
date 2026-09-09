@@ -6,9 +6,12 @@ token missing from reconstructed consumption is *not* unused unless the whole
 success set and every consumption mapping are complete.
 """
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from .payroll_parser import parse_positioned_items
+from .payroll_parser import (
+    _ocr_dot_amounts, _ocr_parser_labels_with_components, amounts, compact,
+    parse_positioned_items,
+)
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,73 @@ class OwnershipIncompleteDiagnostic:
             ],
             "instrumentation_resolvable_count": self.instrumentation_resolvable_count,
             "semantic_ground_truth_required_count": self.semantic_ground_truth_required_count,
+        }
+
+
+@dataclass(frozen=True)
+class ParserObservationTrace:
+    """Snapshot-local trace for one physical occurrence; never authoritative."""
+    token_id: str = field(repr=False)
+    disposition: str
+    typed_role: str | None
+    evidence_closed: bool
+    requires_semantic_ground_truth: bool
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class SuccessfulMappingTrace:
+    """Diagnostic closure for one successful parser fact."""
+    item_occurrence: int
+    logical_field: str | None
+    label_component_ids: tuple[str, ...] = field(repr=False)
+    value_token_id: str | None = field(repr=False)
+    counterfactual_dependency_ids: tuple[str, ...] = field(repr=False)
+    complete: bool
+    reason_code: str
+
+
+@dataclass(frozen=True)
+class OwnershipInstrumentationDiagnostic:
+    """Anonymous aggregate view over optional parser observation traces."""
+    snapshot_id: str = field(repr=False)
+    observations: tuple[ParserObservationTrace, ...] = field(repr=False)
+    successful_mappings: tuple[SuccessfulMappingTrace, ...] = field(repr=False)
+
+    @property
+    def evidence_closed_count(self):
+        return sum(trace.evidence_closed for trace in self.observations)
+
+    @property
+    def instrumentation_incomplete_count(self):
+        return sum(not trace.evidence_closed
+                   and not trace.requires_semantic_ground_truth
+                   for trace in self.observations)
+
+    @property
+    def semantic_ground_truth_required_count(self):
+        return sum(trace.requires_semantic_ground_truth for trace in self.observations)
+
+    @property
+    def successful_mapping_complete_count(self):
+        return sum(mapping.complete for mapping in self.successful_mappings)
+
+    def safe_dict(self):
+        dispositions = Counter(trace.disposition for trace in self.observations)
+        roles = Counter(trace.typed_role for trace in self.observations
+                        if trace.typed_role is not None)
+        blockers = Counter(mapping.reason_code for mapping in self.successful_mappings
+                           if not mapping.complete)
+        return {
+            "traced_token_count": len(self.observations),
+            "evidence_closed_count": self.evidence_closed_count,
+            "instrumentation_incomplete_count": self.instrumentation_incomplete_count,
+            "semantic_ground_truth_required_count": self.semantic_ground_truth_required_count,
+            "dispositions": dict(sorted(dispositions.items())),
+            "typed_roles": dict(sorted(roles.items())),
+            "successful_mapping_count": len(self.successful_mappings),
+            "successful_mapping_complete_count": self.successful_mapping_complete_count,
+            "successful_mapping_blockers": dict(sorted(blockers.items())),
         }
 
 
@@ -345,4 +415,225 @@ def diagnose_incomplete_ownership(snapshot, provenance, claims):
         tuple(sorted(blocker_counts.items())),
         tuple(_reason_aggregate(reason, count)
               for reason, count in sorted(reason_counts.items())),
+    )
+
+
+def trace_incomplete_ownership(snapshot, provenance, claims=()):
+    """Close diagnostic observation evidence without changing ownership states.
+
+    Every result is scoped to one immutable physical-token snapshot.  The
+    observer calls the unchanged production parser and records only roles that
+    are demonstrated by parser input stages and per-occurrence counterfactuals.
+    It never treats absence from parser output as unused or adoption-relevant.
+    """
+    claims = tuple(claims)
+    assessments = assess_ownership(snapshot, provenance, claims)
+    incomplete_ids = {
+        token_id for token_id, result in assessments.items()
+        if result.state == "ledger_incomplete"
+    }
+    if not incomplete_ids:
+        return OwnershipInstrumentationDiagnostic(snapshot.snapshot_id, (), ())
+
+    provenance_valid = (
+        provenance.snapshot_id == snapshot.snapshot_id
+        and provenance.token_count == len(snapshot.token_ids)
+        and provenance.source_materialization_matches
+        and provenance.page_scope_complete
+        and provenance.success_set_complete
+    )
+    if not provenance_valid:
+        traces = tuple(
+            ParserObservationTrace(
+                token_id, "untraced", None, False, False,
+                "snapshot_or_replay_provenance_unverified",
+            )
+            for token_id in snapshot.token_ids if token_id in incomplete_ids
+        )
+        return OwnershipInstrumentationDiagnostic(snapshot.snapshot_id, traces, ())
+
+    ocr_mode = getattr(snapshot, "parser_mode", "pdf") == "ocr"
+    baseline = tuple(parse_positioned_items(snapshot.tokens, ocr=ocr_mode))
+    baseline_all = Counter(_parser_item_signature(item) for item in baseline)
+    baseline_success = Counter(
+        _parser_item_signature(item) for item in baseline if not item.needs_review
+    )
+    baseline_review = Counter(
+        _parser_item_signature(item) for item in baseline if item.needs_review
+    )
+
+    effects = {}
+    for index, token_id in enumerate(snapshot.token_ids):
+        replay = tuple(parse_positioned_items(
+            snapshot.tokens[:index] + snapshot.tokens[index + 1:], ocr=ocr_mode,
+        ))
+        replay_all = Counter(_parser_item_signature(item) for item in replay)
+        replay_success = Counter(
+            _parser_item_signature(item) for item in replay if not item.needs_review
+        )
+        replay_review = Counter(
+            _parser_item_signature(item) for item in replay if item.needs_review
+        )
+        lost_success = frozenset(
+            signature for signature, count in baseline_success.items()
+            if replay_success[signature] < count
+        )
+        effects[token_id] = (
+            lost_success,
+            any(replay_review[signature] < count
+                for signature, count in baseline_review.items()),
+            replay_all != baseline_all,
+        )
+
+    parser_observed = set()
+    context_observed = set()
+    label_parts_by_signature = {}
+    if ocr_mode:
+        labels_with_parts = _ocr_parser_labels_with_components(snapshot.tokens)
+        for label, indexes in labels_with_parts:
+            part_ids = tuple(
+                snapshot.token_ids[index]
+                for index in indexes
+                if 0 <= index < len(snapshot.token_ids)
+            )
+            parser_observed.update(part_ids)
+            key = (label.page, label.x, label.y, compact(label.text))
+            label_parts_by_signature.setdefault(key, set()).add(part_ids)
+        for token_id, token in zip(snapshot.token_ids, snapshot.tokens):
+            if amounts(token.text) or _ocr_dot_amounts(token):
+                parser_observed.add(token_id)
+            if token.text.strip() and set(token.text.strip()) <= {"|", "｜"}:
+                context_observed.add(token_id)
+    else:
+        for token_id, token in zip(snapshot.token_ids, snapshot.tokens):
+            if amounts(token.text):
+                parser_observed.add(token_id)
+            else:
+                parser_observed.add(token_id)
+                label_parts_by_signature.setdefault(
+                    (token.page, token.x, token.y, compact(token.text)), set(),
+                ).add((token_id,))
+
+    mappings = []
+    roles_by_token = {}
+    for occurrence, item in enumerate(baseline):
+        if item.needs_review:
+            continue
+        signature = _parser_item_signature(item)
+        label_key = (item.page, item.x, item.y, compact(item.raw_item_name))
+        label_options = {
+            parts for parts in label_parts_by_signature.get(label_key, set()) if parts
+        }
+        label_ids = next(iter(label_options)) if len(label_options) == 1 else ()
+        dependency_ids = tuple(
+            token_id for token_id in snapshot.token_ids
+            if signature in effects[token_id][0]
+        )
+        value_ids = tuple(
+            token_id for token_id, token in zip(snapshot.token_ids, snapshot.tokens)
+            if (token_id in dependency_ids and item.raw_value is not None
+                and token.page == item.page and token.text == item.raw_value)
+        )
+        value_id = value_ids[0] if len(value_ids) == 1 else None
+        # An unmapped production success is still one snapshot-local logical
+        # fact.  The occurrence reference closes physical provenance without
+        # inventing a standard field or semantic ground truth.
+        logical_field = (
+            item.standard_item_candidate
+            or f"snapshot_success_occurrence:{occurrence}"
+        )
+        complete = bool(
+            len(label_options) == 1
+            and value_id is not None
+            and baseline_success[signature] == 1
+            and all(token_id in dependency_ids for token_id in label_ids)
+            and value_id in dependency_ids
+            and not any(token_id in snapshot.identity_ambiguous
+                        for token_id in (*label_ids, value_id))
+        )
+        if complete:
+            reason = "successful_mapping_counterfactual_closed"
+        elif len(label_options) != 1:
+            reason = "logical_label_component_provenance_incomplete"
+        elif value_id is None:
+            reason = "successful_value_occurrence_incomplete"
+        elif baseline_success[signature] != 1:
+            reason = "successful_fact_occurrence_ambiguous"
+        elif any(token_id in snapshot.identity_ambiguous
+                 for token_id in (*label_ids, value_id)):
+            reason = "successful_physical_identity_ambiguous"
+        else:
+            reason = "successful_counterfactual_dependency_incomplete"
+        mapping = SuccessfulMappingTrace(
+            occurrence, logical_field, tuple(label_ids), value_id,
+            dependency_ids, complete, reason,
+        )
+        mappings.append(mapping)
+        if complete:
+            for token_id in label_ids:
+                roles_by_token.setdefault(token_id, set()).add("label_component")
+            roles_by_token.setdefault(value_id, set()).add("value")
+            for token_id in dependency_ids:
+                if token_id not in label_ids and token_id != value_id:
+                    roles_by_token.setdefault(token_id, set()).add("decision_context")
+
+    traces = []
+    for token_id, token in zip(snapshot.token_ids, snapshot.tokens):
+        if token_id not in incomplete_ids:
+            continue
+        lost_success, review_effect, any_effect = effects[token_id]
+        roles = roles_by_token.get(token_id, set())
+        if len(roles) == 1:
+            role = next(iter(roles))
+            traces.append(ParserObservationTrace(
+                token_id, role, role, True, False,
+                "successful_mapping_counterfactual_closed",
+            ))
+            continue
+        if lost_success:
+            traces.append(ParserObservationTrace(
+                token_id, "untraced", None, False, False,
+                "successful_dependency_mapping_incomplete",
+            ))
+            continue
+        if review_effect or any_effect:
+            traces.append(ParserObservationTrace(
+                token_id, "ground_truth_required", None, False, True,
+                "non_success_dependency_requires_authoritative_relevance",
+            ))
+            continue
+        redundant_peer = any(
+            other_id != token_id
+            and other_id in parser_observed
+            and other.page == token.page
+            and compact(other.text) == compact(token.text)
+            and abs(other.x - token.x) <= 12
+            and abs(other.y - token.y) <= 12
+            and abs(other.width - token.width) <= max(other.width, token.width) * .1
+            and abs(other.height - token.height) <= max(other.height, token.height) * .1
+            and not effects[other_id][2]
+            for other_id, other in zip(snapshot.token_ids, snapshot.tokens)
+        )
+        if redundant_peer:
+            traces.append(ParserObservationTrace(
+                token_id, "redundant", "redundant", True, False,
+                "parser_equivalent_peer_and_counterfactual_invariance",
+            ))
+        elif token_id in context_observed:
+            traces.append(ParserObservationTrace(
+                token_id, "observed", "decision_context", True, False,
+                "explicit_structural_context_observation_no_decision_effect",
+            ))
+        elif token_id in parser_observed:
+            traces.append(ParserObservationTrace(
+                token_id, "observed", None, True, False,
+                "parser_input_stage_observed_no_decision_effect",
+            ))
+        else:
+            traces.append(ParserObservationTrace(
+                token_id, "explicit_domain_exclusion", None, True, False,
+                "excluded_by_parser_label_value_and_context_grammars",
+            ))
+    return OwnershipInstrumentationDiagnostic(
+        snapshot.snapshot_id, tuple(traces), tuple(mappings),
     )
