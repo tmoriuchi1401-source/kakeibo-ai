@@ -348,6 +348,50 @@ payload remain byte-for-byte or structurally identical. Production enablement,
 real-data evaluation, and any adoption decision remain a separate approval
 boundary.
 
+### Read-only production shadow caller
+
+`payroll-ownership-shadow` is the only production-data caller. Activation uses
+dual explicit control: `PAYROLL_OWNERSHIP_ATTESTATION_ENABLED=true` and the
+command's `--enable` flag must both be present. The environment variable alone,
+or the caller flag alone, returns a disabled report before credentials, Drive,
+Sheets, candidate inputs, or the HMAC key are touched. Enabled evaluation also
+requires `--hmac-key-file`; the file must contain exactly one 32-byte hex key and
+must resolve outside the repository. The key is held only in process memory and
+is absent from reports, exception messages, plans, and payloads.
+
+The caller reads the existing Payroll Drive folder and Sheets snapshot through
+read-only repositories, builds the unchanged parser/storage/`PayrollWritePlan`
+values, and creates typed attestation requests only for ownership candidates
+that survive the existing evidence contract. It never imports or calls a writer
+or apply function. Its report contains anonymous counts and fixed reason codes,
+with no file IDs, names, values, text, geometry, token IDs, or attestations.
+
+For each ready real-data request, immutable negative controls check employer,
+parser mode, snapshot, hidden-candidate, stale-evidence, field, value, and review
+contamination rejection. These controls do not alter the original plan. The
+report also verifies that parser output, storage candidate, review state,
+`PayrollWritePlan`, writer preview, and materialization payload remain identical
+before and after shadow evaluation. PDF-text sources remain evidence-unavailable
+until an equally strict production-source snapshot bridge exists; they are not
+silently treated as OCR evidence.
+
+The 2026-09-10 approved production-data shadow run read five sources (three
+production PDF-text and two production OCR) and evaluated all five without a
+processing failure. Existing storage produced 170 items: 63 standard mappings,
+three `unknown_with_value`, and 118 review items. All five existing write plans
+remained blocked. The OCR evidence contained seven ownership claims: three
+authoritative standard claims and four fallback claims. No claim became an
+adoption candidate because no authoritative employer scope was configured;
+seven candidate evaluations returned `employer_scope_missing`. The three
+PDF-text sources also remained explicitly unavailable to the OCR snapshot bridge.
+Consequently the run produced zero attestations and zero false attestations;
+negative controls had no real-data-ready request to exercise. The complete
+synthetic negative-control suite still rejected employer, parser-mode, snapshot,
+hidden-candidate, stale-evidence, field, value, and review mutations. The real
+run reported an unchanged production differential and zero writer/apply calls.
+This is result B: safety held, but real-data evidence is insufficient for
+production adoption, so read-only shadow evaluation should continue.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

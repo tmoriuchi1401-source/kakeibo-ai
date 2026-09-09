@@ -240,7 +240,12 @@ def test_ownership_integration_is_the_only_narrow_production_bridge():
         "PayrollOwnershipAdoptionCandidate",
         "PayrollOwnershipAttestationEvaluation",
         "PayrollOwnershipPlanBinding",
+        "PayrollStorageAuthorityEvidence",
+        "analyze_successful_claim_authority",
         "attest_payroll_write_plan_ownership",
+        "capture_candidate_enumeration",
+        "evaluate_adoption_candidate",
+        "reconstruct_consumption",
     }
     source = path.read_text(encoding="utf-8-sig")
     assert "apply_payroll_write_plans" not in source

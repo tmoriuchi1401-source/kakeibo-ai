@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse, csv, mimetypes, os
+from pathlib import Path
 from .settings import Settings
 from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
@@ -56,6 +57,11 @@ from .google_clients import (
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 from .payroll_sheets import PayrollSheetsReadRepository
+from .payroll_ownership_integration import (
+    DISABLED_PAYROLL_OWNERSHIP_SHADOW_REPORT,
+    drive_payroll_ownership_shadow,
+    load_local_payroll_ownership_hmac_key,
+)
 from .payroll_storage_preview import (
     build_append_plan,
     drive_save_preview,
@@ -162,6 +168,13 @@ def main():
     payroll_save_preview.add_argument(
         "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
     )
+    payroll_ownership_shadow=sub.add_parser("payroll-ownership-shadow")
+    payroll_ownership_shadow.add_argument("--enable",action="store_true")
+    payroll_ownership_shadow.add_argument("--hmac-key-file")
+    payroll_ownership_shadow.add_argument("--employer-id")
+    payroll_ownership_shadow.add_argument(
+        "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
+    )
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-master-sync-preview")
     payroll_master_apply=sub.add_parser("payroll-master-sync")
@@ -210,6 +223,32 @@ def main():
             ),
             ensure_ascii=False,
         ))
+    elif args.cmd=="payroll-ownership-shadow":
+        import json
+        s=Settings()
+        if not (args.enable and s.payroll_ownership_attestation_enabled):
+            print(json.dumps(
+                DISABLED_PAYROLL_OWNERSHIP_SHADOW_REPORT.safe_dict(),
+                ensure_ascii=False,
+            ))
+        else:
+            if not args.hmac_key_file:
+                p.error("payroll-ownership-shadow requires --hmac-key-file")
+            s.validate(need_sheet=True, need_payroll_drive=True)
+            key=load_local_payroll_ownership_hmac_key(
+                args.hmac_key_file,
+                repository_root=Path(__file__).resolve().parents[1],
+            )
+            snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+            report=drive_payroll_ownership_shadow(
+                s.payroll_drive_folder_id,
+                snapshot,
+                enabled=True,
+                local_key=key,
+                employer_id=args.employer_id,
+                statement_type=args.statement_type,
+            )
+            print(json.dumps(report.safe_dict(),ensure_ascii=False))
     elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
         import json
         s=Settings(); s.validate(need_sheet=True)
