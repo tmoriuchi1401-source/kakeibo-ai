@@ -118,6 +118,7 @@ def test_uncertain_equal_value_duplicate_blocks_strong_duplicate():
     assert not result.candidates
     assert result.blocked_competitor_count >= 1
     assert result.unresolved_competitor_count >= 1
+    assert result.same_amount_competitor_count == 1
     assert result.payment_role_evidence_completeness == "unresolved"
 
 
@@ -217,6 +218,7 @@ def test_output_and_repr_are_data_minimized():
     assert set(result.aggregate()) == {"shadow_candidate_count", "blocked_competitor_count",
         "blocked_negative_context_count", "ambiguous_count", "proposal_only_count",
         "incomplete_count", "unresolved_competitor_count",
+        "same_amount_competitor_count",
         "payment_role_evidence_complete", "materialization_stable", "evaluation_failed"}
 
 

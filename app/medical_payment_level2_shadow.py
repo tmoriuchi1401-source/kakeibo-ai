@@ -69,6 +69,7 @@ class Level2ShadowEvaluation:
     proposal_only_count: int = 0
     incomplete_count: int = 0
     unresolved_competitor_count: int = 0
+    same_amount_competitor_count: int = 0
     payment_role_evidence_completeness: Literal["complete", "unresolved", "incomplete"] = "unresolved"
     materialization_stability: Literal["unverified", "confirmed", "conflicting"] = "unverified"
     evaluation_failed: int = 0
@@ -82,6 +83,7 @@ class Level2ShadowEvaluation:
             "proposal_only_count": self.proposal_only_count,
             "incomplete_count": self.incomplete_count,
             "unresolved_competitor_count": self.unresolved_competitor_count,
+            "same_amount_competitor_count": self.same_amount_competitor_count,
             "payment_role_evidence_complete": int(
                 self.payment_role_evidence_completeness == "complete"),
             "materialization_stable": int(self.materialization_stability == "confirmed"),
@@ -238,11 +240,12 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
         groups[numeric.value].append(numeric)
 
     eligible: list[tuple[list[_Numeric], str]] = []
-    negative_blocks = competitor_blocks = unresolved_competitors = 0
+    negative_blocks = competitor_blocks = unresolved_competitors = same_amount_competitors = 0
     for group in groups.values():
         uncertain_positive = [item for item in group
                               if classify_structural_relation(label, item.region).state == "UNCERTAIN"]
         unresolved_competitors += int(bool(uncertain_positive))
+        same_amount_competitors += int(bool(uncertain_positive))
         related = [(item, relation.axis) for item in group
                    if (relation := _strong_relation(label, item.region)) is not None]
         if not related:
@@ -306,6 +309,7 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
             ambiguous_count=int(len(eligible) > 1),
             proposal_only_count=int(bool(numerics)),
             unresolved_competitor_count=unresolved_competitors,
+            same_amount_competitor_count=same_amount_competitors,
             payment_role_evidence_completeness="unresolved",
         )
     group, relation = eligible[0]
@@ -319,6 +323,7 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
         blocked_competitor_count=competitor_blocks,
         blocked_negative_context_count=negative_blocks,
         unresolved_competitor_count=unresolved_competitors,
+        same_amount_competitor_count=same_amount_competitors,
         payment_role_evidence_completeness="complete",
     )
 
@@ -342,11 +347,13 @@ def evaluate_materialization_stable_level2_shadow(
     blocked = sum(item.blocked_competitor_count for item in results)
     negative = sum(item.blocked_negative_context_count for item in results)
     unresolved = sum(item.unresolved_competitor_count for item in results)
+    same_amount = sum(item.same_amount_competitor_count for item in results)
     if (blocked or negative or unresolved or any(len(item.candidates) != 1 for item in results)):
         return Level2ShadowEvaluation(
             blocked_competitor_count=blocked,
             blocked_negative_context_count=negative,
             unresolved_competitor_count=unresolved,
+            same_amount_competitor_count=same_amount,
             payment_role_evidence_completeness="unresolved",
             materialization_stability="conflicting",
         )
