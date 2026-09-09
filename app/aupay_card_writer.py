@@ -38,7 +38,7 @@ from .aupay_card_executor import (
 from .sheets import HEADERS
 
 
-WRITER_SAFETY_SCHEMA_VERSION = 1
+WRITER_SAFETY_SCHEMA_VERSION = 2
 TARGET_BINDING_VERSION = 1
 ABSOLUTE_MAX_BATCH_SIZE = 100
 _RELATIVE_QUERY = re.compile(r"(?:newer_than|older_than|newer|older):", re.IGNORECASE)
@@ -141,6 +141,10 @@ class ProductionRunManifest:
     plan_created_at: datetime
     plan_binding_ref: str
     audit_key_id: str
+    target_binding_version: int
+    canonical_count: int
+    candidate_count: int
+    withheld_count: int
     authority_mode: str = "read_only_preflight"
 
     def validate(self) -> None:
@@ -154,6 +158,15 @@ class ProductionRunManifest:
         _aware(self.plan_created_at, "plan_created_at_timezone_required")
         if self.authority_mode not in {"read_only_preflight", "synthetic_test"}:
             raise RuntimeError("production_run_authority_disabled")
+        if self.target_binding_version != TARGET_BINDING_VERSION:
+            raise RuntimeError("run_manifest_target_binding_invalid")
+        if (
+            self.canonical_count < 0
+            or self.candidate_count < 0
+            or self.withheld_count < 0
+            or self.candidate_count + self.withheld_count != self.canonical_count
+        ):
+            raise RuntimeError("run_manifest_accounting_invalid")
 
 
 def create_run_manifest(
@@ -163,6 +176,7 @@ def create_run_manifest(
     plan_created_at: datetime,
     run_id: str,
     audit_key: PersistentAuditKey,
+    target_binding_version: int = TARGET_BINDING_VERSION,
     authority_mode: str = "read_only_preflight",
 ) -> ProductionRunManifest:
     validate_canonical_apply_plan(plan)
@@ -174,6 +188,10 @@ def create_run_manifest(
         plan_created_at=plan_created_at,
         plan_binding_ref=_plan_binding_ref(plan, audit_key.secret),
         audit_key_id=audit_key.key_id,
+        target_binding_version=target_binding_version,
+        canonical_count=plan.canonical_transaction_count,
+        candidate_count=len(plan.candidates),
+        withheld_count=plan.canonical_transaction_count - len(plan.candidates),
         authority_mode=authority_mode,
     )
     manifest.validate()

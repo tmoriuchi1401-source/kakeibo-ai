@@ -74,11 +74,15 @@ being resent.
 schedule capped at 30 seconds per interval. Exhausting the window never causes a
 second write request.
 
-## Capability still required in a future phase
+## Production-shaped persistence remains sealed
 
-The in-memory journal and lease implementations are synthetic contract fakes,
-not production persistence. Before a separately approved one-item canary, a
-durable journal, distributed lease backend, protected stable key, real target
-binding, operational recovery procedure, and separately reviewed real Sheets
-transport must be connected. That future transport must remain unreachable from
-the current CLI until explicit production authorization is added.
+The contract now has repo-external protected-key loading, an append-only and
+hash-chained SQLite journal, immutable fixed-run persistence, a cross-process
+SQLite lease, restart recovery, and an exact-target Sheets transport adapter.
+They remain unreachable from the CLI and production capability issuance is
+unconditionally disabled. Details and backend deployment limitations are in
+[`aupay_card_production_persistence.md`](aupay_card_production_persistence.md).
+
+A separately approved phase is still required to provision real secrets and
+durable storage, review write-scope credentials, persist a real fixed run, and
+define the human capability-unseal boundary before a one-item canary.
