@@ -7,6 +7,7 @@ used transiently and are never retained in the returned fixed-schema result.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 import unicodedata
 from typing import Literal
 
@@ -27,7 +28,7 @@ from .medical_receipt_privacy import (
 )
 
 
-SCHEMA_VERSION = "medical-level2-pre-candidate-diagnostics-v1"
+SCHEMA_VERSION = "medical-level2-pre-candidate-diagnostics-v2"
 _STRONG_LABELS = tuple(
     dict.fromkeys(label for label, _, strength, _ in _LABEL_RULES if strength == "strong")
 )
@@ -52,6 +53,36 @@ class PaymentLabelObservation:
     low_confidence_match_count: int = 0
     normalization_near_match_count: int = 0
     unsupported_label_shape_count: int = 0
+
+
+@dataclass(frozen=True)
+class UnsupportedLabelShapeDiagnostics:
+    observation_count: int = 0
+    token_count_one: int = 0
+    token_count_two: int = 0
+    token_count_many: int = 0
+    contiguous_count: int = 0
+    fragmented_count: int = 0
+    fragment_count_one: int = 0
+    fragment_count_two: int = 0
+    fragment_count_many: int = 0
+    allowlist_length_delta_zero: int = 0
+    allowlist_length_delta_one: int = 0
+    allowlist_length_delta_two: int = 0
+    allowlist_length_delta_large: int = 0
+    prefix_only_count: int = 0
+    suffix_only_count: int = 0
+    interior_fragment_count: int = 0
+    no_allowlist_fragment_count: int = 0
+    separator_or_whitespace_split_count: int = 0
+    mixed_character_class_count: int = 0
+    geometry_isolated_count: int = 0
+    geometry_pair_count: int = 0
+    geometry_multi_fragment_count: int = 0
+    geometry_unknown_count: int = 0
+    neighboring_token_count_zero: int = 0
+    neighboring_token_count_one: int = 0
+    neighboring_token_count_many: int = 0
 
 
 @dataclass(frozen=True)
@@ -94,8 +125,11 @@ class OcrIncompleteBreakdown:
 
 @dataclass(frozen=True)
 class PreCandidateDiagnostics:
-    schema_version: Literal["medical-level2-pre-candidate-diagnostics-v1"] = SCHEMA_VERSION
+    schema_version: Literal["medical-level2-pre-candidate-diagnostics-v2"] = SCHEMA_VERSION
     label: PaymentLabelObservation = field(default_factory=PaymentLabelObservation)
+    unsupported_shape: UnsupportedLabelShapeDiagnostics = field(
+        default_factory=UnsupportedLabelShapeDiagnostics
+    )
     structure: LabelToNumberStructuralObservation = field(
         default_factory=LabelToNumberStructuralObservation
     )
@@ -115,6 +149,60 @@ class PreCandidateDiagnostics:
             "low_confidence_match_count": self.label.low_confidence_match_count,
             "normalization_near_match_count": self.label.normalization_near_match_count,
             "unsupported_label_shape_count": self.label.unsupported_label_shape_count,
+            "unsupported_shape_observation_count": self.unsupported_shape.observation_count,
+            "unsupported_token_count_one": self.unsupported_shape.token_count_one,
+            "unsupported_token_count_two": self.unsupported_shape.token_count_two,
+            "unsupported_token_count_many": self.unsupported_shape.token_count_many,
+            "unsupported_contiguous_count": self.unsupported_shape.contiguous_count,
+            "unsupported_fragmented_count": self.unsupported_shape.fragmented_count,
+            "unsupported_fragment_count_one": self.unsupported_shape.fragment_count_one,
+            "unsupported_fragment_count_two": self.unsupported_shape.fragment_count_two,
+            "unsupported_fragment_count_many": self.unsupported_shape.fragment_count_many,
+            "unsupported_allowlist_length_delta_zero": (
+                self.unsupported_shape.allowlist_length_delta_zero
+            ),
+            "unsupported_allowlist_length_delta_one": (
+                self.unsupported_shape.allowlist_length_delta_one
+            ),
+            "unsupported_allowlist_length_delta_two": (
+                self.unsupported_shape.allowlist_length_delta_two
+            ),
+            "unsupported_allowlist_length_delta_large": (
+                self.unsupported_shape.allowlist_length_delta_large
+            ),
+            "unsupported_prefix_only_count": self.unsupported_shape.prefix_only_count,
+            "unsupported_suffix_only_count": self.unsupported_shape.suffix_only_count,
+            "unsupported_interior_fragment_count": (
+                self.unsupported_shape.interior_fragment_count
+            ),
+            "unsupported_no_allowlist_fragment_count": (
+                self.unsupported_shape.no_allowlist_fragment_count
+            ),
+            "unsupported_separator_or_whitespace_split_count": (
+                self.unsupported_shape.separator_or_whitespace_split_count
+            ),
+            "unsupported_mixed_character_class_count": (
+                self.unsupported_shape.mixed_character_class_count
+            ),
+            "unsupported_geometry_isolated_count": (
+                self.unsupported_shape.geometry_isolated_count
+            ),
+            "unsupported_geometry_pair_count": self.unsupported_shape.geometry_pair_count,
+            "unsupported_geometry_multi_fragment_count": (
+                self.unsupported_shape.geometry_multi_fragment_count
+            ),
+            "unsupported_geometry_unknown_count": (
+                self.unsupported_shape.geometry_unknown_count
+            ),
+            "unsupported_neighboring_token_count_zero": (
+                self.unsupported_shape.neighboring_token_count_zero
+            ),
+            "unsupported_neighboring_token_count_one": (
+                self.unsupported_shape.neighboring_token_count_one
+            ),
+            "unsupported_neighboring_token_count_many": (
+                self.unsupported_shape.neighboring_token_count_many
+            ),
             "numeric_observation_count": self.structure.numeric_observation_count,
             "strong_relation_count": self.structure.strong_relation_count,
             "uncertain_relation_count": self.structure.uncertain_relation_count,
@@ -183,6 +271,99 @@ def _label_shape(region: TextRegion) -> _LabelShape | None:
         normalization_near=normalization_near,
         unsupported=unsupported,
     )
+
+
+def _shape_characters(value: str) -> str:
+    """Drop only visible separators for anonymous shape measurements."""
+    return "".join(
+        character for character in unicodedata.normalize("NFKC", value)
+        if character.isalnum()
+    )
+
+
+def _allowlist_fragment_position(value: str) -> str:
+    if any(label.startswith(value) or value.startswith(label) for label in _STRONG_LABELS):
+        return "PREFIX"
+    if any(label.endswith(value) or value.endswith(label) for label in _STRONG_LABELS):
+        return "SUFFIX"
+    if any(value in label or label in value for label in _STRONG_LABELS):
+        return "INTERIOR"
+    return "NONE"
+
+
+def _mixed_character_classes(value: str) -> bool:
+    classes = set()
+    for character in value:
+        if character.isdecimal():
+            classes.add("DIGIT")
+        elif character.isascii() and character.isalpha():
+            classes.add("ASCII_ALPHA")
+        elif character.isalpha():
+            classes.add("NON_ASCII_ALPHA")
+    return len(classes) > 1
+
+
+def _unsupported_shape_diagnostics(
+    observation: OcrObservation,
+    labels: list[_LabelShape],
+) -> UnsupportedLabelShapeDiagnostics:
+    unsupported = [item for item in labels if item.unsupported]
+    counts = {
+        field_name: 0
+        for field_name in UnsupportedLabelShapeDiagnostics.__dataclass_fields__
+    }
+    counts["observation_count"] = len(unsupported)
+    for item in unsupported:
+        normalized = unicodedata.normalize("NFKC", item.region.text).strip()
+        tokens = re.findall(r"\S+", normalized)
+        fragments = [value for value in re.split(r"[\W_]+", normalized) if value]
+        token_bucket = "one" if len(tokens) <= 1 else "two" if len(tokens) == 2 else "many"
+        fragment_bucket = (
+            "one" if len(fragments) <= 1 else "two" if len(fragments) == 2 else "many"
+        )
+        counts[f"token_count_{token_bucket}"] += 1
+        counts[f"fragment_count_{fragment_bucket}"] += 1
+        split = len(fragments) > 1
+        counts["fragmented_count" if split else "contiguous_count"] += 1
+        counts["separator_or_whitespace_split_count"] += int(split)
+
+        shape = _shape_characters(normalized)
+        delta = min(abs(len(shape) - len(label)) for label in _STRONG_LABELS)
+        delta_bucket = "zero" if delta == 0 else "one" if delta == 1 else "two" if delta == 2 else "large"
+        counts[f"allowlist_length_delta_{delta_bucket}"] += 1
+        position = _allowlist_fragment_position(shape)
+        position_field = {
+            "PREFIX": "prefix_only_count",
+            "SUFFIX": "suffix_only_count",
+            "INTERIOR": "interior_fragment_count",
+            "NONE": "no_allowlist_fragment_count",
+        }[position]
+        counts[position_field] += 1
+        counts["mixed_character_class_count"] += int(_mixed_character_classes(shape))
+
+        if item.region.bbox is None:
+            counts["geometry_unknown_count"] += 1
+        else:
+            adjacent_labels = sum(
+                other.region.ordinal != item.region.ordinal
+                and _locally_related(item.region, other.region)
+                for other in labels
+            )
+            geometry_bucket = (
+                "isolated_count" if adjacent_labels == 0
+                else "pair_count" if adjacent_labels == 1
+                else "multi_fragment_count"
+            )
+            counts[f"geometry_{geometry_bucket}"] += 1
+
+        neighbors = sum(
+            region.ordinal != item.region.ordinal
+            and _locally_related(item.region, region)
+            for region in observation.regions
+        )
+        neighbor_bucket = "zero" if neighbors == 0 else "one" if neighbors == 1 else "many"
+        counts[f"neighboring_token_count_{neighbor_bucket}"] += 1
+    return UnsupportedLabelShapeDiagnostics(**counts)
 
 
 def _distance_bucket(state: RelationState, axis: str | None, gap: float | None) -> DistanceBucket:
@@ -345,6 +526,7 @@ def observe_pre_candidate_diagnostics(observation: OcrObservation) -> PreCandida
         )
         return PreCandidateDiagnostics(
             label=label_summary,
+            unsupported_shape=_unsupported_shape_diagnostics(observation, labels),
             structure=structure,
             competitors=competitors,
             incomplete=_incomplete(observation),

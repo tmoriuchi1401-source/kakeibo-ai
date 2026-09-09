@@ -71,6 +71,74 @@ def test_unsupported_payment_label_shape_is_only_diagnostic():
     assert evaluate_level2_payment_shadow(source).candidates == ()
 
 
+def test_contiguous_unsupported_shape_has_single_token_and_fragment():
+    result = observe_pre_candidate_diagnostics(
+        observation(region("領収請求", 100, 100))
+    ).unsupported_shape
+    assert result.observation_count == 1
+    assert result.contiguous_count == 1
+    assert result.token_count_one == 1
+    assert result.fragment_count_one == 1
+
+
+def test_fragmented_unsupported_shape_records_explicit_whitespace_split():
+    result = observe_pre_candidate_diagnostics(
+        observation(region("領収 請求", 100, 100))
+    ).unsupported_shape
+    assert result.fragmented_count == 1
+    assert result.token_count_two == 1
+    assert result.fragment_count_two == 1
+    assert result.separator_or_whitespace_split_count == 1
+
+
+@pytest.mark.parametrize(("text", "field"), [
+    ("領収金額控", "prefix_only_count"),
+    ("控領収金額", "suffix_only_count"),
+    ("控領収金額再", "interior_fragment_count"),
+])
+def test_allowlist_fragment_position_is_anonymous(text, field):
+    result = observe_pre_candidate_diagnostics(
+        observation(region(text, 100, 100))
+    ).unsupported_shape
+    assert getattr(result, field) == 1
+
+
+def test_separator_split_is_observed_without_normalizing_to_an_exact_label():
+    source = observation(region("領収/請求", 100, 100))
+    result = observe_pre_candidate_diagnostics(source)
+    assert result.unsupported_shape.separator_or_whitespace_split_count == 1
+    assert result.unsupported_shape.fragment_count_two == 1
+    assert result.label.exact_match_count == 0
+    assert evaluate_level2_payment_shadow(source).candidates == ()
+
+
+def test_geometry_split_bucket_counts_adjacent_label_like_regions_only():
+    source = observation(
+        region("領収請求", 100, 100),
+        region("支払請求", 190, 100),
+    )
+    result = observe_pre_candidate_diagnostics(source).unsupported_shape
+    assert result.observation_count == 2
+    assert result.geometry_pair_count == 2
+    assert result.geometry_isolated_count == 0
+
+
+def test_multiple_explicit_fragments_use_bounded_many_bucket():
+    result = observe_pre_candidate_diagnostics(
+        observation(region("領収 / 請求 / 支払", 100, 100))
+    ).unsupported_shape
+    assert result.fragment_count_many == 1
+    assert result.token_count_many == 1
+    assert result.fragmented_count == 1
+
+
+def test_mixed_character_class_is_shape_only_and_never_authorizes():
+    source = observation(region("支払A1", 100, 100), region("1234円", 100, 135))
+    result = observe_pre_candidate_diagnostics(source)
+    assert result.unsupported_shape.mixed_character_class_count == 1
+    assert evaluate_level2_payment_shadow(source).candidates == ()
+
+
 def test_label_and_strong_numeric_relation_are_counted():
     source = observation(region("支払額", 100, 100), region("1234円", 100, 135))
     result = observe_pre_candidate_diagnostics(source)
@@ -163,6 +231,20 @@ def test_fixed_schema_and_repr_do_not_leak_text_amount_geometry_or_source_identi
         "schema_version", "exact_match_count", "partial_or_fragment_match_count",
         "low_confidence_match_count", "normalization_near_match_count",
         "unsupported_label_shape_count", "numeric_observation_count",
+        "unsupported_shape_observation_count", "unsupported_token_count_one",
+        "unsupported_token_count_two", "unsupported_token_count_many",
+        "unsupported_contiguous_count", "unsupported_fragmented_count",
+        "unsupported_fragment_count_one", "unsupported_fragment_count_two",
+        "unsupported_fragment_count_many", "unsupported_allowlist_length_delta_zero",
+        "unsupported_allowlist_length_delta_one", "unsupported_allowlist_length_delta_two",
+        "unsupported_allowlist_length_delta_large", "unsupported_prefix_only_count",
+        "unsupported_suffix_only_count", "unsupported_interior_fragment_count",
+        "unsupported_no_allowlist_fragment_count",
+        "unsupported_separator_or_whitespace_split_count",
+        "unsupported_mixed_character_class_count", "unsupported_geometry_isolated_count",
+        "unsupported_geometry_pair_count", "unsupported_geometry_multi_fragment_count",
+        "unsupported_geometry_unknown_count", "unsupported_neighboring_token_count_zero",
+        "unsupported_neighboring_token_count_one", "unsupported_neighboring_token_count_many",
         "strong_relation_count", "uncertain_relation_count", "unrelated_relation_count",
         "competitor_count", "payment_connected_count", "label_connected_count",
         "target_connected_count", "structurally_near_count",
