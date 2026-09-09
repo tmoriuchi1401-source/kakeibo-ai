@@ -22,24 +22,48 @@ from .medical_payment_level2_shadow import (
     evaluate_level2_payment_shadow,
 )
 from .medical_receipt_privacy import (
+    _LABEL_RULES,
     _compact_ocr_token,
     _exact_strong_structured_label_match,
 )
 
 
-SCHEMA_VERSION = "medical-level2-rescue-shadow-v1"
+SCHEMA_VERSION = "medical-level2-rescue-shadow-v2"
 _INCOMPLETE_ISSUES = {
     "recognition_missing", "invalid_geometry", "invalid_confidence", "blank_text"
 }
+_STRONG_LABEL_SURFACES = tuple(
+    dict.fromkeys(
+        label for label, _, strength, _ in _LABEL_RULES if strength == "strong"
+    )
+) + ("支払額",)
 
 
 @dataclass(frozen=True)
 class RescueShadowEvaluation:
     schema_version: str = SCHEMA_VERSION
+    boundary_observation_count: int = 0
+    boundary_separator_observation_count: int = 0
+    boundary_adjacent_pair_observation_count: int = 0
     boundary_exact_reconstruction_count: int = 0
+    boundary_high_confidence_count: int = 0
+    boundary_unique_numeric_count: int = 0
+    boundary_strong_relation_count: int = 0
+    boundary_competitor_free_count: int = 0
+    boundary_pre_stability_positive_count: int = 0
     boundary_safe_positive_count: int = 0
     boundary_ambiguous_reconstruction_count: int = 0
     boundary_numeric_blocker_count: int = 0
+    boundary_veto_incomplete_count: int = 0
+    boundary_veto_non_exact_count: int = 0
+    boundary_veto_low_confidence_count: int = 0
+    boundary_veto_numeric_not_unique_count: int = 0
+    boundary_veto_uncertain_relation_count: int = 0
+    boundary_veto_unrelated_relation_count: int = 0
+    boundary_veto_competitor_count: int = 0
+    boundary_veto_ambiguous_reconstruction_count: int = 0
+    boundary_veto_existing_level2_candidate_count: int = 0
+    boundary_veto_materialization_unverified_count: int = 0
     geometry_exact_reconstruction_count: int = 0
     geometry_strong_relation_count: int = 0
     geometry_overmerge_risk_count: int = 0
@@ -51,6 +75,9 @@ class RescueShadowEvaluation:
     existing_level2_candidate_count: int = 0
     evaluation_failed: int = 0
     _coherent_surfaces: tuple[str, ...] = field(default=(), repr=False)
+    _boundary_fingerprints: tuple[tuple[str, int, str], ...] = field(
+        default=(), repr=False
+    )
 
     def aggregate(self) -> dict[str, int | bool | str]:
         return {
@@ -75,10 +102,32 @@ class StableCoherentEvaluation:
 
 
 @dataclass(frozen=True)
+class StableBoundaryEvaluation:
+    schema_version: str = SCHEMA_VERSION
+    evaluated_materialization_count: int = 0
+    pre_stability_positive_count: int = 0
+    safe_positive_count: int = 0
+    materialization_unverified_count: int = 0
+    materialization_conflict_count: int = 0
+    evaluation_failed: int = 0
+
+    def aggregate(self) -> dict[str, int | str]:
+        return dict(self.__dict__)
+
+
+@dataclass(frozen=True)
 class _Reconstruction:
     label: TextRegion = field(repr=False)
     fragment_ordinals: tuple[int, ...] = field(repr=False)
     strict_boundary: bool = False
+
+
+@dataclass(frozen=True)
+class _BoundaryObservation:
+    surface: str = field(repr=False)
+    label: TextRegion | None = field(default=None, repr=False)
+    parts: tuple[TextRegion, ...] = field(default=(), repr=False)
+    kind: str = "pair"
 
 
 def _high_confidence(region: TextRegion) -> bool:
@@ -93,6 +142,13 @@ def _label_vocabulary(value: str) -> bool:
 def _separator_free(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     return "".join(character for character in normalized if character.isalnum())
+
+
+def _proper_strong_label_fragment(value: str) -> bool:
+    compact = _separator_free(value)
+    return bool(compact) and any(
+        compact != label and compact in label for label in _STRONG_LABEL_SURFACES
+    )
 
 
 def _virtual_label(parts: tuple[TextRegion, ...], text: str) -> TextRegion | None:
@@ -155,6 +211,142 @@ def _intervening(parts: tuple[TextRegion, TextRegion], regions: tuple[TextRegion
             if overlap >= 0.40 * min(max(lh, rh), oh) and lx + lw <= ox and ox + ow <= rx:
                 return True
     return False
+
+
+def _boundary_observations(observation: OcrObservation) -> tuple[_BoundaryObservation, ...]:
+    """Return strict boundary shapes before confidence or exact-match gating."""
+    ordered = sorted(
+        observation.regions,
+        key=lambda region: ((_safe_box(region) or (0, 0, 0, 0))[1],
+                            (_safe_box(region) or (0, 0, 0, 0))[0], region.ordinal),
+    )
+    found: list[_BoundaryObservation] = []
+    for region in ordered:
+        normalized = unicodedata.normalize("NFKC", region.text)
+        fragments = tuple(value for value in re.split(r"[\W_]+", normalized) if value)
+        reconstructed = _separator_free(normalized)
+        if (
+            len(fragments) >= 2
+            and reconstructed != _compact_ocr_token(normalized)
+            and all(_proper_strong_label_fragment(value) for value in fragments)
+        ):
+            label = None
+            if _exact_strong_structured_label_match(reconstructed) is not None:
+                label = _virtual_label((region,), reconstructed)
+            found.append(_BoundaryObservation(reconstructed, label, (region,), "separator"))
+    for left_index, left in enumerate(ordered):
+        for right in ordered[left_index + 1:]:
+            lb, rb = _safe_box(left), _safe_box(right)
+            if lb is None or rb is None or rb[0] < lb[0]:
+                continue
+            strict, _ = _pair_geometry(left, right)
+            if (
+                not strict
+                or _intervening((left, right), observation.regions)
+                or not _proper_strong_label_fragment(left.text)
+                or not _proper_strong_label_fragment(right.text)
+            ):
+                continue
+            combined = _separator_free(left.text) + _separator_free(right.text)
+            label = None
+            if _exact_strong_structured_label_match(combined) is not None:
+                label = _virtual_label((left, right), combined)
+            found.append(_BoundaryObservation(combined, label, (left, right), "pair"))
+    return tuple(found)
+
+
+def _boundary_competitor(
+    candidate: _BoundaryObservation,
+    target: TextRegion,
+    observation: OcrObservation,
+    exact_count: int,
+    existing_level2_count: int,
+) -> bool:
+    if exact_count != 1 or existing_level2_count:
+        return True
+    excluded = {part.ordinal for part in candidate.parts} | {target.ordinal}
+    return any(
+        region.ordinal not in excluded
+        and _is_negative(region)
+        and (
+            candidate.label is not None
+            and (_blocking_relation(candidate.label, region) is not None
+                 or _blocking_relation(target, region) is not None)
+        )
+        for region in observation.regions
+    )
+
+
+def _boundary_stage_counts(
+    observation: OcrObservation,
+    existing_level2_count: int,
+) -> tuple[dict[str, int], tuple[tuple[str, int, str], ...]]:
+    raw = _boundary_observations(observation)
+    exact = [item for item in raw if item.label is not None]
+    high = [item for item in exact if all(_high_confidence(part) for part in item.parts)]
+    numerics = _numeric_regions(observation)
+    unique_numeric = (
+        numerics[0]
+        if len(numerics) == 1
+        and _high_confidence(numerics[0])
+        and _whole_numeric(numerics[0]) is not None
+        else None
+    )
+    numeric_ready = high if unique_numeric is not None else []
+    strong: list[tuple[_BoundaryObservation, TextRegion, str]] = []
+    uncertain = unrelated = 0
+    if unique_numeric is not None:
+        for item in high:
+            relation = classify_structural_relation(item.label, unique_numeric)  # type: ignore[arg-type]
+            if relation.state == "STRONG" and relation.axis is not None:
+                strong.append((item, unique_numeric, relation.axis))
+            elif relation.state == "UNCERTAIN":
+                uncertain += 1
+            else:
+                unrelated += 1
+    competitor_free = [
+        item for item in strong
+        if not _boundary_competitor(
+            item[0], item[1], observation, len(exact), existing_level2_count
+        )
+    ]
+    complete = observation.complete and not any(
+        set(region.issues) & _INCOMPLETE_ISSUES for region in observation.regions
+    )
+    pre_stable = competitor_free if complete else []
+    counts = {
+        "boundary_observation_count": len(raw),
+        "boundary_separator_observation_count": sum(item.kind == "separator" for item in raw),
+        "boundary_adjacent_pair_observation_count": sum(item.kind == "pair" for item in raw),
+        "boundary_exact_reconstruction_count": len(exact),
+        "boundary_high_confidence_count": len(high),
+        "boundary_unique_numeric_count": len(numeric_ready),
+        "boundary_strong_relation_count": len(strong),
+        "boundary_competitor_free_count": len(competitor_free),
+        "boundary_pre_stability_positive_count": len(pre_stable),
+        "boundary_safe_positive_count": 0,
+        "boundary_ambiguous_reconstruction_count": int(len(exact) > 1),
+        "boundary_numeric_blocker_count": len(high) - len(numeric_ready),
+        "boundary_veto_incomplete_count": len(competitor_free) if not complete else 0,
+        "boundary_veto_non_exact_count": len(raw) - len(exact),
+        "boundary_veto_low_confidence_count": len(exact) - len(high),
+        "boundary_veto_numeric_not_unique_count": len(high) - len(numeric_ready),
+        "boundary_veto_uncertain_relation_count": uncertain,
+        "boundary_veto_unrelated_relation_count": unrelated,
+        "boundary_veto_competitor_count": len(strong) - len(competitor_free),
+        "boundary_veto_ambiguous_reconstruction_count": (
+            len(strong) if len(exact) > 1 else 0
+        ),
+        "boundary_veto_existing_level2_candidate_count": (
+            len(strong) if existing_level2_count else 0
+        ),
+        "boundary_veto_materialization_unverified_count": len(pre_stable),
+    }
+    fingerprints = tuple(
+        (item.surface, _whole_numeric(target), axis)  # type: ignore[arg-type]
+        for item, target, axis in pre_stable
+    )
+    return counts, fingerprints
 
 
 def _reconstructions(observation: OcrObservation) -> tuple[_Reconstruction, ...]:
@@ -251,28 +443,27 @@ def evaluate_payment_rescue_shadow(observation: OcrObservation) -> RescueShadowE
     if type(observation) is not OcrObservation:
         return RescueShadowEvaluation(evaluation_failed=1)
     try:
-        production_count = len(evaluate_level2_payment_shadow(observation).candidates)
+        existing_level2_count = len(evaluate_level2_payment_shadow(observation).candidates)
+        boundary_counts, boundary_fingerprints = _boundary_stage_counts(
+            observation, existing_level2_count
+        )
         if not observation.complete or any(
             set(region.issues) & _INCOMPLETE_ISSUES for region in observation.regions
         ):
             return RescueShadowEvaluation(
-                observation_complete=False, existing_level2_candidate_count=production_count
+                **boundary_counts,
+                observation_complete=False,
+                existing_level2_candidate_count=existing_level2_count,
+                _boundary_fingerprints=boundary_fingerprints,
             )
         reconstructions = _reconstructions(observation)
-        strict = [item for item in reconstructions if item.strict_boundary]
         broad = [item for item in reconstructions if not item.strict_boundary]
         numerics = _numeric_regions(observation)
-        strict_blocked = sum(_numeric_blocked(item.label, numerics) for item in strict)
         coherent = _coherent_surfaces(observation)
         coherent_strong = sum(bool(_strong_whole_numeric(region, numerics)) for _, region in coherent)
         coherent_blocked = sum(_numeric_blocked(region, numerics) for _, region in coherent)
         return RescueShadowEvaluation(
-            boundary_exact_reconstruction_count=len(strict),
-            boundary_safe_positive_count=int(
-                production_count == 0 and len(strict) == 1 and strict_blocked == 0
-            ),
-            boundary_ambiguous_reconstruction_count=int(len(strict) > 1),
-            boundary_numeric_blocker_count=strict_blocked,
+            **boundary_counts,
             geometry_exact_reconstruction_count=len(broad),
             geometry_strong_relation_count=sum(
                 bool(_strong_whole_numeric(item.label, numerics)) for item in broad
@@ -294,8 +485,9 @@ def evaluate_payment_rescue_shadow(observation: OcrObservation) -> RescueShadowE
             coherent_strong_relation_count=coherent_strong,
             coherent_numeric_blocker_count=coherent_blocked,
             observation_complete=True,
-            existing_level2_candidate_count=production_count,
+            existing_level2_candidate_count=existing_level2_count,
             _coherent_surfaces=tuple(value for value, _ in coherent),
+            _boundary_fingerprints=boundary_fingerprints,
         )
     except Exception:
         return RescueShadowEvaluation(evaluation_failed=1)
@@ -327,4 +519,49 @@ def evaluate_stable_coherent_form(
         ),
         stable_numeric_blocker_count=sum(item.coherent_numeric_blocker_count for item in results),
         materialization_conflict_count=len(union - stable),
+    )
+
+
+def evaluate_materialization_stable_boundary_shadow(
+    observations: tuple[OcrObservation, ...],
+    *,
+    same_source_confirmed: bool,
+) -> StableBoundaryEvaluation:
+    """Confirm one boundary rescue only across consistent materializations.
+
+    The same-source fact must be established by the local caller. Raw labels,
+    values, geometry, and source identity remain private and are never returned.
+    """
+    if (
+        type(observations) is not tuple
+        or len(observations) < 2
+        or same_source_confirmed is not True
+    ):
+        return StableBoundaryEvaluation(
+            evaluated_materialization_count=(
+                len(observations) if isinstance(observations, tuple) else 0
+            ),
+            materialization_unverified_count=1,
+        )
+    results = tuple(evaluate_payment_rescue_shadow(item) for item in observations)
+    pre_stable = sum(item.boundary_pre_stability_positive_count for item in results)
+    if any(item.evaluation_failed or not item.observation_complete for item in results):
+        return StableBoundaryEvaluation(
+            evaluated_materialization_count=len(results),
+            pre_stability_positive_count=pre_stable,
+            materialization_conflict_count=1,
+            evaluation_failed=1,
+        )
+    if any(len(item._boundary_fingerprints) != 1 for item in results):
+        return StableBoundaryEvaluation(
+            evaluated_materialization_count=len(results),
+            pre_stability_positive_count=pre_stable,
+            materialization_conflict_count=1,
+        )
+    fingerprints = {item._boundary_fingerprints[0] for item in results}
+    return StableBoundaryEvaluation(
+        evaluated_materialization_count=len(results),
+        pre_stability_positive_count=pre_stable,
+        safe_positive_count=int(len(fingerprints) == 1),
+        materialization_conflict_count=int(len(fingerprints) != 1),
     )

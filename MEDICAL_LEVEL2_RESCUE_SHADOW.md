@@ -21,9 +21,9 @@ unit, one existing STRONG relation, no numeric competitor, and zero existing
 Level 2 candidates. The result contains no label or amount.
 
 Synthetic positives pass, while reversed, non-exact, intervening-token,
-low-confidence, and multiple-numeric fixtures fail closed. This is grade **A**
-as a narrowly bounded next-phase production-candidate concept. Promotion is not
-part of this checkpoint, and real safe-positive evidence is still required.
+low-confidence, and multiple-numeric fixtures fail closed. This was a
+design-stage grade **A** concept, conditional on real safe-positive evidence.
+The follow-up evidence gate below did not satisfy that condition.
 
 ## Strategy B: layout / geometry reconstruction
 
@@ -70,10 +70,35 @@ no external AI communication, and made no Drive or Sheets writes. Raw OCR text,
 amounts, coordinates, source identifiers, and filenames were neither returned
 nor persisted.
 
+## Boundary real-evidence follow-up
+
+The same nine files and ten isolated receipt units were evaluated read-only in
+two separate pinned RapidOCR worker processes per unit. Seven units were complete
+in both materializations; no input failed. The v2 observer records each gate
+stage and fixed veto category without retaining source values.
+
+- raw boundary mismatch observations: 0
+- separator observations: 0
+- adjacent-pair observations: 0
+- exact reconstructions: 0
+- high-confidence reconstructions: 0
+- unique-numeric gate passes: 0
+- STRONG-relation gate passes: 0
+- competitor-free gate passes: 0
+- pre-stability positives: 0
+- materialization-stable safe positives: 0
+- all individual veto categories: 0, because no raw boundary observation entered
+  the gate
+
+No additional designated `medical-eval` corpus was available locally. Synthetic
+success therefore cannot substitute for absent real evidence. Boundary
+reconstruction is grade **C** for this evidence phase: do not promote it; retain
+the observer only if further real collection is expected, otherwise consider
+removing the unused complexity.
+
 ## Selection
 
-Boundary reconstruction is the sole next-phase production-candidate concept,
-subject to the exact conditions above and new real safe-positive evidence.
-Geometry reconstruction remains shadow-only. Unsupported coherent forms are
-deferred rather than added to an allowlist. Production changes in this
-checkpoint: zero.
+Boundary reconstruction is not a production-candidate after the real-evidence
+gate (grade C). Geometry reconstruction remains shadow-only (grade B).
+Unsupported coherent forms remain deferred rather than added to an allowlist
+(grade C). Production changes in this checkpoint: zero.
