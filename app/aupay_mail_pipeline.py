@@ -5,6 +5,7 @@ import hashlib
 import html
 import json
 import re
+import secrets
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -20,6 +21,10 @@ from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
 from .transaction_plan import build_write_plan, reconcile_transactions
 from .aupay_card_apply_plan import build_canonical_apply_plan
+from .aupay_card_executor import (
+    SheetsCanonicalIdentityReader,
+    execute_canonical_apply_plan,
+)
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 
@@ -617,16 +622,44 @@ class AuPayCardMailPipeline:
         return summary
 
     def preview_apply_plan(self, token_json: str, query: str, max_results: int = 100) -> dict:
-        """Return only an anonymized, write-free canonical apply-plan summary."""
+        """Build and pre-apply revalidate a write-free canonical plan."""
         if self.db is None:
             raise ValueError("apply-plan previewにはread-only SheetsDBが必要です")
         transactions, collection = self._collect(gmail_service(token_json), query, max_results)
+        # Plan-time identity state is intentionally a separate read from the
+        # executor's mandatory pre-apply read-back below.
         reconciliation = reconcile_transactions(
             transactions, self.db.get("取込データ!A2:L"),
         )
         plan = build_canonical_apply_plan(collection, reconciliation)
         result = dict(collection)
         result.update(plan.summary())
+        if plan.executable:
+            execution = execute_canonical_apply_plan(
+                plan,
+                SheetsCanonicalIdentityReader(self.db),
+                apply=False,
+                audit_key=secrets.token_bytes(32),
+                audit_ref_scope="ephemeral_read_only_run",
+            )
+            result.update(execution.summary())
+        else:
+            result.update({
+                "executor_result_schema_version": 1,
+                "execution_status": "rejected_invalid_plan",
+                "apply_requested": False,
+                "writer_connected": False,
+                "input_candidate_count": 0,
+                "selected_candidate_count": 0,
+                "revalidated_new_count": 0,
+                "already_present_count": 0,
+                "conflict_count": 0,
+                "withheld_count": plan.canonical_transaction_count,
+                "would_write_count": 0,
+                "failed_review_count": plan.canonical_transaction_count,
+                "executor_reason_codes": ["apply_plan_blocked"],
+                "external_write_count": 0,
+            })
         return result
 
     def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict[str, int]:

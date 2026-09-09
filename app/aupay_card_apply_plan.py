@@ -13,6 +13,8 @@ from .transaction_plan import ReconciledTransaction
 
 
 _PROJECTION_AUTHORITY = object()
+APPLY_PLAN_SCHEMA_VERSION = 3
+APPLY_CANDIDATE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -65,7 +67,7 @@ class CanonicalApplyCandidate:
             raise TypeError("ineligible_canonical_apply_candidate")
         candidate = object.__new__(cls)
         values = {
-            "schema_version": 2,
+            "schema_version": APPLY_CANDIDATE_SCHEMA_VERSION,
             "identity": tx.identity,
             "source": tx.source,
             "source_record_id": tx.source_record_id,
@@ -352,7 +354,7 @@ def build_canonical_apply_plan(collection: dict, reconciliation: dict) -> Canoni
     )
     return CanonicalApplyPlan._create(
         authority=_PROJECTION_AUTHORITY,
-        schema_version=3,
+        schema_version=APPLY_PLAN_SCHEMA_VERSION,
         status=plan_status,
         candidates=candidates,
         item_decisions=decisions,
@@ -384,30 +386,127 @@ def build_canonical_apply_plan(collection: dict, reconciliation: dict) -> Canoni
     )
 
 
-def require_executable_apply_plan(value: object, *, apply: bool) -> CanonicalApplyPlan:
-    """Future writer guard: require the exact safe type and explicit consent."""
+def validate_canonical_apply_plan(value: object) -> CanonicalApplyPlan:
+    """Revalidate the complete, internally-issued executor authority envelope."""
     if type(value) is not CanonicalApplyPlan:
         raise TypeError("canonical_apply_plan_required")
-    if value._authority is not _PROJECTION_AUTHORITY:
+    if getattr(value, "_authority", None) is not _PROJECTION_AUTHORITY:
         raise TypeError("unauthorized_apply_plan")
-    if not apply:
-        raise RuntimeError("explicit_apply_required")
+    if value.schema_version != APPLY_PLAN_SCHEMA_VERSION:
+        raise RuntimeError("apply_plan_schema_invalid")
     if not value.executable:
         raise RuntimeError("apply_plan_blocked")
     if not value.canonical_accounting_valid:
         raise RuntimeError("apply_plan_accounting_invalid")
-    if any(candidate._authority is not _PROJECTION_AUTHORITY for candidate in value.candidates):
+    if any(
+        getattr(candidate, "_authority", None) is not _PROJECTION_AUTHORITY
+        for candidate in value.candidates
+    ):
         raise TypeError("unauthorized_apply_candidate")
+    if any(
+        candidate.schema_version != APPLY_CANDIDATE_SCHEMA_VERSION
+        for candidate in value.candidates
+    ):
+        raise RuntimeError("apply_candidate_schema_invalid")
+
+    decisions_by_identity = {
+        decision.canonical_identity: decision for decision in value.item_decisions
+    }
+    if len(decisions_by_identity) != len(value.item_decisions):
+        raise RuntimeError("apply_plan_duplicate_decision_identity")
+    all_source_identities = [
+        identity
+        for decision in value.item_decisions
+        for identity in decision.source_identities
+    ]
+    if (
+        len(all_source_identities) != len(set(all_source_identities))
+        or any(
+            decision.canonical_identity not in decision.source_identities
+            for decision in value.item_decisions
+        )
+    ):
+        raise RuntimeError("apply_plan_source_identity_manifest_invalid")
+    candidate_identities = [candidate.identity for candidate in value.candidates]
+    if len(candidate_identities) != len(set(candidate_identities)):
+        raise RuntimeError("apply_plan_duplicate_candidate_identity")
     eligible_identities = {
-        decision.canonical_identity for decision in value.item_decisions
+        identity for identity, decision in decisions_by_identity.items()
         if decision.status == "eligible"
     }
-    candidate_identities = {candidate.identity for candidate in value.candidates}
-    if eligible_identities != candidate_identities:
+    if eligible_identities != set(candidate_identities):
         raise RuntimeError("apply_plan_candidate_manifest_mismatch")
     if any(
         candidate.transaction_kind != "purchase" or candidate.amount_yen <= 0
         for candidate in value.candidates
     ):
         raise RuntimeError("apply_plan_candidate_ineligible")
+
+    for candidate in value.candidates:
+        decision = decisions_by_identity[candidate.identity]
+        if (
+            decision.status != "eligible"
+            or decision.transaction_kind != candidate.transaction_kind
+            or decision.business_fingerprint != candidate.business_fingerprint
+            or decision.source_identities != candidate.source_identities
+            or decision.cross_source_state != candidate.cross_source_state
+        ):
+            raise RuntimeError("apply_plan_candidate_manifest_mismatch")
+
+    status_counts = dict(value.item_status_counts)
+    accounted = sum(status_counts.values()) == value.canonical_transaction_count
+    expected_withheld = {
+        "eligible": value.eligible_canonical_count,
+        "withheld_return": value.withheld_return_count,
+        "withheld_cross_source_ambiguous": value.withheld_ambiguous_count,
+        "duplicate_existing_identity": value.duplicate_existing_identity_count,
+        "needs_review": value.withheld_review_count,
+        "invalid": value.invalid_item_count,
+        "withheld_global_failure": value.global_withheld_count,
+    }
+    counts_match = all(
+        status_counts.get(status, 0) == expected
+        for status, expected in expected_withheld.items()
+    )
+    expected_status = "ready_with_withheld" if (
+        len(value.candidates) != len(value.item_decisions)
+        or value.withheld_review_count
+        or value.parser_review_line_item_count
+    ) else "ready"
+    decision_summaries_match = (
+        value.return_transaction_count == sum(
+            decision.transaction_kind == "return" for decision in value.item_decisions
+        )
+        and value.cross_source_strong_match == sum(
+            decision.cross_source_state == "cross_source_strong_match"
+            for decision in value.item_decisions
+        )
+        and value.cross_source_ambiguous == sum(
+            decision.cross_source_state == "cross_source_ambiguous"
+            for decision in value.item_decisions
+        )
+        and value.cross_source_no_match == sum(
+            decision.cross_source_state == "cross_source_no_match"
+            for decision in value.item_decisions
+        )
+        and value.existing_identity_duplicate_count
+        == value.duplicate_existing_identity_count
+    )
+    if (
+        not accounted
+        or not counts_match
+        or not decision_summaries_match
+        or len(value.candidates) != value.eligible_canonical_count
+        or value.blocked_reasons
+        or value.status != expected_status
+    ):
+        raise RuntimeError("apply_plan_accounting_invalid")
     return value
+
+
+def require_executable_apply_plan(value: object, *, apply: bool) -> CanonicalApplyPlan:
+    """Future writer guard: require validated authority and explicit consent."""
+    plan = validate_canonical_apply_plan(value)
+    if not apply:
+        raise RuntimeError("explicit_apply_required")
+    return plan

@@ -197,6 +197,14 @@ no-matchと同様にcandidateになれる。candidate、withheld、duplicate、r
 canonical総数のaccounting invariantもsummaryへ出力する。将来のexecutor境界はsafe plan型と
 明示的なapply指定を必須とする。
 
+previewはplan作成後にSheets identityをもう一度読み、executor直前の状態を
+`still_new`、`already_present_exact`、`conflict`、`revalidation_failure`として再検証する。
+このPhaseのexecutorにはwriterが存在せず、`apply=True`でも
+`apply_blocked_writer_unavailable`となる。timeout等で前回結果が不明な
+`outcome_unknown`はblind retryせず、再読で存在・不在・判定不能を確定する。
+詳細な状態遷移、鍵付きaudit reference、deterministic canary contractは
+[`docs/aupay_card_executor_contract.md`](docs/aupay_card_executor_contract.md)を参照。
+
 カードメールの明細parseはmail-level resultの中でaccepted itemとprivacy-safeなreview
 itemを分離する。正額は `purchase` として正数を保持し、対象明細block自身が
 `-<金額>円(返品)` の形式と返品evidenceを持つ場合だけ `return` として負号を保持する。

@@ -395,6 +395,46 @@ def test_apply_plan_preview_cli_uses_read_only_sheet_service(monkeypatch, capsys
     assert "'apply_plan_status': 'blocked'" in capsys.readouterr().out
 
 
+def test_apply_plan_preview_performs_separate_preapply_read_without_write(monkeypatch):
+    service = service_for(raw_message(detail(1, "匿名店舗", 1200)))
+    monkeypatch.setattr("app.aupay_mail_pipeline.gmail_service", lambda _: service)
+
+    class ReadOnlyPlanDB:
+        def __init__(self):
+            self.get_calls = []
+            self.external_write_count = 0
+
+        def get(self, rng):
+            self.get_calls.append(rng)
+            if rng == "取込データ!A1:L1":
+                return [[
+                    "取込ID", "取込日時", "データ元", "元データID", "日付", "店舗",
+                    "金額", "支払方法", "処理状態", "統合先支出ID", "元データハッシュ", "備考",
+                ]]
+            assert rng == "取込データ!A2:L"
+            return []
+
+        def append(self, *_args, **_kwargs):
+            self.external_write_count += 1
+            raise AssertionError("preview reached writer")
+
+    db = ReadOnlyPlanDB()
+
+    result = AuPayCardMailPipeline(db).preview_apply_plan(
+        "token", "card-query", max_results=100,
+    )
+
+    assert result["apply_candidate_count"] == 1
+    assert result["revalidated_new_count"] == 1
+    assert result["would_write_count"] == 1
+    assert result["execution_status"] == "dry_run_ready"
+    assert result["external_write_count"] == 0
+    assert db.get_calls == [
+        "取込データ!A2:L", "取込データ!A1:L1", "取込データ!A2:L",
+    ]
+    assert db.external_write_count == 0
+
+
 def test_raw_import_cli_is_rejected_before_settings_or_google_access(monkeypatch):
     monkeypatch.setattr(
         cli, "Settings", lambda: pytest.fail("Settings must not be loaded"),
