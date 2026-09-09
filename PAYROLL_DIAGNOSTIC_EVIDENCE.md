@@ -303,6 +303,34 @@ candidate set. This contract is a readiness-to-integration boundary, not an
 adoption registry and not a replacement for `PayrollWritePlan`, writer, review,
 duplicate, schema, or apply authority.
 
+### Production integration architecture (not connected)
+
+Three attachment points were compared. Attesting immediately after storage
+conversion is too early because schema, duplicate, statement review, and active
+standard-item gates have not yet produced their final authority. Making ownership
+a writer-preflight gate is too late and risks turning optional evidence into a
+second write authority or stopping an otherwise safe existing flow. The selected
+design is therefore an optional read-only sidecar after an authoritative
+`PayrollWritePlan` has reached `ready` status.
+
+`attest_payroll_write_plan_ownership` accepts an unchanged ready plan, one
+restricted ownership candidate, and an ephemeral typed crosswalk from the
+existing parser/storage facts. It verifies the plan's employer and source
+identity, exactly one matching standard-item row, the authoritative value,
+non-review state, snapshot/parser/candidate scope, and every contract version.
+The value is not copied into the attestation; a caller-supplied local key creates
+an opaque HMAC commitment. The resulting attestation has a deterministic ID and
+no write capability. Failure returns no attestation and never mutates, replaces,
+or invalidates the `PayrollWritePlan`.
+
+Synthetic proof covers authoritative success, fallback and `unknown_with_value`
+rejection, field/value/source/snapshot/employer/parser/candidate mismatches,
+stale versions, review contamination, and identical-claim idempotency. Parser,
+storage candidate, review result, write plan, writer preview, and materialization
+payload are byte-for-byte or structurally identical before and after sidecar
+evaluation. No production module imports or calls the attestor. Actual production
+connection remains a separate approval boundary.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

@@ -8,6 +8,7 @@ success set and every consumption mapping are complete.
 from collections import Counter
 from dataclasses import dataclass, field
 import hashlib
+import hmac
 import json
 
 from .payroll_parser import (
@@ -345,6 +346,7 @@ class PayrollOwnershipAdoptionCandidate:
     scope_binding: tuple[str, ...] = field(repr=False)
     readiness_version: str
     evidence_contract_version: str
+    adoption_contract_version: str
 
 
 @dataclass(frozen=True)
@@ -364,9 +366,49 @@ class PayrollStorageAuthorityEvidence:
     review_reason_code: str | None
 
 
+@dataclass(frozen=True)
+class PayrollOwnershipPlanBinding:
+    """Ephemeral crosswalk from existing production facts to one sidecar proof."""
+    portable_claim_id: str
+    snapshot_id: str
+    parser_mode: str
+    employer_scope: str
+    source_file_id: str
+    content_hash: str
+    authoritative_standard_item_id: str
+    enumerated_candidate_id: str = field(repr=False)
+    authoritative_value: object = field(repr=False)
+    source_alignment_closed: bool = False
+    review_authority_contaminated: bool = False
+    binding_version: str = "payroll-ownership-plan-binding-v1"
+
+
+@dataclass(frozen=True)
+class PayrollOwnershipAttestation:
+    """Anonymous sidecar evidence with no effect on the authoritative plan."""
+    attestation_id: str
+    portable_claim_id: str
+    snapshot_id: str
+    parser_mode: str
+    employer_scope: str
+    authoritative_standard_item_id: str
+    plan_statement_id: str
+    value_commitment: str = field(repr=False)
+    attestation_version: str
+
+
+@dataclass(frozen=True)
+class PayrollOwnershipAttestationEvaluation:
+    accepted: bool
+    reason_code: str
+    attestation: PayrollOwnershipAttestation | None = None
+
+
 _ADOPTION_CONTRACT_VERSION = "payroll-ownership-adoption-contract-v1"
 _EVIDENCE_CONTRACT_VERSION = "payroll-ownership-evidence-v1"
 _READINESS_VERSION = "payroll-ownership-readiness-v1"
+_PLAN_BINDING_VERSION = "payroll-ownership-plan-binding-v1"
+_ATTESTATION_VERSION = "payroll-ownership-attestation-v1"
 
 
 def _stable_claim_digest(payload):
@@ -734,9 +776,128 @@ def evaluate_adoption_candidate(
         scope_binding,
         readiness_version,
         evidence_contract_version,
+        _ADOPTION_CONTRACT_VERSION,
     )
     return PayrollOwnershipAdoptionEvaluation(
         True, "adoption_candidate_contract_closed", candidate,
+    )
+
+
+def _value_commitment(local_key, candidate, value):
+    if not isinstance(local_key, bytes) or len(local_key) < 32:
+        return None
+    payload = json.dumps((
+        "payroll-ownership-plan-value-v1",
+        candidate.portable_claim_id,
+        candidate.authoritative_standard_item_id,
+        value,
+    ), ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hmac.new(local_key, payload, hashlib.sha256).hexdigest()
+
+
+def attest_payroll_write_plan_ownership(plan, candidate, binding, *, local_key):
+    """Create optional post-plan evidence without changing or gating the plan."""
+    from .payroll_storage_preview import PayrollWritePlan
+
+    def reject(reason):
+        return PayrollOwnershipAttestationEvaluation(False, reason, None)
+
+    if not isinstance(plan, PayrollWritePlan):
+        return reject("payroll_write_plan_required")
+    if not isinstance(candidate, PayrollOwnershipAdoptionCandidate):
+        return reject("ownership_adoption_candidate_required")
+    if not isinstance(binding, PayrollOwnershipPlanBinding):
+        return reject("ownership_plan_binding_required")
+    if candidate.adoption_contract_version != _ADOPTION_CONTRACT_VERSION:
+        return reject("adoption_contract_version_stale")
+    if candidate.evidence_contract_version != _EVIDENCE_CONTRACT_VERSION:
+        return reject("evidence_contract_version_stale")
+    if candidate.readiness_version != _READINESS_VERSION:
+        return reject("readiness_version_stale")
+    expected_scope = (
+        candidate.snapshot_id, candidate.employer_scope, candidate.parser_mode,
+        candidate.authoritative_standard_item_id,
+        *candidate.physical_label_component_ids,
+        candidate.physical_value_id, candidate.enumerated_candidate_id,
+    )
+    if (candidate.evidence_closure_status != "closed"
+            or candidate.scope_binding != expected_scope):
+        return reject("ownership_candidate_scope_binding_invalid")
+    if candidate.portable_claim_id != _portable_production_claim_identity(
+        candidate.snapshot_id,
+        candidate.parser_mode,
+        candidate.authoritative_standard_item_id,
+        candidate.physical_label_component_ids,
+        candidate.physical_value_id,
+        candidate.generator_path,
+        candidate.enumerated_candidate_id,
+        "authoritative_standard_field",
+    ):
+        return reject("ownership_candidate_identity_invalid")
+    if binding.binding_version != _PLAN_BINDING_VERSION:
+        return reject("plan_binding_version_stale")
+    if not binding.source_alignment_closed:
+        return reject("source_alignment_unclosed")
+    if binding.review_authority_contaminated:
+        return reject("review_authority_contamination")
+    if (plan.status != "ready" or plan.eligibility != "eligible"
+            or plan.reason != "safe_new_statement"
+            or plan.duplicate.status != "new"):
+        return reject("write_plan_not_authoritative_ready")
+    if (binding.portable_claim_id != candidate.portable_claim_id
+            or binding.snapshot_id != candidate.snapshot_id
+            or binding.parser_mode != candidate.parser_mode
+            or binding.employer_scope != candidate.employer_scope
+            or binding.authoritative_standard_item_id
+            != candidate.authoritative_standard_item_id
+            or binding.enumerated_candidate_id != candidate.enumerated_candidate_id):
+        return reject("ownership_candidate_scope_mismatch")
+    if (plan.identity.employer_id != binding.employer_scope
+            or plan.identity.source_file_id != binding.source_file_id
+            or plan.identity.content_hash != binding.content_hash
+            or not binding.source_file_id or not binding.content_hash):
+        return reject("write_plan_source_or_employer_mismatch")
+    matching_rows = tuple(
+        row.as_dict() for row in plan.planned_item_rows
+        if row.as_dict().get("standard_item_id")
+        == binding.authoritative_standard_item_id
+    )
+    if len(matching_rows) != 1:
+        return reject("write_plan_field_relation_mismatch")
+    row = matching_rows[0]
+    if (row.get("needs_review") or row.get("review_status") == "pending"):
+        return reject("write_plan_review_contamination")
+    if row.get("value") is None or row.get("value") != binding.authoritative_value:
+        return reject("write_plan_value_mismatch")
+    commitment = _value_commitment(local_key, candidate, binding.authoritative_value)
+    if commitment is None:
+        return reject("attestation_key_invalid")
+    attestation_id = _stable_claim_digest((
+        _ATTESTATION_VERSION,
+        candidate.portable_claim_id,
+        candidate.snapshot_id,
+        candidate.parser_mode,
+        candidate.employer_scope,
+        candidate.authoritative_standard_item_id,
+        plan.identity.statement_id,
+        plan.identity.source_file_id,
+        plan.identity.content_hash,
+        commitment,
+    ))
+    return PayrollOwnershipAttestationEvaluation(
+        True,
+        "ownership_write_plan_attestation_closed",
+        PayrollOwnershipAttestation(
+            attestation_id,
+            candidate.portable_claim_id,
+            candidate.snapshot_id,
+            candidate.parser_mode,
+            candidate.employer_scope,
+            candidate.authoritative_standard_item_id,
+            plan.identity.statement_id,
+            commitment,
+            _ATTESTATION_VERSION,
+        ),
     )
 
 
