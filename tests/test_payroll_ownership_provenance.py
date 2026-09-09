@@ -5,9 +5,11 @@ from app.payroll_ocr import PositionedText
 from app import payroll_parser
 from app.payroll_diagnostic_evidence import observe_tokens
 from app.payroll_ownership_provenance import (
-    CandidateClaim, assess_ownership, capture_candidate_enumeration,
-    diagnose_incomplete_ownership, reconstruct_consumption,
-    trace_incomplete_ownership, verify_candidate_enumeration,
+    CandidateClaim, _portable_production_claim_identity,
+    analyze_successful_claim_authority, assess_ownership,
+    capture_candidate_enumeration, diagnose_incomplete_ownership,
+    reconstruct_consumption, trace_incomplete_ownership,
+    verify_candidate_enumeration,
 )
 from app.payroll_parser import parse_positioned_items
 
@@ -429,3 +431,144 @@ def test_candidate_observer_does_not_exclude_review_candidates_or_change_output(
     assert assess_ownership(
         observed, reconstruct_consumption(observed), claims,
     ) == ownership_before
+
+
+def authority_diagnostic(tokens, parser_mode="ocr"):
+    observed = candidate_snapshot(tokens, parser_mode=parser_mode)
+    provenance = reconstruct_consumption(observed)
+    ledger = capture_candidate_enumeration(observed)
+    return observed, provenance, ledger, analyze_successful_claim_authority(
+        observed, provenance, ledger,
+    )
+
+
+def test_field_authority_distinguishes_standard_from_snapshot_success_only():
+    _standard_snapshot, _standard_provenance, _standard_ledger, standard = (
+        authority_diagnostic((
+            token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+        ))
+    )
+    standard_claim = standard.claims[0]
+    assert standard_claim.authority_result == "authoritative_standard_field"
+    assert standard_claim.portable_claim_id is not None
+    assert standard_claim.final_status == "AUTHORITY_CLOSED"
+
+    _fallback_snapshot, _fallback_provenance, _fallback_ledger, fallback = (
+        authority_diagnostic((
+            token("独自手当", 0, 20, width=40), token("1,234", 50, 20),
+        ))
+    )
+    fallback_claim = fallback.claims[0]
+    assert fallback_claim.authority_result == "snapshot_success_only"
+    assert fallback_claim.authority_source == "storage_unknown_with_value_guard"
+    assert fallback_claim.portable_claim_id is None
+    assert fallback_claim.final_status == "BLOCKED"
+
+
+def test_portable_claim_identity_does_not_use_occurrence_or_iteration_order():
+    arguments = (
+        "snapshot", "ocr", "basic_pay", ("label-a", "label-b"),
+        "value", "horizontal", "candidate",
+        "authoritative_standard_field",
+    )
+    first = _portable_production_claim_identity(*arguments)
+    # No parser item occurrence or list position is accepted by the identity
+    # contract, so replay iteration order cannot enter the digest.
+    second = _portable_production_claim_identity(*arguments)
+    assert first == second
+
+
+def test_same_raw_text_at_different_physical_occurrences_cannot_collide():
+    first, _p1, _l1, first_diagnostic = authority_diagnostic((
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+    ))
+    second, _p2, _l2, second_diagnostic = authority_diagnostic((
+        token("基本給", 200, 20, width=30), token("1,234", 240, 20),
+    ))
+    assert first.token_ids != second.token_ids
+    assert (first_diagnostic.claims[0].portable_claim_id
+            != second_diagnostic.claims[0].portable_claim_id)
+
+
+def test_missing_field_authority_never_issues_production_claim_identity():
+    assert _portable_production_claim_identity(
+        "snapshot", "ocr", None, ("label",), "value",
+        "horizontal", "candidate", "snapshot_success_only",
+    ) is None
+
+
+def test_success_and_review_dependencies_are_typed_without_ground_truth_flow():
+    _observed, _provenance, _ledger, diagnostic = authority_diagnostic((
+        token("基本給", 0, 20, width=30),
+        token("所得税", 55, 20, width=30),
+        token("1,234", 100, 20, width=30),
+    ))
+    successful = next(
+        claim for claim in diagnostic.claims
+        if claim.authority_result == "authoritative_standard_field"
+    )
+    assert successful.review_isolation == "closed"
+    assert successful.shared_physical_evidence_count >= 1
+    assert any(
+        "production_success_dependency" in edge.edge_types
+        and "review_dependency" in edge.edge_types
+        and "shared_physical_evidence" in edge.edge_types
+        for edge in successful.dependency_edges
+    )
+    # Removing the diagnostic review graph cannot alter field authority or the
+    # already-issued identity; review truth is not an authority input.
+    without_review_trace = replace(successful, dependency_edges=())
+    assert without_review_trace.authority_result == successful.authority_result
+    assert without_review_trace.portable_claim_id == successful.portable_claim_id
+
+
+def test_review_result_object_change_does_not_feed_back_to_successful_result():
+    tokens = (
+        token("基本給", 0, 20, width=30),
+        token("所得税", 55, 20, width=30),
+        token("1,234", 100, 20, width=30),
+    )
+    baseline = parse_positioned_items(tokens, ocr=True)
+    success_before = [item.model_dump() for item in baseline if not item.needs_review]
+    review_item = next(item for item in baseline if item.needs_review)
+    review_item.review_reason_code = "pairing_not_found"
+    assert [item.model_dump() for item in baseline if not item.needs_review] == success_before
+    assert parse_positioned_items(tokens, ocr=True) == parse_positioned_items(
+        tokens, ocr=True,
+    )
+
+
+def test_claim_authority_analyzer_cannot_change_parser_or_ownership_state():
+    tokens = (
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+        token("独自手当", 0, 40, width=40), token("2,345", 50, 40),
+    )
+    observed = candidate_snapshot(tokens)
+    provenance = reconstruct_consumption(observed)
+    ledger = capture_candidate_enumeration(observed)
+    parser_before = tuple(parse_positioned_items(tokens, ocr=True))
+    ownership_before = assess_ownership(observed, provenance)
+
+    analyze_successful_claim_authority(observed, provenance, ledger)
+
+    assert tuple(parse_positioned_items(tokens, ocr=True)) == parser_before
+    assert assess_ownership(observed, provenance) == ownership_before
+
+
+def test_claim_authority_fails_closed_for_stale_or_semantically_ambiguous_evidence():
+    observed, provenance, ledger, _diagnostic = authority_diagnostic((
+        token("基本給", 0, 20, width=30), token("1,234", 40, 20),
+    ))
+    stale = replace(provenance, snapshot_id="stale")
+    assert not analyze_successful_claim_authority(observed, stale, ledger).valid
+
+    duplicate = replace(
+        ledger.candidates[0], candidate_id="f" * 64,
+    )
+    ambiguous = replace(
+        ledger, candidates=(*ledger.candidates, duplicate),
+        scope_candidate_ids=(*ledger.scope_candidate_ids, duplicate.candidate_id),
+    )
+    result = analyze_successful_claim_authority(observed, provenance, ambiguous)
+    assert not result.valid
+    assert result.claims == ()

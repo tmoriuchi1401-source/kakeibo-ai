@@ -227,6 +227,47 @@ unchanged and were not omitted from candidate accounting. This closes candidate
 enumeration evidence only; it does not re-evaluate adoption readiness or resolve
 field authority, review isolation, or portable logical-field identity.
 
+### Successful-claim authority boundary
+
+`analyze_successful_claim_authority` is a read-only three-gate diagnostic over
+an ownership-ready snapshot and a closed candidate-enumeration ledger. It does
+not produce readiness or adoption decisions. Field authority comes only from an
+existing production contract: a parser result with `standard_item_candidate`
+is an `authoritative_standard_field`. A successful parser occurrence without
+that field remains `snapshot_success_only`. Production storage independently
+confirms this boundary: absent an alias or standard candidate it stores no value,
+marks the item uncertain, and uses the `unknown_with_value` review reason. The
+diagnostic does not load aliases or infer that missing authority.
+
+A portable production claim ID is issued only after that authority is present.
+Its deterministic digest binds the immutable snapshot, parser mode, logical
+standard field, ordered physical label-component IDs, physical value occurrence,
+candidate generator path, and enumerated candidate ID. It excludes parser-list
+occurrence, execution order, object identity, temporary path, filename, and raw
+OCR text alone. A snapshot-only success receives only an anonymous diagnostic
+ID and never a portable production claim ID.
+
+Review dependencies are sibling edges, not field-authority inputs. Each necessary
+physical token is typed `production_success_dependency`; when its removal also
+changes review output it additionally receives `review_dependency` and
+`shared_physical_evidence`. Shared evidence is permitted, but no review result or
+unresolved review truth flows into the successful claim. Stale provenance,
+unclosed candidate enumeration, a missing selected relation, incomplete physical
+mapping, or semantic ambiguity fails the diagnostic closed.
+
+The anonymous P1/P2 replay reproduced all five successful mappings. The standard
+mapping was the positive control: existing parser/storage authority, a portable
+ID, closed review-edge isolation, and `AUTHORITY_CLOSED`. The four mappings in
+scope were all `snapshot_success_only`, sourced from the production
+`unknown_with_value` guard. All four had closed physical/counterfactual/candidate
+evidence and closed typed review isolation, including explicit shared physical
+edges, but none received a portable production claim ID; all remained `BLOCKED`
+pending authoritative field or alias ground truth. This adds no meaning to the
+98 review/non-success ground-truth-required dependencies and changes no ownership
+state. It shows that strengthening identity cannot repair missing semantic
+authority: fallback successful occurrences are observations, not production
+ownership adoption claims.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table

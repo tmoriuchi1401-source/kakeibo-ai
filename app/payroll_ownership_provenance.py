@@ -272,6 +272,306 @@ class CandidateEnumerationVerification:
     hidden_candidate_detected: bool
 
 
+@dataclass(frozen=True)
+class ClaimDependencyEdge:
+    """Typed diagnostic edge; it carries no semantic or review authority."""
+    token_id: str = field(repr=False)
+    edge_types: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SuccessfulClaimAuthorityTrace:
+    """Three-gate analysis for one successful mapping, never an adoption result."""
+    diagnostic_claim_id: str
+    current_field_type: str
+    authority_source: str
+    authority_result: str
+    portable_claim_id: str | None = field(repr=False)
+    dependency_edges: tuple[ClaimDependencyEdge, ...] = field(repr=False)
+    review_dependency_count: int
+    shared_physical_evidence_count: int
+    review_isolation: str
+    unresolved_semantic_dependency: str | None
+    final_status: str
+
+
+@dataclass(frozen=True)
+class SuccessfulClaimAuthorityDiagnostic:
+    """Snapshot-local aggregate with no mutation, writer, or adoption capability."""
+    snapshot_id: str = field(repr=False)
+    valid: bool
+    reason_code: str
+    claims: tuple[SuccessfulClaimAuthorityTrace, ...] = field(repr=False)
+
+    def safe_dict(self):
+        return {
+            "valid": self.valid,
+            "reason_code": self.reason_code,
+            "claim_count": len(self.claims),
+            "authority_results": dict(sorted(Counter(
+                claim.authority_result for claim in self.claims
+            ).items())),
+            "review_isolation": dict(sorted(Counter(
+                claim.review_isolation for claim in self.claims
+            ).items())),
+            "final_statuses": dict(sorted(Counter(
+                claim.final_status for claim in self.claims
+            ).items())),
+            "portable_claim_count": sum(
+                claim.portable_claim_id is not None for claim in self.claims
+            ),
+        }
+
+
+def _stable_claim_digest(payload):
+    return hashlib.sha256(json.dumps(
+        payload, ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+
+
+def _portable_production_claim_identity(
+    snapshot_id, parser_mode, logical_field, label_ids, value_id,
+    generator_path, candidate_id, authority_result,
+):
+    """Issue an ID only after existing production field authority is proven."""
+    if authority_result != "authoritative_standard_field":
+        return None
+    if not all((snapshot_id, parser_mode, logical_field, label_ids, value_id,
+                generator_path, candidate_id)):
+        return None
+    return _stable_claim_digest((
+        "payroll-production-ownership-claim-v1",
+        snapshot_id,
+        parser_mode,
+        logical_field,
+        tuple(label_ids),
+        value_id,
+        generator_path,
+        candidate_id,
+    ))
+
+
+def _successful_mapping_traces(snapshot, baseline, effects, ocr_mode):
+    """Build physical successful mappings independently of ownership state."""
+    baseline_success = Counter(
+        _parser_item_signature(item) for item in baseline if not item.needs_review
+    )
+    label_parts_by_signature = {}
+    if ocr_mode:
+        for label, indexes in _ocr_parser_labels_with_components(snapshot.tokens):
+            part_ids = tuple(
+                snapshot.token_ids[index]
+                for index in indexes
+                if 0 <= index < len(snapshot.token_ids)
+            )
+            key = (label.page, label.x, label.y, compact(label.text))
+            label_parts_by_signature.setdefault(key, set()).add(part_ids)
+    else:
+        for token_id, token in zip(snapshot.token_ids, snapshot.tokens):
+            label_parts_by_signature.setdefault(
+                (token.page, token.x, token.y, compact(token.text)), set(),
+            ).add((token_id,))
+
+    mappings = []
+    for occurrence, item in enumerate(baseline):
+        if item.needs_review:
+            continue
+        signature = _parser_item_signature(item)
+        label_key = (item.page, item.x, item.y, compact(item.raw_item_name))
+        label_options = {
+            parts for parts in label_parts_by_signature.get(label_key, set()) if parts
+        }
+        label_ids = next(iter(label_options)) if len(label_options) == 1 else ()
+        dependency_ids = tuple(
+            token_id for token_id in snapshot.token_ids
+            if signature in effects[token_id][0]
+        )
+        value_ids = tuple(
+            token_id for token_id, token in zip(snapshot.token_ids, snapshot.tokens)
+            if (token_id in dependency_ids and item.raw_value is not None
+                and token.page == item.page and token.text == item.raw_value)
+        )
+        value_id = value_ids[0] if len(value_ids) == 1 else None
+        logical_field = (
+            item.standard_item_candidate
+            or f"snapshot_success_occurrence:{occurrence}"
+        )
+        complete = bool(
+            len(label_options) == 1
+            and value_id is not None
+            and baseline_success[signature] == 1
+            and all(token_id in dependency_ids for token_id in label_ids)
+            and value_id in dependency_ids
+            and not any(token_id in snapshot.identity_ambiguous
+                        for token_id in (*label_ids, value_id))
+        )
+        if complete:
+            reason = "successful_mapping_counterfactual_closed"
+        elif len(label_options) != 1:
+            reason = "logical_label_component_provenance_incomplete"
+        elif value_id is None:
+            reason = "successful_value_occurrence_incomplete"
+        elif baseline_success[signature] != 1:
+            reason = "successful_fact_occurrence_ambiguous"
+        elif any(token_id in snapshot.identity_ambiguous
+                 for token_id in (*label_ids, value_id)):
+            reason = "successful_physical_identity_ambiguous"
+        else:
+            reason = "successful_counterfactual_dependency_incomplete"
+        mappings.append(SuccessfulMappingTrace(
+            occurrence, logical_field, tuple(label_ids), value_id,
+            dependency_ids, complete, reason,
+        ))
+    return tuple(mappings)
+
+
+def analyze_successful_claim_authority(snapshot, provenance, candidate_ledger):
+    """Analyze field authority, portable identity and review-edge isolation.
+
+    The parser is replayed read-only. Review results and ground truth are never
+    inputs to field authority or claim identity. A successful unmapped item stays
+    snapshot-local because production storage explicitly guards it as
+    ``unknown_with_value``.
+    """
+    parser_mode = getattr(snapshot, "parser_mode", "pdf")
+    provenance_valid = (
+        provenance.snapshot_id == snapshot.snapshot_id
+        and provenance.token_count == len(snapshot.token_ids)
+        and provenance.source_materialization_matches
+        and provenance.page_scope_complete
+        and provenance.success_set_complete
+    )
+    enumeration = verify_candidate_enumeration(snapshot, candidate_ledger)
+    if not provenance_valid or not enumeration.complete:
+        reason = (
+            "claim_source_or_success_replay_unverified"
+            if not provenance_valid else "claim_candidate_enumeration_unverified"
+        )
+        return SuccessfulClaimAuthorityDiagnostic(
+            snapshot.snapshot_id, False, reason, (),
+        )
+
+    ocr_mode = parser_mode == "ocr"
+    baseline = tuple(parse_positioned_items(
+        snapshot.tokens, ocr=ocr_mode,
+    ))
+    baseline_success = Counter(
+        _parser_item_signature(item) for item in baseline if not item.needs_review
+    )
+    baseline_review = Counter(
+        _parser_item_signature(item) for item in baseline if item.needs_review
+    )
+    effects = {}
+    for index, token_id in enumerate(snapshot.token_ids):
+        replay = tuple(parse_positioned_items(
+            snapshot.tokens[:index] + snapshot.tokens[index + 1:], ocr=ocr_mode,
+        ))
+        replay_success = Counter(
+            _parser_item_signature(item) for item in replay if not item.needs_review
+        )
+        replay_review = Counter(
+            _parser_item_signature(item) for item in replay if item.needs_review
+        )
+        effects[token_id] = (
+            frozenset(
+                signature for signature, count in baseline_success.items()
+                if replay_success[signature] < count
+            ),
+            replay_review != baseline_review,
+        )
+    mappings = _successful_mapping_traces(
+        snapshot, baseline, effects, ocr_mode,
+    )
+    claims = []
+    for mapping in mappings:
+        if not mapping.complete or not (0 <= mapping.item_occurrence < len(baseline)):
+            continue
+        item = baseline[mapping.item_occurrence]
+        if item.needs_review:
+            continue
+        selected = tuple(
+            candidate for candidate in candidate_ledger.candidates
+            if candidate.selected
+            and candidate.label_component_ids == mapping.label_component_ids
+            and candidate.value_token_id == mapping.value_token_id
+        )
+        relation = selected[0] if len(selected) == 1 else None
+        field_type = (
+            "authoritative_standard_field"
+            if item.standard_item_candidate is not None
+            else "snapshot_success_only"
+        )
+        authority_source = (
+            "parser_standard_item_candidate_and_storage_contract"
+            if field_type == "authoritative_standard_field"
+            else "storage_unknown_with_value_guard"
+        )
+        authority_result = field_type
+
+        edges = []
+        review_dependency_count = 0
+        shared_count = 0
+        for token_id in mapping.counterfactual_dependency_ids:
+            edge_types = ["production_success_dependency"]
+            if effects[token_id][1]:
+                edge_types.extend(("review_dependency", "shared_physical_evidence"))
+                review_dependency_count += 1
+                shared_count += 1
+            edges.append(ClaimDependencyEdge(token_id, tuple(edge_types)))
+
+        # Review is an output sibling, not an input to parser field selection.
+        # Shared tokens remain explicit edges; no review truth is copied into the
+        # successful claim. This is structural isolation, not semantic approval.
+        review_isolation = (
+            "closed" if len(edges) == len(mapping.counterfactual_dependency_ids)
+            else "indeterminate"
+        )
+        portable_id = None if relation is None else _portable_production_claim_identity(
+            snapshot.snapshot_id,
+            parser_mode,
+            item.standard_item_candidate,
+            mapping.label_component_ids,
+            mapping.value_token_id,
+            relation.generator_path,
+            relation.candidate_id,
+            authority_result,
+        )
+        unresolved = (
+            None if authority_result == "authoritative_standard_field"
+            else "authoritative_field_or_alias_ground_truth_required"
+        )
+        if relation is None or review_isolation != "closed":
+            final_status = "INDETERMINATE"
+        elif authority_result != "authoritative_standard_field" or portable_id is None:
+            final_status = "BLOCKED"
+        else:
+            final_status = "AUTHORITY_CLOSED"
+        diagnostic_id = _stable_claim_digest((
+            "payroll-snapshot-success-diagnostic-v1",
+            snapshot.snapshot_id,
+            tuple(mapping.label_component_ids),
+            mapping.value_token_id,
+            relation.candidate_id if relation is not None else None,
+        ))[:10]
+        claims.append(SuccessfulClaimAuthorityTrace(
+            diagnostic_id,
+            field_type,
+            authority_source,
+            authority_result,
+            portable_id,
+            tuple(edges),
+            review_dependency_count,
+            shared_count,
+            review_isolation,
+            unresolved,
+            final_status,
+        ))
+    return SuccessfulClaimAuthorityDiagnostic(
+        snapshot.snapshot_id, True, "successful_claim_authority_analyzed",
+        tuple(claims),
+    )
+
+
 def _candidate_identity(snapshot_id, path, label_ids, value_id):
     payload = json.dumps(
         ("payroll-parser-candidate-v1", snapshot_id, path, label_ids, value_id),
