@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import app.medical_payment_level2_shadow as level2
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 from app.medical_payment_level2_shadow import (
     classify_structural_relation,
@@ -174,6 +175,71 @@ def test_malformed_numeric_evidence_blocks(bad):
     assert count(source) == 0
 
 
+def test_malformed_blocker_diagnostic_records_multiple_geometry_flags_and_categories():
+    source = observation(region("支払額", 20, 500, 80),
+                         region("自費 1.234", 105, 500, 20),
+                         region("1234円", 140, 500, 60))
+    result = evaluate_level2_payment_shadow(source)
+    assert not result.candidates and result.malformed_blocked_group_count == 1
+    assert result.malformed_blockers == (
+        level2.MalformedNumericBlockerDiagnostic(
+            geometry_flags=("BETWEEN_TARGET", "LABEL_TO_BLOCKER_STRONG"),
+            context_category="PAYMENT_CONTEXT",
+            confidence_band="HIGH",
+            parser_rejection_class="DECIMAL_OR_DOT_LIKE",
+        ),
+    )
+
+
+def test_reverse_only_non_payment_context_is_observable_without_changing_block():
+    source = observation(region("12O4", 100, 40, 80),
+                         region("支払額", 100, 100, 80),
+                         region("1234円", 220, 100, 80))
+    result = evaluate_level2_payment_shadow(source)
+    diagnostic = result.malformed_blockers[0]
+    assert not result.candidates and result.blocked_competitor_count == 1
+    assert diagnostic.geometry_flags == ("BLOCKER_TO_LABEL_STRONG",)
+    assert diagnostic.context_category == "NO_PAYMENT_CONTEXT"
+    assert diagnostic.parser_rejection_class == "OCR_ALPHA_CONTAMINATION"
+
+
+@pytest.mark.parametrize(("bad", "expected"), [
+    ("1,23,4", "MALFORMED_GROUPING"),
+    ("-1234", "SIGN_OR_PREFIX"),
+    ("12O4", "OCR_ALPHA_CONTAMINATION"),
+    ("1.234", "DECIMAL_OR_DOT_LIKE"),
+    ("12/34", "OTHER_UNKNOWN"),
+])
+def test_parser_rejection_class_is_data_minimized(bad, expected):
+    item = observation(region(bad, 100, 100)).regions[0]
+    assert level2._malformed_parser_rejection_class(item) == expected
+
+
+@pytest.mark.parametrize(("confidence", "expected"), [
+    (.96, "HIGH"), (.70, "MID"), (.69, "LOW"), (None, "UNKNOWN"),
+])
+def test_diagnostic_confidence_bands_do_not_affect_thresholds(confidence, expected):
+    item = observation(region("1.234", 100, 100)).regions[0]
+    item = replace(item, confidence=confidence)
+    assert level2._malformed_confidence_band(item) == expected
+
+
+def test_diagnostic_collection_cannot_change_candidate_or_block_semantics(monkeypatch):
+    source = observation(region("支払額", 20, 500, 80), region("1.234", 105, 500, 20),
+                         region("1234円", 140, 500, 60))
+    before = evaluate_level2_payment_shadow(source)
+    monkeypatch.setattr(level2, "_build_malformed_blocker_diagnostics", lambda *args: ())
+    after = evaluate_level2_payment_shadow(source)
+    semantic = lambda result: (
+        len(result.candidates), result.blocked_competitor_count,
+        result.blocked_negative_context_count, result.ambiguous_count,
+        result.proposal_only_count, result.incomplete_count,
+        result.unresolved_competitor_count, result.payment_role_evidence_completeness,
+    )
+    assert semantic(before) == semantic(after)
+    assert len(before.malformed_blockers) == 1 and not after.malformed_blockers
+
+
 def test_unrelated_malformed_numeric_does_not_globally_veto_summary():
     assert count(valid(region("1.234", 400, 100))) == 1
 
@@ -219,6 +285,19 @@ def test_output_and_repr_are_data_minimized():
         "blocked_negative_context_count", "ambiguous_count", "proposal_only_count",
         "incomplete_count", "unresolved_competitor_count",
         "same_amount_competitor_count",
+        "malformed_blocked_group_count", "malformed_blocker_count",
+        "malformed_geometry_between_target",
+        "malformed_geometry_label_to_blocker_strong",
+        "malformed_geometry_label_to_blocker_uncertain",
+        "malformed_geometry_blocker_to_label_strong",
+        "malformed_geometry_blocker_to_label_uncertain",
+        "malformed_context_payment_context", "malformed_context_no_payment_context",
+        "malformed_context_context_unknown",
+        "malformed_confidence_high", "malformed_confidence_mid",
+        "malformed_confidence_low", "malformed_confidence_unknown",
+        "malformed_rejection_malformed_grouping", "malformed_rejection_sign_or_prefix",
+        "malformed_rejection_ocr_alpha_contamination",
+        "malformed_rejection_decimal_or_dot_like", "malformed_rejection_other_unknown",
         "payment_role_evidence_complete", "materialization_stable", "evaluation_failed"}
 
 

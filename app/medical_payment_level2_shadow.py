@@ -60,6 +60,31 @@ class MedicalPaymentShadowCandidate:
     observation_reference: tuple[int, ...] = field(default=(), repr=False)
 
 
+MalformedGeometryFlag = Literal[
+    "BETWEEN_TARGET",
+    "LABEL_TO_BLOCKER_STRONG",
+    "LABEL_TO_BLOCKER_UNCERTAIN",
+    "BLOCKER_TO_LABEL_STRONG",
+    "BLOCKER_TO_LABEL_UNCERTAIN",
+]
+
+
+@dataclass(frozen=True)
+class MalformedNumericBlockerDiagnostic:
+    """Anonymous metadata recorded only after an existing blocker fires."""
+
+    geometry_flags: tuple[MalformedGeometryFlag, ...]
+    context_category: Literal["PAYMENT_CONTEXT", "NO_PAYMENT_CONTEXT", "CONTEXT_UNKNOWN"]
+    confidence_band: Literal["HIGH", "MID", "LOW", "UNKNOWN"]
+    parser_rejection_class: Literal[
+        "MALFORMED_GROUPING",
+        "SIGN_OR_PREFIX",
+        "OCR_ALPHA_CONTAMINATION",
+        "DECIMAL_OR_DOT_LIKE",
+        "OTHER_UNKNOWN",
+    ]
+
+
 @dataclass(frozen=True)
 class Level2ShadowEvaluation:
     candidates: tuple[MedicalPaymentShadowCandidate, ...] = field(default=(), repr=False)
@@ -70,6 +95,9 @@ class Level2ShadowEvaluation:
     incomplete_count: int = 0
     unresolved_competitor_count: int = 0
     same_amount_competitor_count: int = 0
+    malformed_blocked_group_count: int = 0
+    malformed_blockers: tuple[MalformedNumericBlockerDiagnostic, ...] = field(
+        default=(), repr=False)
     payment_role_evidence_completeness: Literal["complete", "unresolved", "incomplete"] = "unresolved"
     materialization_stability: Literal["unverified", "confirmed", "conflicting"] = "unverified"
     evaluation_failed: int = 0
@@ -84,6 +112,40 @@ class Level2ShadowEvaluation:
             "incomplete_count": self.incomplete_count,
             "unresolved_competitor_count": self.unresolved_competitor_count,
             "same_amount_competitor_count": self.same_amount_competitor_count,
+            "malformed_blocked_group_count": self.malformed_blocked_group_count,
+            "malformed_blocker_count": len(self.malformed_blockers),
+            **{
+                f"malformed_geometry_{category.lower()}": sum(
+                    category in item.geometry_flags for item in self.malformed_blockers)
+                for category in (
+                    "BETWEEN_TARGET",
+                    "LABEL_TO_BLOCKER_STRONG",
+                    "LABEL_TO_BLOCKER_UNCERTAIN",
+                    "BLOCKER_TO_LABEL_STRONG",
+                    "BLOCKER_TO_LABEL_UNCERTAIN",
+                )
+            },
+            **{
+                f"malformed_context_{category.lower()}": sum(
+                    item.context_category == category for item in self.malformed_blockers)
+                for category in ("PAYMENT_CONTEXT", "NO_PAYMENT_CONTEXT", "CONTEXT_UNKNOWN")
+            },
+            **{
+                f"malformed_confidence_{category.lower()}": sum(
+                    item.confidence_band == category for item in self.malformed_blockers)
+                for category in ("HIGH", "MID", "LOW", "UNKNOWN")
+            },
+            **{
+                f"malformed_rejection_{category.lower()}": sum(
+                    item.parser_rejection_class == category for item in self.malformed_blockers)
+                for category in (
+                    "MALFORMED_GROUPING",
+                    "SIGN_OR_PREFIX",
+                    "OCR_ALPHA_CONTAMINATION",
+                    "DECIMAL_OR_DOT_LIKE",
+                    "OTHER_UNKNOWN",
+                )
+            },
             "payment_role_evidence_complete": int(
                 self.payment_role_evidence_completeness == "complete"),
             "materialization_stable": int(self.materialization_stability == "confirmed"),
@@ -186,6 +248,69 @@ def _blocking_relation(left: TextRegion, right: TextRegion) -> StructuralRelatio
     return reverse if reverse.state != "UNRELATED" else None
 
 
+def _malformed_geometry_flags(
+    label: TextRegion,
+    related: list[tuple[_Numeric, str]],
+    blocker: TextRegion,
+) -> tuple[MalformedGeometryFlag, ...]:
+    flags: list[MalformedGeometryFlag] = []
+    if any(_between(label, item.region, blocker, relation) for item, relation in related):
+        flags.append("BETWEEN_TARGET")
+    direct = classify_structural_relation(label, blocker)
+    if direct.state in {"STRONG", "UNCERTAIN"}:
+        flags.append(f"LABEL_TO_BLOCKER_{direct.state}")  # type: ignore[arg-type]
+    reverse = classify_structural_relation(blocker, label)
+    if reverse.state in {"STRONG", "UNCERTAIN"}:
+        flags.append(f"BLOCKER_TO_LABEL_{reverse.state}")  # type: ignore[arg-type]
+    return tuple(flags)
+
+
+def _malformed_context_category(region: TextRegion) -> str:
+    compact = _compact_ocr_token(region.text)
+    if not compact or set(region.issues) & {"recognition_missing", "blank_text"}:
+        return "CONTEXT_UNKNOWN"
+    return "PAYMENT_CONTEXT" if _is_possible_payment(region) else "NO_PAYMENT_CONTEXT"
+
+
+def _malformed_confidence_band(region: TextRegion) -> str:
+    if region.confidence is None:
+        return "UNKNOWN"
+    if region.confidence >= _MIN_HIGH_CONFIDENCE:
+        return "HIGH"
+    if region.confidence >= 0.70:
+        return "MID"
+    return "LOW"
+
+
+def _malformed_parser_rejection_class(region: TextRegion) -> str:
+    text = unicodedata.normalize("NFKC", region.text).strip()
+    if text.startswith(("+", "-")):
+        return "SIGN_OR_PREFIX"
+    if any("A" <= value <= "Z" or "a" <= value <= "z" for value in text):
+        return "OCR_ALPHA_CONTAMINATION"
+    if any(value in text for value in ".。・"):
+        return "DECIMAL_OR_DOT_LIKE"
+    if "," in text:
+        return "MALFORMED_GROUPING"
+    return "OTHER_UNKNOWN"
+
+
+def _build_malformed_blocker_diagnostics(
+    label: TextRegion,
+    related: list[tuple[_Numeric, str]],
+    blockers: list[TextRegion],
+) -> tuple[MalformedNumericBlockerDiagnostic, ...]:
+    return tuple(
+        MalformedNumericBlockerDiagnostic(
+            geometry_flags=_malformed_geometry_flags(label, related, blocker),
+            context_category=_malformed_context_category(blocker),  # type: ignore[arg-type]
+            confidence_band=_malformed_confidence_band(blocker),  # type: ignore[arg-type]
+            parser_rejection_class=_malformed_parser_rejection_class(blocker),  # type: ignore[arg-type]
+        )
+        for blocker in blockers
+    )
+
+
 def _is_negative(region: TextRegion) -> bool:
     compact = _compact_ocr_token(region.text)
     return any(value in compact for value in _EXCLUDED_AMOUNT_CONTEXT + _LOCAL_NEGATIVE) or bool(
@@ -241,6 +366,8 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
 
     eligible: list[tuple[list[_Numeric], str]] = []
     negative_blocks = competitor_blocks = unresolved_competitors = same_amount_competitors = 0
+    malformed_blocked_groups = 0
+    malformed_diagnostics: list[MalformedNumericBlockerDiagnostic] = []
     for group in groups.values():
         uncertain_positive = [item for item in group
                               if classify_structural_relation(label, item.region).state == "UNCERTAIN"]
@@ -274,12 +401,18 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
             competitor_blocks += 1
             continue
         malformed_blockers = [(other, _blocking_relation(label, other)) for other in malformed]
-        if any(_between(label, item.region, other, relation)
-               or other_relation is not None
-               for item, _ in related for other, other_relation in malformed_blockers):
+        effective_malformed = [
+            other for other, other_relation in malformed_blockers
+            if any(_between(label, item.region, other, relation) for item, _ in related)
+            or other_relation is not None
+        ]
+        if effective_malformed:
             unresolved_competitors += int(any(r is not None and r.state == "UNCERTAIN"
                                               for _, r in malformed_blockers))
             competitor_blocks += 1
+            malformed_blocked_groups += 1
+            malformed_diagnostics.extend(
+                _build_malformed_blocker_diagnostics(label, related, effective_malformed))
             continue
         local_regions = [r for r in observation.regions
                          if r.ordinal not in {label.ordinal, *(i.ordinal for i in group)}
@@ -310,6 +443,8 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
             proposal_only_count=int(bool(numerics)),
             unresolved_competitor_count=unresolved_competitors,
             same_amount_competitor_count=same_amount_competitors,
+            malformed_blocked_group_count=malformed_blocked_groups,
+            malformed_blockers=tuple(malformed_diagnostics),
             payment_role_evidence_completeness="unresolved",
         )
     group, relation = eligible[0]
@@ -324,6 +459,8 @@ def _evaluate(observation: OcrObservation, classification: str) -> Level2ShadowE
         blocked_negative_context_count=negative_blocks,
         unresolved_competitor_count=unresolved_competitors,
         same_amount_competitor_count=same_amount_competitors,
+        malformed_blocked_group_count=malformed_blocked_groups,
+        malformed_blockers=tuple(malformed_diagnostics),
         payment_role_evidence_completeness="complete",
     )
 
@@ -348,12 +485,17 @@ def evaluate_materialization_stable_level2_shadow(
     negative = sum(item.blocked_negative_context_count for item in results)
     unresolved = sum(item.unresolved_competitor_count for item in results)
     same_amount = sum(item.same_amount_competitor_count for item in results)
+    malformed_groups = sum(item.malformed_blocked_group_count for item in results)
+    malformed_diagnostics = tuple(
+        diagnostic for item in results for diagnostic in item.malformed_blockers)
     if (blocked or negative or unresolved or any(len(item.candidates) != 1 for item in results)):
         return Level2ShadowEvaluation(
             blocked_competitor_count=blocked,
             blocked_negative_context_count=negative,
             unresolved_competitor_count=unresolved,
             same_amount_competitor_count=same_amount,
+            malformed_blocked_group_count=malformed_groups,
+            malformed_blockers=malformed_diagnostics,
             payment_role_evidence_completeness="unresolved",
             materialization_stability="conflicting",
         )
