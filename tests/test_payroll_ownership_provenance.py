@@ -3,7 +3,10 @@ from dataclasses import replace
 
 from app.payroll_ocr import PositionedText
 from app.payroll_diagnostic_evidence import observe_tokens
-from app.payroll_ownership_provenance import CandidateClaim, assess_ownership, reconstruct_consumption
+from app.payroll_ownership_provenance import (
+    CandidateClaim, assess_ownership, diagnose_incomplete_ownership,
+    reconstruct_consumption,
+)
 from app.payroll_parser import parse_positioned_items
 
 KEY = b"synthetic-local-evaluation-key-0000"
@@ -90,3 +93,45 @@ def test_counterfactual_diagnostic_does_not_change_production_result():
     observed = snapshot(tokens)
     reconstruct_consumption(observed)
     assert parse_positioned_items(tokens) == before
+
+
+def test_incomplete_reason_taxonomy_is_anonymous_and_does_not_promote_tokens():
+    tokens = (
+        token("基本", 0, 20, width=25, confidence=90),
+        token("給", 28, 20, width=10, confidence=55),
+        token("1,234", 45, 20, width=30, confidence=90),
+        token("通勤手当", 0, 100, width=40, confidence=90),
+        token("|", 200, 200, width=5, height=50, confidence=90),
+    )
+    observed = observe_tokens(tokens, local_key=KEY, parser_mode="ocr")
+    before = parse_positioned_items(tokens, ocr=True)
+    provenance = reconstruct_consumption(observed)
+    claims = tuple(CandidateClaim("all", token_id) for token_id in observed.token_ids)
+    original = assess_ownership(observed, provenance, claims)
+    diagnostic = diagnose_incomplete_ownership(observed, provenance, claims)
+    counts = {reason.reason_code: reason.count for reason in diagnostic.reasons}
+    assert counts == {
+        "no_decision_effect_observed_parser_observation_or_domain_exclusion_untraced": 1,
+        "non_success_decision_dependency_outside_consumption_ledger": 1,
+        "successful_decision_dependency_role_untyped": 2,
+        "successful_value_counterfactual_present_but_success_ledger_unclosed": 1,
+    }
+    assert diagnostic.mapping_blockers == (("successful_label_identity_ambiguous", 1),)
+    assert diagnostic.instrumentation_resolvable_count == 4
+    assert diagnostic.semantic_ground_truth_required_count == 1
+    assert all(value.state == "ledger_incomplete" for value in original.values())
+    assert assess_ownership(observed, provenance, claims) == original
+    assert parse_positioned_items(tokens, ocr=True) == before
+    exported = str(diagnostic.safe_dict())
+    assert "基本" not in exported and "通勤手当" not in exported and "1,234" not in exported
+
+
+def test_incomplete_taxonomy_fails_closed_on_stale_snapshot():
+    observed = snapshot((token("基本給", -30, 40), token("1,234", 20, 40)))
+    provenance = reconstruct_consumption(observed, source_snapshot_id="stale")
+    claims = tuple(CandidateClaim("all", token_id) for token_id in observed.token_ids)
+    diagnostic = diagnose_incomplete_ownership(observed, provenance, claims)
+    assert diagnostic.ledger_incomplete_count == 2
+    assert [(reason.reason_code, reason.count) for reason in diagnostic.reasons] == [
+        ("snapshot_provenance_unverified", 2),
+    ]

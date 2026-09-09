@@ -103,6 +103,49 @@ This ledger describes the unchanged parse_positioned_items output for this
 snapshot, not Sheets, reconciliation, or a different preview's post-processing.
 Those scopes need explicit provenance before claiming complete consumption.
 
+### Ledger-incomplete reason taxonomy
+
+`diagnose_incomplete_ownership` is an aggregate-only, read-only observer over
+the unchanged parser. It removes one physical token at a time and classifies
+only tokens already reported as `ledger_incomplete`. A changed parser result is
+decision-dependency evidence for that snapshot; it does not by itself establish
+value use, semantics, or adoption. An unchanged result is never upgraded to
+unused because filtering, redundancy, and explicit parser-domain exclusion are
+not distinguishable without an observation trace.
+
+The safe report contains only fixed reason codes, counts, percentages, missing-
+evidence descriptions, and mapping-blocker counts. It contains no OCR text,
+coordinates, token locators, source identifiers, or filenames. Existing
+ownership states are not mutated or reclassified.
+
+### Ownership completeness conditions
+
+Ownership completeness is scoped to adoption-relevant parser dependencies and
+candidate claims; it is not equivalent to classifying every OCR token as used
+or unused. A future completeness assertion requires all of the following:
+
+1. Source replay closure: exact source bytes, complete page scope, deterministic
+   OCR, parser-mode equality, and a complete same-snapshot success-set replay.
+2. Physical identity and coordinate closure: every relevant raw occurrence has
+   unique or explicitly ambiguous identity in the verified native pixel frame.
+3. Parser observation closure: each relevant raw token is traced as a logical
+   label component, value, decision context, redundant input, or explicit
+   parser-domain exclusion; unchanged counterfactual output alone is insufficient.
+4. Logical relation closure: every successful logical field maps to all physical
+   label components and its candidate value occurrence, including normalization
+   and OCR label reconstruction provenance.
+5. Counterfactual decision closure: necessary-token results are repeatable and
+   complete for every adoption-relevant success or candidate relation. Dependencies
+   are typed; label/context dependencies are not mislabeled as value consumption.
+6. Relevance and competition closure: the adoption-relevant claim set is complete,
+   every competing candidate is accounted for, and review/non-success relations
+   stay outside adoption unless authoritative semantic/role review closes them.
+
+Only when every relevant gate is pass/fail with no unknown may ownership be
+called complete. Tokens with traced, explicit parser-domain exclusion may remain
+outside the ownership denominator. No condition authorizes production adoption;
+semantics, column membership, review truth, and policy remain separate gates.
+
 ## Independent structure and coordinate evidence
 
 PositionedText currently has text and estimated boxes, not ruling paths, table
