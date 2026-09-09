@@ -73,3 +73,7 @@ Before a production writer can be added in a separate phase, it must persist
 per-candidate transitions, use bounded batches, record write-attempt state
 before sending, require post-write read-back, and preserve
 `outcome_unknown` as non-retryable until a conclusive read.
+
+The sealed safety-layer implementation and its remaining production capability
+requirements are documented in
+[`aupay_card_writer_safety_contract.md`](aupay_card_writer_safety_contract.md).

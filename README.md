@@ -205,6 +205,12 @@ previewはplan作成後にSheets identityをもう一度読み、executor直前�
 詳細な状態遷移、鍵付きaudit reference、deterministic canary contractは
 [`docs/aupay_card_executor_contract.md`](docs/aupay_card_executor_contract.md)を参照。
 
+production writerのwrite-adjacent safety layerは固定source window、target binding、
+persistent HMAC key、attempt journal、exclusive lease、最大100件のbounded batch、
+write前journalとwrite後exact read-backをcontract化している。ただし実transportとCLI入口は
+未接続で、synthetic fake以外は拒否する。詳細は
+[`docs/aupay_card_writer_safety_contract.md`](docs/aupay_card_writer_safety_contract.md)を参照。
+
 カードメールの明細parseはmail-level resultの中でaccepted itemとprivacy-safeなreview
 itemを分離する。正額は `purchase` として正数を保持し、対象明細block自身が
 `-<金額>円(返品)` の形式と返品evidenceを持つ場合だけ `return` として負号を保持する。

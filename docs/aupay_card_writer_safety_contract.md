@@ -1,0 +1,84 @@
+# au PAY card production writer safety contract
+
+This phase implements the write-adjacent safety state machine without exposing
+a production writer. `execute_synthetic_write` rejects any transport not marked
+`synthetic_only`; no CLI command imports or invokes it.
+
+## Immutable source population
+
+`ProductionRunManifest` binds an internally-authorized canonical plan to a UUID,
+an aware plan creation timestamp, and `FixedSourceWindow`. The source window has
+aware start/end timestamps, an IANA timezone, and a query containing matching
+absolute `after:` and `before:` dates. Relative Gmail operators such as
+`newer_than:1y` are rejected. A changed population produces a different keyed
+plan binding and cannot reuse the run manifest.
+
+Production authority remains disabled: manifests in this phase are limited to
+`read_only_preflight` and `synthetic_test`.
+
+## Target and key binding
+
+`TargetBinding` requires a caller-configured spreadsheet ID, worksheet, exact
+header, and binding version. `ReadOnlySheetsTargetInspector` reads the header;
+ID, worksheet, or schema mismatch stops before a write request. IDs are not
+hard-coded and are excluded from dataclass representations.
+
+Production audit/canary stability requires a protected persistent HMAC key of
+at least 32 bytes and a non-empty key ID. The environment provider accepts a
+base64 key and key ID without logging either value. Missing, malformed, or
+ephemeral key material fails closed. Secrets must be supplied by the deployment
+secret store and never committed or written to `.env`.
+
+## Journal and exclusive lease
+
+The attempt journal is mandatory and must declare persistent availability. Each
+attempt records run ID, canonical identity, attempt ID, deterministic batch
+reference, state, timestamp, and reason code. It stores no merchant, email body,
+credential, or token. The enforced transition order is:
+
+1. `pre_read`
+2. `write_attempted` — durably recorded before calling the API
+3. `write_result`
+4. `post_read`
+5. `final`
+
+An exact pre-existing identity may transition directly from `pre_read` to
+`final`. Invalid or time-regressing transitions are rejected.
+
+An exclusive target/run lease is acquired before revalidation and renewed before
+each candidate. A live lease cannot be replaced. An expired lease is stale and
+may be atomically replaced, but the old owner cannot renew or release the new
+lease. Failure to acquire or renew stops execution; there is no lock-bypass
+fallback.
+
+## Batches, writes, and recovery
+
+Batches have a hard ceiling of 100 candidates. A one-item canary uses the same
+keyed deterministic selection as the dry-run executor. The controller does not
+assume batch atomicity and stops the remaining batch as `not_started` after an
+unknown, conflicting, failed, or explicitly retry-eligible outcome.
+
+Every candidate follows pre-read, durable journal, one write request, result
+classification, bounded read-only verification, and final journal state. A
+successful API response never confirms a write. Only one exact read-back row is
+`write_confirmed`.
+
+Write requests are never automatically retried. Timeout, connection loss, HTTP
+ambiguity, or an unexpected transport exception is `outcome_unknown`, followed
+only by bounded reads. Exact presence confirms the write; conclusive absence
+after an ambiguous/not-sent request is `retry_eligible`; unreadable state remains
+`outcome_unknown`. Acknowledged-but-invisible writes remain unknown rather than
+being resent.
+
+`ReadBackPolicy` allows 1–10 deterministic read attempts with a fixed delay
+schedule capped at 30 seconds per interval. Exhausting the window never causes a
+second write request.
+
+## Capability still required in a future phase
+
+The in-memory journal and lease implementations are synthetic contract fakes,
+not production persistence. Before a separately approved one-item canary, a
+durable journal, distributed lease backend, protected stable key, real target
+binding, operational recovery procedure, and separately reviewed real Sheets
+transport must be connected. That future transport must remain unreachable from
+the current CLI until explicit production authorization is added.

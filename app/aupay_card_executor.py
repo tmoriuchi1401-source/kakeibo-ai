@@ -32,6 +32,7 @@ class CandidateState(str, Enum):
     ALREADY_PRESENT = "already_present"
     CONFLICT = "conflict"
     OUTCOME_UNKNOWN = "outcome_unknown"
+    RETRY_ELIGIBLE = "retry_eligible"
     FAILED = "failed"
 
 
@@ -176,18 +177,21 @@ def _candidate_sort_key(candidate: CanonicalApplyCandidate) -> tuple:
     )
 
 
-def _select_candidates(
+def select_canonical_candidates(
     candidates: Sequence[CanonicalApplyCandidate],
     subset: ExecutionSubset,
     audit_key: bytes,
 ) -> tuple[CanonicalApplyCandidate, ...]:
+    """Select a stable keyed subset and restore canonical execution order."""
+    key = _require_audit_key(audit_key)
+    subset.validate()
     ordered = tuple(sorted(candidates, key=_candidate_sort_key))
     if subset.limit is None or subset.limit >= len(ordered):
         return ordered
     ranked = sorted(
         ordered,
         key=lambda candidate: (
-            hmac.new(audit_key, candidate.identity.encode("utf-8"), hashlib.sha256).digest(),
+            hmac.new(key, candidate.identity.encode("utf-8"), hashlib.sha256).digest(),
             _candidate_sort_key(candidate),
         ),
     )[:subset.limit]
@@ -260,7 +264,7 @@ def execute_canonical_apply_plan(
     key = _require_audit_key(audit_key)
     selection = subset or ExecutionSubset()
     selection.validate()
-    selected = _select_candidates(plan.candidates, selection, key)
+    selected = select_canonical_candidates(plan.candidates, selection, key)
 
     candidate_identities = {candidate.identity for candidate in plan.candidates}
     prior_by_identity: dict[str, CandidateState] = {}
