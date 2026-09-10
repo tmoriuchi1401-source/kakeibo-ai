@@ -2,9 +2,12 @@
 
 This phase adds a formal one-shot production-canary capability path. There is no
 CLI command and `PRODUCTION_CAPABILITY_ENABLED` remains false, so there is no
-standing production authority. A caller must use the public issuance and
+standing authority for this historical canary API. A caller must use the public issuance and
 execution APIs with protected repo-external inputs. This implementation phase
-does not execute a real canary or any production write.
+did not itself execute a real canary or any production write. The later,
+separately bounded daily-arrival authority is documented in
+[`aupay_card_recurring_production.md`](aupay_card_recurring_production.md); it
+does not expose or reuse this exact-one human-approval route.
 
 ## Protected audit key
 

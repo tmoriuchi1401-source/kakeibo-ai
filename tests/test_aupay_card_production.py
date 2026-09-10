@@ -431,7 +431,7 @@ def test_real_sheets_transport_is_sealed_and_has_no_arbitrary_range_api():
     assert db.append_calls == []
 
 
-def test_capability_seal_requires_every_scoped_gate_and_cli_has_no_wiring():
+def test_one_shot_canary_remains_unwired_from_cli():
     all_preconditions = CapabilitySealChecks(
         explicit_capability_flag=True,
         persistent_key_available=True,
@@ -452,8 +452,9 @@ def test_capability_seal_requires_every_scoped_gate_and_cli_has_no_wiring():
 
     import app.cli as cli
     source = inspect.getsource(cli)
-    assert "aupay_card_production" not in source
     assert "SealedSheetsCandidateTransport" not in source
+    assert "execute_production_one_shot_canary" not in source
+    assert "issue_production_write_capability" not in source
 
 
 def test_wrong_spreadsheet_binding_fails_before_any_adapter_write():

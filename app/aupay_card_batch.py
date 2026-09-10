@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -306,6 +306,78 @@ class ProtectedBatchApprovalProvider:
 
 
 @dataclass(frozen=True)
+class RecurringAuthorityPolicy:
+    """Narrow standing authority for ordinary au PAY card Gmail arrivals."""
+
+    policy_id: str
+    source: str
+    expected_spreadsheet_id: str = field(repr=False)
+    expected_worksheet: str = "取込データ"
+    allowed_statuses: tuple[str, ...] = ()
+    max_batch_size: int = 0
+    max_messages: int = 0
+    overlap_seconds: int = 0
+    max_window_seconds: int = 0
+    initial_start: datetime = field(default_factory=_now)
+    valid_from: datetime = field(default_factory=_now)
+    expires_at: datetime = field(default_factory=_now)
+    schema_version: int = BATCH_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        times = (self.initial_start, self.valid_from, self.expires_at)
+        if any(value.tzinfo is None or value.utcoffset() is None for value in times):
+            raise RuntimeError("recurring_authority_timezone_required")
+        if (
+            self.schema_version != BATCH_SCHEMA_VERSION
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", self.policy_id)
+            or self.source != "au_pay_card_gmail"
+            or not self.expected_spreadsheet_id
+            or self.expected_worksheet != "取込データ"
+            or not self.allowed_statuses
+            or not set(self.allowed_statuses).issubset(ALLOWED_STATUSES)
+            or len(self.allowed_statuses) != len(set(self.allowed_statuses))
+            or not (1 <= self.max_batch_size <= MAX_BATCH_SIZE)
+            or not (self.max_batch_size <= self.max_messages <= 1000)
+            or not (3600 <= self.overlap_seconds <= 7 * 86400)
+            or not (self.overlap_seconds < self.max_window_seconds <= 31 * 86400)
+            or self.valid_from >= self.expires_at
+        ):
+            raise RuntimeError("recurring_authority_invalid")
+
+
+class ProtectedRecurringAuthorityProvider:
+    """Load a repo-external, source/target/status/bounds-limited policy."""
+
+    def __init__(self, path, *, repo_root):
+        self.path = _external(path, repo_root)
+
+    def __repr__(self) -> str:
+        return "ProtectedRecurringAuthorityProvider(path=<redacted>)"
+
+    def load(self) -> RecurringAuthorityPolicy:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            value = RecurringAuthorityPolicy(
+                policy_id=str(raw["policy_id"]), source=str(raw["source"]),
+                expected_spreadsheet_id=str(raw["expected_spreadsheet_id"]),
+                expected_worksheet=str(raw.get("expected_worksheet", "取込データ")),
+                allowed_statuses=tuple(str(item) for item in raw["allowed_statuses"]),
+                max_batch_size=int(raw["max_batch_size"]),
+                max_messages=int(raw["max_messages"]),
+                overlap_seconds=int(raw["overlap_seconds"]),
+                max_window_seconds=int(raw["max_window_seconds"]),
+                initial_start=datetime.fromisoformat(str(raw["initial_start"])),
+                valid_from=datetime.fromisoformat(str(raw["valid_from"])),
+                expires_at=datetime.fromisoformat(str(raw["expires_at"])),
+                schema_version=int(raw.get("schema_version", BATCH_SCHEMA_VERSION)),
+            )
+            value.validate()
+            return value
+        except Exception as exc:
+            raise RuntimeError("protected_recurring_authority_invalid") from exc
+
+
+@dataclass(frozen=True)
 class BatchCapability:
     capability_id: str
     token: str = field(repr=False)
@@ -432,6 +504,50 @@ def issue_batch_capability(
         str(uuid4()), hashlib.sha256(os.urandom(32)).hexdigest(), manifest.run_id,
         projection.batch_ref, projection.target_ref, approval.approval_reference,
         now, approval.expires_at,
+    )
+    store.issue(capability)
+    return capability
+
+
+def issue_recurring_batch_capability(
+    projection: BatchProjection, manifest: BatchManifest, *, binding: TargetBinding,
+    inspector: ReadOnlySheetsTargetInspector,
+    key_provider: ProtectedAuditKeyProvider,
+    authority_provider: ProtectedRecurringAuthorityProvider,
+    store: SqliteBatchCapabilityStore, now: datetime | None = None,
+) -> BatchCapability:
+    """Issue one short-lived capability under a bounded recurring policy."""
+    now = now or _now()
+    if (
+        type(key_provider) is not ProtectedAuditKeyProvider
+        or type(authority_provider) is not ProtectedRecurringAuthorityProvider
+        or type(store) is not SqliteBatchCapabilityStore
+    ):
+        raise RuntimeError("formal_recurring_authority_required")
+    key = key_provider.load()
+    if key is None:
+        raise RuntimeError("persistent_audit_key_required")
+    policy = authority_provider.load()
+    validate_batch_manifest(projection, manifest, binding=binding, audit_key=key)
+    validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
+    window_seconds = (manifest.source_window.end - manifest.source_window.start).total_seconds()
+    if (
+        not (policy.valid_from <= now < policy.expires_at)
+        or binding.expected_spreadsheet_id != policy.expected_spreadsheet_id
+        or binding.expected_worksheet != policy.expected_worksheet
+        or projection.batch_size > policy.max_batch_size
+        or not set(projection.statuses).issubset(policy.allowed_statuses)
+        or manifest.source_window.timezone_name != "Asia/Tokyo"
+        or window_seconds > policy.max_window_seconds
+        or 'from:kddi-fs.com' not in manifest.source_window.query_representation
+        or 'subject:"【ご利用詳細】au PAY カード"' not in manifest.source_window.query_representation
+    ):
+        raise RuntimeError("recurring_authority_scope_mismatch")
+    capability = BatchCapability(
+        str(uuid4()), hashlib.sha256(os.urandom(32)).hexdigest(), manifest.run_id,
+        projection.batch_ref, projection.target_ref,
+        f"recurring:{policy.policy_id}", now,
+        now + timedelta(seconds=min(120, MAX_CAPABILITY_TTL_SECONDS)),
     )
     store.issue(capability)
     return capability
@@ -624,6 +740,14 @@ def execute_production_batch_once(
             attempt_id, projection.batch_size, projection.batch_size if exact else 0,
             writes, reads, exact,
         )
+    except Exception:
+        history = journal.history(manifest.run_id, attempt_id)
+        if not history or history[-1][0] != "final":
+            journal.append(
+                manifest, attempt_id, "final", "failed",
+                "batch_execution_failed_closed", clock(),
+            )
+        raise
     finally:
         store.seal(capability, terminal_reason)
         if lease is not None:

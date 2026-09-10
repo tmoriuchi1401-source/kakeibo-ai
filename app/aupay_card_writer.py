@@ -46,6 +46,8 @@ TARGET_BINDING_VERSION = 1
 ABSOLUTE_MAX_BATCH_SIZE = 100
 _RELATIVE_QUERY = re.compile(r"(?:newer_than|older_than|newer|older):", re.IGNORECASE)
 _ABSOLUTE_QUERY = re.compile(r"(?:after|before):\d{4}[/-]\d{1,2}[/-]\d{1,2}")
+_EPOCH_AFTER_QUERY = re.compile(r"(?:^|\s)after:(\d{10})(?:\s|$)")
+_EPOCH_BEFORE_QUERY = re.compile(r"(?:^|\s)before:(\d{10})(?:\s|$)")
 
 
 def _utc_now() -> datetime:
@@ -76,13 +78,24 @@ class FixedSourceWindow:
             raise ValueError("source_window_timezone_invalid") from exc
         if _RELATIVE_QUERY.search(self.query_representation):
             raise ValueError("relative_source_window_forbidden")
-        if len(_ABSOLUTE_QUERY.findall(self.query_representation)) < 2:
-            raise ValueError("absolute_source_query_required")
-        expected_after = start.astimezone(source_timezone).strftime("after:%Y/%m/%d")
-        expected_before = end.astimezone(source_timezone).strftime("before:%Y/%m/%d")
-        normalized_query = self.query_representation.replace("-", "/")
-        if expected_after not in normalized_query or expected_before not in normalized_query:
-            raise ValueError("source_window_query_mismatch")
+        epoch_after = _EPOCH_AFTER_QUERY.search(self.query_representation)
+        epoch_before = _EPOCH_BEFORE_QUERY.search(self.query_representation)
+        if epoch_after or epoch_before:
+            if not epoch_after or not epoch_before:
+                raise ValueError("absolute_source_query_required")
+            if (
+                int(epoch_after.group(1)) != int(start.timestamp())
+                or int(epoch_before.group(1)) != int(end.timestamp())
+            ):
+                raise ValueError("source_window_query_mismatch")
+        else:
+            if len(_ABSOLUTE_QUERY.findall(self.query_representation)) < 2:
+                raise ValueError("absolute_source_query_required")
+            expected_after = start.astimezone(source_timezone).strftime("after:%Y/%m/%d")
+            expected_before = end.astimezone(source_timezone).strftime("before:%Y/%m/%d")
+            normalized_query = self.query_representation.replace("-", "/")
+            if expected_after not in normalized_query or expected_before not in normalized_query:
+                raise ValueError("source_window_query_mismatch")
 
 
 @dataclass(frozen=True)

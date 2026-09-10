@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import base64
 import json
 import re
+import sqlite3
 from uuid import uuid4
 
 import pytest
@@ -226,6 +227,14 @@ def test_existing_identity_stops_before_request_and_seals(tmp_path):
         execute(parts)
     assert db.calls == 0
     assert store.state(capability.capability_id) == "sealed"
+    with sqlite3.connect(parts[6].path) as connection:
+        assert connection.execute(
+            "SELECT stage,state,reason FROM batch_events ORDER BY seq DESC LIMIT 1"
+        ).fetchone() == (
+            "final", "failed", "batch_execution_failed_closed",
+        )
+    with sqlite3.connect(parts[7]._path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM writer_leases").fetchone()[0] == 0
 
 
 def test_capability_cannot_dispatch_twice(tmp_path):

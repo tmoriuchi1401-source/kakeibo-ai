@@ -209,8 +209,12 @@ production writerのwrite-adjacent safety layerは固定source window、target b
 persistent HMAC key、attempt journal、exclusive lease、最大100件のbounded batch、
 write前journalとwrite後exact read-backをcontract化している。repo外protected key adapter、
 SQLite durable journal / immutable manifest / cross-process lease、fixed-range Sheets adapter、
-repo外承認fileと短命one-shot capabilityも実装済みである。standing production flagとCLI入口は
-引き続き存在せず、この実装Phaseでは実writeを行わない。
+repo外承認fileと短命one-shot capabilityも実装済みである。人手承認を要するhistorical
+one-shot canaryは引き続きCLIへ公開しない。一方、通常の新着だけを対象とするbounded recurring
+authorityと専用CLIは `card-gmail-recurring` として分離実装している。前回成功endからJSTの
+absolute epoch windowを作り、overlapを既存identityで除外し、new=0ではmanifest/capabilityを
+作成しない。scheduled production、必要secret、failure recoveryの詳細は
+[`docs/aupay_card_recurring_production.md`](docs/aupay_card_recurring_production.md)を参照。
 永続化とsealの詳細は
 [`docs/aupay_card_production_persistence.md`](docs/aupay_card_production_persistence.md)、基本contractは
 [`docs/aupay_card_writer_safety_contract.md`](docs/aupay_card_writer_safety_contract.md)を参照。

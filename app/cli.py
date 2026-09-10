@@ -1,5 +1,8 @@
 from __future__ import annotations
-import argparse, csv, mimetypes, os
+import argparse, csv, json, mimetypes, os
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from .settings import Settings
 from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
@@ -77,6 +80,9 @@ from .google_clients import (
     shipping_backfill_drive_service,
     shipping_backfill_sheets_service,
 )
+from .aupay_card_batch import ProtectedRecurringAuthorityProvider
+from .aupay_card_production import ProtectedAuditKeyProvider
+from .aupay_card_recurring import SqliteRecurringRunState, run_recurring_ingestion
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 
@@ -113,6 +119,11 @@ def main():
     cgi=sub.add_parser("card-gmail-import"); cgi.add_argument("--max-results",type=int,default=100)
     cgpw=sub.add_parser("card-gmail-write-plan-preview"); cgpw.add_argument("--max-results",type=int,default=100)
     cgpa=sub.add_parser("card-gmail-apply-plan-preview"); cgpa.add_argument("--max-results",type=int,default=100)
+    cgr=sub.add_parser("card-gmail-recurring")
+    cgr.add_argument("--state-dir",default=os.getenv("AUPAY_CARD_STATE_DIR", ""))
+    cgr.add_argument("--audit-key-file",default=os.getenv("AUPAY_CARD_AUDIT_KEY_FILE", ""))
+    cgr.add_argument("--authority-file",default=os.getenv("AUPAY_CARD_RECURRING_AUTHORITY_FILE", ""))
+    cgr.add_argument("--dry-run",action="store_true")
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
     aci=sub.add_parser("aupay-csv-import"); aci.add_argument("csv")
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -277,6 +288,51 @@ def main():
         print(AuPayCardMailPipeline(db).preview_apply_plan(
             s.gmail_token_json, s.aupay_card_gmail_query, args.max_results,
         ))
+    elif args.cmd=="card-gmail-recurring":
+        try:
+            s=Settings(); s.validate(need_gmail=True,need_sheet=True)
+            if not args.state_dir or not args.audit_key_file or not args.authority_file:
+                raise RuntimeError("recurring_state_and_authority_paths_required")
+            repo_root=Path(__file__).resolve().parents[1]
+            state_dir=Path(args.state_dir).resolve()
+            state=SqliteRecurringRunState(
+                state_dir / "recurring.sqlite3", repo_root=repo_root,
+            )
+            key_provider=ProtectedAuditKeyProvider(args.audit_key_file,repo_root=repo_root)
+            authority_provider=ProtectedRecurringAuthorityProvider(
+                args.authority_file,repo_root=repo_root,
+            )
+            db=SheetsDB(
+                s.spreadsheet_id,
+                service=read_only_sheets_service() if args.dry_run else None,
+            )
+            result=run_recurring_ingestion(
+                gmail_service=gmail_readonly_service(s.gmail_token_json), db=db,
+                state=state,key_provider=key_provider,
+                authority_provider=authority_provider,state_dir=state_dir,
+                repo_root=repo_root,now=datetime.now(ZoneInfo("Asia/Tokyo")),
+                dry_run=args.dry_run,
+            )
+        except Exception as exc:
+            result={
+                "schema_version":1,"run_id":"unavailable","status":"failed",
+                "source_window_start":"unavailable","source_window_end":"unavailable",
+                "source_timezone":"Asia/Tokyo","found":0,"fetched":0,
+                "new_eligible":0,"already_present":0,"withheld":0,"review":0,
+                "written":0,"duplicate":0,"failure":1,"write_requests":0,
+                "manifest_final":"not_created","capability_final":"not_issued",
+                "journal_final":"not_started","lease_final":"not_acquired",
+                "failure_reason":str(exc),
+            }
+        rendered=json.dumps(result,ensure_ascii=False,sort_keys=True)
+        print(rendered)
+        step_summary=os.getenv("GITHUB_STEP_SUMMARY","")
+        if step_summary:
+            with open(step_summary,"a",encoding="utf-8") as handle:
+                handle.write("## au PAY card recurring ingestion\n\n```json\n")
+                handle.write(rendered+"\n```\n")
+        if result["failure"]:
+            raise SystemExit(1)
     elif args.cmd=="aupay-csv-preview":
         s,db,_=make(False); print(AuPayCsvPipeline(db).preview(args.csv))
     elif args.cmd=="aupay-csv-import":
