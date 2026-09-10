@@ -245,6 +245,34 @@ def test_apply_writes_one_statement_and_post_reads_exact_rows(tmp_path):
     assert not report.partial_success
 
 
+def test_post_read_accepts_sheets_formatted_numeric_and_boolean_values(tmp_path):
+    reader, preview = make_preview(tmp_path)
+    writer = Writer(reader, preview)
+    original_data_rows = reader.data_rows
+
+    def formatted_data_rows(sheet_key):
+        rows = original_data_rows(sheet_key)
+        return [
+            [
+                (str(value).upper() if isinstance(value, bool)
+                 else str(value) if isinstance(value, (int, float))
+                 else value)
+                for value in row
+            ]
+            for row in rows
+        ]
+
+    reader.data_rows = formatted_data_rows
+    report = apply_payroll_canary(
+        preview, expected_plan_hash=preview.plan_hash, reader=reader,
+        latest_plan=lambda: preview.plan, writer=writer, confirmed=True,
+    )
+    assert report.post_read_header_matches == 1
+    assert report.post_read_item_matches == 1
+    assert report.post_read_exact
+    assert not report.unexpected_changes
+
+
 def test_duplicate_preread_stops_before_writer(tmp_path):
     reader, preview = make_preview(tmp_path)
     reader.rows["payroll_statements"].append(

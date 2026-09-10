@@ -8,6 +8,7 @@ content-bound ready plan may reach the production append adapter.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from pathlib import Path
@@ -152,8 +153,38 @@ def _append_range(title: str, first_row: int, row_count: int, width: int) -> str
     return f"'{title}'!A{first_row}:{column_name(width)}{last_row}"
 
 
+def _sheet_cell_matches(actual, expected) -> bool:
+    """Compare a Sheets formatted value with the value sent using RAW input."""
+    if actual == expected:
+        return True
+    if isinstance(expected, bool):
+        return isinstance(actual, str) and actual.upper() == str(expected).upper()
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        if not isinstance(actual, str):
+            return False
+        try:
+            return Decimal(actual) == Decimal(str(expected))
+        except InvalidOperation:
+            return False
+    return False
+
+
+def _row_matches(actual: PayrollPlannedRow, expected: PayrollPlannedRow) -> bool:
+    return (
+        actual.columns == expected.columns
+        and len(actual.values) == len(expected.values)
+        and all(
+            _sheet_cell_matches(actual_value, expected_value)
+            for actual_value, expected_value in zip(actual.values, expected.values)
+        )
+    )
+
+
 def _exact_rows(rows: Iterable[PayrollPlannedRow], expected) -> int:
-    return sum(row in expected for row in rows)
+    return sum(
+        any(_row_matches(row, expected_row) for expected_row in expected)
+        for row in rows
+    )
 
 
 def _read_planned_rows(reader, sheet_key: str, statement_id: str):
@@ -375,8 +406,12 @@ def apply_payroll_canary(
     after_item_count = reader.data_row_count("payroll_items")
     header_matches = _exact_rows(post_headers, plan.planned_header_rows)
     item_matches = _exact_rows(post_items, plan.planned_item_rows)
-    exact = (tuple(post_headers) == plan.planned_header_rows
-             and tuple(post_items) == plan.planned_item_rows)
+    exact = (
+        len(post_headers) == len(plan.planned_header_rows)
+        and len(post_items) == len(plan.planned_item_rows)
+        and header_matches == len(plan.planned_header_rows)
+        and item_matches == len(plan.planned_item_rows)
+    )
     header_delta = after_header_count - before_header_count
     item_delta = after_item_count - before_item_count
     expected_success = result.status == "completed" and result.applied
