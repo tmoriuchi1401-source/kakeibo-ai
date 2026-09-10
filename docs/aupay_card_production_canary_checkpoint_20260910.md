@@ -69,3 +69,38 @@ this checkpoint.
 The rollout stopped with verdict B because 610 approved, eligible candidates
 were not attempted after the read-quota failure. The 630 confirmed rows must
 not be replayed.
+
+## Quota recovery and rollout completion
+
+- A later recovery run confirmed the Sheets read quota with one minimal header
+  request and freshly verified all 630 earlier rollout identities exactly once.
+  None of those identities was selected or written again.
+- A new absolute-window Gmail collection read 696 of 696 messages and parsed
+  2,644 transactions with no list/read failure, parser review, or review line
+  item. Fresh reconciliation reported 631 existing identities (the repaired
+  canary plus the prior 630), and exactly 610 remaining production-eligible
+  candidates.
+- The 610 candidates were applied through 13 new one-shot batches: twelve
+  50-row batches and one 10-row batch. Each batch used a new UUID, immutable
+  manifest, protected approval artifact, and capability; made exactly one
+  append request; confirmed every complete A:L row exactly; sealed its
+  capability; completed all five journal stages; and released its lease.
+- Batches were paced by 20 seconds to stay below the Sheets per-user read quota
+  without removing target, pre-write identity, or post-write identity checks.
+  No quota failure, timeout, partial result, blind retry, or unknown outcome
+  occurred during the resumed writes.
+- A final fresh collection and reconciliation again read 696 of 696 messages
+  and found 1,241 existing production identities, zero uninserted
+  production-eligible candidates, 5 withheld returns, 10 cross-source
+  ambiguous items, 1 Amazon review item, and 65 Amazon unmatched items.
+- Final rollout audit: 1,240 new production rows in 27 one-request batches
+  across the original and resumed rollouts; zero duplicate identities; zero
+  invalid B/H/I/K cells; zero active leases; zero reusable capabilities; zero
+  unresolved or partial writes; and 135 append-only journal events. The single
+  historical failed-run capability remains recorded as `issued` but is expired,
+  unclaimed, and unusable.
+- The `取込データ` sheet contained 1,662 data rows after completion, with row
+  1663 as its final populated row. Google-rendered visual verification reached
+  that row and showed the appended data in the existing layout.
+
+Final verdict: A.
