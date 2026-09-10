@@ -81,6 +81,7 @@ from .payroll_schema import (
     build_schema_initialization_plan,
     schema_plan_preview,
 )
+from .payroll_display_preview import build_payroll_display_update_preview
 from .payroll_master_sync import (
     PayrollMasterSyncWriteRepository,
     apply_master_sync,
@@ -206,6 +207,7 @@ def main():
     payroll_canary.add_argument("--apply",action="store_true")
     payroll_canary.add_argument("--expected-plan-hash")
     sub.add_parser("payroll-schema-preview")
+    sub.add_parser("payroll-display-preview")
     sub.add_parser("payroll-master-sync-preview")
     payroll_master_apply=sub.add_parser("payroll-master-sync")
     payroll_master_apply.add_argument("--apply",action="store_true")
@@ -351,6 +353,13 @@ def main():
             print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
             if report.unexpected_changes or not report.post_read_exact:
                 raise SystemExit(2)
+    elif args.cmd=="payroll-display-preview":
+        import json
+        s=Settings(); s.validate(need_sheet=True)
+        output=build_payroll_display_update_preview(
+            PayrollSheetsReadRepository(s.spreadsheet_id)
+        )
+        print(json.dumps(output.model_dump(mode="json"),ensure_ascii=False))
     elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
         import json
         s=Settings(); s.validate(need_sheet=True)

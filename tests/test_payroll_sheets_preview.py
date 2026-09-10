@@ -1,5 +1,6 @@
 import json
 
+from app.payroll_display import payroll_display_header
 from app.payroll_models import PayrollItem, PayrollPreview
 from app.payroll_sheets import (
     SHEET_TITLES,
@@ -14,6 +15,7 @@ from app.payroll_storage import (
     PayrollItemAliasRecord,
     PayrollStandardItemRecord,
     PayrollStatementRecord,
+    decide_duplicate,
     phase_a_to_storage_candidate,
     resolve_alias,
 )
@@ -190,6 +192,42 @@ def test_repository_reads_existing_models_aliases_and_employers():
     assert result.aliases[0].raw_item_name == "本給"
     assert result.employers[0].employer_id == "employer-1"
     assert service.write_calls == []
+
+
+def test_display_headers_preserve_canonical_snapshot_and_duplicate_identity():
+    stored = PayrollStatementRecord(
+        statement_id="stored", employer_id="employer-1", statement_type="salary",
+        pay_period="2026-08", source_file_id="file-1", content_hash="hash-1",
+    )
+    standard = PayrollStandardItemRecord(
+        standard_item_id="basic_pay", standard_name="基本給",
+        section="earning", value_type="money",
+    )
+    rows = {
+        "payroll_statements": [model_row(stored, "payroll_statements")],
+        "payroll_standard_items": [model_row(standard, "payroll_standard_items")],
+    }
+    canonical_ranges = complete_ranges(rows)
+    display_ranges = complete_ranges(rows)
+    for key, title in SHEET_TITLES.items():
+        display_ranges[f"'{title}'!1:1"] = [list(payroll_display_header(key))]
+
+    canonical_snapshot = PayrollSheetsReadRepository(
+        "sheet-id", service=FakeSheetsService(
+            set(SHEET_TITLES.values()), canonical_ranges,
+        ),
+    ).snapshot()
+    display_snapshot = PayrollSheetsReadRepository(
+        "sheet-id", service=FakeSheetsService(
+            set(SHEET_TITLES.values()), display_ranges,
+        ),
+    ).snapshot()
+
+    assert display_snapshot == canonical_snapshot
+    source = candidate(source_file_id="file-1", content_hash="hash-1")
+    assert decide_duplicate(source.statement, display_snapshot.statements) == (
+        decide_duplicate(source.statement, canonical_snapshot.statements)
+    )
 
 
 def test_loaded_aliases_ignore_inactive_alias_and_inactive_standard_item():

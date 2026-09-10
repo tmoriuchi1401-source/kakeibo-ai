@@ -11,6 +11,7 @@ from app.payroll_schema import (
     schema_plan_preview,
 )
 from app.payroll_sheets import PayrollSheetsReadRepository, SHEET_TITLES
+from app.payroll_display import payroll_display_header
 from app.payroll_storage import INITIAL_ALIASES, INITIAL_STANDARD_ITEMS, PAYROLL_SCHEMAS
 
 
@@ -106,6 +107,10 @@ def test_apply_creates_five_sheets_headers_and_only_initial_master_rows():
     assert result["statement_rows_written"] == 0
     assert result["statement_item_rows_written"] == 0
     assert "支出明細" in service.state["titles"]
+    for key, title in SHEET_TITLES.items():
+        assert service.state["ranges"][f"'{title}'!1:1"] == [
+            list(payroll_display_header(key))
+        ]
     assert service.state["ranges"].get("'勤務先マスタ'!A2:ZZ", []) == []
     append_ranges = [target for operation, target in service.state["operations"]
                      if operation == "append"]

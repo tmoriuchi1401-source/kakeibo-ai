@@ -5,6 +5,7 @@ from typing import Iterable, TypeVar
 from pydantic import BaseModel, Field, ValidationError
 
 from .google_clients import read_only_sheets_service
+from .payroll_display import canonicalize_payroll_header
 from .payroll_storage import (
     PAYROLL_SCHEMAS,
     PayrollEmployerRecord,
@@ -56,7 +57,7 @@ def validate_sheet_schema(
             sheet_key=sheet_key, sheet_title=title, schema_ok=False,
             sheet_missing=True, missing_columns=expected, column_order_ok=False,
         )
-    actual = [str(column).strip() for column in actual_columns]
+    actual = list(canonicalize_payroll_header(sheet_key, actual_columns))
     missing = [column for column in expected if column not in actual]
     unexpected = [column for column in actual if column not in expected]
     order_ok = actual == expected

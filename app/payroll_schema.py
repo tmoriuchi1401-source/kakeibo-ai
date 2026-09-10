@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .google_clients import sheets_service
+from .payroll_display import canonicalize_payroll_header, payroll_display_header
 from .payroll_sheets import PayrollSheetsReadRepository, SHEET_TITLES
 from .payroll_storage import INITIAL_ALIASES, INITIAL_STANDARD_ITEMS, PAYROLL_SCHEMAS
 
@@ -44,13 +45,15 @@ def build_schema_initialization_plan(
     titles = repository.sheet_titles()
     sheets = []
     for key, title in SHEET_TITLES.items():
-        expected = list(PAYROLL_SCHEMAS[key])
+        expected = list(payroll_display_header(key))
         if title not in titles:
             action: SheetAction = "create"
             reason = "sheet_missing"
         else:
             actual = repository.header(title)
-            if actual == expected:
+            if list(canonicalize_payroll_header(key, actual)) == list(
+                PAYROLL_SCHEMAS[key]
+            ):
                 action = "skip"
                 reason = None
             elif not actual:
@@ -134,7 +137,7 @@ class PayrollSchemaWriteRepository:
     def write_header(self, sheet_title: str, header: list[str]) -> None:
         key = next((key for key, title in SHEET_TITLES.items()
                     if title == sheet_title), None)
-        if key is None or header != list(PAYROLL_SCHEMAS[key]):
+        if key is None or header != list(payroll_display_header(key)):
             raise ValueError("Payroll schema以外のheaderは書き込めません")
         self.service.spreadsheets().values().update(
             spreadsheetId=self.spreadsheet_id,
