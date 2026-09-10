@@ -22,3 +22,50 @@
 
 No credential, HMAC secret, message body, or reusable authority is recorded in
 this checkpoint.
+
+## Staged production rollout checkpoint
+
+- Human approval authorized a fresh staged rollout of 5 candidates, then 25,
+  then all remaining production-eligible candidates in batches of at most 50
+  rows and one Sheets append request per batch. Returns, ambiguous/review
+  candidates, and unmatched Amazon candidates remained write-prohibited.
+- Every fresh Gmail collection read 696 of 696 messages and parsed 2,644
+  transactions with no parser-review item. The initial plan contained 1,322
+  canonical transactions, including 1 existing identity, 5 returns, and 10
+  cross-source ambiguous items. Amazon classification additionally withheld 1
+  review item and 65 unmatched items.
+- Phase 5 completed with verdict A: 5 exact rows, one request, sealed
+  capability, released lease, and the complete five-stage journal. Run:
+  `3abfde7d-cc3b-4050-bf57-80717f9e9923`.
+- Phase 25 completed with verdict A after a new Gmail collection and full plan:
+  25 exact rows, one request, sealed capability, released lease, and the
+  complete five-stage journal. Run:
+  `b89eb84d-0ac6-4754-bde7-e66b89babfbb`.
+- The third fresh plan found 1,210 remaining production-eligible candidates.
+  Twelve 50-row batches completed with verdict A (600 rows and 12 requests).
+  Before the thirteenth remaining batch could acquire a lease, create a journal
+  attempt, or invoke the transport, its target-header read received the Sheets
+  per-user read-quota HTTP 429. Execution stopped immediately and no later batch
+  was attempted. The stopped pre-write run is
+  `3d3b88c5-0270-443a-86f5-c8b17c7b3d27`.
+- Rollout total: 630 new rows in 14 successful one-shot requests. A fresh
+  read-only audit found all 630 identities exactly once, with zero invalid B,
+  H, I, or K cells. Statuses were 276 `auto_expense`, 38 `matched_amazon`, 4
+  `matched_receipt`, and 312 `transfer_aupay_charge`.
+- Authority audit: 15 immutable manifests and 15 protected approval artifacts;
+  14 capabilities sealed; 70 append-only journal events across 14 completed
+  runs; zero active leases. The stopped run's unused capability naturally
+  expired while still recorded as `issued`; it was never claimed and cannot be
+  dispatched after expiry.
+- The common target binding was
+  `writer-target-v1:282b0d11d2998d9e9cf6357bcb396f92`. The implementation and
+  schemas require exactly 32 hexadecimal characters after the prefix. The
+  earlier 33-character rendering was a report transcription typo; repository
+  history contains no 33-character target reference.
+- Google-rendered visual verification reached the final populated row, 1053,
+  and showed the appended values in the existing `取込データ` layout without
+  visible structural damage.
+
+The rollout stopped with verdict B because 610 approved, eligible candidates
+were not attempted after the read-quota failure. The 630 confirmed rows must
+not be replayed.
