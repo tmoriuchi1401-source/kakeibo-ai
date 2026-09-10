@@ -16,6 +16,7 @@ from app.payroll_parser import parse_positioned_items
 from app.payroll_sheets import PayrollSheetsSnapshot, validate_sheet_schema
 from app.payroll_storage import (
     PAYROLL_SCHEMAS,
+    PayrollEmployerRecord,
     PayrollStandardItemRecord,
     phase_a_to_storage_candidate,
 )
@@ -160,6 +161,34 @@ def test_drive_shadow_builds_typed_request_without_writer_or_apply():
     ).safe_dict()
 
     assert report["sampled_files"] == report["evaluated_files"] == 1
+    assert report["attestation_success_count"] == 1
+    assert report["false_attestation_count"] == 0
+    assert report["differential_unchanged"]
+    assert report["writer_invocation_count"] == report["apply_invocation_count"] == 0
+
+
+def test_drive_shadow_uses_business_authority_without_ownership_inventing_it():
+    preview, _storage, _plan, ownership_snapshot = shadow_inputs()
+    preview.company_name = "勤務先A株式会社"
+    preview.statement_label = "給与明細書"
+    target = sheets_snapshot()
+    target.employers = [PayrollEmployerRecord(
+        employer_id="employer-1", employer_label="勤務先A株式会社",
+    )]
+    capture = SimpleNamespace(
+        snapshot=ownership_snapshot,
+        ownership_ready=True,
+        reason="ownership_ready",
+    )
+
+    report = drive_payroll_ownership_shadow(
+        "folder-00001", target, enabled=True, local_key=KEY,
+        service=FakeDriveService(),
+        downloader=lambda _file_id: b"synthetic-source-bytes",
+        parser=lambda _path: preview,
+        capture=lambda _path, *, local_key: capture,
+    ).safe_dict()
+
     assert report["attestation_success_count"] == 1
     assert report["false_attestation_count"] == 0
     assert report["differential_unchanged"]

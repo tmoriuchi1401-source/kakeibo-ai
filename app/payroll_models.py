@@ -53,6 +53,8 @@ class PayrollPreview(BaseModel):
     extraction_method: Literal["pdf_text", "ocr"]
     company_name: str | None = Field(default=None, exclude=True)
     company_present: bool = False
+    # Explicit document-title evidence only; never persisted in storage rows.
+    statement_label: str | None = Field(default=None, exclude=True)
     pay_period: str | None = None
     pay_date: str | None = None
     gross_pay: int | None = None

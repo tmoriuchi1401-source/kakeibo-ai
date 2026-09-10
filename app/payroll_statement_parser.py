@@ -16,6 +16,10 @@ from .payroll_parser import (
 
 _COMPANY_MARKERS = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社")
 _SENSITIVE_MARKERS = ("氏名", "社員番号", "従業員番号", "住所", "口座", "メール")
+_STATEMENT_LABELS = (
+    "給与調整明細書", "給与調整明細", "賞与支給明細書", "賞与明細書",
+    "賞与明細", "給与支給明細書", "給与明細書", "給与明細",
+)
 _SUMMARY_CANDIDATES = ("gross_pay", "total_deductions", "net_pay")
 _COMPLETE_MONEY_TOKEN = re.compile(
     r"\d+|\d{1,3}(?:,\d{3})+"
@@ -29,6 +33,29 @@ def _company_name(text: str) -> str | None:
                 and not any(marker in line for marker in _SENSITIVE_MARKERS)):
             return line
     return None
+
+
+def _statement_label(text: str) -> str | None:
+    """Return one explicit, non-conflicting document-title phrase."""
+    found = {
+        label
+        for line in text.splitlines()
+        for label in _STATEMENT_LABELS
+        if label in line
+    }
+    # Prefer the longest phrase where one title contains another, but reject
+    # genuinely conflicting salary/bonus/adjustment evidence.
+    maximal = {
+        label for label in found
+        if not any(label != other and label in other for other in found)
+    }
+    kinds = {
+        "adjustment" if "調整" in label else "bonus" if "賞与" in label else "salary"
+        for label in maximal
+    }
+    if len(kinds) != 1:
+        return None
+    return max(maximal, key=len)
 
 
 def _confirmed_summary_values(items: list[PayrollItem]) -> dict[str, int]:
@@ -135,6 +162,7 @@ def _totals(text: str, items: list[PayrollItem]) -> tuple[int | None, int | None
 def preview_payroll_file(path: str | Path) -> PayrollPreview:
     extracted = extract_payroll_text(path)
     company_name = _company_name(extracted.text)
+    statement_label = _statement_label(extracted.text)
     period, pay_date = parse_period_and_date(extracted.text)
     items = parse_positioned_items(extracted.tokens, ocr=extracted.extraction_method == "ocr")
     if extracted.extraction_method == "ocr":
@@ -147,6 +175,7 @@ def preview_payroll_file(path: str | Path) -> PayrollPreview:
                           extraction_method=extracted.extraction_method,
                           company_name=company_name,
                           company_present=bool(company_name),
+                          statement_label=statement_label,
                           pay_period=period, pay_date=pay_date, gross_pay=gross,
                           total_deductions=deductions, net_pay=net, items=items,
                           parse_status=status)

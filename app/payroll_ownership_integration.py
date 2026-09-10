@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from .drive_payroll import DrivePayrollPreview, _suffix, temporary_payroll_file
+from .payroll_business_authority import resolve_payroll_business_authority
 from .payroll_ocr_snapshot_bridge import capture_ocr_ownership_snapshot
 from .payroll_ownership_provenance import (
     PayrollOwnershipAdoptionCandidate,
@@ -580,10 +581,14 @@ def drive_payroll_ownership_shadow(
             data = adapter.downloader(file["id"])
             with temporary_payroll_file(data, suffix) as path:
                 preview = adapter.parser(path)
+                authority = resolve_payroll_business_authority(
+                    preview, sheets_snapshot.employers,
+                    employer_id=employer_id, statement_type=statement_type,
+                )
                 storage = phase_a_to_storage_candidate(
                     preview,
-                    employer_id=employer_id,
-                    statement_type=statement_type,
+                    employer_id=authority.employer_id,
+                    statement_type=authority.statement_type,
                     source_type="drive",
                     source_file_id=file["id"],
                     content_hash=hashlib.sha256(data).hexdigest(),

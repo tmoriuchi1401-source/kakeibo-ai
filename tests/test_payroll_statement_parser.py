@@ -55,8 +55,11 @@ def test_preview_uses_extracted_text_and_calculates_summary(monkeypatch):
     assert result.parse_status == "success"
     assert result.company_name == "秘密サンプル株式会社"
     assert result.company_present
+    assert result.statement_label == "給与明細書"
     assert "秘密サンプル株式会社" not in result.model_dump()
     assert "秘密サンプル株式会社" not in result.model_dump_json()
+    assert "給与明細書" not in result.model_dump()
+    assert "給与明細書" not in result.model_dump_json()
 
 
 def test_encrypted_pdf_stops_safely(monkeypatch):
@@ -65,6 +68,18 @@ def test_encrypted_pdf_stops_safely(monkeypatch):
     monkeypatch.setattr("app.payroll_statement_parser.extract_payroll_text", stop)
     with pytest.raises(EncryptedPayrollPdfError):
         preview_payroll_file("encrypted.pdf")
+
+
+def test_conflicting_explicit_statement_titles_stay_unresolved(monkeypatch):
+    text = "給与明細書\n賞与明細書"
+    monkeypatch.setattr(
+        "app.payroll_statement_parser.extract_payroll_text",
+        lambda path: SimpleNamespace(
+            text=text, file_type="pdf", extraction_method="pdf_text", tokens=(),
+        ),
+    )
+
+    assert preview_payroll_file("statement.pdf").statement_label is None
 
 
 def test_anonymized_ocr_fixture_covers_preview_totals_and_storage_review(monkeypatch):

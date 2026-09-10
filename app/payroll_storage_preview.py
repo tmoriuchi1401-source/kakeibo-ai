@@ -7,6 +7,7 @@ from typing import Any, Iterable, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .drive_payroll import DrivePayrollPreview, _suffix, temporary_payroll_file
+from .payroll_business_authority import resolve_payroll_business_authority
 from .payroll_models import PayrollReviewReasonCode
 from .payroll_sheets import PayrollSheetsSnapshot, usable_aliases
 from .payroll_storage import (
@@ -571,10 +572,14 @@ def drive_storage_candidates(
             data = adapter.downloader(file["id"])
             with temporary_payroll_file(data, suffix) as path:
                 result = adapter.parser(path)
+            authority = resolve_payroll_business_authority(
+                result, snapshot.employers,
+                employer_id=employer_id, statement_type=statement_type,
+            )
             candidates.append(phase_a_to_storage_candidate(
                 result,
-                employer_id=employer_id,
-                statement_type=statement_type,
+                employer_id=authority.employer_id,
+                statement_type=authority.statement_type,
                 source_type="drive",
                 source_file_id=file["id"],
                 content_hash=hashlib.sha256(data).hexdigest(),
@@ -616,10 +621,14 @@ def drive_save_preview(
             data = adapter.downloader(file["id"])
             with temporary_payroll_file(data, suffix) as path:
                 result = adapter.parser(path)
+            authority = resolve_payroll_business_authority(
+                result, snapshot.employers,
+                employer_id=employer_id, statement_type=statement_type,
+            )
             candidates.append(phase_a_to_storage_candidate(
                 result,
-                employer_id=employer_id,
-                statement_type=statement_type,
+                employer_id=authority.employer_id,
+                statement_type=authority.statement_type,
                 source_type="drive",
                 source_file_id=file["id"],
                 content_hash=hashlib.sha256(data).hexdigest(),

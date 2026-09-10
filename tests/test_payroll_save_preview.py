@@ -463,6 +463,48 @@ def test_drive_candidate_without_operator_identity_stays_missing_and_blocked():
     assert service.write_calls == []
 
 
+def test_drive_candidate_uses_unique_active_master_and_explicit_document_title():
+    service = DriveService([
+        {"id": "file-1", "name": "opaque.pdf", "mimeType": "application/pdf"},
+    ])
+    source = parsed_statement().model_copy(deep=True)
+    source.company_name = "勤務先Ａ & 株式会社"
+    source.statement_label = "給与明細書"
+    target = snapshot()
+    target.employers = [PayrollEmployerRecord(
+        employer_id="master-employer", employer_label="勤務先A＆株式会社",
+    )]
+
+    candidates = drive_storage_candidates(
+        "folder-123456", target, service=service,
+        downloader=lambda _file_id: b"payroll", parser=lambda _path: source,
+    )
+
+    assert candidates[0].statement.employer_id == "master-employer"
+    assert candidates[0].statement.statement_type == "salary"
+    assert service.write_calls == []
+
+
+def test_drive_candidate_does_not_invent_employer_from_company_or_filename():
+    service = DriveService([
+        {"id": "file-1", "name": "勤務先A-給与.pdf", "mimeType": "application/pdf"},
+    ])
+    source = parsed_statement().model_copy(deep=True)
+    source.company_name = "勤務先A株式会社"
+    source.statement_label = "給与明細書"
+    target = snapshot()
+    target.employers = []
+
+    candidate = drive_storage_candidates(
+        "folder-123456", target, service=service,
+        downloader=lambda _file_id: b"payroll", parser=lambda _path: source,
+    )[0]
+
+    assert candidate.statement.employer_id is None
+    assert candidate.statement.statement_type == "salary"
+    assert service.write_calls == []
+
+
 def test_cli_propagates_operator_identity_to_drive_save_preview(monkeypatch, capsys):
     import app.cli as cli
 
