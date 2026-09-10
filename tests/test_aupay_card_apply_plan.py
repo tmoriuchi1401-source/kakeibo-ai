@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 
 from app.aupay_card_apply_plan import (
     CanonicalApplyCandidate,
@@ -89,8 +90,13 @@ def test_noncanonical_resend_is_not_projected_and_pair_yields_one_candidate():
     assert result.candidates[0].identity == mail_id("a")
     assert result.candidates[0].source_identities == (mail_id("a"), mail_id("b"))
     assert result.noncanonical_resend_count == 1
-    assert len(result.candidates[0].to_import_row()) == 12
-    assert result.candidates[0].to_import_row()[10] == result.candidates[0].business_fingerprint
+    materialized = result.candidates[0].to_import_row(
+        imported_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        status="auto_expense",
+    )
+    assert len(materialized) == 12
+    assert materialized[10] == result.candidates[0].source_hash
+    assert materialized[10] != result.candidates[0].business_fingerprint
 
 
 def test_public_projection_selects_exactly_one_without_mutating_full_plan():

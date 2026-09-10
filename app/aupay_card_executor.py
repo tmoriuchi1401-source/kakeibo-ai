@@ -45,7 +45,7 @@ class ExistingCanonicalRecord:
     merchant: str
     amount_yen: int
     payment_method: str
-    business_fingerprint: str
+    source_hash: str
     memo: str
 
     @classmethod
@@ -58,7 +58,7 @@ class ExistingCanonicalRecord:
             merchant=candidate.merchant,
             amount_yen=candidate.amount_yen,
             payment_method=candidate.payment_method,
-            business_fingerprint=candidate.business_fingerprint,
+            source_hash=candidate.source_hash,
             memo=candidate.memo,
         )
 
@@ -381,7 +381,7 @@ class SheetsCanonicalIdentityReader:
                 merchant=str(row[5]).strip(),
                 amount_yen=amount,
                 payment_method=str(row[7]).strip(),
-                business_fingerprint=str(row[10]).strip(),
+                source_hash=str(row[10]).strip(),
                 memo=str(row[11]).strip(),
             ))
         return {

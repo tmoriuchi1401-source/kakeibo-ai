@@ -20,9 +20,12 @@ from uuid import UUID, uuid4
 from .aupay_card_apply_plan import (
     CanonicalApplyCandidate,
     CanonicalApplyPlan,
+    production_import_status,
     validate_canonical_apply_plan,
 )
 from .aupay_card_executor import CandidateState, CanonicalIdentityReader
+from .aupay_card_contract import is_amazon_merchant
+from .aupay_card_pipeline import AuPayCardPipeline, _amazon_extended_eligible
 from .aupay_card_writer import (
     AttemptJournal,
     BatchPolicy,
@@ -1044,9 +1047,23 @@ class SealedSheetsCandidateTransport:
             or history[-1].canonical_identity != candidate.identity
         ):
             raise RuntimeError("write_attempt_journal_required")
+        dispatch_time = self._clock()
         self._capability_store.authorize_dispatch(
-            capability, attempt_id, self._clock(),
+            capability, attempt_id, dispatch_time,
         )
+        amazon_status = None
+        if is_amazon_merchant(candidate.merchant):
+            classifier = AuPayCardPipeline(self._db)
+            amazon_status, _, _, _ = classifier._classify_amazon_details(
+                candidate.transaction_date,
+                candidate.amount_yen,
+                classifier._amazon_candidates(),
+                allow_extended=_amazon_extended_eligible(
+                    candidate.merchant, candidate.payment_method, candidate.memo,
+                ),
+            )
+        status = production_import_status(candidate, amazon_status=amazon_status)
+        row = candidate.to_import_row(imported_at=dispatch_time, status=status)
         self.invocation_count += 1
         # Use the fixed approved range and RAW input so candidate text can never
         # be interpreted as a Sheets formula. No arbitrary range enters this API.
@@ -1055,7 +1072,7 @@ class SealedSheetsCandidateTransport:
             range=f"{self._binding.expected_worksheet}!A:L",
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
-            body={"values": [candidate.to_import_row()]},
+            body={"values": [row]},
         ).execute()
         return WriteRequestResult(WriteDisposition.ACKNOWLEDGED, "sheets_append_ack")
 

@@ -19,6 +19,7 @@ from googleapiclient.errors import HttpError
 
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
+from .aupay_card_contract import aupay_card_source_hash
 from .transaction_plan import build_write_plan, reconcile_transactions
 from .aupay_card_apply_plan import build_canonical_apply_plan
 from .aupay_card_executor import (
@@ -71,6 +72,8 @@ class ParsedCardLineItem:
     payment_method: str
     member: str
     source_record_id: str
+    source_occurrence: int
+    source_hash: str
 
     def to_reconciliation_input(self) -> dict:
         return {
@@ -83,6 +86,9 @@ class ParsedCardLineItem:
             "memo": f"メール明細No.{self.item_number:03d}",
             "occurrence": self.item_number,
             "import_id": self.source_record_id,
+            "source_occurrence": self.source_occurrence,
+            "source_memo": "",
+            "source_hash": self.source_hash,
         }
 
 
@@ -221,6 +227,7 @@ def parse_aupay_card_raw_partial(raw_mime: bytes) -> CardMailParseResult:
         )
     source_hash = hashlib.sha256(message_id.encode("utf-8")).hexdigest()[:24]
     accepted: list[ParsedCardLineItem] = []
+    source_occurrences: dict[tuple, int] = {}
     review: list[CardLineItemReview] = []
     for i in range(1, len(blocks), 2):
         number, block = int(blocks[i]), blocks[i + 1]
@@ -267,15 +274,32 @@ def parse_aupay_card_raw_partial(raw_mime: bytes) -> CardMailParseResult:
                 evidence_classifications=tuple(dict.fromkeys(evidence)),
             ))
             continue
+        payment_method = "通常払い"
+        occurrence_key = (date, merchant.strip(), amount, payment_method, member, "")
+        source_occurrence = source_occurrences.get(occurrence_key, 0) + 1
+        source_occurrences[occurrence_key] = source_occurrence
+        source_record_id = f"aupaycard-mail:{source_hash}:{number:03d}"
+        source_input = {
+            "date": date,
+            "merchant": merchant.strip(),
+            "amount": amount,
+            "payment_type": payment_method,
+            "member": member,
+            "source_memo": "",
+            "source_occurrence": source_occurrence,
+            "import_id": source_record_id,
+        }
         accepted.append(ParsedCardLineItem(
             item_number=number,
             date=date,
             merchant=merchant.strip(),
             amount_yen=amount,
             transaction_kind=transaction_kind,
-            payment_method="メール通知",
+            payment_method=payment_method,
             member=member,
-            source_record_id=f"aupaycard-mail:{source_hash}:{number:03d}",
+            source_record_id=source_record_id,
+            source_occurrence=source_occurrence,
+            source_hash=aupay_card_source_hash(source_input),
         ))
     return CardMailParseResult(tuple(accepted), tuple(review))
 

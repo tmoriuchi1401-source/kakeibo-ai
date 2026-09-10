@@ -8,13 +8,19 @@ inputs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .transaction_plan import ReconciledTransaction
+from .aupay_card_contract import (
+    format_import_timestamp,
+    is_amazon_merchant,
+    is_aupay_charge_merchant,
+)
 
 
 _PROJECTION_AUTHORITY = object()
 APPLY_PLAN_SCHEMA_VERSION = 3
-APPLY_CANDIDATE_SCHEMA_VERSION = 2
+APPLY_CANDIDATE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -41,6 +47,9 @@ class CanonicalApplyCandidate:
     payment_method: str
     business_fingerprint: str
     memo: str
+    member: str
+    source_occurrence: int
+    source_hash: str
     reconciliation_state: str
     source_identities: tuple[str, ...]
     cross_source_state: str
@@ -78,6 +87,9 @@ class CanonicalApplyCandidate:
             "payment_method": tx.payment_method,
             "business_fingerprint": tx.business_fingerprint,
             "memo": tx.memo,
+            "member": tx.member,
+            "source_occurrence": tx.source_occurrence,
+            "source_hash": tx.source_hash,
             "reconciliation_state": item.state,
             "source_identities": item.source_identities,
             "cross_source_state": item.cross_source.state,
@@ -88,16 +100,41 @@ class CanonicalApplyCandidate:
             object.__setattr__(candidate, name, value)
         return candidate
 
-    def to_import_row(self, *, status: str = "unclassified_card") -> list:
+    def to_import_row(
+        self, *, imported_at, status: str, target_id: str = "",
+    ) -> list:
         """Materialize only an authorized canonical projection, never a raw row."""
         if self._authority is not _PROJECTION_AUTHORITY:
             raise TypeError("unauthorized_apply_candidate")
+        if status == "unclassified_card":
+            raise ValueError("source_specific_unclassified_status_forbidden")
+        timestamp = format_import_timestamp(imported_at)
         return [
-            self.identity, "", self.source, self.source_record_id,
+            self.identity, timestamp, self.source, self.source_record_id,
             self.transaction_date, self.merchant, self.amount_yen,
-            self.payment_method, status, "", self.business_fingerprint,
+            self.payment_method, status, target_id, self.source_hash,
             self.memo,
         ]
+
+
+def production_import_status(
+    candidate: CanonicalApplyCandidate, *, amazon_status: str | None = None,
+) -> str:
+    """Classify one authorized candidate without promoting review cases."""
+    if candidate.transaction_kind != "purchase" or candidate.amount_yen <= 0:
+        raise ValueError("candidate_not_materializable")
+    if is_aupay_charge_merchant(candidate.merchant):
+        return "transfer_aupay_charge"
+    if is_amazon_merchant(candidate.merchant):
+        allowed = {"matched_amazon", "amazon_needs_review", "amazon_unmatched"}
+        if amazon_status not in allowed:
+            raise ValueError("amazon_classification_required")
+        return amazon_status
+    if candidate.cross_source_state == "cross_source_strong_match":
+        return "matched_receipt"
+    if candidate.cross_source_state != "cross_source_no_match":
+        raise ValueError("candidate_cross_source_review_required")
+    return "auto_expense"
 
 
 @dataclass(frozen=True, init=False)
@@ -441,6 +478,11 @@ def validate_canonical_apply_plan(value: object) -> CanonicalApplyPlan:
         for candidate in value.candidates
     ):
         raise RuntimeError("apply_plan_candidate_ineligible")
+    if any(
+        not re.fullmatch(r"[0-9a-f]{64}", candidate.source_hash)
+        for candidate in value.candidates
+    ):
+        raise RuntimeError("apply_plan_candidate_source_hash_invalid")
 
     for candidate in value.candidates:
         decision = decisions_by_identity[candidate.identity]

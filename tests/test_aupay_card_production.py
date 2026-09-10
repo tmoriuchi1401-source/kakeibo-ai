@@ -4,6 +4,7 @@ import base64
 import hashlib
 import inspect
 import json
+import re
 import sqlite3
 from uuid import uuid4
 
@@ -1050,9 +1051,11 @@ class FailingSheetsRequest:
 class FakeSheetsValues:
     def __init__(self):
         self.append_calls = 0
+        self.append_arguments = []
 
-    def append(self, **_kwargs):
+    def append(self, **kwargs):
         self.append_calls += 1
+        self.append_arguments.append(kwargs)
         return FailingSheetsRequest()
 
 
@@ -1092,6 +1095,12 @@ def test_real_transport_fake_timeout_is_one_shot_released_and_resealed(tmp_path)
     assert result.retry_eligible_count == 1
     assert transport.invocation_count == 1
     assert db.svc.values_api.append_calls == 1
+    materialized = db.svc.values_api.append_arguments[0]["body"]["values"][0]
+    assert materialized[1] == "2026-09-09 09:00:00"
+    assert materialized[7] == "通常払い"
+    assert materialized[8] == "auto_expense"
+    assert re.fullmatch(r"[0-9a-f]{64}", materialized[10])
+    assert materialized[10] != parts[0].plan.candidates[0].business_fingerprint
     assert parts[4].state(capability.capability_id) == "sealed"
     probe = parts[5].acquire(
         target_binding_reference(parts[2], KEY), "probe", parts[1].run_id, 30,

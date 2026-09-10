@@ -11,6 +11,11 @@ import hashlib
 import re
 import unicodedata
 
+from .aupay_card_contract import (
+    aupay_card_source_hash,
+    normalize_card_payment_method,
+)
+
 
 def _text(value: object) -> str:
     return unicodedata.normalize("NFKC", str(value or "")).strip()
@@ -33,6 +38,9 @@ class Transaction:
     identity: str
     business_fingerprint: str
     memo: str = ""
+    member: str = ""
+    source_occurrence: int = 1
+    source_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,16 +83,25 @@ def normalize_card_transaction(raw: dict) -> Transaction:
         raise ValueError("transaction_kind_invalid")
     if (kind == "purchase" and amount < 0) or (kind == "return" and amount > 0):
         raise ValueError("transaction_kind_amount_mismatch")
-    payment = _text(raw.get("payment_type")) or "メール通知"
+    payment = normalize_card_payment_method(raw.get("payment_type"))
     memo = _text(raw.get("memo"))
+    member = _text(raw.get("member"))
+    try:
+        source_occurrence = int(raw.get("source_occurrence", raw.get("occurrence", 1)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("source_occurrence_invalid") from exc
+    source_hash = _text(raw.get("source_hash")) or aupay_card_source_hash(raw)
+    if not re.fullmatch(r"[0-9a-f]{64}", source_hash):
+        raise ValueError("source_hash_invalid")
     # The business fingerprint is evidence/audit metadata, not a duplicate
     # key: same-day same-amount purchases must remain separate transactions.
     business = "|".join((
-        date, merchant, str(amount), kind, payment, _text(raw.get("member")), memo,
+        date, merchant, str(amount), kind, payment, member, memo,
     ))
     fingerprint = hashlib.sha256(business.encode("utf-8")).hexdigest()[:24]
-    return Transaction(2, "au PAYカード", source_id, date, merchant, amount,
-                       kind, payment, source_id, fingerprint, memo)
+    return Transaction(3, "au PAYカード", source_id, date, merchant, amount,
+                       kind, payment, source_id, fingerprint, memo, member,
+                       source_occurrence, source_hash)
 
 
 def normalized_merchant(value: object) -> str:
@@ -144,7 +161,8 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
     review: list[Transaction] = []
     for rows in by_identity.values():
         variants = {(x.transaction_date, x.merchant, x.amount_yen, x.transaction_kind,
-                     x.payment_method, x.business_fingerprint) for x in rows}
+                     x.payment_method, x.business_fingerprint, x.source_hash)
+                    for x in rows}
         if len(variants) > 1:
             collisions += 1
             review.extend(rows)

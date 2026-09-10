@@ -2,7 +2,12 @@ from __future__ import annotations
 import csv, hashlib, re, unicodedata
 from datetime import datetime
 from .sheets import SheetsDB
-from .utils import canonical_hash, now_jst_string
+from .aupay_card_contract import (
+    aupay_card_source_hash,
+    is_amazon_merchant,
+    is_aupay_charge_merchant,
+)
+from .utils import now_jst_string
 
 def norm_text(s:str)->str:
     return unicodedata.normalize("NFKC", str(s or "")).strip()
@@ -46,11 +51,10 @@ def parse_aupay_card_csv(path:str)->list[dict]:
     return out
 
 def is_aupay_charge(merchant:str)->bool:
-    m=norm_text(merchant).upper()
-    return "AU PAY 残高オートチャージ" in m or "AU PAY 残高チャージ" in m
+    return is_aupay_charge_merchant(merchant)
 
 def is_amazon(merchant:str)->bool:
-    return "AMAZON.CO.JP" in norm_text(merchant).upper()
+    return is_amazon_merchant(merchant)
 
 def _amazon_extended_eligible(*parts)->bool:
     text=" ".join(norm_text(part).upper() for part in parts)
@@ -186,7 +190,7 @@ class AuPayCardPipeline:
                     note += f"; Amazon候補数={len(c)}"
             else:
                 state="unclassified_card"; stats["unclassified_card"]+=1
-            h=canonical_hash(d)
+            h=aupay_card_source_hash(d)
             rows.append([d["import_id"],now_jst_string(),"au PAYカード",d["import_id"],d["date"],
                          d["merchant"],d["amount"],d["payment_type"],state,"",h,note])
             stats["new"]+=1
