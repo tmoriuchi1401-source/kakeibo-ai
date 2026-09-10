@@ -37,6 +37,7 @@ WriteReason = Literal[
     "schema_invalid",
     "exact_duplicate",
     "content_hash_duplicate",
+    "operator_reconciled_alternate_source",
     "source_identity_conflict",
     "revision_conflict",
     "employer_id_missing",
