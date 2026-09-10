@@ -72,12 +72,11 @@ jobs:
         shell: bash
         env:
           MANUAL_APPLY: ${{ inputs.apply || false }}
-          BRANCH_CANARY_APPLY: ${{ github.event_name == 'push' && github.event.head_commit.message == 'Run bounded three-item production canary' }}
         run: |
           set -euo pipefail
           args=()
           event="${{ github.event_name }}"
-          if [[ ( "$event" == "push" && "$BRANCH_CANARY_APPLY" != "true" ) || ( "$event" == "workflow_dispatch" && "$MANUAL_APPLY" != "true" ) ]]; then
+          if [[ "$event" == "push" || ( "$event" == "workflow_dispatch" && "$MANUAL_APPLY" != "true" ) ]]; then
             args+=(--dry-run)
           fi
           python -m app.cli card-gmail-recurring "${args[@]}"
