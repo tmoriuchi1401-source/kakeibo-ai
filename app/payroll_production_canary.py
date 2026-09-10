@@ -169,11 +169,16 @@ def _read_planned_rows(reader, sheet_key: str, statement_id: str):
     for raw_row in reader.data_rows(sheet_key):
         if len(raw_row) <= identity_index or raw_row[identity_index] != statement_id:
             continue
-        values = list(raw_row) + [None] * max(0, len(columns) - len(raw_row))
+        values = [None if value == "" else value for value in raw_row]
+        values += [None] * max(0, len(columns) - len(values))
         result.append(PayrollPlannedRow(
             columns=columns, values=tuple(values[:len(columns)]),
         ))
     return tuple(result)
+
+
+def _same_a1_range(actual: str | None, expected: str) -> bool:
+    return bool(actual) and actual.replace("'", "") == expected.replace("'", "")
 
 
 def build_payroll_canary_preview(
@@ -378,8 +383,12 @@ def apply_payroll_canary(
     ranges_exact = (
         recording.header_outcome is not None
         and recording.item_outcome is not None
-        and recording.header_outcome.updated_range == preview.expected_header_range
-        and recording.item_outcome.updated_range == preview.expected_item_range
+        and _same_a1_range(
+            recording.header_outcome.updated_range, preview.expected_header_range,
+        )
+        and _same_a1_range(
+            recording.item_outcome.updated_range, preview.expected_item_range,
+        )
     )
     unexpected = (
         not exact or not ranges_exact

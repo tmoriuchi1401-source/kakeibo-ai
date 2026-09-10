@@ -155,7 +155,8 @@ class Writer:
         self.reader.rows["payroll_statements"].extend(row.values for row in rows)
         return PayrollAppendOutcome(
             status="confirmed_success", requested_rows=len(rows),
-            confirmed_rows=len(rows), updated_range=self.preview.expected_header_range,
+            confirmed_rows=len(rows),
+            updated_range=self.preview.expected_header_range.replace("'", ""),
         )
 
     def append_item_rows(self, rows):
@@ -166,7 +167,8 @@ class Writer:
         self.reader.rows["payroll_items"].extend(values)
         return PayrollAppendOutcome(
             status="confirmed_success", requested_rows=len(rows),
-            confirmed_rows=len(rows), updated_range=self.preview.expected_item_range,
+            confirmed_rows=len(rows),
+            updated_range=self.preview.expected_item_range.replace("'", ""),
         )
 
 
