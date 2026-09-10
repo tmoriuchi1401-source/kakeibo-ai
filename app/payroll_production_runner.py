@@ -105,11 +105,26 @@ def run_payroll_production_preview(
         PayrollSourceReconciliationDecision
     ] = (),
     reconciliation_key: bytes | None = None,
+    reconciliation_journal_path=None,
+    reconciliation_key_path=None,
+    repository_root=None,
 ) -> PayrollProductionRunReport:
     """Classify every candidate independently without invoking a writer."""
 
     candidates = tuple(candidates)
     decisions = tuple(reconciliation_decisions)
+    if reconciliation_journal_path is not None or reconciliation_key_path is not None:
+        if reconciliation_journal_path is None or reconciliation_key_path is None or repository_root is None:
+            decisions = ()
+            reconciliation_key = None
+        else:
+            try:
+                from .payroll_reconciliation_persistence import load_reconciliation_journal, load_reconciliation_key
+                reconciliation_key = load_reconciliation_key(reconciliation_key_path, repository_root=repository_root)
+                decisions = load_reconciliation_journal(reconciliation_journal_path, local_key=reconciliation_key)
+            except (OSError, ValueError, UnicodeError, KeyError, TypeError):
+                decisions = ()
+                reconciliation_key = None
     decision_counts = Counter(
         decision.alternate_content_hash for decision in decisions
     )
