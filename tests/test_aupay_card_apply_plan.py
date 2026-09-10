@@ -5,6 +5,7 @@ from app.aupay_card_apply_plan import (
     CanonicalApplyCandidate,
     CanonicalApplyPlan,
     build_canonical_apply_plan,
+    project_candidate_batch_plan,
     project_one_candidate_plan,
     require_executable_apply_plan,
 )
@@ -114,6 +115,33 @@ def test_public_projection_selects_exactly_one_without_mutating_full_plan():
     assert projected.candidates[0].identity == mail_id("b")
     assert projected.canonical_transaction_count == 1
     assert projected.canonical_accounting_valid
+
+
+def test_public_batch_projection_preserves_exact_requested_eligible_order():
+    full_plan = plan([
+        row(mail_id("a"), merchant="A"),
+        row(mail_id("b"), merchant="B", amount=2000),
+        row(mail_id("c"), merchant="C", amount=3000),
+    ])
+
+    projected = project_candidate_batch_plan(
+        full_plan, (mail_id("c"), mail_id("a")),
+    )
+
+    assert [candidate.identity for candidate in projected.candidates] == [
+        mail_id("c"), mail_id("a"),
+    ]
+    assert projected.canonical_transaction_count == 2
+    assert projected.eligible_canonical_count == 2
+    assert projected.canonical_accounting_valid
+
+
+def test_public_batch_projection_rejects_duplicates_and_missing_identity():
+    full_plan = plan([row(mail_id("a")), row(mail_id("b"), amount=2000)])
+    with pytest.raises(ValueError, match="duplicate_identity"):
+        project_candidate_batch_plan(full_plan, (mail_id("a"), mail_id("a")))
+    with pytest.raises(RuntimeError, match="candidate_not_found"):
+        project_candidate_batch_plan(full_plan, (mail_id("z"),))
 
 
 def test_public_projection_rejects_missing_and_withheld_identity():

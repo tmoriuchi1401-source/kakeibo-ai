@@ -610,6 +610,65 @@ def project_one_candidate_plan(
     return validate_canonical_apply_plan(projected)
 
 
+def project_candidate_batch_plan(
+    source_plan: CanonicalApplyPlan, candidate_identities: tuple[str, ...],
+) -> CanonicalApplyPlan:
+    """Derive an exact ordered eligible batch without exposing constructors."""
+    validate_canonical_apply_plan(source_plan)
+    if not candidate_identities or len(candidate_identities) > 100:
+        raise ValueError("apply_batch_size_invalid")
+    if len(candidate_identities) != len(set(candidate_identities)):
+        raise ValueError("apply_batch_duplicate_identity")
+    candidates_by_identity = {
+        candidate.identity: candidate for candidate in source_plan.candidates
+    }
+    decisions_by_identity = {
+        decision.canonical_identity: decision for decision in source_plan.item_decisions
+    }
+    try:
+        candidates = tuple(candidates_by_identity[value] for value in candidate_identities)
+        decisions = tuple(decisions_by_identity[value] for value in candidate_identities)
+    except KeyError as exc:
+        if exc.args[0] in decisions_by_identity:
+            raise RuntimeError("apply_plan_candidate_not_eligible") from exc
+        raise RuntimeError("apply_plan_candidate_not_found") from exc
+    projected = CanonicalApplyPlan._create(
+        authority=_PROJECTION_AUTHORITY,
+        schema_version=APPLY_PLAN_SCHEMA_VERSION,
+        status="ready",
+        candidates=candidates,
+        item_decisions=decisions,
+        blocked_reasons=(),
+        raw_transaction_count=sum(len(item.source_identities) for item in decisions),
+        canonical_transaction_count=len(candidates),
+        noncanonical_resend_count=sum(len(item.source_identities) - 1 for item in decisions),
+        eligible_canonical_count=len(candidates),
+        withheld_ambiguous_count=0,
+        parser_review_count=0,
+        parser_review_line_item_count=0,
+        reconciliation_review_count=0,
+        rejected_transaction_count=0,
+        identity_collision_count=0,
+        cross_source_strong_match=sum(
+            item.cross_source_state == "cross_source_strong_match" for item in decisions
+        ),
+        cross_source_ambiguous=0,
+        cross_source_no_match=sum(
+            item.cross_source_state == "cross_source_no_match" for item in decisions
+        ),
+        existing_identity_duplicate_count=0,
+        return_transaction_count=0,
+        withheld_return_count=0,
+        duplicate_existing_identity_count=0,
+        withheld_review_count=0,
+        invalid_item_count=0,
+        global_withheld_count=0,
+        item_withheld_reason_counts=(),
+        canonical_accounting_valid=True,
+    )
+    return validate_canonical_apply_plan(projected)
+
+
 def require_executable_apply_plan(value: object, *, apply: bool) -> CanonicalApplyPlan:
     """Future writer guard: require validated authority and explicit consent."""
     plan = validate_canonical_apply_plan(value)
