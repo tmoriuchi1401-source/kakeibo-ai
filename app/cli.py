@@ -205,10 +205,8 @@ def main():
             raise SystemExit(1)
         print("開発環境チェック完了")
     elif args.cmd=="payroll-file-preview":
-        import json
         print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
     elif args.cmd=="payroll-drive-preview":
-        import json
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
     elif args.cmd=="init":

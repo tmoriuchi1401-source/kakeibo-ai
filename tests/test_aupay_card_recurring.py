@@ -2,8 +2,10 @@ from datetime import datetime, timedelta
 import base64
 from email.message import EmailMessage
 import json
+import sys
 from zoneinfo import ZoneInfo
 
+from app import cli
 from app.aupay_card_batch import ProtectedRecurringAuthorityProvider
 from app.aupay_card_production import ProtectedAuditKeyProvider
 from app.aupay_card_recurring import (
@@ -205,3 +207,45 @@ def test_dry_run_and_incomplete_collection_do_not_advance_checkpoint(tmp_path):
     assert failed["write_requests"] == 0
     assert parts[2].successful_window_end() is None
     assert parts[5].write_calls == 0
+
+
+def test_recurring_cli_renders_summary_without_json_scope_error(monkeypatch, tmp_path, capsys):
+    class FakeSettings:
+        spreadsheet_id = "sheet-production"
+        gmail_token_json = "{}"
+
+        def validate(self, **_kwargs):
+            return None
+
+    result = {
+        "schema_version": 1, "run_id": "dry-run", "status": "dry_run_ready",
+        "source_window_start": NOW.isoformat(), "source_window_end": NOW.isoformat(),
+        "source_timezone": "Asia/Tokyo", "found": 1, "fetched": 1,
+        "new_eligible": 1, "already_present": 0, "withheld": 0, "review": 0,
+        "written": 0, "duplicate": 0, "failure": 0, "write_requests": 0,
+        "manifest_final": "not_created", "capability_final": "not_issued",
+        "journal_final": "not_started", "lease_final": "not_acquired",
+        "failure_reason": "",
+    }
+    monkeypatch.setattr(cli, "Settings", FakeSettings)
+    monkeypatch.setattr(cli, "SheetsDB", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: object())
+    monkeypatch.setattr(cli, "gmail_readonly_service", lambda _token: object())
+    monkeypatch.setattr(cli, "SqliteRecurringRunState", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "ProtectedAuditKeyProvider", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        cli, "ProtectedRecurringAuthorityProvider", lambda *_args, **_kwargs: object()
+    )
+    monkeypatch.setattr(cli, "run_recurring_ingestion", lambda **_kwargs: result)
+    monkeypatch.setattr(
+        sys, "argv",
+        ["kakeibo", "card-gmail-recurring", "--state-dir", str(tmp_path),
+         "--audit-key-file", str(tmp_path / "key.json"),
+         "--authority-file", str(tmp_path / "authority.json"), "--dry-run"],
+    )
+
+    cli.main()
+
+    rendered = json.loads(capsys.readouterr().out)
+    assert rendered["status"] == "dry_run_ready"
+    assert rendered["failure"] == 0
