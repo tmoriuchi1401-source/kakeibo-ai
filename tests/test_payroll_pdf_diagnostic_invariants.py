@@ -204,6 +204,7 @@ def test_production_modules_do_not_depend_on_observer():
                          "payroll_coordinate_diagnostics.py", "payroll_boundary_diagnostics.py",
                          "payroll_ownership_provenance.py", "payroll_extraction_path_diagnostics.py",
                          "payroll_ocr_snapshot_bridge.py",
+                         "payroll_pdf_text_snapshot_bridge.py",
                          "payroll_ownership_integration.py"}:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
@@ -237,6 +238,7 @@ def test_ownership_integration_is_the_only_narrow_production_bridge():
         for alias in node.names
     }
     assert provenance_imports == {
+        "CandidateClaim",
         "PayrollOwnershipAdoptionCandidate",
         "PayrollOwnershipAttestationEvaluation",
         "PayrollOwnershipPlanBinding",
@@ -244,8 +246,10 @@ def test_ownership_integration_is_the_only_narrow_production_bridge():
         "analyze_successful_claim_authority",
         "attest_payroll_write_plan_ownership",
         "capture_candidate_enumeration",
+        "close_consumption_provenance_from_instrumentation",
         "evaluate_adoption_candidate",
         "reconstruct_consumption",
+        "trace_incomplete_ownership",
     }
     source = path.read_text(encoding="utf-8-sig")
     assert "apply_payroll_write_plans" not in source

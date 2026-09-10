@@ -9,6 +9,7 @@ from app.payroll_ownership_provenance import (
     CandidateClaim, _portable_production_claim_identity,
     analyze_successful_claim_authority, assess_ownership,
     capture_candidate_enumeration, diagnose_incomplete_ownership,
+    close_consumption_provenance_from_instrumentation,
     evaluate_adoption_candidate, PayrollStorageAuthorityEvidence,
     reconstruct_consumption,
     trace_incomplete_ownership,
@@ -36,6 +37,48 @@ def test_unique_success_consumes_one_physical_token_and_excludes_another():
     result = assess_ownership(observed, provenance, claims)
     assert result[observed.token_ids[1]].state == "definitely_used"
     assert result[observed.token_ids[2]].state == "definitely_unused"
+
+
+def test_ocr_reconstructed_label_closes_only_via_complete_instrumentation():
+    observed = observe_tokens((
+        token("雇用", 10, 10, width=20, confidence=86),
+        token("保険", 34, 10, width=20, confidence=86),
+        token("料", 58, 10, width=8, confidence=59),
+        token("10,056", 120, 10, confidence=92),
+    ), local_key=KEY, parser_mode="ocr")
+
+    provenance = reconstruct_consumption(observed)
+    assert not provenance.complete
+    claims = tuple(CandidateClaim("instrumentation", token_id)
+                   for token_id in observed.token_ids)
+    instrumentation = trace_incomplete_ownership(observed, provenance, claims)
+    closed = close_consumption_provenance_from_instrumentation(
+        observed, provenance, instrumentation,
+    )
+
+    assert closed.complete
+    assert [mapping.reason_code for mapping in closed.mappings] == [
+        "unique_parser_counterfactual_via_component_trace",
+    ]
+
+
+def test_incomplete_or_stale_instrumentation_cannot_close_provenance():
+    observed = observe_tokens((
+        token("雇用", 10, 10, width=20, confidence=86),
+        token("保険", 34, 10, width=20, confidence=86),
+        token("料", 58, 10, width=8, confidence=59),
+        token("10,056", 120, 10, confidence=92),
+    ), local_key=KEY, parser_mode="ocr")
+    provenance = reconstruct_consumption(observed)
+    empty = trace_incomplete_ownership(observed, provenance, ())
+
+    assert close_consumption_provenance_from_instrumentation(
+        observed, provenance, empty,
+    ) == provenance
+    stale = replace(empty, snapshot_id="stale")
+    assert close_consumption_provenance_from_instrumentation(
+        observed, provenance, stale,
+    ) == provenance
 
 
 def test_duplicate_same_text_is_resolved_only_when_counterfactual_is_unique():

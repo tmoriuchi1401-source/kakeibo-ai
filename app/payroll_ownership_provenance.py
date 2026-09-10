@@ -6,7 +6,7 @@ token missing from reconstructed consumption is *not* unused unless the whole
 success set and every consumption mapping are complete.
 """
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import hmac
 import json
@@ -1649,3 +1649,53 @@ def trace_incomplete_ownership(snapshot, provenance, claims=()):
     return OwnershipInstrumentationDiagnostic(
         snapshot.snapshot_id, tuple(traces), tuple(mappings),
     )
+
+
+def close_consumption_provenance_from_instrumentation(
+    snapshot, provenance, instrumentation,
+):
+    """Derive closure only from complete same-snapshot counterfactual traces.
+
+    ``reconstruct_consumption`` deliberately remains conservative for physical
+    multi-token OCR labels.  This adapter does not change that result; it creates
+    a new provenance value only when existing instrumentation independently
+    proves the exact successful occurrence and its unique physical value token.
+    """
+
+    if (not isinstance(provenance, ConsumptionProvenance)
+            or not isinstance(instrumentation, OwnershipInstrumentationDiagnostic)
+            or provenance.snapshot_id != snapshot.snapshot_id
+            or instrumentation.snapshot_id != snapshot.snapshot_id
+            or provenance.token_count != len(snapshot.token_ids)
+            or not provenance.page_scope_complete
+            or not provenance.source_materialization_matches
+            or not provenance.success_set_complete):
+        return provenance
+    traces_by_occurrence = {}
+    for trace in instrumentation.successful_mappings:
+        if trace.complete and trace.value_token_id is not None:
+            traces_by_occurrence.setdefault(trace.item_occurrence, []).append(trace)
+    closed = []
+    for mapping in provenance.mappings:
+        if mapping.token_id is not None:
+            closed.append(mapping)
+            continue
+        options = traces_by_occurrence.get(mapping.item_occurrence, [])
+        if len(options) != 1:
+            closed.append(mapping)
+            continue
+        trace = options[0]
+        if (trace.value_token_id not in snapshot.token_ids
+                or trace.value_token_id in snapshot.identity_ambiguous
+                or not trace.label_component_ids
+                or any(token_id not in snapshot.token_ids
+                       or token_id in snapshot.identity_ambiguous
+                       for token_id in trace.label_component_ids)):
+            closed.append(mapping)
+            continue
+        closed.append(ConsumptionMapping(
+            mapping.item_occurrence,
+            trace.value_token_id,
+            "unique_parser_counterfactual_via_component_trace",
+        ))
+    return replace(provenance, mappings=tuple(closed))

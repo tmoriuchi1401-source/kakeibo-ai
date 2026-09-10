@@ -121,11 +121,75 @@ def test_shadow_disabled_does_not_touch_key_drive_parser_or_capture():
         downloader=Poison(),
         parser=Poison(),
         capture=Poison(),
+        capture_pdf_text=Poison(),
     )
 
     assert result is DISABLED_PAYROLL_OWNERSHIP_SHADOW_REPORT
     assert result.safe_dict()["writer_invocation_count"] == 0
     assert result.safe_dict()["apply_invocation_count"] == 0
+
+
+def test_drive_shadow_evaluates_pdf_text_capture_without_writer_or_apply():
+    preview, _storage, _plan, ownership_snapshot = shadow_inputs()
+    preview.file_type = "pdf"
+    preview.extraction_method = "pdf_text"
+    capture = SimpleNamespace(
+        snapshot=ownership_snapshot.__class__(
+            ownership_snapshot.snapshot_id,
+            ownership_snapshot.tokens,
+            ownership_snapshot.token_ids,
+            ownership_snapshot.facts,
+            ownership_snapshot.identity_ambiguous,
+            "pdf",
+        ),
+        ownership_ready=True,
+        reason="ownership_ready",
+    )
+
+    report = drive_payroll_ownership_shadow(
+        "folder-00001", sheets_snapshot(), enabled=True, local_key=KEY,
+        employer_id="employer-1", statement_type="salary",
+        service=FakeDriveService(),
+        downloader=lambda _file_id: b"synthetic-source-bytes",
+        parser=lambda _path: preview,
+        capture=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("OCR capture called for PDF text")
+        ),
+        capture_pdf_text=lambda _path, *, local_key: capture,
+    ).safe_dict()
+
+    assert report["evaluated_files"] == 1
+    assert report["parser_modes"] == {"pdf_text": 1}
+    assert report["candidate_rejections"] != {
+        "production_pdf_text_ownership_capture_unavailable": 1,
+    }
+    assert report["false_attestation_count"] == 0
+    assert report["differential_unchanged"]
+    assert report["writer_invocation_count"] == report["apply_invocation_count"] == 0
+
+
+def test_drive_shadow_does_not_capture_when_statement_type_is_missing():
+    preview, _storage, _plan, _ownership_snapshot = shadow_inputs()
+
+    report = drive_payroll_ownership_shadow(
+        "folder-00001", sheets_snapshot(), enabled=True, local_key=KEY,
+        employer_id="employer-1", statement_type=None,
+        service=FakeDriveService(),
+        downloader=lambda _file_id: b"synthetic-source-bytes",
+        parser=lambda _path: preview,
+        capture=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ownership capture called without statement type")
+        ),
+        capture_pdf_text=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("PDF capture called without statement type")
+        ),
+    ).safe_dict()
+
+    assert report["claim_count"] == 0
+    assert report["adoption_candidate_count"] == 0
+    assert report["candidate_rejections"] == {"statement_type_missing": 1}
+    assert report["false_attestation_count"] == 0
+    assert report["writer_invocation_count"] == report["apply_invocation_count"] == 0
 
 
 class FakeDriveService:

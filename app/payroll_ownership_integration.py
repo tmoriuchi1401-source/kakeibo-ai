@@ -16,7 +16,9 @@ from typing import Literal
 from .drive_payroll import DrivePayrollPreview, _suffix, temporary_payroll_file
 from .payroll_business_authority import resolve_payroll_business_authority
 from .payroll_ocr_snapshot_bridge import capture_ocr_ownership_snapshot
+from .payroll_pdf_text_snapshot_bridge import capture_pdf_text_ownership_snapshot
 from .payroll_ownership_provenance import (
+    CandidateClaim,
     PayrollOwnershipAdoptionCandidate,
     PayrollOwnershipAttestationEvaluation,
     PayrollOwnershipPlanBinding,
@@ -24,8 +26,10 @@ from .payroll_ownership_provenance import (
     analyze_successful_claim_authority,
     attest_payroll_write_plan_ownership,
     capture_candidate_enumeration,
+    close_consumption_provenance_from_instrumentation,
     evaluate_adoption_candidate,
     reconstruct_consumption,
+    trace_incomplete_ownership,
 )
 from .payroll_statement_parser import preview_payroll_file
 from .payroll_sheets import usable_aliases
@@ -382,6 +386,15 @@ def evaluate_payroll_ownership_shadow_artifact(
         page_scope_complete=source_replay_closed,
         success_set_complete=source_replay_closed,
     )
+    instrumentation = trace_incomplete_ownership(
+        ownership_snapshot,
+        provenance,
+        tuple(CandidateClaim("instrumentation", token_id)
+              for token_id in ownership_snapshot.token_ids),
+    )
+    provenance = close_consumption_provenance_from_instrumentation(
+        ownership_snapshot, provenance, instrumentation,
+    )
     ledger = capture_candidate_enumeration(ownership_snapshot)
     authority = analyze_successful_claim_authority(
         ownership_snapshot, provenance, ledger,
@@ -556,6 +569,7 @@ def drive_payroll_ownership_shadow(
     downloader=None,
     parser=preview_payroll_file,
     capture=capture_ocr_ownership_snapshot,
+    capture_pdf_text=capture_pdf_text_ownership_snapshot,
 ) -> PayrollOwnershipShadowReport:
     """Read production sources and return anonymous evidence without mutation."""
 
@@ -597,7 +611,12 @@ def drive_payroll_ownership_shadow(
                     file_name=file.get("name"),
                 )
                 plan = build_write_plan([storage], sheets_snapshot)[0]
-                if preview.extraction_method != "ocr":
+                missing_business_authority = (
+                    "employer_scope_missing" if authority.employer_id is None
+                    else "statement_type_missing" if authority.statement_type is None
+                    else None
+                )
+                if missing_business_authority is not None:
                     artifacts.append(PayrollOwnershipShadowArtifactResult(
                         parser_mode=preview.extraction_method,
                         plan_status=plan.status,
@@ -609,20 +628,24 @@ def drive_payroll_ownership_shadow(
                             item.review_reason_code == "unknown_with_value"
                             for item in storage.items
                         ),
-                        storage_review_count=sum(item.needs_review for item in storage.items),
+                        storage_review_count=sum(
+                            item.needs_review for item in storage.items
+                        ),
                         claim_count=0,
                         authoritative_standard_claim_count=0,
                         fallback_claim_count=0,
                         adoption_candidate_count=0,
                         attestation_success_count=0,
                         false_attestation_count=0,
-                        candidate_rejections=((
-                            "production_pdf_text_ownership_capture_unavailable", 1,
-                        ),),
-                        capture_reason="production_pdf_text_ownership_capture_unavailable",
+                        candidate_rejections=((missing_business_authority, 1),),
+                        capture_reason="business_authority_incomplete",
                     ))
                     continue
-                captured = capture(path, local_key=local_key)
+                captured = (
+                    capture(path, local_key=local_key)
+                    if preview.extraction_method == "ocr"
+                    else capture_pdf_text(path, local_key=local_key)
+                )
             artifacts.append(evaluate_payroll_ownership_shadow_artifact(
                 preview,
                 storage,
