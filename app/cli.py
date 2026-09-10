@@ -63,6 +63,12 @@ from .payroll_ownership_integration import (
     load_local_payroll_ownership_hmac_key,
 )
 from .payroll_review_integration import PayrollReviewReloadRequest
+from .payroll_production_canary import (
+    apply_payroll_canary,
+    load_production_canary_preview,
+    production_canary_writer,
+    rebuild_latest_payroll_canary_plan,
+)
 from .payroll_storage_preview import (
     build_append_plan,
     drive_save_preview,
@@ -188,6 +194,17 @@ def main():
     payroll_ownership_shadow.add_argument(
         "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
     )
+    payroll_canary=sub.add_parser("payroll-production-canary")
+    payroll_canary.add_argument("--enable-review-journal",action="store_true")
+    payroll_canary.add_argument("--review-journal-file")
+    payroll_canary.add_argument("--review-hmac-key-file")
+    payroll_canary.add_argument("--review-source-content-hash")
+    payroll_canary.add_argument("--employer-id")
+    payroll_canary.add_argument(
+        "--statement-type", choices=("salary", "bonus", "adjustment"),
+    )
+    payroll_canary.add_argument("--apply",action="store_true")
+    payroll_canary.add_argument("--expected-plan-hash")
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-master-sync-preview")
     payroll_master_apply=sub.add_parser("payroll-master-sync")
@@ -292,6 +309,48 @@ def main():
                 statement_type=args.statement_type,
             )
             print(json.dumps(report.safe_dict(),ensure_ascii=False))
+    elif args.cmd=="payroll-production-canary":
+        import json
+        if not args.enable_review_journal:
+            p.error("payroll production canary requires explicit review journal opt-in")
+        if not all((args.review_journal_file,args.review_hmac_key_file,
+                    args.review_source_content_hash,args.employer_id,
+                    args.statement_type)):
+            p.error("payroll production canary requires exact journal, key, source, employer, and type")
+        if args.apply and not args.expected_plan_hash:
+            p.error("payroll production canary apply requires expected plan hash")
+        s=Settings(); s.validate(need_sheet=True,need_payroll_drive=True)
+        reader=PayrollSheetsReadRepository(s.spreadsheet_id)
+        preview=load_production_canary_preview(
+            spreadsheet_id=s.spreadsheet_id,
+            folder_id=s.payroll_drive_folder_id,
+            expected_content_hash=args.review_source_content_hash,
+            journal_path=args.review_journal_file,
+            hmac_key_path=args.review_hmac_key_file,
+            repository_root=Path(__file__).resolve().parents[1],
+            employer_id=args.employer_id,
+            statement_type=args.statement_type,
+            reader=reader,
+        )
+        if not args.apply:
+            print(json.dumps(preview.model_dump(mode="json"),ensure_ascii=False))
+        else:
+            report=apply_payroll_canary(
+                preview,
+                expected_plan_hash=args.expected_plan_hash,
+                reader=reader,
+                latest_plan=lambda: rebuild_latest_payroll_canary_plan(
+                    preview, reader.snapshot(),
+                    journal_path=args.review_journal_file,
+                    hmac_key_path=args.review_hmac_key_file,
+                    repository_root=Path(__file__).resolve().parents[1],
+                ),
+                writer=production_canary_writer(s.spreadsheet_id),
+                confirmed=True,
+            )
+            print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
+            if report.unexpected_changes or not report.post_read_exact:
+                raise SystemExit(2)
     elif args.cmd in {"payroll-schema-preview", "payroll-schema-apply"}:
         import json
         s=Settings(); s.validate(need_sheet=True)

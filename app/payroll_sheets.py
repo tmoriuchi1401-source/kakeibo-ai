@@ -122,6 +122,15 @@ class PayrollSheetsReadRepository:
                 continue
         return records
 
+    def data_rows(self, sheet_key: str) -> list[list]:
+        """Return stored data rows without silently repairing malformed values."""
+        title = SHEET_TITLES[sheet_key]
+        return self._values(f"'{title}'!A2:ZZ")
+
+    def data_row_count(self, sheet_key: str) -> int:
+        """Count physical non-header rows for append-range and delta checks."""
+        return len(self.data_rows(sheet_key))
+
     def read_statement_headers(self) -> list[PayrollStatementRecord]:
         return self._records("payroll_statements", PayrollStatementRecord)
 
