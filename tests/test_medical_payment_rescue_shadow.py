@@ -8,9 +8,11 @@ from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
 from app.medical_payment_level2_shadow import evaluate_level2_payment_shadow
 from app.medical_payment_rescue_shadow import (
     SCHEMA_VERSION,
+    evaluate_coherent_ambiguity_stability,
     evaluate_materialization_stable_boundary_shadow,
     evaluate_payment_rescue_shadow,
     evaluate_stable_coherent_form,
+    observe_coherent_numeric_ambiguity,
 )
 from app.medical_receipt_privacy import build_receipt_privacy_preview
 
@@ -345,6 +347,165 @@ def test_production_privacy_preview_is_invariant_after_boundary_observation():
     after = build_receipt_privacy_preview("病院 診療\n領収金額", ())
     assert after == before
     assert after.status == "needs_review"
+
+
+def test_coherent_competitor_count_buckets_are_observation_level_only():
+    two = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("2222円", 100, 170),
+    )
+    three = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("2222円", 100, 170),
+        region("3333円", 100, 205),
+    )
+    four = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("2222円", 100, 170),
+        region("3333円", 100, 205), region("4444円", 100, 240),
+    )
+    assert observe_coherent_numeric_ambiguity(two).competitor_count_two == 1
+    assert observe_coherent_numeric_ambiguity(three).competitor_count_three == 1
+    assert observe_coherent_numeric_ambiguity(four).competitor_count_four_plus == 1
+
+
+def test_coherent_relation_categories_cover_only_bounded_geometry_claims():
+    source = observation(
+        region("領収請求1234", 100, 100, width=100),
+        region("2222円", 220, 100),
+        region("3333円", 100, 135),
+        region("4444円", 250, 170),
+        region("5555円", 650, 850),
+    )
+    result = observe_coherent_numeric_ambiguity(source)
+    assert result.relation_same_region_count == 1
+    assert result.relation_same_line_count == 1
+    assert result.relation_adjacent_line_count == 1
+    assert result.relation_nearby_region_count == 1
+    assert result.relation_separated_region_count == 1
+    assert result.relation_unknown_count == 0
+
+
+def test_coherent_context_categories_use_existing_exact_signals_only():
+    source = observation(
+        region("領収請求", 100, 100, width=80),
+        region("支払1111円", 250, 100, width=90),
+        region("小計2222円", 250, 140, width=90),
+        region("消費税3333円", 250, 180, width=110),
+        region("保険4444円", 250, 220, width=90),
+        region("点数5555", 250, 260, width=90),
+        region("6666円", 250, 300, width=70),
+    )
+    result = observe_coherent_numeric_ambiguity(source)
+    # The payment-like numeric region is itself a second coherent observation,
+    # so every competitor-context bucket is observed once per coherent anchor.
+    assert result.coherent_observation_count == 2
+    assert result.context_payment_like_count == 2
+    assert result.context_subtotal_like_count == 2
+    assert result.context_tax_like_count == 2
+    assert result.context_burden_insurance_like_count == 2
+    assert result.context_count_points_like_count == 2
+    assert result.context_unknown_count == 2
+
+
+def test_structural_uniqueness_taxonomy_is_diagnostic_not_a_selector():
+    high = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("小計2222円", 650, 850, width=100),
+    )
+    additional_constraint = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 165), region("小計2222円", 650, 850, width=100),
+    )
+    intrinsic = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("2222円", 170, 100),
+    )
+    insufficient = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 650, 800), region("2222円", 650, 850),
+    )
+    assert observe_coherent_numeric_ambiguity(high).structural_uniqueness_a_count == 1
+    assert observe_coherent_numeric_ambiguity(additional_constraint).structural_uniqueness_b_count == 1
+    assert observe_coherent_numeric_ambiguity(intrinsic).structural_uniqueness_c_count == 1
+    assert observe_coherent_numeric_ambiguity(insufficient).structural_uniqueness_d_count == 1
+
+
+def test_coherent_materialization_stability_has_three_fail_closed_states():
+    stable_first = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1111円", 100, 135), region("2222円", 650, 850), unit="stable-first",
+    )
+    stable_second = observation(
+        region("領収請求", 102, 101, width=80),
+        region("1111円", 102, 136), region("2222円", 650, 850), unit="stable-second",
+    )
+    stable = evaluate_coherent_ambiguity_stability(
+        (stable_first, stable_second), same_source_confirmed=True
+    )
+    assert stable.stable_count == 1 and stable.partially_stable_count == 0
+
+    partial_second = observation(
+        region("領収請求", 102, 101, width=80),
+        region("1111円", 102, 166), region("2222円", 650, 850), unit="partial-second",
+    )
+    partial = evaluate_coherent_ambiguity_stability(
+        (stable_first, partial_second), same_source_confirmed=True
+    )
+    assert partial.partially_stable_count == 1 and partial.stable_count == 0
+
+    unstable_second = observation(
+        region("支払請求", 102, 101, width=80),
+        region("1111円", 650, 800), region("2222円", 650, 850),
+        region("3333円", 650, 900), unit="unstable-second",
+    )
+    unstable = evaluate_coherent_ambiguity_stability(
+        (stable_first, unstable_second), same_source_confirmed=True
+    )
+    assert unstable.unstable_count >= 1 and unstable.stable_count == 0
+
+
+def test_simple_numeric_heuristics_have_no_semantic_support():
+    first = observation(
+        region("領収請求", 100, 100, width=80),
+        region("1000円", 190, 100), region("9000円", 280, 100),
+    )
+    values_swapped = observation(
+        region("領収請求", 100, 100, width=80),
+        region("9000円", 190, 100), region("1000円", 280, 100),
+    )
+    first_result = observe_coherent_numeric_ambiguity(first)
+    swapped_result = observe_coherent_numeric_ambiguity(values_swapped)
+    first_order = (1000, 9000)
+    swapped_order = (9000, 1000)
+    # The geometry is unchanged while every positional/extremum answer changes.
+    # These assertions model adversarial outcomes only; no reusable selector is
+    # added to either production or shadow code.
+    assert first_order[0] != swapped_order[0]
+    assert first_order[-1] != swapped_order[-1]
+    assert first_order.index(max(first_order)) != swapped_order.index(max(swapped_order))
+    assert first_order.index(min(first_order)) != swapped_order.index(min(swapped_order))
+    assert first_result.aggregate() == swapped_result.aggregate()
+    assert first_result.nearest_without_semantic_support_count == 1
+    assert first_result.ordinal_without_semantic_support_count == 1
+    assert first_result.extremum_without_semantic_support_count == 1
+    assert first_result.same_line_ambiguity_count == 1
+    assert first_result.same_block_identity_unavailable_count == 1
+    assert first_result.structural_uniqueness_c_count == 1
+
+
+def test_coherent_ambiguity_aggregate_hides_private_surface_value_geometry_and_source():
+    source = observation(
+        region("SYNTHETIC_PRIVATE_MARKER領収請求", 123, 456, width=180),
+        region("987654円", 123, 490, width=88),
+        region("876543円", 650, 850, width=88), unit="private-coherent-source.png",
+    )
+    result = observe_coherent_numeric_ambiguity(source)
+    rendered = repr(result) + json.dumps(result.aggregate(), ensure_ascii=False)
+    assert "SYNTHETIC_PRIVATE_MARKER" not in rendered
+    assert "987654" not in rendered and "876543" not in rendered
+    assert "123" not in rendered and "456" not in rendered
+    assert "private-coherent-source" not in rendered
 
 
 def test_production_modules_do_not_import_rescue_shadow():

@@ -96,6 +96,48 @@ reconstruction is grade **C** for this evidence phase: do not promote it; retain
 the observer only if further real collection is expected, otherwise consider
 removing the unused complexity.
 
+## Coherent numeric-ambiguity follow-up
+
+The same corpus was evaluated twice per unit with separate pinned RapidOCR worker
+processes. The diagnostic never chooses a number. It records only fixed count,
+relation, context, stability, and structural-uniqueness categories. Incomplete
+units do not contribute a misleading coherent subset.
+
+All 14 coherent observations had four or more numeric competitors. Across the
+360 coherent-label/numeric pairings, the anonymous relation distribution was:
+
+- same OCR region: 1
+- same line: 6
+- adjacent line: 14
+- nearby region: 66
+- separated region: 273
+- unknown geometry: 0
+
+The context distribution over the same 360 pairings was:
+
+- payment-like: 8
+- subtotal-like: 0
+- tax-like: 2
+- burden/insurance-like: 5
+- count/points-like: 0
+- unknown: 345
+
+All 14 coherent observations were stable across the two materializations;
+partially stable and unstable counts were zero. This is stable ambiguity, not
+stable uniqueness: structural uniqueness was A=0, B=1, C=13, D=0.
+
+Adversarial synthetic controls show that nearest, first/last, maximum/minimum,
+same-line-only, and same-block-only rules are not safe. Numeric values can be
+permuted without changing the anonymous structure; multiple numerics can share a
+line; and OCR observations provide no native block identity. On the real corpus,
+all 14 observations therefore carry nearest, ordinal, extremum, and unavailable
+block-identity risk counters.
+
+The coherent strategy remains grade **C**. A single B-class observation is not
+enough to justify a selector, while 13 of 14 are intrinsically ambiguous under
+the available structure. End automatic-rescue exploration and keep manual review
+as the expected outcome.
+
 ## Selection
 
 Boundary reconstruction is not a production-candidate after the real-evidence

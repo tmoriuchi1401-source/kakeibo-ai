@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 import unicodedata
+from typing import Literal
 
 from .medical_ocr_observation_shadow import OcrObservation, TextRegion
 from .medical_payment_evidence import _NUMERIC_RUN, _POSSIBLE_PAYMENT_CONTEXT
@@ -109,6 +110,89 @@ class StableBoundaryEvaluation:
     safe_positive_count: int = 0
     materialization_unverified_count: int = 0
     materialization_conflict_count: int = 0
+    evaluation_failed: int = 0
+
+    def aggregate(self) -> dict[str, int | str]:
+        return dict(self.__dict__)
+
+
+RelationCategory = Literal[
+    "SAME_LINE", "SAME_REGION", "ADJACENT_LINE", "NEARBY_REGION",
+    "SEPARATED_REGION", "UNKNOWN",
+]
+ContextCategory = Literal[
+    "PAYMENT_LIKE", "SUBTOTAL_LIKE", "TAX_LIKE", "BURDEN_INSURANCE_LIKE",
+    "COUNT_POINTS_LIKE", "UNKNOWN",
+]
+UniquenessCategory = Literal["A", "B", "C", "D"]
+
+
+@dataclass(frozen=True)
+class _CoherentAmbiguityRecord:
+    surface: str = field(repr=False)
+    competitor_bucket: str
+    relation_counts: tuple[tuple[str, int], ...]
+    context_counts: tuple[tuple[str, int], ...]
+    uniqueness: UniquenessCategory
+
+    @property
+    def comparison_signature(self) -> tuple[object, ...]:
+        return (
+            self.competitor_bucket, self.relation_counts,
+            self.context_counts, self.uniqueness,
+        )
+
+
+@dataclass(frozen=True)
+class CoherentAmbiguityEvaluation:
+    schema_version: str = "medical-level2-coherent-ambiguity-v1"
+    coherent_observation_count: int = 0
+    competitor_count_two: int = 0
+    competitor_count_three: int = 0
+    competitor_count_four_plus: int = 0
+    competitor_count_other: int = 0
+    relation_same_line_count: int = 0
+    relation_same_region_count: int = 0
+    relation_adjacent_line_count: int = 0
+    relation_nearby_region_count: int = 0
+    relation_separated_region_count: int = 0
+    relation_unknown_count: int = 0
+    context_payment_like_count: int = 0
+    context_subtotal_like_count: int = 0
+    context_tax_like_count: int = 0
+    context_burden_insurance_like_count: int = 0
+    context_count_points_like_count: int = 0
+    context_unknown_count: int = 0
+    structural_uniqueness_a_count: int = 0
+    structural_uniqueness_b_count: int = 0
+    structural_uniqueness_c_count: int = 0
+    structural_uniqueness_d_count: int = 0
+    nearest_without_semantic_support_count: int = 0
+    ordinal_without_semantic_support_count: int = 0
+    extremum_without_semantic_support_count: int = 0
+    same_line_ambiguity_count: int = 0
+    same_region_ambiguity_count: int = 0
+    same_block_identity_unavailable_count: int = 0
+    observation_complete: bool = False
+    evaluation_failed: int = 0
+    _records: tuple[_CoherentAmbiguityRecord, ...] = field(default=(), repr=False)
+
+    def aggregate(self) -> dict[str, int | bool | str]:
+        return {
+            name: value for name, value in self.__dict__.items()
+            if not name.startswith("_")
+        }
+
+
+@dataclass(frozen=True)
+class CoherentMaterializationStability:
+    schema_version: str = "medical-level2-coherent-stability-v1"
+    evaluated_materialization_count: int = 0
+    compared_observation_count: int = 0
+    stable_count: int = 0
+    partially_stable_count: int = 0
+    unstable_count: int = 0
+    same_source_unverified_count: int = 0
     evaluation_failed: int = 0
 
     def aggregate(self) -> dict[str, int | str]:
@@ -436,6 +520,229 @@ def _coherent_surfaces(observation: OcrObservation) -> tuple[tuple[str, TextRegi
         ):
             values.append((compact, region))
     return tuple(values)
+
+
+def _coherent_relation(
+    label: TextRegion,
+    numeric: TextRegion,
+) -> tuple[RelationCategory, str]:
+    if label.ordinal == numeric.ordinal:
+        return "SAME_REGION", "STRONG"
+    lb, nb = _safe_box(label), _safe_box(numeric)
+    if lb is None or nb is None:
+        return "UNKNOWN", "UNRELATED"
+    order = {"UNRELATED": 0, "UNCERTAIN": 1, "STRONG": 2}
+    relations = (
+        classify_structural_relation(label, numeric),
+        classify_structural_relation(numeric, label),
+    )
+    relation = max(relations, key=lambda item: order[item.state])
+    if relation.state != "UNRELATED":
+        if relation.axis == "row_right":
+            return "SAME_LINE", relation.state
+        if relation.axis == "column_below":
+            return "ADJACENT_LINE", relation.state
+    lx, ly, lw, lh = lb
+    nx, ny, nw, nh = nb
+    horizontal_gap = max(lx - (nx + nw), nx - (lx + lw), 0.0)
+    vertical_gap = max(ly - (ny + nh), ny - (ly + lh), 0.0)
+    if max(horizontal_gap, vertical_gap) / max(lh, nh) <= 5.0:
+        return "NEARBY_REGION", "UNRELATED"
+    return "SEPARATED_REGION", "UNRELATED"
+
+
+def _coherent_context(region: TextRegion) -> ContextCategory:
+    compact = _compact_ocr_token(region.text)
+    if any(value in compact for value in ("保険", "公費", "自己負担", "一部負担")):
+        return "BURDEN_INSURANCE_LIKE"
+    if "税" in compact:
+        return "TAX_LIKE"
+    if any(value in compact for value in ("小計", "預り", "預かり", "お釣", "釣銭")):
+        return "SUBTOTAL_LIKE"
+    if any(value in compact for value in ("点数", "数量", "回数", "件数", "単価")):
+        return "COUNT_POINTS_LIKE"
+    if _label_vocabulary(compact):
+        return "PAYMENT_LIKE"
+    return "UNKNOWN"
+
+
+def _coherent_uniqueness(
+    relations: tuple[tuple[RelationCategory, str], ...],
+    contexts: tuple[ContextCategory, ...],
+    complete: bool,
+) -> UniquenessCategory:
+    if not complete or len(relations) < 2 or any(category == "UNKNOWN" for category, _ in relations):
+        return "D"
+    negative_contexts = {
+        "SUBTOTAL_LIKE", "TAX_LIKE", "BURDEN_INSURANCE_LIKE", "COUNT_POINTS_LIKE"
+    }
+    local_categories = {"SAME_REGION", "SAME_LINE", "ADJACENT_LINE", "NEARBY_REGION"}
+    plausible = [
+        index for index, ((category, _), context) in enumerate(zip(relations, contexts, strict=True))
+        if category in local_categories and context not in negative_contexts
+    ]
+    if len(plausible) > 1:
+        return "C"
+    if not plausible:
+        return "D"
+    selected = plausible[0]
+    selected_relation = relations[selected]
+    remaining_are_bounded = all(
+        index == selected
+        or context in negative_contexts
+        or relation[0] == "SEPARATED_REGION"
+        for index, (relation, context) in enumerate(zip(relations, contexts, strict=True))
+    )
+    if selected_relation[1] == "STRONG" and remaining_are_bounded:
+        return "A"
+    return "B"
+
+
+def observe_coherent_numeric_ambiguity(
+    observation: OcrObservation,
+) -> CoherentAmbiguityEvaluation:
+    """Classify every coherent/numeric pairing without selecting a numeric."""
+    if type(observation) is not OcrObservation:
+        return CoherentAmbiguityEvaluation(evaluation_failed=1)
+    try:
+        complete = observation.complete and not any(
+            set(region.issues) & _INCOMPLETE_ISSUES for region in observation.regions
+        )
+        # Match the established coherent-ambiguity population: incomplete OCR
+        # units do not contribute a misleading partial subset.
+        coherent = _coherent_surfaces(observation) if complete else ()
+        numerics = tuple(_numeric_regions(observation))
+        relation_totals = {category: 0 for category in (
+            "SAME_LINE", "SAME_REGION", "ADJACENT_LINE", "NEARBY_REGION",
+            "SEPARATED_REGION", "UNKNOWN",
+        )}
+        context_totals = {category: 0 for category in (
+            "PAYMENT_LIKE", "SUBTOTAL_LIKE", "TAX_LIKE",
+            "BURDEN_INSURANCE_LIKE", "COUNT_POINTS_LIKE", "UNKNOWN",
+        )}
+        competitor_buckets = {"TWO": 0, "THREE": 0, "FOUR_PLUS": 0, "OTHER": 0}
+        uniqueness_totals = {"A": 0, "B": 0, "C": 0, "D": 0}
+        records: list[_CoherentAmbiguityRecord] = []
+        same_line_ambiguity = same_region_ambiguity = 0
+        for surface, label in coherent:
+            count = len(numerics)
+            bucket = "TWO" if count == 2 else "THREE" if count == 3 else (
+                "FOUR_PLUS" if count >= 4 else "OTHER"
+            )
+            competitor_buckets[bucket] += 1
+            relations = tuple(_coherent_relation(label, numeric) for numeric in numerics)
+            contexts = tuple(_coherent_context(numeric) for numeric in numerics)
+            for category, _ in relations:
+                relation_totals[category] += 1
+            for context in contexts:
+                context_totals[context] += 1
+            uniqueness = _coherent_uniqueness(relations, contexts, complete)
+            uniqueness_totals[uniqueness] += 1
+            relation_counts = tuple(
+                (category, sum(item[0] == category for item in relations))
+                for category in relation_totals
+            )
+            context_counts = tuple(
+                (category, sum(item == category for item in contexts))
+                for category in context_totals
+            )
+            records.append(_CoherentAmbiguityRecord(
+                surface, bucket, relation_counts, context_counts, uniqueness
+            ))
+            same_line_ambiguity += int(sum(item[0] == "SAME_LINE" for item in relations) > 1)
+            same_region_ambiguity += int(sum(item[0] == "SAME_REGION" for item in relations) > 1)
+        ambiguous_count = sum(len(numerics) >= 2 for _ in coherent)
+        return CoherentAmbiguityEvaluation(
+            coherent_observation_count=len(coherent),
+            competitor_count_two=competitor_buckets["TWO"],
+            competitor_count_three=competitor_buckets["THREE"],
+            competitor_count_four_plus=competitor_buckets["FOUR_PLUS"],
+            competitor_count_other=competitor_buckets["OTHER"],
+            relation_same_line_count=relation_totals["SAME_LINE"],
+            relation_same_region_count=relation_totals["SAME_REGION"],
+            relation_adjacent_line_count=relation_totals["ADJACENT_LINE"],
+            relation_nearby_region_count=relation_totals["NEARBY_REGION"],
+            relation_separated_region_count=relation_totals["SEPARATED_REGION"],
+            relation_unknown_count=relation_totals["UNKNOWN"],
+            context_payment_like_count=context_totals["PAYMENT_LIKE"],
+            context_subtotal_like_count=context_totals["SUBTOTAL_LIKE"],
+            context_tax_like_count=context_totals["TAX_LIKE"],
+            context_burden_insurance_like_count=context_totals["BURDEN_INSURANCE_LIKE"],
+            context_count_points_like_count=context_totals["COUNT_POINTS_LIKE"],
+            context_unknown_count=context_totals["UNKNOWN"],
+            structural_uniqueness_a_count=uniqueness_totals["A"],
+            structural_uniqueness_b_count=uniqueness_totals["B"],
+            structural_uniqueness_c_count=uniqueness_totals["C"],
+            structural_uniqueness_d_count=uniqueness_totals["D"],
+            nearest_without_semantic_support_count=ambiguous_count,
+            ordinal_without_semantic_support_count=ambiguous_count,
+            extremum_without_semantic_support_count=ambiguous_count,
+            same_line_ambiguity_count=same_line_ambiguity,
+            same_region_ambiguity_count=same_region_ambiguity,
+            same_block_identity_unavailable_count=ambiguous_count,
+            observation_complete=complete,
+            _records=tuple(records),
+        )
+    except Exception:
+        return CoherentAmbiguityEvaluation(evaluation_failed=1)
+
+
+def evaluate_coherent_ambiguity_stability(
+    observations: tuple[OcrObservation, ...],
+    *,
+    same_source_confirmed: bool,
+) -> CoherentMaterializationStability:
+    """Compare anonymous coherent structure across independent materializations."""
+    if (
+        type(observations) is not tuple
+        or len(observations) < 2
+        or same_source_confirmed is not True
+    ):
+        return CoherentMaterializationStability(
+            evaluated_materialization_count=(
+                len(observations) if isinstance(observations, tuple) else 0
+            ),
+            same_source_unverified_count=1,
+        )
+    results = tuple(observe_coherent_numeric_ambiguity(item) for item in observations)
+    if any(item.evaluation_failed or not item.observation_complete for item in results):
+        return CoherentMaterializationStability(
+            evaluated_materialization_count=len(results), evaluation_failed=1
+        )
+    grouped: list[dict[str, list[tuple[object, ...]]]] = []
+    for result in results:
+        materialization: dict[str, list[tuple[object, ...]]] = {}
+        for record in result._records:
+            materialization.setdefault(record.surface, []).append(record.comparison_signature)
+        for signatures in materialization.values():
+            signatures.sort()
+        grouped.append(materialization)
+    stable = partial = unstable = compared = 0
+    for surface in set().union(*(set(item) for item in grouped)):
+        occurrence_count = max(len(item.get(surface, ())) for item in grouped)
+        for index in range(occurrence_count):
+            compared += 1
+            signatures = [
+                item.get(surface, [])[index]
+                for item in grouped
+                if index < len(item.get(surface, ()))
+            ]
+            if len(signatures) != len(grouped):
+                unstable += 1
+            elif len(set(signatures)) == 1:
+                stable += 1
+            elif any(len({signature[dimension] for signature in signatures}) == 1
+                     for dimension in range(3)):
+                partial += 1
+            else:
+                unstable += 1
+    return CoherentMaterializationStability(
+        evaluated_materialization_count=len(results),
+        compared_observation_count=compared,
+        stable_count=stable,
+        partially_stable_count=partial,
+        unstable_count=unstable,
+    )
 
 
 def evaluate_payment_rescue_shadow(observation: OcrObservation) -> RescueShadowEvaluation:
