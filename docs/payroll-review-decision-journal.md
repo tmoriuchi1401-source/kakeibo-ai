@@ -21,3 +21,18 @@ leaves the fresh candidate unchanged and in review.
 
 Possessing a valid journal does not authorize a Payroll writer/apply operation
 and does not enable ownership attestation in production.
+
+## Default-disabled production preview integration
+
+`app.payroll_review_integration` is called only between storage candidate
+creation and `PayrollWritePlan` construction. Disabled callers do not inspect a
+request and do not load either the key or journal. Enabled callers must provide
+an explicit `PayrollReviewReloadRequest` scoped to one exact content SHA-256.
+Non-selected sources cause no journal I/O, while a selected source is replayed
+all-or-nothing through the existing review authority.
+
+The `payroll-storage-preview` and `payroll-save-preview` commands require the
+explicit `--enable-review-journal` flag together with journal file, HMAC key
+file, and source content hash arguments. No environment setting enables this
+path. The integration returns only adjusted in-memory candidates and read-only
+metadata; it never invokes a Payroll writer or apply service.

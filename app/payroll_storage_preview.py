@@ -9,6 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .drive_payroll import DrivePayrollPreview, _suffix, temporary_payroll_file
 from .payroll_business_authority import resolve_payroll_business_authority
 from .payroll_models import PayrollReviewReasonCode
+from .payroll_review_integration import (
+    PayrollReviewReloadRequest,
+    reload_payroll_review_decisions,
+    summarize_payroll_review_reload,
+)
 from .payroll_sheets import PayrollSheetsSnapshot, usable_aliases
 from .payroll_storage import (
     PAYROLL_ITEM_COLUMNS,
@@ -557,6 +562,8 @@ def drive_storage_candidates(
     parser=None,
     employer_id: str | None = None,
     statement_type: str | None = None,
+    review_journal_enabled: bool = False,
+    review_reload_request: PayrollReviewReloadRequest | None = None,
 ) -> list[PayrollStorageCandidate]:
     """Read Phase A files and make B1 candidates without Drive/Sheets writes."""
     adapter = DrivePayrollPreview(
@@ -576,7 +583,7 @@ def drive_storage_candidates(
                 result, snapshot.employers,
                 employer_id=employer_id, statement_type=statement_type,
             )
-            candidates.append(phase_a_to_storage_candidate(
+            candidate = phase_a_to_storage_candidate(
                 result,
                 employer_id=authority.employer_id,
                 statement_type=authority.statement_type,
@@ -586,7 +593,12 @@ def drive_storage_candidates(
                 aliases=aliases,
                 standard_items=snapshot.standard_items,
                 file_name=file.get("name"),
-            ))
+            )
+            if review_journal_enabled is True:
+                candidate = reload_payroll_review_decisions(
+                    candidate, snapshot, review_reload_request, enabled=True,
+                ).candidate
+            candidates.append(candidate)
         except Exception:
             # Phase A already owns parser diagnostics. Storage planning must allow
             # the remaining candidates to proceed and never invent a row.
@@ -603,6 +615,8 @@ def drive_save_preview(
     parser=None,
     employer_id: str | None = None,
     statement_type: str | None = None,
+    review_journal_enabled: bool = False,
+    review_reload_request: PayrollReviewReloadRequest | None = None,
 ) -> dict[str, Any]:
     """Parse Drive statements and return a complete, strictly read-only plan."""
     adapter = DrivePayrollPreview(
@@ -611,6 +625,7 @@ def drive_save_preview(
     aliases = usable_aliases(snapshot.standard_items, snapshot.aliases)
     files = adapter._files()
     candidates = []
+    review_reload_evidence = []
     failed = 0
     for file in files:
         suffix = _suffix(file)
@@ -625,7 +640,7 @@ def drive_save_preview(
                 result, snapshot.employers,
                 employer_id=employer_id, statement_type=statement_type,
             )
-            candidates.append(phase_a_to_storage_candidate(
+            candidate = phase_a_to_storage_candidate(
                 result,
                 employer_id=authority.employer_id,
                 statement_type=authority.statement_type,
@@ -635,10 +650,22 @@ def drive_save_preview(
                 aliases=aliases,
                 standard_items=snapshot.standard_items,
                 file_name=file.get("name"),
-            ))
+            )
+            if review_journal_enabled is True:
+                reloaded = reload_payroll_review_decisions(
+                    candidate, snapshot, review_reload_request, enabled=True,
+                )
+                candidate = reloaded.candidate
+                review_reload_evidence.append(reloaded.evidence)
+            candidates.append(candidate)
         except Exception:
             failed += 1
     plans = build_save_plan(candidates, snapshot)
-    return save_preview_summary(
+    summary = save_preview_summary(
         plans, snapshot, sampled_files=len(files), failed_files=failed,
     )
+    if review_journal_enabled is True:
+        summary["review_journal_reload"] = summarize_payroll_review_reload(
+            review_reload_evidence,
+        )
+    return summary

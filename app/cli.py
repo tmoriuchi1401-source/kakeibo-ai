@@ -62,6 +62,7 @@ from .payroll_ownership_integration import (
     drive_payroll_ownership_shadow,
     load_local_payroll_ownership_hmac_key,
 )
+from .payroll_review_integration import PayrollReviewReloadRequest
 from .payroll_storage_preview import (
     build_append_plan,
     drive_save_preview,
@@ -163,11 +164,23 @@ def main():
     payroll_storage_preview.add_argument(
         "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
     )
+    payroll_storage_preview.add_argument(
+        "--enable-review-journal", action="store_true",
+    )
+    payroll_storage_preview.add_argument("--review-journal-file")
+    payroll_storage_preview.add_argument("--review-hmac-key-file")
+    payroll_storage_preview.add_argument("--review-source-content-hash")
     payroll_save_preview=sub.add_parser("payroll-save-preview")
     payroll_save_preview.add_argument("--employer-id")
     payroll_save_preview.add_argument(
         "--statement-type", choices=("salary", "bonus", "adjustment", "other"),
     )
+    payroll_save_preview.add_argument(
+        "--enable-review-journal", action="store_true",
+    )
+    payroll_save_preview.add_argument("--review-journal-file")
+    payroll_save_preview.add_argument("--review-hmac-key-file")
+    payroll_save_preview.add_argument("--review-source-content-hash")
     payroll_ownership_shadow=sub.add_parser("payroll-ownership-shadow")
     payroll_ownership_shadow.add_argument("--enable",action="store_true")
     payroll_ownership_shadow.add_argument("--hmac-key-file")
@@ -206,9 +219,24 @@ def main():
         import json
         s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
         snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        review_kwargs={}
+        if args.enable_review_journal:
+            if not all((args.review_journal_file,args.review_hmac_key_file,
+                        args.review_source_content_hash)):
+                p.error("enabled review journal requires journal, key, and source hash")
+            review_kwargs={
+                "review_journal_enabled":True,
+                "review_reload_request":PayrollReviewReloadRequest(
+                    expected_content_hash=args.review_source_content_hash,
+                    journal_path=args.review_journal_file,
+                    hmac_key_path=args.review_hmac_key_file,
+                    repository_root=Path(__file__).resolve().parents[1],
+                ),
+            }
         candidates=drive_storage_candidates(
             s.payroll_drive_folder_id,snapshot,
             employer_id=args.employer_id,statement_type=args.statement_type,
+            **review_kwargs,
         )
         plans=build_append_plan(candidates,snapshot)
         print(json.dumps(preview_summary(plans,snapshot),ensure_ascii=False))
@@ -216,10 +244,25 @@ def main():
         import json
         s=Settings(); s.validate(need_sheet=True, need_payroll_drive=True)
         snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        review_kwargs={}
+        if args.enable_review_journal:
+            if not all((args.review_journal_file,args.review_hmac_key_file,
+                        args.review_source_content_hash)):
+                p.error("enabled review journal requires journal, key, and source hash")
+            review_kwargs={
+                "review_journal_enabled":True,
+                "review_reload_request":PayrollReviewReloadRequest(
+                    expected_content_hash=args.review_source_content_hash,
+                    journal_path=args.review_journal_file,
+                    hmac_key_path=args.review_hmac_key_file,
+                    repository_root=Path(__file__).resolve().parents[1],
+                ),
+            }
         print(json.dumps(
             drive_save_preview(
                 s.payroll_drive_folder_id,snapshot,
                 employer_id=args.employer_id,statement_type=args.statement_type,
+                **review_kwargs,
             ),
             ensure_ascii=False,
         ))
