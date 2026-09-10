@@ -1,13 +1,6 @@
 name: au PAY card recurring production
 
 on:
-  push:
-    branches:
-      - agent/aupay-card-gmail-ingestion
-    paths:
-      - '.github/workflows/aupay-card-recurring-production.yml'
-      - 'app/cli.py'
-      - 'app/aupay_card_*.py'
   workflow_dispatch:
     inputs:
       apply:
@@ -76,7 +69,7 @@ jobs:
           set -euo pipefail
           args=()
           event="${{ github.event_name }}"
-          if [[ "$event" == "push" || ( "$event" == "workflow_dispatch" && "$MANUAL_APPLY" != "true" ) ]]; then
+          if [[ "$event" == "workflow_dispatch" && "$MANUAL_APPLY" != "true" ]]; then
             args+=(--dry-run)
           fi
           python -m app.cli card-gmail-recurring "${args[@]}"
