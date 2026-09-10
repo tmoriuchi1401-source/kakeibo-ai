@@ -14,6 +14,13 @@ absolute `after:` and `before:` dates. Relative Gmail operators such as
 `newer_than:1y` are rejected. A changed population produces a different keyed
 plan binding and cannot reuse the run manifest.
 
+Production canaries use manifest schema v3. A keyed full-plan binding covers
+candidate content, decisions, and accounting; a separate exact-one projection
+binding covers the selected `canonical-item-v2` content reference, target, and
+`batch_size: 1`. Changing identity, date, merchant, amount, transaction kind,
+business fingerprint, reconciliation state, or source identity changes the v2
+reference. The legacy v1 identity-only reference cannot authorize production.
+
 Standing production authority remains disabled. A `production_canary` manifest
 is valid only as one input to the separately protected, short-lived capability
 path; by itself it grants no transport authority.

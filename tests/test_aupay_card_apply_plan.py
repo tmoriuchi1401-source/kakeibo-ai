@@ -4,6 +4,7 @@ from app.aupay_card_apply_plan import (
     CanonicalApplyCandidate,
     CanonicalApplyPlan,
     build_canonical_apply_plan,
+    project_one_candidate_plan,
     require_executable_apply_plan,
 )
 from app.transaction_plan import normalize_card_transaction, reconcile_transactions
@@ -90,6 +91,35 @@ def test_noncanonical_resend_is_not_projected_and_pair_yields_one_candidate():
     assert result.noncanonical_resend_count == 1
     assert len(result.candidates[0].to_import_row()) == 12
     assert result.candidates[0].to_import_row()[10] == result.candidates[0].business_fingerprint
+
+
+def test_public_projection_selects_exactly_one_without_mutating_full_plan():
+    full_plan = plan([
+        row(mail_id("a"), merchant="A"),
+        row(mail_id("b"), merchant="B", amount=2000),
+    ])
+    before = full_plan.summary()
+
+    projected = project_one_candidate_plan(full_plan, mail_id("b"))
+
+    assert len(full_plan.candidates) == 2
+    assert full_plan.summary() == before
+    assert len(projected.candidates) == 1
+    assert projected.candidates[0].identity == mail_id("b")
+    assert projected.canonical_transaction_count == 1
+    assert projected.canonical_accounting_valid
+
+
+def test_public_projection_rejects_missing_and_withheld_identity():
+    ready = plan([row(mail_id("a"))])
+    withheld = plan([
+        row(mail_id("r"), amount=-1000, transaction_kind="return"),
+    ])
+
+    with pytest.raises(RuntimeError, match="candidate_not_found"):
+        project_one_candidate_plan(ready, mail_id("z"))
+    with pytest.raises(RuntimeError, match="candidate_not_eligible"):
+        project_one_candidate_plan(withheld, mail_id("r"))
 
 
 @pytest.mark.parametrize("collection_summary, reason", [

@@ -31,6 +31,7 @@ from .aupay_card_writer import (
     JournalStage,
     Lease,
     PersistentAuditKey,
+    OneCandidateProjection,
     ProductionRunManifest,
     ReadBackPolicy,
     TargetBinding,
@@ -44,7 +45,9 @@ from .aupay_card_writer import (
     _load_and_validate_key,
     _target_ref,
     _validate_manifest,
+    canonical_candidate_reference_v2,
     preflight_writer,
+    validate_production_canary_manifest,
     validate_target_binding,
 )
 
@@ -480,6 +483,14 @@ def _manifest_payload(manifest: ProductionRunManifest) -> str:
         "candidate_count": manifest.candidate_count,
         "withheld_count": manifest.withheld_count,
         "authority_mode": manifest.authority_mode,
+        "selected_candidate_identity": manifest.selected_candidate_identity,
+        "selected_candidate_ref": manifest.selected_candidate_ref,
+        "target_ref": manifest.target_ref,
+        "batch_size": manifest.batch_size,
+        "full_plan_binding_ref": manifest.full_plan_binding_ref,
+        "projection_binding_ref": manifest.projection_binding_ref,
+        "full_plan_canonical_count": manifest.full_plan_canonical_count,
+        "full_plan_candidate_count": manifest.full_plan_candidate_count,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
@@ -555,6 +566,14 @@ class SqliteRunManifestStore:
             candidate_count=raw["candidate_count"],
             withheld_count=raw["withheld_count"],
             authority_mode=raw["authority_mode"],
+            selected_candidate_identity=raw.get("selected_candidate_identity", ""),
+            selected_candidate_ref=raw.get("selected_candidate_ref", ""),
+            target_ref=raw.get("target_ref", ""),
+            batch_size=raw.get("batch_size", 0),
+            full_plan_binding_ref=raw.get("full_plan_binding_ref", ""),
+            projection_binding_ref=raw.get("projection_binding_ref", ""),
+            full_plan_canonical_count=raw.get("full_plan_canonical_count", 0),
+            full_plan_candidate_count=raw.get("full_plan_candidate_count", 0),
         )
         manifest.validate()
         return manifest
@@ -614,7 +633,7 @@ class ProtectedCanaryApprovalProvider:
             raise RuntimeError("protected_canary_approval_invalid") from exc
         if not approval.approval_reference or len(approval.approval_reference) > 256:
             raise RuntimeError("human_approval_reference_required")
-        if not re.fullmatch(r"canonical-item-v1:[0-9a-f]{32}", approval.candidate_ref):
+        if not re.fullmatch(r"canonical-item-v2:[0-9a-f]{32}", approval.candidate_ref):
             raise RuntimeError("protected_canary_approval_invalid")
         if not re.fullmatch(r"writer-target-v1:[0-9a-f]{32}", approval.target_ref):
             raise RuntimeError("protected_canary_approval_invalid")
@@ -809,7 +828,7 @@ class ProductionApprovalPreflight:
 
 
 def validate_production_approval_preflight(
-    plan: CanonicalApplyPlan,
+    projection: OneCandidateProjection,
     manifest: ProductionRunManifest,
     *,
     binding: TargetBinding,
@@ -832,18 +851,17 @@ def validate_production_approval_preflight(
         raise RuntimeError("production_preflight_run_id_invalid") from exc
     expected_source_window.validate()
     approval = approval_provider.load()
-    validate_canonical_apply_plan(plan)
     key = _load_and_validate_key(key_provider)
-    _validate_manifest(plan, manifest, key)
-    if manifest.authority_mode != "production_canary":
-        raise RuntimeError("production_canary_authority_required")
+    validate_production_canary_manifest(
+        projection, manifest, binding=binding, audit_key=key,
+    )
     if manifest.run_id != expected_run_id:
         raise RuntimeError("production_preflight_run_mismatch")
     if manifest.source_window != expected_source_window:
         raise RuntimeError("production_preflight_source_window_mismatch")
     if approval.batch_size != 1:
         raise RuntimeError("production_canary_batch_size_must_be_one")
-    if len(plan.candidates) != 1 or manifest.candidate_count != 1:
+    if len(projection.plan.candidates) != 1 or manifest.candidate_count != 1:
         raise RuntimeError("production_canary_requires_exactly_one_candidate")
     if not approval.approval_reference.strip():
         raise RuntimeError("human_approval_reference_required")
@@ -854,8 +872,8 @@ def validate_production_approval_preflight(
     if ttl > MAX_CANARY_CAPABILITY_TTL_SECONDS:
         raise RuntimeError("production_capability_ttl_too_long")
     validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
-    target_ref = target_binding_reference(binding, key)
-    candidate_ref = canonical_candidate_reference(plan.candidates[0], key)
+    target_ref = projection.target_ref
+    candidate_ref = projection.selected_candidate_ref
     if approval.target_ref != target_ref:
         raise RuntimeError("approved_target_mismatch")
     if approval.candidate_ref != candidate_ref:
@@ -874,7 +892,7 @@ def validate_production_approval_preflight(
 
 
 def issue_production_write_capability(
-    plan: CanonicalApplyPlan,
+    projection: OneCandidateProjection,
     manifest: ProductionRunManifest,
     *,
     binding: TargetBinding,
@@ -896,14 +914,13 @@ def issue_production_write_capability(
     if type(capability_store) is not SqliteCapabilityStore:
         raise RuntimeError("durable_capability_store_required")
     approval = approval_provider.load()
-    validate_canonical_apply_plan(plan)
     key = _load_and_validate_key(key_provider)
-    _validate_manifest(plan, manifest, key)
-    if manifest.authority_mode != "production_canary":
-        raise RuntimeError("production_canary_authority_required")
+    validate_production_canary_manifest(
+        projection, manifest, binding=binding, audit_key=key,
+    )
     if approval.batch_size != 1:
         raise RuntimeError("production_canary_batch_size_must_be_one")
-    if len(plan.candidates) != 1 or manifest.candidate_count != 1:
+    if len(projection.plan.candidates) != 1 or manifest.candidate_count != 1:
         raise RuntimeError("production_canary_requires_exactly_one_candidate")
     if not approval.approval_reference.strip():
         raise RuntimeError("human_approval_reference_required")
@@ -918,8 +935,8 @@ def issue_production_write_capability(
     if not capability_store.ready():
         raise RuntimeError("capability_store_unavailable")
     validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
-    target_ref = _target_ref(binding, key.secret)
-    candidate_ref = canonical_candidate_reference(plan.candidates[0], key)
+    target_ref = projection.target_ref
+    candidate_ref = projection.selected_candidate_ref
     if approval.target_ref != target_ref:
         raise RuntimeError("approved_target_mismatch")
     if approval.candidate_ref != candidate_ref:
@@ -1015,7 +1032,7 @@ class SealedSheetsCandidateTransport:
         )
         if _target_ref(self._binding, key.secret) != capability.target_ref:
             raise RuntimeError("capability_target_mismatch")
-        candidate_ref = _keyed_ref(key.secret, "canonical-item", candidate.identity)
+        candidate_ref = canonical_candidate_reference_v2(candidate, key)
         if candidate_ref != capability.candidate_ref:
             raise RuntimeError("candidate_not_in_capability")
         if candidate.transaction_kind != "purchase" or candidate.amount_yen <= 0:
@@ -1044,7 +1061,7 @@ class SealedSheetsCandidateTransport:
 
 
 def _execute_one_shot_canary(
-    plan: CanonicalApplyPlan,
+    projection: OneCandidateProjection,
     manifest: ProductionRunManifest,
     *,
     capability: ProductionWriteCapability,
@@ -1084,8 +1101,10 @@ def _execute_one_shot_canary(
         else:
             raise RuntimeError("canary_transport_mode_invalid")
         key = _load_and_validate_key(key_provider)
-        validate_canonical_apply_plan(plan)
-        _validate_manifest(plan, manifest, key)
+        validate_production_canary_manifest(
+            projection, manifest, binding=binding, audit_key=key,
+        )
+        plan = projection.plan
         readback_policy.validate()
         now = _aware_time(clock(), "capability_clock_timezone_required")
         if now >= capability.expires_at:
@@ -1105,7 +1124,7 @@ def _execute_one_shot_canary(
         if target_ref != capability.target_ref:
             raise RuntimeError("capability_target_mismatch")
         candidate = plan.candidates[0]
-        candidate_ref = _keyed_ref(key.secret, "canonical-item", candidate.identity)
+        candidate_ref = canonical_candidate_reference_v2(candidate, key)
         if candidate_ref != capability.candidate_ref:
             raise RuntimeError("candidate_not_in_capability")
         lease = leases.acquire(target_ref, owner_id, manifest.run_id, lease_seconds)
@@ -1127,7 +1146,7 @@ def _execute_one_shot_canary(
         if len(preflight.candidate_results) != 1:
             raise RuntimeError("production_canary_preread_incomplete")
         pre_result = preflight.candidate_results[0]
-        if pre_result.audit_item_ref != capability.candidate_ref:
+        if canonical_candidate_reference_v2(candidate, key) != capability.candidate_ref:
             raise RuntimeError("candidate_identity_recheck_failed")
         attempt_id = str(uuid4())
         batch_id = _keyed_ref(key.secret, "writer-batch", manifest.run_id, "canary-1")

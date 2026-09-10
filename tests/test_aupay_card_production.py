@@ -45,6 +45,9 @@ from app.aupay_card_writer import (
     ReadBackPolicy,
     TargetBinding,
     TargetSnapshot,
+    canonical_candidate_reference_v2,
+    create_one_candidate_projection,
+    create_production_canary_manifest,
     create_run_manifest,
     execute_synthetic_write,
     validate_target_binding,
@@ -81,6 +84,22 @@ def make_plan(count=1):
         "gmail_list_failed": 0,
         "gmail_read_failed": 0,
         "needs_review": 0,
+    }, reconciliation)
+
+
+def make_single_plan(**changes):
+    row = {
+        "import_id": mail_id("a"), "date": "2026-08-08",
+        "merchant": "秘密店舗", "amount": 1000,
+        "transaction_kind": "purchase", "payment_type": "メール通知",
+        "member": "本会員", "memo": "メール明細No.001",
+    }
+    row.update(changes)
+    reconciliation = reconcile_transactions([row], [])
+    return build_canonical_apply_plan({
+        "collection_complete": True, "listing_complete": True,
+        "collection_truncated": False, "gmail_list_failed": 0,
+        "gmail_read_failed": 0, "needs_review": 0,
     }, reconciliation)
 
 
@@ -561,9 +580,16 @@ def _write_approval(path, approval):
 
 def canary_components(tmp_path, *, count=1, expires_at=None,
                       approval_ref="change-42", approval_changes=None):
-    plan = make_plan(count)
-    manifest = run_manifest(plan, mode="production_canary")
+    full_plan = make_plan(count)
     binding = TargetBinding(expected_spreadsheet_id=SHEET_ID)
+    projection = create_one_candidate_projection(
+        full_plan, candidate_identity=full_plan.candidates[0].identity,
+        binding=binding, audit_key=KEY,
+    )
+    manifest = create_production_canary_manifest(
+        projection, source_window=source_window(), plan_created_at=NOW,
+        run_id=str(uuid4()), audit_key=KEY, binding=binding,
+    )
     path = tmp_path / "canary-state.db"
     journal = SqliteAttemptJournal(path, repo_root=repo_guard(path))
     store = SqliteCapabilityStore(path, repo_root=repo_guard(path))
@@ -576,7 +602,9 @@ def canary_components(tmp_path, *, count=1, expires_at=None,
     key_provider = ProtectedAuditKeyProvider(key_path, repo_root=repo_guard(key_path))
     approval = CanaryApproval(
         approval_reference=approval_ref,
-        candidate_ref=canonical_candidate_reference(plan.candidates[0], KEY),
+        candidate_ref=canonical_candidate_reference_v2(
+            projection.plan.candidates[0], KEY,
+        ),
         target_ref=target_binding_reference(binding, KEY),
         batch_size=1,
         expires_at=expires_at or NOW + timedelta(seconds=60),
@@ -584,13 +612,13 @@ def canary_components(tmp_path, *, count=1, expires_at=None,
     if approval_changes:
         approval = replace(approval, **approval_changes)
     provider = _write_approval(tmp_path / "canary-approval.json", approval)
-    return plan, manifest, binding, journal, store, leases, key_provider, provider, approval
+    return projection, manifest, binding, journal, store, leases, key_provider, provider, approval
 
 
 def issue_canary(parts, *, inspector=None, clock=lambda: NOW):
-    plan, manifest, binding, journal, store, _leases, key_provider, provider, _approval = parts
+    projection, manifest, binding, journal, store, _leases, key_provider, provider, _approval = parts
     return issue_production_write_capability(
-        plan, manifest, binding=binding, inspector=inspector or Inspector(),
+        projection, manifest, binding=binding, inspector=inspector or Inspector(),
         key_provider=key_provider, journal=journal, capability_store=store,
         approval_provider=provider, clock=clock,
     )
@@ -599,11 +627,11 @@ def issue_canary(parts, *, inspector=None, clock=lambda: NOW):
 def validate_canary(parts, *, manifest=None, key_provider=None,
                     approval_provider=None, expected_run_id=None,
                     expected_source_window=None, clock=lambda: NOW):
-    plan, default_manifest, binding, _journal, _store, _leases, default_key, \
+    projection, default_manifest, binding, _journal, _store, _leases, default_key, \
         default_approval, _approval = parts
     selected_manifest = manifest or default_manifest
     return validate_production_approval_preflight(
-        plan, selected_manifest, binding=binding, inspector=Inspector(),
+        projection, selected_manifest, binding=binding, inspector=Inspector(),
         key_provider=key_provider or default_key,
         approval_provider=approval_provider or default_approval,
         expected_run_id=expected_run_id or default_manifest.run_id,
@@ -628,7 +656,110 @@ def test_valid_approval_dry_validation_has_zero_authority_side_effects(tmp_path)
     assert result.lease_acquired_count == 0
     assert result.journal_write_count == 0
     assert result.transport_invocation_count == 0
-    assert parts[0].candidates[0].merchant not in repr(result)
+    assert parts[0].plan.candidates[0].merchant not in repr(result)
+
+
+def test_production_manifest_v3_round_trips_all_bindings(tmp_path):
+    parts = canary_components(tmp_path)
+    manifest_path = tmp_path / "manifest-v3.db"
+    store = SqliteRunManifestStore(
+        manifest_path, repo_root=repo_guard(manifest_path),
+    )
+
+    store.save(parts[1])
+
+    assert store.load(parts[1].run_id) == parts[1]
+
+
+def test_candidate_reference_v2_is_deterministic_and_content_bound():
+    baseline = make_single_plan().candidates[0]
+    baseline_ref = canonical_candidate_reference_v2(baseline, KEY)
+
+    assert baseline_ref == canonical_candidate_reference_v2(baseline, KEY)
+    assert baseline_ref.startswith("canonical-item-v2:")
+    for changed_plan in (
+        make_single_plan(merchant="別店舗"),
+        make_single_plan(date="2026-08-09"),
+        make_single_plan(amount=1001),
+        make_single_plan(import_id=mail_id("b")),
+    ):
+        assert canonical_candidate_reference_v2(changed_plan.candidates[0], KEY) != baseline_ref
+
+
+def test_approval_v1_reference_is_not_accepted_by_v2_contract(tmp_path):
+    parts = canary_components(
+        tmp_path, approval_changes={
+            "candidate_ref": "canonical-item-v1:" + "0" * 32,
+        },
+    )
+    with pytest.raises(RuntimeError, match="protected_canary_approval_invalid"):
+        validate_canary(parts)
+
+
+def test_dry_validation_rejects_wrong_key_and_manifest_bindings(tmp_path):
+    parts = canary_components(tmp_path)
+    wrong_key_path = tmp_path / "wrong-key.json"
+    wrong_key_path.write_text(json.dumps({
+        "key_id": KEY.key_id,
+        "key_b64": base64.b64encode(b"q" * 32).decode("ascii"),
+    }), encoding="utf-8")
+    wrong_key = ProtectedAuditKeyProvider(
+        wrong_key_path, repo_root=repo_guard(wrong_key_path),
+    )
+    with pytest.raises(RuntimeError, match="projection_binding_mismatch"):
+        validate_canary(parts, key_provider=wrong_key)
+
+    for field_name in ("full_plan_binding_ref", "projection_binding_ref"):
+        bad = replace(parts[1], **{
+            field_name: (
+                "writer-full-plan-v2:" if field_name.startswith("full")
+                else "writer-projection-v2:"
+            ) + "0" * 32,
+        })
+        with pytest.raises(RuntimeError, match="manifest_binding_mismatch"):
+            validate_canary(parts, manifest=bad)
+
+
+def test_old_approval_cannot_authorize_same_identity_with_changed_content(tmp_path):
+    parts = canary_components(tmp_path)
+    changed_full_plan = make_single_plan(merchant="同一IDの変更後店舗")
+    changed_projection = create_one_candidate_projection(
+        changed_full_plan,
+        candidate_identity=changed_full_plan.candidates[0].identity,
+        binding=parts[2], audit_key=KEY,
+    )
+    changed_manifest = create_production_canary_manifest(
+        changed_projection, source_window=source_window(), plan_created_at=NOW,
+        run_id=parts[1].run_id, audit_key=KEY, binding=parts[2],
+    )
+
+    with pytest.raises(RuntimeError, match="approved_candidate_mismatch"):
+        validate_production_approval_preflight(
+            changed_projection, changed_manifest, binding=parts[2],
+            inspector=Inspector(), key_provider=parts[6],
+            approval_provider=parts[7], expected_run_id=changed_manifest.run_id,
+            expected_source_window=changed_manifest.source_window,
+            clock=lambda: NOW,
+        )
+
+
+def test_manifest_cannot_be_reused_for_changed_full_plan(tmp_path):
+    parts = canary_components(tmp_path, count=2)
+    changed_full_plan = make_plan(3)
+    changed_projection = create_one_candidate_projection(
+        changed_full_plan,
+        candidate_identity=parts[0].selected_candidate_identity,
+        binding=parts[2], audit_key=KEY,
+    )
+
+    with pytest.raises(RuntimeError, match="manifest_binding_mismatch"):
+        validate_production_approval_preflight(
+            changed_projection, parts[1], binding=parts[2],
+            inspector=Inspector(), key_provider=parts[6],
+            approval_provider=parts[7], expected_run_id=parts[1].run_id,
+            expected_source_window=parts[1].source_window,
+            clock=lambda: NOW,
+        )
 
 
 def test_approval_dry_validation_rejects_missing_approval_file(tmp_path):
@@ -662,7 +793,7 @@ def test_approval_dry_validation_rejects_missing_audit_key(tmp_path):
 def test_approval_dry_validation_rejects_approval_mismatch(tmp_path, failure, reason):
     changes = {
         "reference": {"approval_reference": ""},
-        "candidate": {"candidate_ref": "canonical-item-v1:" + "0" * 32},
+        "candidate": {"candidate_ref": "canonical-item-v2:" + "0" * 32},
         "target": {"target_ref": "writer-target-v1:" + "0" * 32},
         "batch": {"batch_size": 2},
         "expired": {"expires_at": NOW},
@@ -676,7 +807,7 @@ def test_approval_dry_validation_rejects_approval_mismatch(tmp_path, failure, re
 def test_approval_dry_validation_recomputes_candidate_reference(tmp_path):
     parts = canary_components(
         tmp_path, approval_changes={
-            "candidate_ref": "canonical-item-v1:" + "f" * 32,
+            "candidate_ref": "canonical-item-v2:" + "f" * 32,
         },
     )
     with pytest.raises(RuntimeError, match="approved_candidate_mismatch"):
@@ -727,9 +858,9 @@ def test_approval_dry_validation_leaves_sqlite_and_transport_unchanged(tmp_path)
 
 
 def run_synthetic_canary(parts, capability, reader, transport, *, clock=lambda: NOW):
-    plan, manifest, binding, journal, store, leases, key_provider, _provider, _approval = parts
+    projection, manifest, binding, journal, store, leases, key_provider, _provider, _approval = parts
     return execute_synthetic_one_shot_canary(
-        plan, manifest, capability=capability, capability_store=store,
+        projection, manifest, capability=capability, capability_store=store,
         binding=binding, inspector=Inspector(), key_provider=key_provider,
         journal=journal, leases=leases, reader=reader, transport=transport,
         readback_policy=ReadBackPolicy(1, ()), owner_id="canary-owner",
@@ -740,20 +871,20 @@ def run_synthetic_canary(parts, capability, reader, transport, *, clock=lambda: 
 def test_valid_one_shot_capability_issuance_is_exact_and_short_lived(tmp_path):
     parts = canary_components(tmp_path)
     capability = issue_canary(parts)
-    plan, manifest, binding, _journal, store, _leases, _key, _provider, approval = parts
+    projection, manifest, binding, _journal, store, _leases, _key, _provider, approval = parts
 
     assert capability.run_id == manifest.run_id
     assert capability.candidate_ref == approval.candidate_ref
     assert capability.target_ref == target_binding_reference(binding, KEY)
     assert capability.expires_at - capability.issued_at == timedelta(seconds=60)
     assert store.state(capability.capability_id) == "issued"
-    assert plan.candidates[0].merchant not in repr(capability)
+    assert projection.plan.candidates[0].merchant not in repr(capability)
 
 
 @pytest.mark.parametrize("failure", ["candidate", "target", "batch", "approval", "expired"])
 def test_capability_issuance_rejects_wrong_or_missing_approval_bounds(tmp_path, failure):
     changes = {
-        "candidate": {"candidate_ref": "canonical-item-v1:" + "0" * 32},
+        "candidate": {"candidate_ref": "canonical-item-v2:" + "0" * 32},
         "target": {"target_ref": "writer-target-v1:" + "0" * 32},
         "batch": {"batch_size": 2},
         "approval": {"approval_reference": ""},
@@ -765,10 +896,11 @@ def test_capability_issuance_rejects_wrong_or_missing_approval_bounds(tmp_path, 
     assert parts[4].state("missing") is None
 
 
-def test_capability_issuance_rejects_second_candidate_structurally(tmp_path):
+def test_projection_structurally_excludes_second_candidate(tmp_path):
     parts = canary_components(tmp_path, count=2)
-    with pytest.raises(RuntimeError, match="exactly_one_candidate"):
-        issue_canary(parts)
+    assert len(parts[0].source_plan.candidates) == 2
+    assert len(parts[0].plan.candidates) == 1
+    issue_canary(parts)
 
 
 def test_expired_issued_capability_is_rejected_and_resealed(tmp_path):
@@ -787,7 +919,7 @@ def test_expired_issued_capability_is_rejected_and_resealed(tmp_path):
 def test_successful_synthetic_one_shot_reseals_and_second_write_is_impossible(tmp_path):
     parts = canary_components(tmp_path)
     capability = issue_canary(parts)
-    candidate = parts[0].candidates[0]
+    candidate = parts[0].plan.candidates[0]
     reader = SequenceReader([
         IdentityRead(),
         IdentityRead((ExistingCanonicalRecord.from_candidate(candidate),)),
@@ -822,7 +954,7 @@ def test_fresh_preread_failure_duplicate_and_identity_mismatch_write_zero(tmp_pa
 
     duplicate_parts = canary_components(tmp_path / "duplicate")
     duplicate_capability = issue_canary(duplicate_parts)
-    duplicate_candidate = duplicate_parts[0].candidates[0]
+    duplicate_candidate = duplicate_parts[0].plan.candidates[0]
     duplicate_transport = CanaryTransport()
     duplicate_result = run_synthetic_canary(
         duplicate_parts, duplicate_capability,
@@ -850,12 +982,11 @@ def test_fresh_preread_failure_duplicate_and_identity_mismatch_write_zero(tmp_pa
 
     mismatch_parts = canary_components(tmp_path / "mismatch")
     mismatch_capability = issue_canary(mismatch_parts)
-    other_plan = make_plan()
-    other_manifest = run_manifest(other_plan, mode="production_canary")
+    other_parts = canary_components(tmp_path / "other")
     mismatch_transport = CanaryTransport()
     with pytest.raises(RuntimeError, match="capability_run_mismatch|run_manifest_plan_mismatch"):
         execute_synthetic_one_shot_canary(
-            other_plan, other_manifest, capability=mismatch_capability,
+            other_parts[0], other_parts[1], capability=mismatch_capability,
             capability_store=mismatch_parts[4], binding=mismatch_parts[2],
             inspector=Inspector(), key_provider=mismatch_parts[6], journal=mismatch_parts[3],
             leases=mismatch_parts[5], reader=StaticReader(),
@@ -892,7 +1023,7 @@ def test_real_transport_cannot_be_reached_without_claimed_capability(tmp_path):
         key_provider=parts[6], clock=lambda: NOW,
     )
     with pytest.raises(RuntimeError, match="write_attempt_journal_required"):
-        transport.write_once(parts[0].candidates[0], attempt_id=str(uuid4()))
+        transport.write_once(parts[0].plan.candidates[0], attempt_id=str(uuid4()))
     assert transport.invocation_count == 0
     assert db.append_calls == []
 

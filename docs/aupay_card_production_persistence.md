@@ -58,15 +58,21 @@ wrong owner token. Backend errors and live-lock contention stop before write.
 ## Protected human approval and one-shot capability
 
 `ProtectedCanaryApprovalProvider` reads a repo-external JSON approval envelope.
-It binds a human approval reference, the exact `canonical-item-v1` reference,
+It binds a human approval reference, the exact content-bound
+`canonical-item-v2` reference,
 the exact keyed target reference, `batch_size: 1`, and an aware expiry. Issuance
-also recomputes the plan, candidate, and target references, requires a
-`production_canary` run manifest, rejects plans with anything other than one
-candidate, and caps TTL at five minutes.
+also recomputes the full-plan, exact-one projection, candidate, and target
+references, requires a schema-v3 `production_canary` run manifest, and caps TTL
+at five minutes. V1 candidate references remain readable only as legacy audit
+identifiers and are rejected as production approval authority.
 
-For the currently approved canary, that protected envelope must name
-`canonical-item-v1:7f95f0a819ad90aeae1e4c1d3ba15011`; issuance recomputes the
-reference from the loaded plan and protected key and rejects any mismatch.
+The public exact-one projection API selects one already-eligible identity from
+a validated full plan without private constructors. Missing, withheld, review,
+invalid, or duplicate authority fails closed. The full plan remains immutable;
+the projection has truthful one-item accounting and cannot carry a second item.
+The manifest separately binds the complete fresh plan, projected plan, selected
+v2 candidate content, exact target, batch size, audit key ID, run UUID, and
+absolute source window.
 
 `validate_production_approval_preflight` performs the same approval, candidate,
 target, expiry/TTL, and keyed-reference checks without issuing a capability. It

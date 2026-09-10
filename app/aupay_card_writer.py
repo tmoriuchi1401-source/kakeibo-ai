@@ -13,6 +13,7 @@ from enum import Enum
 import base64
 import hashlib
 import hmac
+import json
 import os
 import re
 import time
@@ -23,6 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .aupay_card_apply_plan import (
     CanonicalApplyCandidate,
     CanonicalApplyPlan,
+    project_one_candidate_plan,
     validate_canonical_apply_plan,
 )
 from .aupay_card_executor import (
@@ -39,6 +41,7 @@ from .sheets import HEADERS
 
 
 WRITER_SAFETY_SCHEMA_VERSION = 2
+PRODUCTION_CANARY_MANIFEST_SCHEMA_VERSION = 3
 TARGET_BINDING_VERSION = 1
 ABSOLUTE_MAX_BATCH_SIZE = 100
 _RELATIVE_QUERY = re.compile(r"(?:newer_than|older_than|newer|older):", re.IGNORECASE)
@@ -146,9 +149,20 @@ class ProductionRunManifest:
     candidate_count: int
     withheld_count: int
     authority_mode: str = "read_only_preflight"
+    selected_candidate_identity: str = ""
+    selected_candidate_ref: str = ""
+    target_ref: str = ""
+    batch_size: int = 0
+    full_plan_binding_ref: str = ""
+    projection_binding_ref: str = ""
+    full_plan_canonical_count: int = 0
+    full_plan_candidate_count: int = 0
 
     def validate(self) -> None:
-        if self.schema_version != WRITER_SAFETY_SCHEMA_VERSION:
+        if self.schema_version not in {
+            WRITER_SAFETY_SCHEMA_VERSION,
+            PRODUCTION_CANARY_MANIFEST_SCHEMA_VERSION,
+        }:
             raise RuntimeError("run_manifest_schema_invalid")
         try:
             UUID(self.run_id)
@@ -169,6 +183,29 @@ class ProductionRunManifest:
             or self.candidate_count + self.withheld_count != self.canonical_count
         ):
             raise RuntimeError("run_manifest_accounting_invalid")
+        if self.schema_version == PRODUCTION_CANARY_MANIFEST_SCHEMA_VERSION:
+            if self.authority_mode != "production_canary":
+                raise RuntimeError("production_canary_authority_required")
+            if self.canonical_count != 1 or self.candidate_count != 1:
+                raise RuntimeError("production_canary_requires_exactly_one_candidate")
+            if self.batch_size != 1:
+                raise RuntimeError("production_canary_batch_size_must_be_one")
+            if not re.fullmatch(
+                r"canonical-item-v2:[0-9a-f]{32}", self.selected_candidate_ref,
+            ):
+                raise RuntimeError("production_candidate_reference_invalid")
+            if not re.fullmatch(r"writer-target-v1:[0-9a-f]{32}", self.target_ref):
+                raise RuntimeError("production_target_reference_invalid")
+            if not self.selected_candidate_identity:
+                raise RuntimeError("production_candidate_identity_required")
+            if not re.fullmatch(
+                r"writer-full-plan-v2:[0-9a-f]{32}", self.full_plan_binding_ref,
+            ) or not re.fullmatch(
+                r"writer-projection-v2:[0-9a-f]{32}", self.projection_binding_ref,
+            ):
+                raise RuntimeError("production_plan_binding_invalid")
+            if self.full_plan_canonical_count < 1 or self.full_plan_candidate_count < 1:
+                raise RuntimeError("production_full_plan_accounting_invalid")
 
 
 def create_run_manifest(
@@ -493,6 +530,187 @@ def _target_ref(binding: TargetBinding, key: bytes) -> str:
         key, "writer-target", binding.expected_spreadsheet_id,
         binding.expected_worksheet, str(binding.binding_version),
     )
+
+
+def _keyed_ref_v2(key: bytes, namespace: str, payload: object) -> str:
+    body = json.dumps(
+        {"namespace": namespace, "version": 2, "payload": payload},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hmac.new(key, body, hashlib.sha256).hexdigest()[:32]
+    return f"{namespace}-v2:{digest}"
+
+
+def _candidate_reference_payload(candidate: CanonicalApplyCandidate) -> dict:
+    return {
+        "candidate_schema_version": candidate.schema_version,
+        "identity": candidate.identity,
+        "source": candidate.source,
+        "source_record_id": candidate.source_record_id,
+        "transaction_date": candidate.transaction_date,
+        "merchant": candidate.merchant,
+        "amount_yen": candidate.amount_yen,
+        "transaction_kind": candidate.transaction_kind,
+        "business_fingerprint": candidate.business_fingerprint,
+        "reconciliation_state": candidate.reconciliation_state,
+        "source_identities": list(candidate.source_identities),
+        "cross_source_state": candidate.cross_source_state,
+    }
+
+
+def canonical_candidate_reference_v2(
+    candidate: CanonicalApplyCandidate, audit_key: PersistentAuditKey,
+) -> str:
+    """Bind approval to canonical identity and write-relevant content."""
+    audit_key.validate()
+    return _keyed_ref_v2(
+        audit_key.secret, "canonical-item", _candidate_reference_payload(candidate),
+    )
+
+
+def _full_plan_payload(plan: CanonicalApplyPlan) -> dict:
+    return {
+        "schema_version": plan.schema_version,
+        "status": plan.status,
+        "counts": plan.summary(),
+        "candidates": [
+            _candidate_reference_payload(candidate)
+            for candidate in sorted(plan.candidates, key=lambda item: item.identity)
+        ],
+        "decisions": [
+            {
+                "status": decision.status,
+                "reasons": list(decision.reasons),
+                "canonical_identity": decision.canonical_identity,
+                "source_identities": list(decision.source_identities),
+                "business_fingerprint": decision.business_fingerprint,
+                "transaction_kind": decision.transaction_kind,
+                "cross_source_state": decision.cross_source_state,
+            }
+            for decision in sorted(
+                plan.item_decisions, key=lambda item: item.canonical_identity,
+            )
+        ],
+    }
+
+
+def full_plan_binding_reference_v2(
+    plan: CanonicalApplyPlan, audit_key: PersistentAuditKey,
+) -> str:
+    validate_canonical_apply_plan(plan)
+    audit_key.validate()
+    return _keyed_ref_v2(audit_key.secret, "writer-full-plan", _full_plan_payload(plan))
+
+
+@dataclass(frozen=True)
+class OneCandidateProjection:
+    source_plan: CanonicalApplyPlan = field(repr=False)
+    plan: CanonicalApplyPlan = field(repr=False)
+    selected_candidate_identity: str
+    selected_candidate_ref: str
+    target_ref: str
+    full_plan_binding_ref: str
+    projected_plan_binding_ref: str
+    projection_binding_ref: str
+    batch_size: int = 1
+    schema_version: int = 2
+
+
+def create_one_candidate_projection(
+    full_plan: CanonicalApplyPlan,
+    *,
+    candidate_identity: str,
+    binding: TargetBinding,
+    audit_key: PersistentAuditKey,
+) -> OneCandidateProjection:
+    validate_canonical_apply_plan(full_plan)
+    binding.validate()
+    audit_key.validate()
+    plan = project_one_candidate_plan(full_plan, candidate_identity)
+    candidate_ref = canonical_candidate_reference_v2(plan.candidates[0], audit_key)
+    target_ref = _target_ref(binding, audit_key.secret)
+    full_ref = full_plan_binding_reference_v2(full_plan, audit_key)
+    projected_ref = full_plan_binding_reference_v2(plan, audit_key)
+    projection_ref = _keyed_ref_v2(audit_key.secret, "writer-projection", {
+        "full_plan_binding_ref": full_ref,
+        "projected_plan_binding_ref": projected_ref,
+        "selected_candidate_ref": candidate_ref,
+        "target_ref": target_ref,
+        "batch_size": 1,
+    })
+    return OneCandidateProjection(
+        source_plan=full_plan, plan=plan,
+        selected_candidate_identity=candidate_identity,
+        selected_candidate_ref=candidate_ref, target_ref=target_ref,
+        full_plan_binding_ref=full_ref,
+        projected_plan_binding_ref=projected_ref,
+        projection_binding_ref=projection_ref,
+    )
+
+
+def validate_one_candidate_projection(
+    value: object, *, binding: TargetBinding, audit_key: PersistentAuditKey,
+) -> OneCandidateProjection:
+    if type(value) is not OneCandidateProjection:
+        raise TypeError("one_candidate_projection_required")
+    expected = create_one_candidate_projection(
+        value.source_plan, candidate_identity=value.selected_candidate_identity,
+        binding=binding, audit_key=audit_key,
+    )
+    if value != expected:
+        raise RuntimeError("one_candidate_projection_binding_mismatch")
+    return value
+
+
+def create_production_canary_manifest(
+    projection: OneCandidateProjection,
+    *,
+    source_window: FixedSourceWindow,
+    plan_created_at: datetime,
+    run_id: str,
+    audit_key: PersistentAuditKey,
+    binding: TargetBinding,
+) -> ProductionRunManifest:
+    validate_one_candidate_projection(projection, binding=binding, audit_key=audit_key)
+    manifest = ProductionRunManifest(
+        schema_version=PRODUCTION_CANARY_MANIFEST_SCHEMA_VERSION,
+        run_id=run_id, source_window=source_window,
+        plan_created_at=plan_created_at,
+        plan_binding_ref=projection.projection_binding_ref,
+        audit_key_id=audit_key.key_id,
+        target_binding_version=binding.binding_version,
+        canonical_count=1, candidate_count=1, withheld_count=0,
+        authority_mode="production_canary",
+        selected_candidate_identity=projection.selected_candidate_identity,
+        selected_candidate_ref=projection.selected_candidate_ref,
+        target_ref=projection.target_ref, batch_size=1,
+        full_plan_binding_ref=projection.full_plan_binding_ref,
+        projection_binding_ref=projection.projection_binding_ref,
+        full_plan_canonical_count=projection.source_plan.canonical_transaction_count,
+        full_plan_candidate_count=len(projection.source_plan.candidates),
+    )
+    manifest.validate()
+    return manifest
+
+
+def validate_production_canary_manifest(
+    projection: OneCandidateProjection,
+    manifest: ProductionRunManifest,
+    *,
+    binding: TargetBinding,
+    audit_key: PersistentAuditKey,
+) -> None:
+    validate_one_candidate_projection(projection, binding=binding, audit_key=audit_key)
+    manifest.validate()
+    if manifest.audit_key_id != audit_key.key_id:
+        raise RuntimeError("run_manifest_audit_key_mismatch")
+    expected = create_production_canary_manifest(
+        projection, source_window=manifest.source_window,
+        plan_created_at=manifest.plan_created_at, run_id=manifest.run_id,
+        audit_key=audit_key, binding=binding,
+    )
+    if manifest != expected:
+        raise RuntimeError("production_canary_manifest_binding_mismatch")
 
 
 def preflight_writer(
