@@ -6,6 +6,8 @@ on:
       - agent/aupay-card-gmail-ingestion
     paths:
       - '.github/workflows/aupay-card-recurring-production.yml'
+      - 'app/cli.py'
+      - 'app/aupay_card_*.py'
   workflow_dispatch:
     inputs:
       apply:
