@@ -161,6 +161,41 @@ def test_attendance_hours_does_not_confirm_adjacent_money_value():
     assert all(item.review_reason_code == "attendance_conflict" for item in items)
 
 
+def test_earning_label_containing_time_is_not_reclassified_as_attendance():
+    item = parse_positioned_items((
+        token("時間外労働", 10, 10), token("141,719", 120, 10),
+    ))[0]
+
+    assert item.standard_item_candidate == "overtime_pay"
+    assert item.section == "earning"
+    assert item.value == 141719
+    assert not item.needs_review
+
+
+def test_exact_structural_headings_do_not_create_review_items():
+    items = parse_positioned_items((
+        token("支　　給　　額", 10, 10),
+        token("控　　除　　額", 100, 10),
+        token("勤　　務　　状　　況", 200, 10),
+        token("配偶", 10, 30), token("寡婦", 40, 30),
+        token("寡夫", 70, 30), token("学生", 100, 30),
+        token("障害", 130, 30), token("災害", 160, 30),
+        token("税区分", 190, 30),
+        token("基本給", 10, 50), token("560,520", 120, 50),
+    ))
+
+    assert [item.raw_item_name for item in items] == ["基本給"]
+
+
+def test_heading_words_without_complete_table_context_remain_reviewable():
+    items = parse_positioned_items((
+        token("支給額", 10, 10), token("123,456", 120, 10),
+        token("税区分", 10, 30),
+    ))
+
+    assert {item.raw_item_name for item in items} == {"支給額", "税区分"}
+
+
 def test_explicit_attendance_units_remain_confirmed():
     items = parse_positioned_items((
         token("出勤日数（平日）", 10, 10), token("20.0日", 120, 10),

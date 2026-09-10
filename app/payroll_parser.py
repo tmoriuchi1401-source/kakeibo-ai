@@ -176,6 +176,26 @@ def _is_non_item_heading(name: str) -> bool:
     )
 
 
+def _is_structural_table_heading(
+    label: PositionedText,
+    tokens: tuple[PositionedText, ...],
+) -> bool:
+    """Exclude a heading only when its complete same-row structure is present."""
+
+    normalized = compact(label.text).strip("()（）:：<>＜＞")
+    same_row = {
+        compact(token.text).strip("()（）:：<>＜＞")
+        for token in tokens
+        if token.page == label.page
+        and abs(token.y - label.y) <= max(label.height, token.height) * .65
+    }
+    main_headers = {"支給額", "控除額", "勤務状況"}
+    if normalized in main_headers:
+        return main_headers <= same_row
+    tax_headers = {"配偶", "寡婦", "寡夫", "学生", "障害", "災害", "税区分"}
+    return normalized == "税区分" and tax_headers <= same_row
+
+
 def _is_plausible_item_label(name: str) -> bool:
     return bool(
         candidate(name)
@@ -898,7 +918,8 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
             exclusion_reason = "label_nonword_or_numeric"
         elif any(term in name for term in sensitive + ignored):
             exclusion_reason = "label_sensitive_or_ignored"
-        elif _is_non_item_heading(name):
+        elif (_is_non_item_heading(name)
+              or _is_structural_table_heading(label, tokens)):
             exclusion_reason = "label_non_item_heading"
         elif ocr and compact(name) in short_ocr_fragments and candidate(name) is None:
             exclusion_reason = "ocr_short_fragment"
@@ -998,7 +1019,7 @@ def parse_positioned_items(tokens: tuple[PositionedText, ...], *, ocr: bool = Fa
         confirmed = chosen is not None and not ambiguous and not low_confidence
         number = chosen[0] if chosen else None
         attendance_conflict = bool(
-            confirmed and number is not None
+            confirmed and number is not None and section_for(name) == "attendance"
             and _attendance_value_conflicts(name, number.text)
         )
         if attendance_conflict:
