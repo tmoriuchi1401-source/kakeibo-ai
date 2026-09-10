@@ -50,12 +50,18 @@ required external operational state. A stale, missing, or invalid journal is
 
 Alternate-source decisions are also required external operational state when
 the same alternate source will recur. The repository provides authenticated
-serialization and the production runner accepts one or more
-`--reconciliation-decision-file` values with a repo-external
+serialization and the production runner accepts one
+`--reconciliation-journal-file` with a repo-external dedicated
 `--reconciliation-hmac-key-file`; it does not create or choose the operator
-decision. Persisting the current Source 4 decision is therefore an operator
-task. A managed decision store, key rotation, and UI/caller automation can be
-added later without weakening the current fail-closed flow.
+decision. The pair must be supplied explicitly and environment variables alone
+cannot enable reconciliation authority. A managed decision store, key rotation,
+and UI automation can be added later without weakening the fail-closed flow.
+
+On Windows, store both files in a user-local, repo-external directory such as
+`%LOCALAPPDATA%\KakeiboAI\Payroll`. The journal and its single decision record
+are independently HMAC-signed. Journal writes require a matching preview and
+use exclusive creation; existing unequal content is a conflict. The key is
+created separately, never overwritten, and is not serialized into the journal.
 
 Ownership remains shadow-only and is neither read nor required by this runner.
 Sources 1, 2, and 5 remain review/manual cases; this flow does not attempt to

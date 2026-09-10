@@ -50,6 +50,8 @@ class PayrollProductionStatementResult(BaseModel):
     target_statement_id: str | None = None
     planned_header_rows: int = 0
     planned_item_rows: int = 0
+    planned_update_rows: int = 0
+    review_item_count: int = 0
     writer_candidate: bool = False
     writer_invocations: int = 0
     actual_header_rows: int = 0
@@ -66,6 +68,12 @@ class PayrollProductionRunReport(BaseModel):
     writer_invocation_count: int = 0
     actual_header_rows: int = 0
     actual_item_rows: int = 0
+    actual_update_rows: int = 0
+    reconciliation_source: Literal[
+        "disabled", "explicit_input", "external_journal", "rejected"
+    ] = "disabled"
+    reconciliation_reload_reason: str = "reconciliation_persistence_disabled"
+    reconciliation_record_count: int = 0
     results: tuple[PayrollProductionStatementResult, ...]
 
 
@@ -113,18 +121,44 @@ def run_payroll_production_preview(
 
     candidates = tuple(candidates)
     decisions = tuple(reconciliation_decisions)
+    reconciliation_source = "explicit_input" if decisions else "disabled"
+    reconciliation_reload_reason = (
+        "explicit_reconciliation_input"
+        if decisions else "reconciliation_persistence_disabled"
+    )
     if reconciliation_journal_path is not None or reconciliation_key_path is not None:
         if reconciliation_journal_path is None or reconciliation_key_path is None or repository_root is None:
             decisions = ()
             reconciliation_key = None
+            reconciliation_source = "rejected"
+            reconciliation_reload_reason = "reconciliation_persistence_configuration_incomplete"
         else:
             try:
-                from .payroll_reconciliation_persistence import load_reconciliation_journal, load_reconciliation_key
-                reconciliation_key = load_reconciliation_key(reconciliation_key_path, repository_root=repository_root)
-                decisions = load_reconciliation_journal(reconciliation_journal_path, local_key=reconciliation_key)
-            except (OSError, ValueError, UnicodeError, KeyError, TypeError):
+                from .payroll_reconciliation_persistence import (
+                    load_reconciliation_journal,
+                    load_reconciliation_key,
+                )
+                reconciliation_key = load_reconciliation_key(
+                    reconciliation_key_path, repository_root=repository_root,
+                )
+                journal = load_reconciliation_journal(
+                    reconciliation_journal_path,
+                    local_key=reconciliation_key,
+                    repository_root=repository_root,
+                )
+                decisions = journal.records
+                reconciliation_source = "external_journal"
+                reconciliation_reload_reason = "reconciliation_journal_loaded"
+            except ValueError as exc:
                 decisions = ()
                 reconciliation_key = None
+                reconciliation_source = "rejected"
+                reconciliation_reload_reason = str(exc)
+            except (OSError, UnicodeError, KeyError, TypeError):
+                decisions = ()
+                reconciliation_key = None
+                reconciliation_source = "rejected"
+                reconciliation_reload_reason = "reconciliation_journal_unavailable"
     decision_counts = Counter(
         decision.alternate_content_hash for decision in decisions
     )
@@ -191,6 +225,10 @@ def run_payroll_production_preview(
                                  if writer_candidate else 0),
             planned_item_rows=(len(plan.planned_item_rows)
                                if writer_candidate else 0),
+            review_item_count=sum(
+                item.needs_review or item.review_status == "pending"
+                for item in reload_result.candidate.items
+            ),
             writer_candidate=writer_candidate,
         ))
         plans.append(plan)
@@ -201,5 +239,8 @@ def run_payroll_production_preview(
         statement_count=len(results),
         outcome_counts=dict(sorted(counts.items())),
         writer_candidate_count=sum(result.writer_candidate for result in results),
+        reconciliation_source=reconciliation_source,
+        reconciliation_reload_reason=reconciliation_reload_reason,
+        reconciliation_record_count=len(decisions),
         results=tuple(results),
     )

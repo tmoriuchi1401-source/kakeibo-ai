@@ -63,11 +63,7 @@ from .payroll_ownership_integration import (
     load_local_payroll_ownership_hmac_key,
 )
 from .payroll_review_integration import PayrollReviewReloadRequest
-from .payroll_review_persistence import load_local_payroll_review_hmac_key
 from .payroll_production_runner import run_payroll_production_preview
-from .payroll_source_reconciliation import (
-    deserialize_payroll_source_reconciliation_decision,
-)
 from .payroll_production_canary import (
     apply_payroll_canary,
     load_production_canary_preview,
@@ -222,9 +218,7 @@ def main():
     payroll_production.add_argument("--review-journal-file")
     payroll_production.add_argument("--review-hmac-key-file")
     payroll_production.add_argument("--review-source-content-hash")
-    payroll_production.add_argument(
-        "--reconciliation-decision-file", action="append", default=[],
-    )
+    payroll_production.add_argument("--reconciliation-journal-file")
     payroll_production.add_argument("--reconciliation-hmac-key-file")
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-display-preview")
@@ -386,22 +380,10 @@ def main():
                 hmac_key_path=args.review_hmac_key_file,
                 repository_root=Path(__file__).resolve().parents[1],
             )
-        if (args.reconciliation_decision_file
-                and not args.reconciliation_hmac_key_file):
-            p.error("reconciliation decisions require an HMAC key file")
-        reconciliation_key=None
-        reconciliation_decisions=[]
-        if args.reconciliation_decision_file:
-            reconciliation_key=load_local_payroll_review_hmac_key(
-                args.reconciliation_hmac_key_file,
-                repository_root=Path(__file__).resolve().parents[1],
-            )
-            reconciliation_decisions=[
-                deserialize_payroll_source_reconciliation_decision(
-                    Path(file).read_bytes(), local_key=reconciliation_key,
-                )
-                for file in args.reconciliation_decision_file
-            ]
+        if bool(args.reconciliation_journal_file) != bool(
+            args.reconciliation_hmac_key_file
+        ):
+            p.error("reconciliation journal and HMAC key must be supplied together")
         s=Settings(); s.validate(need_sheet=True,need_payroll_drive=True)
         snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
         candidates=drive_storage_candidates(
@@ -412,8 +394,9 @@ def main():
             candidates,snapshot,
             review_reload_request=review_request,
             review_journal_enabled=args.enable_review_journal,
-            reconciliation_decisions=reconciliation_decisions,
-            reconciliation_key=reconciliation_key,
+            reconciliation_journal_path=args.reconciliation_journal_file,
+            reconciliation_key_path=args.reconciliation_hmac_key_file,
+            repository_root=Path(__file__).resolve().parents[1],
         )
         print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
     elif args.cmd=="payroll-display-preview":
