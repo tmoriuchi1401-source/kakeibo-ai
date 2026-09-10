@@ -23,6 +23,7 @@ from .payroll_storage import (
 
 
 REVIEW_AUTHORITY_VERSION = "payroll-review-authority-v1"
+SOURCE_VALUE_BINDING_VERSION = "payroll-review-source-value-v1"
 ReviewDecision = Literal["confirm_existing_value", "exclude_non_item"]
 
 
@@ -66,6 +67,24 @@ def payroll_review_schema_fingerprint(snapshot: PayrollSheetsSnapshot) -> str:
 
 
 @dataclass(frozen=True)
+class PayrollReviewSourceValueBinding:
+    contract_version: str
+    content_hash: str = field(repr=False)
+    parser_mode: str
+    page_count: int
+    item_occurrence: int
+    raw_label_digest: str = field(repr=False)
+    source_value: str = field(repr=False)
+    source_value_digest: str = field(repr=False)
+    label_token_id: str = field(repr=False)
+    value_token_id: str = field(repr=False)
+    page: int
+    relation: str
+    rerun_digest: str = field(repr=False)
+    signature: str = field(repr=False)
+
+
+@dataclass(frozen=True)
 class PayrollReviewEvidence:
     contract_version: str
     source_file_id_digest: str = field(repr=False)
@@ -83,6 +102,8 @@ class PayrollReviewEvidence:
     current_standard_item_id: str | None
     section: str
     review_reason: str | None
+    source_value_binding_id: str | None
+    source_value_binding: PayrollReviewSourceValueBinding | None = field(repr=False)
     evidence_id: str
 
 
@@ -113,7 +134,56 @@ class PayrollReviewApplyResult:
     applied: bool
 
 
-def _evidence_payload(candidate, snapshot, item_occurrence, local_key):
+def _source_value_binding_payload(binding):
+    return {
+        "contract_version": binding.contract_version,
+        "content_hash": binding.content_hash,
+        "parser_mode": binding.parser_mode,
+        "page_count": binding.page_count,
+        "item_occurrence": binding.item_occurrence,
+        "raw_label_digest": binding.raw_label_digest,
+        "source_value": binding.source_value,
+        "source_value_digest": binding.source_value_digest,
+        "label_token_id": binding.label_token_id,
+        "value_token_id": binding.value_token_id,
+        "page": binding.page,
+        "relation": binding.relation,
+        "rerun_digest": binding.rerun_digest,
+    }
+
+
+def _validate_source_value_binding(
+    binding, candidate, item_occurrence, local_key,
+):
+    if not isinstance(binding, PayrollReviewSourceValueBinding):
+        raise ValueError("source_value_binding_invalid")
+    statement = candidate.statement
+    item = candidate.items[item_occurrence]
+    payload = _source_value_binding_payload(binding)
+    if binding.contract_version != SOURCE_VALUE_BINDING_VERSION:
+        raise ValueError("source_value_binding_version_stale")
+    if not hmac.compare_digest(binding.signature, _mac(local_key, payload)):
+        raise ValueError("source_value_binding_signature_invalid")
+    if (binding.content_hash != statement.content_hash
+            or binding.parser_mode != candidate.parse_method
+            or binding.item_occurrence != item_occurrence
+            or binding.raw_label_digest != _mac(
+                local_key, ("raw_label", item.raw_item_name),
+            )
+            or binding.source_value_digest != _mac(
+                local_key, ("source_value", binding.source_value),
+            )
+            or binding.page_count < 1
+            or not 1 <= binding.page <= binding.page_count
+            or binding.label_token_id == binding.value_token_id
+            or binding.relation != "exact_same_row_right"):
+        raise ValueError("source_value_binding_mismatch")
+    return _mac(local_key, payload)
+
+
+def _evidence_payload(
+    candidate, snapshot, item_occurrence, local_key, source_value_binding,
+):
     statement = candidate.statement
     if not snapshot.schema_ok:
         raise ValueError("schema_authority_incomplete")
@@ -130,6 +200,12 @@ def _evidence_payload(candidate, snapshot, item_occurrence, local_key):
         raise IndexError("item_occurrence_out_of_range")
     item = candidate.items[item_occurrence]
     schema_fingerprint = payroll_review_schema_fingerprint(snapshot)
+    binding_id = (
+        _validate_source_value_binding(
+            source_value_binding, candidate, item_occurrence, local_key,
+        )
+        if source_value_binding is not None else None
+    )
     return {
         "contract_version": REVIEW_AUTHORITY_VERSION,
         "source_file_id_digest": _mac(
@@ -149,6 +225,7 @@ def _evidence_payload(candidate, snapshot, item_occurrence, local_key):
         "current_standard_item_id": item.standard_item_id,
         "section": item.section,
         "review_reason": item.review_reason_code,
+        "source_value_binding_id": binding_id,
     }
 
 
@@ -158,17 +235,21 @@ def capture_payroll_review_evidence(
     item_occurrence: int,
     *,
     local_key: bytes,
+    source_value_binding: PayrollReviewSourceValueBinding | None = None,
 ) -> PayrollReviewEvidence:
     """Capture immutable evidence for one pending review occurrence."""
 
     _require_key(local_key)
     payload = _evidence_payload(
-        candidate, snapshot, item_occurrence, local_key,
+        candidate, snapshot, item_occurrence, local_key, source_value_binding,
     )
     item = candidate.items[item_occurrence]
     if not item.needs_review or item.review_status != "pending":
         raise ValueError("item_not_pending")
-    return PayrollReviewEvidence(**payload, evidence_id=_mac(local_key, payload))
+    return PayrollReviewEvidence(
+        **payload, source_value_binding=source_value_binding,
+        evidence_id=_mac(local_key, payload),
+    )
 
 
 def create_payroll_review_assertion(
@@ -266,6 +347,7 @@ def preview_payroll_review_assertion(
     try:
         current = capture_payroll_review_evidence(
             candidate, snapshot, evidence.item_occurrence, local_key=local_key,
+            source_value_binding=evidence.source_value_binding,
         )
     except (IndexError, ValueError):
         return reject("review_evidence_not_current")
@@ -275,6 +357,8 @@ def preview_payroll_review_assertion(
     if assertion.decision == "exclude_non_item":
         if assertion.standard_item_id is not None or assertion.reviewed_value is not None:
             return reject("excluded_item_cannot_set_field_or_value")
+        if item.raw_value is None and evidence.source_value_binding is None:
+            return reject("source_value_binding_required")
     elif assertion.decision == "confirm_existing_value":
         if item.raw_value is None:
             return reject("source_value_missing")
@@ -320,6 +404,7 @@ def apply_payroll_review_assertion(
     item = result.items[evidence.item_occurrence]
     if assertion.decision == "exclude_non_item":
         item.standard_item_id = None
+        item.raw_value = None
         item.value = None
         item.needs_review = False
         item.review_status = "confirmed"

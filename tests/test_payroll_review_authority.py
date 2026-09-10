@@ -49,9 +49,10 @@ def pending_candidate(*, raw_value="300,000"):
     )
 
 
-def assertion(candidate, sheets, **overrides):
+def assertion(candidate, sheets, *, source_value_binding=None, **overrides):
     evidence = capture_payroll_review_evidence(
         candidate, sheets, 0, local_key=KEY,
+        source_value_binding=source_value_binding,
     )
     values = dict(
         decision="confirm_existing_value", operator_id="reviewer-1",
@@ -91,9 +92,25 @@ def test_preview_is_read_only_and_confirmed_apply_can_make_plan_ready():
     assert candidate.items[0].needs_review
 
 
-def test_exclusion_requires_explicit_value_free_decision_and_confirmation():
+def test_exclusion_without_parser_raw_value_requires_source_value_binding():
     sheets = snapshot()
     candidate = pending_candidate(raw_value=None)
+    evidence, decision = assertion(
+        candidate, sheets, decision="exclude_non_item",
+        standard_item_id=None, reviewed_value=None,
+    )
+
+    preview = preview_payroll_review_assertion(
+        candidate, sheets, evidence, decision, local_key=KEY,
+    )
+
+    assert not preview.accepted
+    assert preview.reason_code == "source_value_binding_required"
+
+
+def test_exclusion_of_existing_raw_value_requires_confirmation():
+    sheets = snapshot()
+    candidate = pending_candidate()
     evidence, decision = assertion(
         candidate, sheets, decision="exclude_non_item",
         standard_item_id=None, reviewed_value=None,
