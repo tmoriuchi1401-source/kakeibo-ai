@@ -32,6 +32,7 @@ from .medical_gemini_shadow import (
 from .medical_ocr_observation_shadow import OcrObservation, TextRegion
 from .medical_payment_evidence import _NUMERIC_RUN, _scope
 from .medical_payment_level2_shadow import Level2ShadowEvaluation
+from .medical_payment_level2_shadow import classify_structural_relation
 from .medical_receipt_privacy import (
     _compact_ocr_token,
     _exact_strong_structured_label_match,
@@ -587,7 +588,27 @@ def _vertically_overlaps(left: _LocalTokenEvidence, right: _LocalTokenEvidence) 
     return max(ly, ry) <= min(ly + lh, ry + rh)
 
 
-def _response_bind(build: StructuredShadowBuild, response_bytes: bytes) -> StructuredShadowResult:
+def _has_existing_strong_relation(
+    label: _LocalTokenEvidence,
+    amount: _LocalTokenEvidence,
+    observation: OcrObservation,
+) -> bool:
+    """Use only the existing Level 2 STRONG relation classifier in shadow binding."""
+    if label.unit_ref != amount.unit_ref or label.page != amount.page:
+        return False
+    regions = {region.ordinal: region for region in observation.regions}
+    source_label = regions.get(label.ordinal)
+    source_amount = regions.get(amount.ordinal)
+    if source_label is None or source_amount is None:
+        return False
+    return classify_structural_relation(source_label, source_amount).state == "STRONG"
+
+
+def _response_bind(
+    build: StructuredShadowBuild,
+    observation: OcrObservation,
+    response_bytes: bytes,
+) -> StructuredShadowResult:
     if type(response_bytes) is not bytes or not 0 < len(response_bytes) <= _MAX_RESPONSE_BYTES:
         raise StructuredShadowRejected("malformed_response")
     try:
@@ -637,8 +658,11 @@ def _response_bind(build: StructuredShadowBuild, response_bytes: bytes) -> Struc
         or amount.scope == "excluded"
         or any(label is None or not label.exact_strong_label for label in labels)
         or any(label.unit_ref != amount.unit_ref or label.page != amount.page for label in labels)
-        or not any(label.token_id == amount.token_id or _vertically_overlaps(label, amount)
-                   for label in labels)
+        or not any(
+            label.token_id == amount.token_id
+            or _has_existing_strong_relation(label, amount, observation)
+            for label in labels
+        )
     ):
         raise StructuredShadowRejected("binding_rejected")
     strong_labels = tuple(token for token in build.tokens if token.exact_strong_label)
@@ -647,7 +671,8 @@ def _response_bind(build: StructuredShadowBuild, response_bytes: bytes) -> Struc
         for token in build.tokens
         if token.numeric_amount is not None
         and token.scope != "excluded"
-        and any(label.token_id == token.token_id or _vertically_overlaps(label, token)
+        and any(label.token_id == token.token_id
+                or _has_existing_strong_relation(label, token, observation)
                 for label in strong_labels)
     }
     if viable != {amount.token_id}:
@@ -675,7 +700,7 @@ def run_structured_shadow(
     except Exception:
         return StructuredShadowResult("needs_review", "transport_error")
     try:
-        return _response_bind(build, response)
+        return _response_bind(build, observation, response)
     except StructuredShadowRejected as error:
         return StructuredShadowResult("needs_review", str(error))
     except Exception:
@@ -714,7 +739,8 @@ def evaluate_real_medical_offline(
             for token in build.tokens
             if token.numeric_amount is not None
             and token.scope != "excluded"
-            and any(label.token_id == token.token_id or _vertically_overlaps(label, token)
+            and any(label.token_id == token.token_id
+                    or _has_existing_strong_relation(label, token, observation)
                     for label in labels)
         }
         evidence_bindable = int(len(viable) == 1 and bool(labels))

@@ -20,6 +20,7 @@ from app.medical_ai_structured_shadow import (
     handoff_to_existing_review_first,
     prepare_structured_shadow_from_level2,
     run_structured_shadow,
+    _has_existing_strong_relation,
 )
 from app.medical_gemini_shadow import HttpResponse
 from app.medical_ocr_observation_shadow import ReceiptImage, make_observation
@@ -36,7 +37,7 @@ def observation(*, competitor=False, negative=False, pii=False):
          "confidence": .94, "detection_confidence": .97},
     ]
     if competitor:
-        rows.append({"text": "2,400円", "polygon": [(170, 12), (230, 12), (230, 22), (170, 22)],
+        rows.append({"text": "2,400円", "polygon": [(120, 12), (180, 12), (180, 22), (120, 22)],
                      "confidence": .93, "detection_confidence": .96})
     if negative:
         rows.append({"text": "小計 9,999円", "polygon": [(100, 13), (190, 13), (190, 23), (100, 23)],
@@ -74,6 +75,22 @@ def response(build, *, amount_id=None, label_ids=None, decision="select",
 
 def ids(build):
     return build.tokens[1].token_id, [build.tokens[0].token_id]
+
+
+def column_relation_observation(*, second_amount=False, uncertain=False):
+    label_y = 10
+    amount_y = 30 if not uncertain else 45
+    rows = [
+        {"text": "領収金額", "polygon": [(100, label_y), (180, label_y), (180, 20), (100, 20)],
+         "confidence": .96, "detection_confidence": .98},
+        {"text": "1,200円", "polygon": [(105, amount_y), (165, amount_y), (165, amount_y + 10), (105, amount_y + 10)],
+         "confidence": .94, "detection_confidence": .97},
+    ]
+    if second_amount:
+        rows.append({"text": "2,400円", "polygon": [(110, 40), (170, 40), (170, 50), (110, 50)],
+                     "confidence": .93, "detection_confidence": .96})
+    image = ReceiptImage("synthetic-column-relation", 1, b"synthetic-image-only")
+    return make_observation(image, "rapidocr-shadow", ("a" * 64,), 300, 200, rows)
 
 
 def enabled():
@@ -188,6 +205,58 @@ def test_valid_selection_is_locally_bound_but_never_authoritative():
     assert result.candidate_amount == 1200
     assert result.production_authorized is result.write_authorized is False
     assert transport.invocations == 1
+
+
+def test_unique_strong_column_relation_enables_shadow_binding():
+    observed = column_relation_observation()
+    build = build_structured_shadow_payload(observed, source_kind="synthetic_fixture")
+    result = run_structured_shadow(
+        build, observed,
+        FakeStructuredShadowTransport(response(build, amount_id=build.tokens[1].token_id,
+                                                label_ids=[build.tokens[0].token_id])),
+        enabled(),
+    )
+    assert result.reason_code == "accepted_shadow_candidate"
+    assert result.candidate_amount == 1200
+
+
+def test_uncertain_only_relation_rejects():
+    observed = column_relation_observation(uncertain=True)
+    build = build_structured_shadow_payload(observed, source_kind="synthetic_fixture")
+    result = run_structured_shadow(
+        build, observed,
+        FakeStructuredShadowTransport(response(build, amount_id=build.tokens[1].token_id,
+                                                label_ids=[build.tokens[0].token_id])),
+        enabled(),
+    )
+    assert result.reason_code == "binding_rejected"
+    assert result.candidate_amount is None
+
+
+def test_multiple_strong_relation_candidates_reject_as_ambiguous():
+    observed = column_relation_observation(second_amount=True)
+    build = build_structured_shadow_payload(observed, source_kind="synthetic_fixture")
+    result = run_structured_shadow(
+        build, observed,
+        FakeStructuredShadowTransport(response(build, amount_id=build.tokens[1].token_id,
+                                                label_ids=[build.tokens[0].token_id])),
+        enabled(),
+    )
+    assert result.reason_code == "ambiguous_evidence"
+    assert result.candidate_amount is None
+
+
+def test_strong_relation_requires_same_unit_and_page():
+    observed = column_relation_observation()
+    build = build_structured_shadow_payload(observed, source_kind="synthetic_fixture")
+    label, amount = build.tokens[0], build.tokens[1]
+    assert _has_existing_strong_relation(label, amount, observed)
+    assert not _has_existing_strong_relation(
+        replace(label, unit_ref="unit_" + "X" * 32), amount, observed
+    )
+    assert not _has_existing_strong_relation(
+        replace(amount, page=2), label, observed
+    )
 
 
 @pytest.mark.parametrize("bad", [b"not-json", b"{}", b'{"schema_version":NaN}'])
