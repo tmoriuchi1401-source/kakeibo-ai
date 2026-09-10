@@ -63,6 +63,11 @@ from .payroll_ownership_integration import (
     load_local_payroll_ownership_hmac_key,
 )
 from .payroll_review_integration import PayrollReviewReloadRequest
+from .payroll_review_persistence import load_local_payroll_review_hmac_key
+from .payroll_production_runner import run_payroll_production_preview
+from .payroll_source_reconciliation import (
+    deserialize_payroll_source_reconciliation_decision,
+)
 from .payroll_production_canary import (
     apply_payroll_canary,
     load_production_canary_preview,
@@ -206,6 +211,21 @@ def main():
     )
     payroll_canary.add_argument("--apply",action="store_true")
     payroll_canary.add_argument("--expected-plan-hash")
+    payroll_production=sub.add_parser("payroll-production-run")
+    payroll_production.add_argument("--employer-id")
+    payroll_production.add_argument(
+        "--statement-type", choices=("salary", "bonus", "adjustment"),
+    )
+    payroll_production.add_argument(
+        "--enable-review-journal", action="store_true",
+    )
+    payroll_production.add_argument("--review-journal-file")
+    payroll_production.add_argument("--review-hmac-key-file")
+    payroll_production.add_argument("--review-source-content-hash")
+    payroll_production.add_argument(
+        "--reconciliation-decision-file", action="append", default=[],
+    )
+    payroll_production.add_argument("--reconciliation-hmac-key-file")
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-display-preview")
     sub.add_parser("payroll-master-sync-preview")
@@ -353,6 +373,49 @@ def main():
             print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
             if report.unexpected_changes or not report.post_read_exact:
                 raise SystemExit(2)
+    elif args.cmd=="payroll-production-run":
+        import json
+        review_request=None
+        if args.enable_review_journal:
+            if not all((args.review_journal_file,args.review_hmac_key_file,
+                        args.review_source_content_hash)):
+                p.error("enabled review journal requires journal, key, and source hash")
+            review_request=PayrollReviewReloadRequest(
+                expected_content_hash=args.review_source_content_hash,
+                journal_path=args.review_journal_file,
+                hmac_key_path=args.review_hmac_key_file,
+                repository_root=Path(__file__).resolve().parents[1],
+            )
+        if (args.reconciliation_decision_file
+                and not args.reconciliation_hmac_key_file):
+            p.error("reconciliation decisions require an HMAC key file")
+        reconciliation_key=None
+        reconciliation_decisions=[]
+        if args.reconciliation_decision_file:
+            reconciliation_key=load_local_payroll_review_hmac_key(
+                args.reconciliation_hmac_key_file,
+                repository_root=Path(__file__).resolve().parents[1],
+            )
+            reconciliation_decisions=[
+                deserialize_payroll_source_reconciliation_decision(
+                    Path(file).read_bytes(), local_key=reconciliation_key,
+                )
+                for file in args.reconciliation_decision_file
+            ]
+        s=Settings(); s.validate(need_sheet=True,need_payroll_drive=True)
+        snapshot=PayrollSheetsReadRepository(s.spreadsheet_id).snapshot()
+        candidates=drive_storage_candidates(
+            s.payroll_drive_folder_id,snapshot,
+            employer_id=args.employer_id,statement_type=args.statement_type,
+        )
+        report=run_payroll_production_preview(
+            candidates,snapshot,
+            review_reload_request=review_request,
+            review_journal_enabled=args.enable_review_journal,
+            reconciliation_decisions=reconciliation_decisions,
+            reconciliation_key=reconciliation_key,
+        )
+        print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
     elif args.cmd=="payroll-display-preview":
         import json
         s=Settings(); s.validate(need_sheet=True)
