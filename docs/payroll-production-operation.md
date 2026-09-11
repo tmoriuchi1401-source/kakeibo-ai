@@ -66,3 +66,52 @@ created separately, never overwritten, and is not serialized into the journal.
 Ownership remains shadow-only and is neither read nor required by this runner.
 Sources 1, 2, and 5 remain review/manual cases; this flow does not attempt to
 improve OCR, relax authority, or make them write-ready.
+
+## Windows scheduled read-only scan
+
+The Windows launcher runs the same classifier as a scheduled, read-only scan:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-payroll-scheduled.ps1
+```
+
+It resolves the repository from the script location, sets that explicit working
+directory, prefers `.venv\Scripts\python.exe`, and otherwise uses the `python`
+on `PATH`. The process exit codes are `0` for a completed scan, `2` for a safe
+failure, and `3` when another scan owns the single-run lock.
+
+The default external configuration is
+`%LOCALAPPDATA%\KakeiboAI\Payroll\scheduled-scan-config-v1.json`. It contains
+resource identifiers and absolute paths, but no HMAC key or Google credential
+contents. The strict v1 shape binds the Spreadsheet, Payroll Drive folder,
+service-account file, Source 3 review journal/key/exact content hash, Source 4
+reconciliation journal/key, local log directory, and lock file. All referenced
+files and outputs must be outside the repository. Ambient Google credential JSON
+cannot override the configured credential file.
+
+Logs are one JSON file per attempt under the configured repo-external directory.
+They contain timestamps, source identifier/content digests, outcomes, reasons,
+review and row counts, and error categories. They omit HMAC values, Google token
+or credential contents, source filenames, OCR text, item labels, and monetary
+values. A `WRITE_READY` entry is only a preview: scheduled mode has no writer and
+additionally rejects any nonzero writer invocation or actual row count.
+
+The lock uses exclusive file creation. A concurrent Task Scheduler invocation
+exits `3` without scanning. The lock is removed when the owning process exits
+normally or raises; after an unclean process termination an operator must inspect
+and remove the stale lock before retrying. This favors missed scans over overlap.
+
+For Task Scheduler, use `powershell.exe` as the program and pass
+`-NoProfile -ExecutionPolicy Bypass -File
+"<absolute-repository-path>\scripts\run-payroll-scheduled.ps1"` as its
+arguments. The registration contains the one unavoidable repository path; the
+launcher itself has no fixed checkout path and resolves its working directory
+from its own location. No registration is performed by this repository. Run
+only as the Windows user that can read the external config, journals, keys, and
+credential.
+
+Future GitHub Actions migration would require moving the two signed decision
+journals to durable private storage and placing both HMAC keys plus the Google
+service-account credential in repository-independent secret storage. The
+Spreadsheet/Drive identifiers and scheduled config must then be supplied as
+workflow configuration. This local launcher does not implement that migration.

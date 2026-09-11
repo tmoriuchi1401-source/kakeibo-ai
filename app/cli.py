@@ -64,6 +64,12 @@ from .payroll_ownership_integration import (
 )
 from .payroll_review_integration import PayrollReviewReloadRequest
 from .payroll_production_runner import run_payroll_production_preview
+from .payroll_scheduled import (
+    PayrollScheduledLockError,
+    load_payroll_scheduled_config,
+    run_payroll_scheduled_scan,
+    write_payroll_scheduled_error_log,
+)
 from .payroll_production_canary import (
     apply_payroll_canary,
     load_production_canary_preview,
@@ -220,6 +226,8 @@ def main():
     payroll_production.add_argument("--review-source-content-hash")
     payroll_production.add_argument("--reconciliation-journal-file")
     payroll_production.add_argument("--reconciliation-hmac-key-file")
+    payroll_scheduled=sub.add_parser("payroll-production-scheduled")
+    payroll_scheduled.add_argument("--config-file",required=True)
     sub.add_parser("payroll-schema-preview")
     sub.add_parser("payroll-display-preview")
     sub.add_parser("payroll-master-sync-preview")
@@ -399,6 +407,76 @@ def main():
             repository_root=Path(__file__).resolve().parents[1],
         )
         print(json.dumps(report.model_dump(mode="json"),ensure_ascii=False))
+    elif args.cmd=="payroll-production-scheduled":
+        import json
+        repository_root=Path(__file__).resolve().parents[1]
+        try:
+            config=load_payroll_scheduled_config(
+                args.config_file,repository_root=repository_root,
+            )
+        except Exception as exc:
+            print(json.dumps({
+                "status":"failed","error_category":type(exc).__name__,
+                "log_path":None,"writer_invocation_count":0,
+                "actual_write_count":0,
+            },ensure_ascii=False,indent=2))
+            raise SystemExit(2)
+        # Scheduled configuration is authoritative for the credential file;
+        # no ambient credential JSON may silently replace it.
+        os.environ.pop("GOOGLE_SERVICE_ACCOUNT_JSON",None)
+        os.environ["GOOGLE_SERVICE_ACCOUNT_FILE"] = str(
+            config.google_service_account_file
+        )
+
+        def scheduled_scan():
+            snapshot=PayrollSheetsReadRepository(config.spreadsheet_id).snapshot()
+            candidates=drive_storage_candidates(
+                config.payroll_drive_folder_id,snapshot,
+                employer_id=config.employer_id,
+                statement_type=config.statement_type,
+            )
+            review_request=PayrollReviewReloadRequest(
+                expected_content_hash=config.review_source_content_hash,
+                journal_path=config.review_journal_file,
+                hmac_key_path=config.review_hmac_key_file,
+                repository_root=repository_root,
+            )
+            return run_payroll_production_preview(
+                candidates,snapshot,
+                review_reload_request=review_request,
+                review_journal_enabled=True,
+                reconciliation_journal_path=config.reconciliation_journal_file,
+                reconciliation_key_path=config.reconciliation_hmac_key_file,
+                repository_root=repository_root,
+            )
+
+        try:
+            result=run_payroll_scheduled_scan(config,scheduled_scan)
+        except PayrollScheduledLockError as exc:
+            print(json.dumps({
+                "status":"skipped","error_category":str(exc),
+                "writer_invocation_count":0,"actual_write_count":0,
+            },ensure_ascii=False,indent=2))
+            raise SystemExit(3)
+        except Exception as exc:
+            category=type(exc).__name__
+            try:
+                log_path=write_payroll_scheduled_error_log(
+                    config.log_directory,category,
+                )
+            except Exception:
+                log_path=None
+            print(json.dumps({
+                "status":"failed","error_category":category,
+                "log_path":str(log_path) if log_path else None,
+                "writer_invocation_count":0,
+                "actual_write_count":0,
+            },ensure_ascii=False,indent=2))
+            raise SystemExit(2)
+        print(json.dumps({
+            "status":"completed","log_path":str(result.log_path),
+            **result.summary,
+        },ensure_ascii=False,indent=2))
     elif args.cmd=="payroll-display-preview":
         import json
         s=Settings(); s.validate(need_sheet=True)
