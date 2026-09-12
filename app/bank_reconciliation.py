@@ -19,6 +19,7 @@ from .reconciliation import (
     parse_import_rows,
 )
 from .sheets import SheetsDB
+from .transaction_plan import resolve_transaction_identities
 
 
 CLASSIFICATIONS = (
@@ -90,6 +91,32 @@ class BankShadowResult:
                 "withheld": write_eligibility["withheld"],
             },
             "needs_review_reasons": dict(sorted(review_reasons.items())),
+        }
+
+
+@dataclass(frozen=True)
+class BankPreviewPlan:
+    """Production-equivalent decision counts without a writer or side effects."""
+
+    parsed: int
+    eligible_before_dedupe: int
+    existing_duplicate: int
+    ambiguous_collision: int
+    new_plan_candidates: int
+    withheld_by_classification: int
+    candidate_identities: tuple[str, ...]
+    write_attempted: int = 0
+
+    def summary(self) -> dict:
+        return {
+            "parsed": self.parsed,
+            "eligible_before_dedupe": self.eligible_before_dedupe,
+            "existing_duplicate": self.existing_duplicate,
+            "ambiguous_collision": self.ambiguous_collision,
+            "new_plan_candidates": self.new_plan_candidates,
+            "withheld_by_classification": self.withheld_by_classification,
+            "candidate_identity_count": len(self.candidate_identities),
+            "write_attempted": self.write_attempted,
         }
 
 
@@ -233,6 +260,72 @@ def build_bank_shadow_result(
     return BankShadowResult(parsed, tuple(decisions))
 
 
+def build_bank_preview_plan(
+    shadow: BankShadowResult,
+    existing_transactions: list[ImportTransaction],
+) -> BankPreviewPlan:
+    """Build the final pre-writer plan using the shared identity resolver."""
+    decisions = shadow.decisions
+    canonical = [
+        decision.classification.transaction.to_canonical()
+        for decision in decisions
+    ]
+    resolution = resolve_transaction_identities(
+        canonical,
+        signature=lambda transaction: (
+            transaction.source,
+            transaction.source_record_id,
+            transaction.transaction_date,
+            transaction.merchant,
+            transaction.amount_yen,
+            transaction.transaction_kind,
+            transaction.payment_method,
+            transaction.business_fingerprint,
+            transaction.source_hash,
+        ),
+    )
+    existing_ids = {
+        transaction.import_id for transaction in existing_transactions
+    }
+    eligible_before_dedupe = sum(
+        decision.write_eligibility == "preview_candidate"
+        for decision in decisions
+    )
+    eligible = {
+        decision.classification.transaction.source_row_identity
+        for decision in decisions
+        if decision.write_eligibility == "preview_candidate"
+    }
+    collision_ids = {
+        transaction.identity
+        for group in resolution.collision_groups
+        for transaction in group
+    }
+    existing_duplicate = sum(
+        transaction.identity in existing_ids
+        for transaction in resolution.unique
+        if transaction.identity not in collision_ids
+    )
+    candidate_identities = tuple(sorted(
+        transaction.identity
+        for transaction in resolution.unique
+        if transaction.identity in eligible
+        and transaction.identity not in existing_ids
+        and transaction.identity not in collision_ids
+    ))
+    return BankPreviewPlan(
+        parsed=len(decisions),
+        eligible_before_dedupe=eligible_before_dedupe,
+        existing_duplicate=existing_duplicate,
+        ambiguous_collision=len(resolution.collision_groups),
+        new_plan_candidates=len(candidate_identities),
+        withheld_by_classification=sum(
+            decision.write_eligibility == "withheld" for decision in decisions
+        ),
+        candidate_identities=candidate_identities,
+    )
+
+
 class BankPdfShadowPipeline:
     """Read the PDF and existing canonical rows without exposing row content."""
 
@@ -260,3 +353,30 @@ class BankPdfShadowPipeline:
             existing_transactions,
             confirmed_internal_transfers=confirmed_internal_transfers,
         ).summary()
+
+    def production_preview(
+        self,
+        path: str | Path,
+        *,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+    ) -> dict:
+        existing_rows = self.db.get("取込データ!A2:L")
+        existing_transactions = parse_import_rows(existing_rows)
+        parsed = BankPdfPipeline().parse(
+            path,
+            account_alias=account_alias,
+            existing_identities={
+                transaction.import_id for transaction in existing_transactions
+            },
+        )
+        shadow = build_bank_shadow_result(
+            parsed,
+            existing_transactions,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+        )
+        result = shadow.summary()
+        result.update(build_bank_preview_plan(
+            shadow, existing_transactions,
+        ).summary())
+        return result

@@ -11,6 +11,7 @@ from app.bank_reconciliation import (
     CARD_STATEMENT_AUTHORITY_STATUS,
     PAYPAY_BANK_AUTHORITY_STATUS,
     BankPdfShadowPipeline,
+    build_bank_preview_plan,
     build_bank_shadow_result,
     classify_bank_transaction,
     reconcile_bank_classification,
@@ -269,6 +270,106 @@ def test_income_and_expense_are_only_preview_candidates():
     assert income.write_eligibility == "preview_candidate"
     assert expense.write_eligibility == "preview_candidate"
     assert cash.write_eligibility == "withheld"
+
+
+def parsed_for(*transactions):
+    return BankPdfResult(
+        pages=1,
+        candidate_rows=len(transactions),
+        transactions=tuple(transactions),
+        issues=(),
+        balance_consistency_failures=0,
+        duplicate_candidates=0,
+        canonical_transactions=tuple(item.to_canonical() for item in transactions),
+    )
+
+
+def test_production_preview_plan_only_admits_income_and_expense():
+    transactions = (
+        bank("給与 匿名勤務先", 1000, "bank:income"),
+        bank("口座振替 公共サービス", -1000, "bank:expense"),
+        bank("口座振替 AU PAY カード", -1000, "bank:card"),
+        bank("振込 匿名宛先", -1000, "bank:transfer"),
+        bank("約定返済", -1000, "bank:loan"),
+        bank("ATM 現金引出", -1000, "bank:cash"),
+        bank("不明摘要", -1000, "bank:review"),
+    )
+    shadow = build_bank_shadow_result(parsed_for(*transactions), [])
+
+    plan = build_bank_preview_plan(shadow, [])
+
+    assert plan.parsed == len(transactions)
+    assert plan.eligible_before_dedupe == 2
+    assert plan.withheld_by_classification == 5
+    assert plan.new_plan_candidates == 2
+    assert plan.write_attempted == 0
+
+
+def test_existing_identity_is_removed_from_new_plan():
+    transaction = bank("口座振替 公共サービス", identity="bank:existing")
+    shadow = build_bank_shadow_result(parsed_for(transaction), [])
+    existing = parse_import_rows([
+        import_row("bank:existing", "auじぶん銀行PDF", 1000, "accepted"),
+    ])
+
+    plan = build_bank_preview_plan(shadow, existing)
+
+    assert plan.eligible_before_dedupe == 1
+    assert plan.existing_duplicate == 1
+    assert plan.new_plan_candidates == 0
+    assert plan.candidate_identities == ()
+
+
+def test_identity_collision_is_ambiguous_and_withheld():
+    first = bank("口座振替 公共サービスA", identity="bank:collision")
+    second = bank("口座振替 公共サービスB", identity="bank:collision")
+    shadow = build_bank_shadow_result(parsed_for(first, second), [])
+
+    plan = build_bank_preview_plan(shadow, [])
+
+    assert plan.eligible_before_dedupe == 2
+    assert plan.ambiguous_collision == 1
+    assert plan.new_plan_candidates == 0
+    assert plan.write_attempted == 0
+
+
+def test_production_preview_plan_replay_is_deterministic():
+    transactions = (
+        bank("給与 匿名勤務先", 1000, "bank:income"),
+        bank("口座振替 公共サービス", -1000, "bank:expense"),
+    )
+    shadow = build_bank_shadow_result(parsed_for(*transactions), [])
+
+    first = build_bank_preview_plan(shadow, []).summary()
+    second = build_bank_preview_plan(shadow, []).summary()
+
+    assert first == second
+
+
+def test_production_preview_never_invokes_writer(monkeypatch):
+    transaction = bank("給与 匿名勤務先", 1000)
+    parsed = parsed_for(transaction)
+
+    class ReadOnlyDB:
+        def get(self, range_name):
+            assert range_name == "取込データ!A2:L"
+            return []
+
+        def append(self, *_args, **_kwargs):
+            raise AssertionError("production preview reached writer")
+
+        def update_rows(self, *_args, **_kwargs):
+            raise AssertionError("production preview reached writer")
+
+    monkeypatch.setattr("app.bank_reconciliation.BankPdfPipeline.parse",
+                        lambda *args, **kwargs: parsed)
+
+    result = BankPdfShadowPipeline(ReadOnlyDB()).production_preview(
+        "statement.pdf",
+    )
+
+    assert result["new_plan_candidates"] == 1
+    assert result["write_attempted"] == 0
 
 
 def test_shadow_cli_uses_read_only_sheets_and_prints_summary(monkeypatch, capsys):

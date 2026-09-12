@@ -297,6 +297,15 @@ review reasonの件数のみで、取引内容、個別金額、残高、照合i
 しない。`income` と `expense` のみを将来のpreview候補とし、classificationと
 write eligibilityを別フィールドで集計する。
 
+canonical identity resolverを使ったproduction-equivalentのwrite-free planだけを確認する:
+
+```bash
+python -m app.cli bank-pdf-production-preview statement.pdf --account-alias jibun-primary
+```
+
+既存取込データはread-onlyで再取得し、既存identity・identity collision・分類withholdを
+集計する。`write_attempted` は常に0で、Sheets writerへは到達しない。
+
 operatorが所有関係を確認した自口座transferのexact descriptionとdirectionは、Git管理外の
 `.env` にJSON配列で設定できる。名称の部分一致や同姓名・同額・反復回数はauthorityにしない:
 

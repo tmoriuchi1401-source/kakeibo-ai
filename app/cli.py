@@ -219,6 +219,9 @@ def main():
     bank_shadow=sub.add_parser("bank-pdf-shadow-preview")
     bank_shadow.add_argument("pdf")
     bank_shadow.add_argument("--account-alias",default="jibun-primary")
+    bank_production=sub.add_parser("bank-pdf-production-preview")
+    bank_production.add_argument("pdf")
+    bank_production.add_argument("--account-alias",default="jibun-primary")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -248,6 +251,18 @@ def main():
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         print(json.dumps(
             BankPdfShadowPipeline(db).preview(
+                args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-production-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankPdfShadowPipeline(db).production_preview(
                 args.pdf,account_alias=args.account_alias,
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
