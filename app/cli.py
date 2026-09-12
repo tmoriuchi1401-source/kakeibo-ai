@@ -94,6 +94,7 @@ from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 from .bank_pdf_pipeline import BankPdfPipeline
 from .bank_reconciliation import BankPdfShadowPipeline
+from .bank_canary import BankCanaryPreparationPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -222,6 +223,13 @@ def main():
     bank_production=sub.add_parser("bank-pdf-production-preview")
     bank_production.add_argument("pdf")
     bank_production.add_argument("--account-alias",default="jibun-primary")
+    bank_canary_candidates=sub.add_parser("bank-pdf-canary-candidates")
+    bank_canary_candidates.add_argument("pdf")
+    bank_canary_candidates.add_argument("--account-alias",default="jibun-primary")
+    bank_canary=sub.add_parser("bank-pdf-canary-dry-run")
+    bank_canary.add_argument("pdf")
+    bank_canary.add_argument("--account-alias",default="jibun-primary")
+    bank_canary.add_argument("--source-identity",required=True)
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -264,6 +272,33 @@ def main():
         print(json.dumps(
             BankPdfShadowPipeline(db).production_preview(
                 args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-candidates":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).candidate_identities(
+                args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).dry_run(
+                args.pdf,
+                selected_source_identity=args.source_identity,
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+                account_alias=args.account_alias,
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
                 ),

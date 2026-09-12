@@ -12,10 +12,10 @@ import re
 
 from .transaction_plan import ReconciledTransaction
 from .aupay_card_contract import (
-    format_import_timestamp,
     is_amazon_merchant,
     is_aupay_charge_merchant,
 )
+from .canonical_import import materialize_import_row
 
 
 _PROJECTION_AUTHORITY = object()
@@ -108,13 +108,9 @@ class CanonicalApplyCandidate:
             raise TypeError("unauthorized_apply_candidate")
         if status == "unclassified_card":
             raise ValueError("source_specific_unclassified_status_forbidden")
-        timestamp = format_import_timestamp(imported_at)
-        return [
-            self.identity, timestamp, self.source, self.source_record_id,
-            self.transaction_date, self.merchant, self.amount_yen,
-            self.payment_method, status, target_id, self.source_hash,
-            self.memo,
-        ]
+        return materialize_import_row(
+            self, imported_at=imported_at, status=status, target_id=target_id,
+        )
 
 
 def production_import_status(

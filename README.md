@@ -306,6 +306,20 @@ python -m app.cli bank-pdf-production-preview statement.pdf --account-alias jibu
 既存取込データはread-onlyで再取得し、既存identity・identity collision・分類withholdを
 集計する。`write_attempted` は常に0で、Sheets writerへは到達しない。
 
+production canaryの準備では、まずwrite候補のstable source identityだけを列挙し、
+operatorがexact identityを1件指定してread-only preflightを行う:
+
+```bash
+python -m app.cli bank-pdf-canary-candidates statement.pdf --account-alias jibun-primary
+python -m app.cli bank-pdf-canary-dry-run statement.pdf --account-alias jibun-primary --source-identity '<stable-source-identity>'
+```
+
+選択は日付・金額・row番号では行わず、`--source-identity` の完全一致だけをauthorityとする。
+`income` / `expense` 以外、既存identity、collision、0件または複数件一致、target spreadsheet・
+`取込データ` headerの不一致はすべてfail closedになる。dry-runは既存のtarget bindingと
+canonical identity readerで事前読取し、共通12列schemaへ1行だけ投影するが、writerや
+production capabilityは呼び出さず、`external_write_count` は常に0である。
+
 operatorが所有関係を確認した自口座transferのexact descriptionとdirectionは、Git管理外の
 `.env` にJSON配列で設定できる。名称の部分一致や同姓名・同額・反復回数はauthorityにしない:
 
