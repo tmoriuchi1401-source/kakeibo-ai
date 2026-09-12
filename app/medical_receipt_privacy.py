@@ -288,6 +288,11 @@ _NORMAL_RECEIPT_ANCHORS = (
 _NORMAL_TRANSACTION_SIGNALS = (
     "小計",
     "合計",
+    "合計金額",
+    "お買上金額",
+    "お支払金額",
+    "現計",
+    "総合計",
     "税込",
     "消費税",
     "現金",

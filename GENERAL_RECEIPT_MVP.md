@@ -62,9 +62,14 @@ must be complete and match the exact source digest or parsing stops.
 Phase 1 decision: **B — implementation ready, real-receipt evaluation pending**.
 
 - Synthetic, human-readable layouts: 8/8 minimum-field success.
+- Local runtime materialization check: 2/6 ready with exact ground truth and 4/6
+  safely reviewed across PNG and image-only PDF. The ready pair used a clear
+  Latin merchant header; the review pairs exposed a Japanese merchant OCR
+  confidence failure and a total-label OCR miss. No wrong total was accepted.
 - Review cases: conflicting total, conflicting date, possible semantic duplicate.
 - Safety cases: non-total money excluded; Medical input privacy-blocked; arbitrary
-  non-receipt rejected; incomplete RapidOCR observation rejected.
+  non-receipt rejected; incomplete RapidOCR observation rejected; low-confidence
+  selected merchant rejected from the write plan.
 - Remaining: evaluate 5–10 user-provided ordinary receipts with human-confirmed
   ground truth. No ordinary receipt media was present in the local workspace;
   the available private fixtures are Medical and must not be repurposed.

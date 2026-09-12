@@ -10,6 +10,7 @@ from app.general_receipt_preview import (
 )
 from app.receipt_text_extraction import _ReceiptTextExtraction
 from app.medical_ocr_observation_shadow import make_observation
+from app.medical_receipt_privacy import _StructuredOcrToken, classify_receipt_text
 
 
 # Eight deliberately small, human-readable receipt layouts.  Ground truth is
@@ -50,6 +51,15 @@ LAYOUTS = [
 ]
 
 
+@pytest.mark.parametrize(
+    "label", ("合計", "合計金額", "お買上金額", "お支払金額", "現計", "総合計"),
+)
+def test_required_total_labels_are_normal_receipt_transaction_signals(label):
+    decision = classify_receipt_text(f"レシート\n商品A\n{label} 500円")
+
+    assert decision.classification == "normal"
+
+
 @pytest.mark.parametrize(("text", "ground_truth"), LAYOUTS)
 def test_eight_layout_harness_extracts_minimum_transaction(text, ground_truth):
     result = preview_general_receipt_text(text, source_id="sample")
@@ -84,6 +94,21 @@ def test_conflicting_total_candidates_require_review_and_withhold_total():
     assert result.status == "needs_review"
     assert result.total is None
     assert result.issues == ("total_ambiguous",)
+    assert result.write_plan_rows == 0
+
+
+def test_low_confidence_merchant_ocr_requires_review():
+    tokens = (
+        _StructuredOcrToken("青空", 1, 10, 10, 80, 20, 42, (1, 1, 1, 5)),
+        _StructuredOcrToken("ストア", 1, 95, 10, 100, 20, 92, (1, 1, 1, 5)),
+    )
+    result = preview_general_receipt_text(
+        "青空ストア\nレシート\n2026/09/01\n合計 500円",
+        source_id="low-merchant", ocr_tokens=tokens,
+    )
+
+    assert result.status == "needs_review"
+    assert "merchant_ocr_low_confidence" in result.issues
     assert result.write_plan_rows == 0
 
 

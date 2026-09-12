@@ -15,7 +15,7 @@ from datetime import date
 from typing import Literal
 
 from .medical_ocr_observation_shadow import OcrObservation, ReceiptImage
-from .medical_receipt_privacy import build_receipt_privacy_preview
+from .medical_receipt_privacy import _StructuredOcrToken, build_receipt_privacy_preview
 from .receipt_text_extraction import ExtractionMethod, _extract_receipt_text
 from .reconciliation import (
     ImportTransaction,
@@ -254,6 +254,31 @@ def _select(candidates: tuple[FieldCandidate, ...], *, margin: int = 8) -> tuple
     return candidates[0].value, False
 
 
+def _selected_text_confidence(
+    value: str | None,
+    tokens: tuple[_StructuredOcrToken, ...],
+) -> float | None:
+    """Find confidence for the exact OCR line that supplied a selected string."""
+    if not value or not tokens:
+        return None
+    target = _compact(value).casefold()
+    grouped: dict[tuple[int, tuple[int, int, int, int]], list[_StructuredOcrToken]] = {}
+    for token in tokens:
+        grouped.setdefault((token.page, token.line_key), []).append(token)
+    matches = []
+    for line_tokens in grouped.values():
+        ordered = sorted(line_tokens, key=lambda token: token.x)
+        line = _compact("".join(token.text for token in ordered)).casefold()
+        if line != target:
+            continue
+        weight = sum(max(1, len(_compact(token.text))) for token in ordered)
+        if weight:
+            matches.append(sum(
+                token.confidence * max(1, len(_compact(token.text))) for token in ordered
+            ) / weight)
+    return max(matches) if matches else None
+
+
 def _duplicate_state(
     import_id: str,
     source_sha256: str,
@@ -286,6 +311,7 @@ def preview_general_receipt_text(
     extraction_method: ReceiptOcrMethod = "image_ocr",
     classification: str = "normal",
     existing_rows: list[list] | None = None,
+    ocr_tokens: tuple[_StructuredOcrToken, ...] = (),
 ) -> GeneralReceiptPreview:
     """Pure parser entry point, also used by the small human-checked eval harness."""
     digest = source_sha256 or hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -305,6 +331,12 @@ def preview_general_receipt_text(
         issues.append("merchant_missing")
     elif merchant_ambiguous:
         issues.append("merchant_ambiguous")
+    else:
+        merchant_confidence = _selected_text_confidence(
+            selected_merchant if isinstance(selected_merchant, str) else None, ocr_tokens,
+        )
+        if merchant_confidence is not None and merchant_confidence < 75:
+            issues.append("merchant_ocr_low_confidence")
     if not totals:
         issues.append("total_missing")
     elif total_ambiguous:
@@ -419,6 +451,7 @@ def preview_general_receipt_bytes(
         extraction_method=extracted.method,
         classification=privacy.classification,
         existing_rows=existing_rows,
+        ocr_tokens=extracted.structured_tokens,
     )
 
 
