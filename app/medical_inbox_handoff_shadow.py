@@ -50,8 +50,14 @@ class MedicalInboxHandoffShadow:
 
     def _load(self) -> None:
         assert self._store_path is not None
+        self._items = {item.review_item_id: item for item in self.read_items(self._store_path)}
+
+    @staticmethod
+    def read_items(store_path: str | os.PathLike[str]) -> tuple[MedicalReviewItem, ...]:
+        """Read-only access for local review tooling; identity key is not needed."""
+        path = Path(store_path)
         try:
-            with self._store_path.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8") as handle:
                 document = json.load(handle)
             if type(document) is not dict or document.get("schema_version") != 1:
                 raise ValueError
@@ -59,11 +65,11 @@ class MedicalInboxHandoffShadow:
             if type(raw_items) is not list:
                 raise ValueError
             loaded = [MedicalReviewItem.safe_validate(value) for value in raw_items]
-            self._items = {item.review_item_id: item for item in loaded}
-            if len(self._items) != len(loaded):
+            if len({item.review_item_id for item in loaded}) != len(loaded):
                 raise ValueError
+            return tuple(loaded)
         except FileNotFoundError:
-            return
+            return ()
         except Exception as exc:
             raise SafeReviewValidationError() from None
 

@@ -116,6 +116,18 @@ def test_corrupted_store_fails_closed(tmp_path):
         MedicalInboxHandoffShadow(identity_key=KEY, store_path=path)
 
 
+def test_wrong_schema_version_fails_closed(tmp_path):
+    path = tmp_path / "medical-review.json"
+    path.write_text(json.dumps({"schema_version": 999, "items": []}), encoding="utf-8")
+
+    with pytest.raises(SafeReviewValidationError):
+        MedicalInboxHandoffShadow(identity_key=KEY, store_path=path)
+
+
+def test_missing_store_is_an_empty_read_only_queue(tmp_path):
+    assert MedicalInboxHandoffShadow.read_items(tmp_path / "missing.json") == ()
+
+
 def test_missing_identity_key_fails_closed(tmp_path):
     with pytest.raises(SafeReviewValidationError):
         MedicalInboxHandoffShadow(identity_key=b"", store_path=tmp_path / "review.json")

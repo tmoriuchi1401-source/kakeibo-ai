@@ -80,6 +80,7 @@ from .google_clients import (
 )
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
+from .medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -141,6 +142,9 @@ def main():
     sub.add_parser("review-refresh")
     sub.add_parser("review-apply-preview")
     sub.add_parser("review-apply")
+    mr=sub.add_parser("medical-review")
+    mr.add_argument("action", choices=("list", "show"))
+    mr.add_argument("review_item_id", nargs="?")
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
     sub.add_parser("auto-expense-preview")
@@ -318,6 +322,19 @@ def main():
         s,db,_=make(False); print(ReviewApprovalPipeline(db).preview())
     elif args.cmd=="review-apply":
         s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
+    elif args.cmd=="medical-review":
+        if args.action == "show" and not args.review_item_id:
+            raise RuntimeError("medical-review show にはreview_item_idが必要です")
+        s = Settings()
+        items = MedicalInboxHandoffShadow.read_items(s.medical_review_store_file())
+        if args.action == "list":
+            pending = [item.model_dump(mode="json") for item in items if item.review_status == "pending"]
+            print(json.dumps(pending, ensure_ascii=False, sort_keys=True))
+        else:
+            found = next((item for item in items if item.review_item_id == args.review_item_id), None)
+            if found is None:
+                raise RuntimeError("指定されたreview itemが見つかりません")
+            print(json.dumps(found.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
     elif args.cmd=="expenses-preview":
         s,db,_=make(False); print(ExpenseViewPipeline(db).preview())
     elif args.cmd=="expenses-refresh":

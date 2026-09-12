@@ -61,6 +61,26 @@ the key itself is never serialized. The adapter performs no external AI call,
 Sheets write, Drive move, or production decision handoff. `sensitive_unknown`
 remains on hold and is not coerced into the Medical queue.
 
+## Local review operation
+
+The runtime configuration names `MEDICAL_REVIEW_STORE_PATH` and
+`MEDICAL_REVIEW_IDENTITY_KEY` in `.env.example`. The default store path is a
+user-specific application-data path (`%LOCALAPPDATA%/kakeibo-ai/medical-review.json`
+on Windows, or the platform's user local-data equivalent), never the
+repository. The configured path must be absolute; its parent is initialized
+only by the explicit handoff factory, while a read-only review command does
+not create or repair files. The identity key is base64 text decoded only in
+memory and must contain at least 16 bytes.
+
+Existing local CLI tooling can inspect the safe store without Sheets or a key:
+
+```text
+python -m app.cli medical-review list
+python -m app.cli medical-review show <review_item_id>
+```
+
+These commands are read-only and show only the persisted review metadata.
+
 ## Role of `general_receipt_preview.py`
 
 `app/general_receipt_preview.py` remains a local, read-only diagnostic preview.
