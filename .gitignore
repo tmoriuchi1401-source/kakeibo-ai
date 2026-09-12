@@ -5,6 +5,8 @@ __pycache__/
 service-account.json
 token.json
 *.pyc
+.private/
+.pytest-merge-tmp/
 
 # 家計簿の実データ・メール・画像・ローカルバックアップ
 *.csv
