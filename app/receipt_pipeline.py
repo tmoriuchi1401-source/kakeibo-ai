@@ -1,5 +1,6 @@
 from __future__ import annotations
 import mimetypes, uuid
+from collections.abc import Callable
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import evaluate_receipt_privacy
 from .medical_receipt_privacy import Classification
@@ -7,9 +8,11 @@ from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 
 class ReceiptPipeline:
-    def __init__(self,db:SheetsDB,ai:GeminiAI, *, medical_review_observer=None):
+    def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
+                 gemini_factory:Callable[[], GeminiAI] | None=None):
         self.db=db; self.ai=ai
         self.medical_review_observer=medical_review_observer
+        self._gemini_factory=gemini_factory
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
@@ -49,6 +52,10 @@ class ReceiptPipeline:
             if medical_shadow_status is not None:
                 result["medical_shadow_status"] = medical_shadow_status
             return result
+        if self.ai is None:
+            if self._gemini_factory is None:
+                raise RuntimeError("未設定: GEMINI_API_KEY")
+            self.ai=self._gemini_factory()
         cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats,**source_policy)
         allowed=set(cats)
         invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]

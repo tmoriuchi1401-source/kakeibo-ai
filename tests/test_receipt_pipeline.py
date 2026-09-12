@@ -155,6 +155,41 @@ def test_non_normal_gate_never_calls_gemini_or_sheets(
     assert result["medical_payment_amount"] == expected_amount
 
 
+def test_medical_gate_does_not_resolve_lazy_gemini(monkeypatch):
+    db = FakeDB()
+    gemini_factory = Mock(side_effect=AssertionError("Gemini must remain unused"))
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=_medical_gate())
+    )
+
+    result = pipeline_module.ReceiptPipeline(
+        db, None, gemini_factory=gemini_factory
+    ).process_bytes(b"private medical bytes", "image/png", "medical-source")
+
+    assert result["status"] == "privacy_blocked"
+    assert result["gemini_allowed"] is False
+    gemini_factory.assert_not_called()
+    assert db.category_calls == 0
+    assert db.append_calls == []
+
+
+def test_normal_gate_without_gemini_key_fails_closed_at_use_boundary(monkeypatch):
+    db = FakeDB()
+    gemini_factory = Mock(side_effect=RuntimeError("未設定: GEMINI_API_KEY"))
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=_normal_gate())
+    )
+
+    with pytest.raises(RuntimeError, match="未設定: GEMINI_API_KEY"):
+        pipeline_module.ReceiptPipeline(
+            db, None, gemini_factory=gemini_factory
+        ).process_bytes(b"normal receipt", "image/png", "normal-source")
+
+    gemini_factory.assert_called_once_with()
+    assert db.category_calls == 0
+    assert db.append_calls == []
+
+
 def test_medical_needs_review_is_observed_without_gemini_or_sheets(monkeypatch):
     db = FakeDB()
     ai = FakeAI(_normal_receipt_result())

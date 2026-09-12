@@ -118,7 +118,16 @@ def make_receipt_pipeline(settings, db, ai):
                 def observe(self, **kwargs):
                     raise RuntimeError("medical shadow configuration unavailable")
             observer = _UnavailableMedicalObserver()
-    return ReceiptPipeline(db, ai, medical_review_observer=observer)
+    gemini_factory = None
+    if ai is None and settings is not None:
+        def gemini_factory():
+            # Receipt privacy classification runs first. Normal receipts still
+            # require the same fail-closed key validation at the use boundary.
+            settings.validate(need_gemini=True)
+            return GeminiAI(settings.gemini_api_key, settings.gemini_model)
+    return ReceiptPipeline(
+        db, ai, medical_review_observer=observer, gemini_factory=gemini_factory,
+    )
 
 
 def print_drive_receipt_results(results):
@@ -285,7 +294,7 @@ def main():
         )
         print(json.dumps(result.as_dict(),ensure_ascii=False))
     elif args.cmd=="receipt":
-        s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
+        s,db,ai=make(False); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
         try:
             print(make_receipt_pipeline(s, db, ai).process_bytes(
                 data,mime,os.path.basename(args.image),
@@ -648,7 +657,7 @@ def main():
         with open(args.eml,"rb") as f:
             print(parse_amazon_email(f.read()).anonymized())
     elif args.cmd=="drive-receipts":
-        s,db,ai=make(); s.validate(need_drive=True)
+        s,db,ai=make(False); s.validate(need_drive=True)
         print_drive_receipt_results(
             process_inbox(s.receipt_drive_folder_id,make_receipt_pipeline(s, db, ai),s.processed_drive_folder_id,
                           known_source_classification=args.source_classification)

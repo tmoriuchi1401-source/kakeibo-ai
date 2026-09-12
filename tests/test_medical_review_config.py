@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,7 +10,7 @@ from app import cli
 from app.medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 from app.settings import Settings
 from tests.test_medical_inbox_handoff_shadow import medical_gate
-from tests.test_receipt_pipeline import FakeDB, FakeAI, _normal_receipt_result
+from tests.test_receipt_pipeline import FakeDB, FakeAI, _normal_gate, _normal_receipt_result
 
 
 def test_configured_store_parent_is_initialized_and_key_decoded(tmp_path):
@@ -112,4 +113,50 @@ def test_enabled_but_invalid_handoff_config_keeps_medical_blocked(monkeypatch):
     assert result["status"] == "privacy_blocked"
     assert result["medical_shadow_status"] == "handoff_failed"
     ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
+
+
+def test_medical_shadow_runs_without_gemini_key_or_client(tmp_path, monkeypatch):
+    store = tmp_path / "review.json"
+    settings = Settings(
+        gemini_api_key="",
+        medical_review_store_path=str(store),
+        medical_review_identity_key=base64.b64encode(
+            b"configured-medical-key"
+        ).decode("ascii"),
+        medical_review_shadow_enabled=True,
+    )
+    db = FakeDB()
+    gemini_client = Mock(side_effect=AssertionError("Gemini client must not be created"))
+    monkeypatch.setattr(cli, "GeminiAI", gemini_client)
+    monkeypatch.setattr(
+        "app.receipt_pipeline.evaluate_receipt_privacy", lambda content, mime: medical_gate()
+    )
+
+    result = cli.make_receipt_pipeline(settings, db, None).process_bytes(
+        b"medical", "image/png", "medical-shadow-source"
+    )
+
+    assert result["status"] == "privacy_blocked"
+    assert result["medical_shadow_status"] == "new_item"
+    assert store.exists()
+    gemini_client.assert_not_called()
+    assert db.append_calls == []
+
+
+def test_normal_receipt_without_gemini_key_uses_existing_validation(monkeypatch):
+    settings = Settings(gemini_api_key="")
+    db = FakeDB()
+    gemini_client = Mock(side_effect=AssertionError("invalid client construction"))
+    monkeypatch.setattr(cli, "GeminiAI", gemini_client)
+    monkeypatch.setattr(
+        "app.receipt_pipeline.evaluate_receipt_privacy", lambda content, mime: _normal_gate()
+    )
+
+    with pytest.raises(RuntimeError, match="未設定: GEMINI_API_KEY"):
+        cli.make_receipt_pipeline(settings, db, None).process_bytes(
+            b"normal", "image/png", "normal-source"
+        )
+
+    gemini_client.assert_not_called()
     assert db.append_calls == []
