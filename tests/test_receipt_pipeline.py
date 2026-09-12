@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from app import receipt_pipeline as pipeline_module
+from app.medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 from app.models import ReceiptItem, ReceiptResult
 from app.receipt_privacy_gate import ReceiptPrivacyGateResult
 
@@ -152,6 +153,84 @@ def test_non_normal_gate_never_calls_gemini_or_sheets(
     assert result["classification"] == expected_classification
     assert result["gemini_allowed"] is False
     assert result["medical_payment_amount"] == expected_amount
+
+
+def test_medical_needs_review_is_observed_without_gemini_or_sheets(monkeypatch):
+    db = FakeDB()
+    ai = FakeAI(_normal_receipt_result())
+    observer = Mock()
+    gate_result = _medical_gate("needs_review")
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=gate_result)
+    )
+
+    result = pipeline_module.ReceiptPipeline(
+        db, ai, medical_review_observer=observer
+    ).process_bytes(b"private medical bytes", "image/png", "medical-source")
+
+    observer.observe.assert_called_once_with(source_id="medical-source", gate=gate_result)
+    assert result["status"] == "privacy_blocked"
+    ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
+
+
+def test_medical_pipeline_to_canonical_review_handoff_is_idempotent(monkeypatch):
+    db = FakeDB()
+    ai = FakeAI(_normal_receipt_result())
+    handoff = MedicalInboxHandoffShadow(identity_key=b"synthetic-pipeline-review-key")
+    gate = Mock(return_value=_medical_gate("needs_review"))
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy", gate)
+    pipeline = pipeline_module.ReceiptPipeline(
+        db, ai, medical_review_observer=handoff
+    )
+
+    first = pipeline.process_bytes(b"private medical bytes", "image/png", "medical-source")
+    second = pipeline.process_bytes(b"private medical bytes", "image/png", "medical-source")
+
+    assert first["status"] == second["status"] == "privacy_blocked"
+    assert len(handoff.items()) == 1
+    assert gate.call_count == 2
+    ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
+
+
+def test_sensitive_unknown_is_not_promoted_to_medical_review(monkeypatch):
+    db = FakeDB()
+    ai = FakeAI(_normal_receipt_result())
+    observer = Mock()
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=_sensitive_gate())
+    )
+
+    result = pipeline_module.ReceiptPipeline(
+        db, ai, medical_review_observer=observer
+    ).process_bytes(b"unknown private bytes", "image/png", "unknown-source")
+
+    observer.observe.assert_not_called()
+    assert result["status"] == "privacy_blocked"
+    ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
+
+
+def test_medical_review_observer_failure_preserves_privacy_block(monkeypatch):
+    db = FakeDB()
+    ai = FakeAI(_normal_receipt_result())
+    observer = Mock()
+    observer.observe.side_effect = RuntimeError("synthetic shadow failure")
+    monkeypatch.setattr(
+        pipeline_module,
+        "evaluate_receipt_privacy",
+        Mock(return_value=_medical_gate("needs_review")),
+    )
+
+    result = pipeline_module.ReceiptPipeline(
+        db, ai, medical_review_observer=observer
+    ).process_bytes(b"private medical bytes", "image/png", "medical-source")
+
+    assert result["status"] == "privacy_blocked"
+    assert result["classification"] == "medical"
+    ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
 
 
 def test_blocked_result_never_contains_synthetic_private_text(monkeypatch):

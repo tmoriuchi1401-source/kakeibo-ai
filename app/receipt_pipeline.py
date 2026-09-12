@@ -7,8 +7,9 @@ from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 
 class ReceiptPipeline:
-    def __init__(self,db:SheetsDB,ai:GeminiAI):
+    def __init__(self,db:SheetsDB,ai:GeminiAI, *, medical_review_observer=None):
         self.db=db; self.ai=ai
+        self.medical_review_observer=medical_review_observer
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
@@ -24,6 +25,13 @@ class ReceiptPipeline:
         privacy=evaluate_receipt_privacy(image_bytes,mime_type,**source_policy)
         if privacy.classification != "normal" or not privacy.gemini_allowed:
             self._source_privacy[source_id] = privacy.classification
+            if privacy.classification == "medical" and self.medical_review_observer is not None:
+                try:
+                    self.medical_review_observer.observe(source_id=source_id, gate=privacy)
+                except Exception:
+                    # Shadow review generation must never weaken or replace the
+                    # existing fail-closed privacy decision.
+                    pass
             return {
                 "status":"privacy_blocked",
                 "classification":privacy.classification,
