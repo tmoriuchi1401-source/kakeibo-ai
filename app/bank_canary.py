@@ -15,6 +15,7 @@ from .bank_pdf_pipeline import DEFAULT_ACCOUNT_ALIAS, BankPdfPipeline, SOURCE
 from .bank_reconciliation import (
     BankPreviewPlan,
     BankShadowResult,
+    ConfirmedInternalTransfers,
     build_bank_preview_plan,
     build_bank_shadow_result,
 )
@@ -30,6 +31,8 @@ BANK_BATCH_ROWS = 5
 BANK_INITIAL_BACKFILL_ROWS = 51
 BANK_BATCH_ROW_BOUNDS = frozenset({BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS})
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
+LOAN_CLASSIFICATION = "loan_repayment"
+LOAN_EXPENSE_CATEGORY = ("住まい", "住宅ローン")
 _BANK_CANARY_PLAN_AUTHORITY = object()
 _BANK_BATCH_PLAN_AUTHORITY = object()
 
@@ -222,6 +225,41 @@ class BankBatchDryRunResult:
             "max_writes": self.max_writes,
             "income": self.income,
             "expense": self.expense,
+            "write_attempted": self.write_attempted,
+            "external_write_count": self.external_write_count,
+        }
+
+
+@dataclass(frozen=True)
+class BankLoanPreviewResult:
+    selected: int
+    planned: int
+    write_eligible: int
+    canonical_expense_rows: int
+    existing_duplicate: int
+    ambiguous_collision: int
+    target_binding_valid: bool
+    target_header_valid: bool
+    category_authority_valid: bool
+    category_major: str
+    category_minor: str
+    write_attempted: int = 0
+    external_write_count: int = 0
+
+    def summary(self) -> dict:
+        return {
+            "selected": self.selected,
+            "planned": self.planned,
+            "write_eligible": self.write_eligible,
+            "canonical_expense_rows": self.canonical_expense_rows,
+            "existing_duplicate": self.existing_duplicate,
+            "ambiguous_collision": self.ambiguous_collision,
+            "target_binding_valid": self.target_binding_valid,
+            "target_header_valid": self.target_header_valid,
+            "expense_category": {
+                "major": self.category_major, "minor": self.category_minor,
+            },
+            "category_authority_valid": self.category_authority_valid,
             "write_attempted": self.write_attempted,
             "external_write_count": self.external_write_count,
         }
@@ -542,6 +580,95 @@ def dry_run_bank_canary(
     )
 
 
+def preview_bank_loan_repayments(
+    shadow: BankShadowResult,
+    preview: BankPreviewPlan,
+    db: SheetsDB,
+    *,
+    imported_at,
+    expected_rows: int = 4,
+) -> BankLoanPreviewResult:
+    """Validate all clear loan repayments up to the writer boundary, read-only."""
+    decisions = tuple(
+        decision for decision in shadow.decisions
+        if decision.classification.classification == LOAN_CLASSIFICATION
+    )
+    if len(decisions) != expected_rows:
+        raise RuntimeError("bank_loan_preview_expected_row_count_changed")
+    if preview.ambiguous_collision:
+        raise RuntimeError("bank_loan_preview_collision")
+    if any(decision.write_eligibility != "preview_candidate" for decision in decisions):
+        raise RuntimeError("bank_loan_preview_write_eligibility_withheld")
+    transactions = tuple(
+        decision.classification.transaction.to_canonical()
+        for decision in decisions
+    )
+    identities = tuple(transaction.identity for transaction in transactions)
+    if len(set(identities)) != expected_rows or any(
+        preview.candidate_identities.count(identity) != 1 for identity in identities
+    ):
+        raise RuntimeError("bank_loan_preview_identity_not_unique")
+    if any(
+        transaction.source != SOURCE
+        or transaction.transaction_kind != "withdrawal"
+        or transaction.amount_yen >= 0
+        for transaction in transactions
+    ):
+        raise RuntimeError("bank_loan_preview_expense_semantics_invalid")
+
+    binding = TargetBinding(
+        expected_spreadsheet_id=str(db.sid),
+        expected_worksheet=CANARY_TARGET_SHEET,
+    )
+    validate_target_binding(
+        binding,
+        ReadOnlySheetsTargetInspector(db).inspect(CANARY_TARGET_SHEET),
+    )
+    observations = SheetsCanonicalIdentityReader(db).read_identities(identities)
+    for transaction in transactions:
+        observation = observations.get(transaction.identity)
+        if observation is None or not observation.readable:
+            raise RuntimeError("bank_loan_preview_identity_readback_unavailable")
+        if observation.records:
+            exact = (
+                len(observation.records) == 1
+                and observation.records[0]
+                == ExistingCanonicalRecord.from_candidate(transaction)
+            )
+            raise RuntimeError(
+                "bank_loan_preview_existing_identity_duplicate"
+                if exact else "bank_loan_preview_existing_identity_collision"
+            )
+    categories = set(db.categories())
+    if LOAN_EXPENSE_CATEGORY not in categories:
+        raise RuntimeError("bank_loan_preview_housing_category_unavailable")
+    rows = tuple(
+        materialize_import_row(
+            transaction,
+            imported_at=imported_at,
+            status="bank_loan_repayment",
+        )
+        for transaction in transactions
+    )
+    if len(rows) != expected_rows or any(
+        len(row) != len(HEADERS[CANARY_TARGET_SHEET]) for row in rows
+    ):
+        raise RuntimeError("bank_loan_preview_row_schema_invalid")
+    return BankLoanPreviewResult(
+        selected=expected_rows,
+        planned=expected_rows,
+        write_eligible=expected_rows,
+        canonical_expense_rows=expected_rows,
+        existing_duplicate=0,
+        ambiguous_collision=0,
+        target_binding_valid=True,
+        target_header_valid=True,
+        category_authority_valid=True,
+        category_major=LOAN_EXPENSE_CATEGORY[0],
+        category_minor=LOAN_EXPENSE_CATEGORY[1],
+    )
+
+
 class BankCanaryPreparationPipeline:
     """Build and preflight a one-row bank canary using read-only Sheets state."""
 
@@ -553,7 +680,8 @@ class BankCanaryPreparationPipeline:
         path: str | Path,
         *,
         account_alias: str,
-        confirmed_internal_transfers: frozenset[tuple[str, str]],
+        confirmed_internal_transfers: ConfirmedInternalTransfers,
+        card_statement_authorities=(),
     ) -> tuple[BankShadowResult, BankPreviewPlan]:
         existing_rows = self.db.get("取込データ!A2:L")
         existing = parse_import_rows(existing_rows)
@@ -566,15 +694,45 @@ class BankCanaryPreparationPipeline:
             parsed,
             existing,
             confirmed_internal_transfers=confirmed_internal_transfers,
+            card_statement_authorities=tuple(card_statement_authorities),
         )
         return shadow, build_bank_preview_plan(shadow, existing)
+
+    def loan_dry_run(
+        self,
+        path: str | Path,
+        *,
+        imported_at,
+        expected_rows: int = 4,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers=frozenset(),
+        card_statement_authorities=(),
+    ) -> dict:
+        shadow, preview = self._context(
+            path,
+            account_alias=account_alias,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+            card_statement_authorities=card_statement_authorities,
+        )
+        result = preview_bank_loan_repayments(
+            shadow, preview, self.db,
+            imported_at=imported_at,
+            expected_rows=expected_rows,
+        ).summary()
+        result.update({
+            "parsed": preview.parsed,
+            "existing_bank_duplicates": preview.existing_duplicate,
+            "new_plan_candidates": preview.new_plan_candidates,
+            "withheld_by_classification": preview.withheld_by_classification,
+        })
+        return result
 
     def candidate_identities(
         self,
         path: str | Path,
         *,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     ) -> dict:
         _, preview = self._context(
             path,
@@ -595,7 +753,7 @@ class BankCanaryPreparationPipeline:
         selected_source_identity: str,
         imported_at,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     ) -> dict:
         shadow, preview = self._context(
             path,
@@ -624,7 +782,7 @@ class BankCanaryPreparationPipeline:
         selected_source_identities: tuple[str, ...],
         imported_at,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     ) -> dict:
         """Prepare exactly five explicit identities and stop before any writer."""
         shadow, preview = self._context(
@@ -653,7 +811,7 @@ class BankCanaryPreparationPipeline:
         *,
         selected_source_identity: str,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     ) -> dict:
         """Confirm the selected identity is suppressed without exposing row data."""
         shadow, preview = self._context(
@@ -685,7 +843,7 @@ class BankCanaryPreparationPipeline:
         *,
         selected_source_identities: tuple[str, ...],
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     ) -> dict:
         """Verify all five exact identities are suppressed, returning counts only."""
         selected = tuple(selected_source_identities)

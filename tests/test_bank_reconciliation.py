@@ -14,8 +14,10 @@ from app.bank_reconciliation import (
     build_bank_preview_plan,
     build_bank_shadow_result,
     classify_bank_transaction,
+    group_transfer_ownership_candidates,
     reconcile_bank_classification,
 )
+from app.aupay_mail_pipeline import AuPayCardStatementAuthority
 from app.cli import main
 from app.reconciliation import parse_import_rows
 from app.settings import Settings
@@ -71,6 +73,55 @@ def test_card_settlement_identified_but_unlinked_from_individual_purchases():
     assert not decision.matched_identity
 
 
+def statement(identity="statement:1", *, date="2026-09-01", amount=1000):
+    return AuPayCardStatementAuthority(
+        statement_identity=identity,
+        payment_date=date,
+        statement_total_yen=amount,
+        billing_cycle="2026-08",
+    ).to_import_transaction()
+
+
+def test_card_statement_runtime_authority_requires_exact_unique_match():
+    classified = classify_bank_transaction(bank("口座振替 AU PAY カード"))
+
+    matched = reconcile_bank_classification(
+        classified, [], card_statement_authorities=(statement(),),
+    )
+    wrong_amount = reconcile_bank_classification(
+        classified, [], card_statement_authorities=(statement(amount=1001),),
+    )
+    wrong_date = reconcile_bank_classification(
+        classified, [], card_statement_authorities=(statement(date="2026-09-02"),),
+    )
+    ambiguous = reconcile_bank_classification(
+        classified, [],
+        card_statement_authorities=(statement("statement:1"), statement("statement:2")),
+    )
+
+    assert matched.reconciliation_status == "matched"
+    assert matched.matched_identity == "statement:1"
+    assert wrong_amount.reconciliation_status == "identified_unlinked"
+    assert wrong_date.reconciliation_status == "identified_unlinked"
+    assert ambiguous.reconciliation_status == "identified_unlinked"
+
+
+def test_one_statement_cannot_authorize_two_same_date_amount_bank_rows():
+    transactions = (
+        bank("口座振替 AU PAY カード", identity="bank:card:1"),
+        bank("口座振替 AU PAY カード", identity="bank:card:2"),
+    )
+
+    shadow = build_bank_shadow_result(
+        parsed_for(*transactions), [],
+        card_statement_authorities=(statement(),),
+    )
+
+    assert [item.reconciliation_status for item in shadow.decisions] == [
+        "identified_unlinked", "identified_unlinked",
+    ]
+
+
 def test_direct_debit_is_expense_after_card_rules():
     decision = reconcile(bank("口座振替 公共サービス"))
     assert decision.classification.classification == "expense"
@@ -103,7 +154,7 @@ def test_confirmed_internal_transfer_requires_exact_configured_description():
     confirmed = classify_bank_transaction(
         transaction,
         confirmed_internal_transfers=frozenset({
-            ("振込 匿名資金移動", "incoming"),
+            ("振込匿名資金移動", "incoming", "test-account"),
         }),
     )
 
@@ -115,32 +166,77 @@ def test_confirmed_internal_transfer_requires_exact_configured_description():
     wrong_direction = classify_bank_transaction(
         bank("振込 匿名資金移動", -1000),
         confirmed_internal_transfers=frozenset({
-            ("振込 匿名資金移動", "incoming"),
+            ("振込匿名資金移動", "incoming", "test-account"),
         }),
     )
     assert wrong_direction.classification == "needs_review"
 
+    wrong_account = classify_bank_transaction(
+        transaction,
+        confirmed_internal_transfers=frozenset({
+            ("振込匿名資金移動", "incoming", "other-account"),
+        }),
+    )
+    fuzzy_description = classify_bank_transaction(
+        bank("振込 匿名資金移動 追加", 1000),
+        confirmed_internal_transfers=frozenset({
+            ("振込匿名資金移動", "incoming", "test-account"),
+        }),
+    )
+    assert wrong_account.classification == "needs_review"
+    assert fuzzy_description.classification == "needs_review"
+
 
 def test_private_transfer_config_requires_exact_description_and_direction():
     settings = Settings(bank_internal_transfers_json=json.dumps([
-        {"description": "振込 匿名資金移動", "direction": "incoming"},
+        {
+            "normalized_description": "振込匿名資金移動",
+            "direction": "incoming",
+            "account_alias": "test-account",
+            "active": True,
+        },
+        {
+            "normalized_description": "振込停止済",
+            "direction": "outgoing",
+            "account_alias": "test-account",
+            "active": False,
+        },
     ], ensure_ascii=False))
 
     assert settings.bank_confirmed_internal_transfers() == frozenset({
-        ("振込 匿名資金移動", "incoming"),
+        ("振込匿名資金移動", "incoming", "test-account"),
     })
 
 
 @pytest.mark.parametrize("value", [
     "not-json",
     '["description only"]',
-    '[{"description":"匿名","direction":"both"}]',
+    '[{"normalized_description":"匿名","direction":"both",'
+    '"account_alias":"test-account","active":true}]',
+    '[{"normalized_description":"振込 匿名","direction":"incoming",'
+    '"account_alias":"test-account","active":true}]',
 ])
 def test_private_transfer_config_fails_closed(value):
     settings = Settings(bank_internal_transfers_json=value)
 
     with pytest.raises(RuntimeError, match="BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON"):
         settings.bank_confirmed_internal_transfers()
+
+
+def test_transfer_candidate_grouping_uses_normalized_description_and_direction():
+    parsed = parsed_for(
+        bank("振込 匿名資金移動", 1000, "bank:in:1"),
+        bank("振込　匿名資金移動", 2000, "bank:in:2"),
+        bank("振込 匿名資金移動", -1000, "bank:out:1"),
+    )
+
+    groups = group_transfer_ownership_candidates(parsed)
+
+    assert [(item.normalized_description, item.direction, item.occurrence_count)
+            for item in groups] == [
+        ("振込匿名資金移動", "incoming", 2),
+        ("振込匿名資金移動", "outgoing", 1),
+    ]
 
 
 def test_ambiguous_transfer_and_atm_withdrawal_have_separate_semantics():
@@ -155,13 +251,13 @@ def test_ambiguous_transfer_and_atm_withdrawal_have_separate_semantics():
     )
 
 
-def test_loan_repayment_is_separate_and_withheld_from_write_preview():
+def test_loan_repayment_is_separate_and_write_eligible_as_cashflow_expense():
     decision = reconcile(bank("約定返済"))
 
     assert decision.classification.classification == "loan_repayment"
     assert decision.classification.reason == "contractual_loan_repayment"
     assert decision.reconciliation_status == "not_applicable"
-    assert decision.write_eligibility == "withheld"
+    assert decision.write_eligibility == "preview_candidate"
 
 
 def test_paypay_candidate_matches_only_explicit_transfer_authority():
@@ -262,14 +358,16 @@ def test_replay_is_counted_without_changing_classification(monkeypatch):
     }
 
 
-def test_income_and_expense_are_only_preview_candidates():
+def test_income_expense_and_loan_are_preview_candidates_but_cash_is_not():
     income = reconcile(bank("給与 匿名勤務先", 1000))
     expense = reconcile(bank("口座振替 公共サービス"))
     cash = reconcile(bank("ATM 現金引出"))
+    loan = reconcile(bank("約定返済"))
 
     assert income.write_eligibility == "preview_candidate"
     assert expense.write_eligibility == "preview_candidate"
     assert cash.write_eligibility == "withheld"
+    assert loan.write_eligibility == "preview_candidate"
 
 
 def parsed_for(*transactions):
@@ -284,7 +382,7 @@ def parsed_for(*transactions):
     )
 
 
-def test_production_preview_plan_only_admits_income_and_expense():
+def test_production_preview_plan_admits_income_expense_and_loan_only():
     transactions = (
         bank("給与 匿名勤務先", 1000, "bank:income"),
         bank("口座振替 公共サービス", -1000, "bank:expense"),
@@ -299,9 +397,9 @@ def test_production_preview_plan_only_admits_income_and_expense():
     plan = build_bank_preview_plan(shadow, [])
 
     assert plan.parsed == len(transactions)
-    assert plan.eligible_before_dedupe == 2
-    assert plan.withheld_by_classification == 5
-    assert plan.new_plan_candidates == 2
+    assert plan.eligible_before_dedupe == 3
+    assert plan.withheld_by_classification == 4
+    assert plan.new_plan_candidates == 3
     assert plan.write_attempted == 0
 
 

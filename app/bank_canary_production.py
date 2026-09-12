@@ -29,6 +29,7 @@ from .bank_canary import (
     dry_run_bank_batch,
     dry_run_bank_canary,
 )
+from .bank_reconciliation import ConfirmedInternalTransfers
 from .canonical_one_row_production import (
     GitCheckpointGuard,
     SealedCanonicalOneRowTransport,
@@ -57,7 +58,7 @@ def run_bank_production_canary(
     audit_key_file: str | Path,
     approval_file: str | Path,
     account_alias: str,
-    confirmed_internal_transfers: frozenset[tuple[str, str]],
+    confirmed_internal_transfers: ConfirmedInternalTransfers,
     clock: Callable[[], datetime],
     sleeper: Callable[[float], None],
 ) -> dict:
@@ -195,7 +196,7 @@ def run_bank_production_batch(
     audit_key_file: str | Path,
     approval_file: str | Path,
     account_alias: str,
-    confirmed_internal_transfers: frozenset[tuple[str, str]],
+    confirmed_internal_transfers: ConfirmedInternalTransfers,
     clock: Callable[[], datetime],
     sleeper: Callable[[float], None],
 ) -> dict:

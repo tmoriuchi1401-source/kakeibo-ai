@@ -8,6 +8,9 @@ from .transaction_plan import Transaction
 from .utils import normalize_store
 
 
+CARD_STATEMENT_AUTHORITY_STATUS = "card_statement_total"
+
+
 @dataclass(frozen=True)
 class ImportTransaction:
     row_num: int

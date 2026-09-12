@@ -16,6 +16,7 @@ from .aupay_mail_pipeline import (
     AuPayCardMailPipeline,
     AuPayMailPipeline,
     authorize_gmail,
+    collect_aupay_card_statement_authorities,
     parse_eml,
     parse_aupay_card_eml,
 )
@@ -93,7 +94,10 @@ from .amazon_production import (
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 from .bank_pdf_pipeline import BankPdfPipeline
-from .bank_reconciliation import BankPdfShadowPipeline
+from .bank_reconciliation import (
+    BankPdfShadowPipeline,
+    group_transfer_ownership_candidates,
+)
 from .bank_canary import BankCanaryPreparationPipeline
 from .bank_canary_production import (
     run_bank_production_batch,
@@ -227,6 +231,13 @@ def main():
     bank_production=sub.add_parser("bank-pdf-production-preview")
     bank_production.add_argument("pdf")
     bank_production.add_argument("--account-alias",default="jibun-primary")
+    bank_transfer_candidates=sub.add_parser("bank-pdf-transfer-candidates")
+    bank_transfer_candidates.add_argument("pdf")
+    bank_transfer_candidates.add_argument("--account-alias",default="jibun-primary")
+    bank_phase10=sub.add_parser("bank-pdf-phase10-preview")
+    bank_phase10.add_argument("pdf")
+    bank_phase10.add_argument("--account-alias",default="jibun-primary")
+    bank_phase10.add_argument("--statement-max-results",type=int,default=100)
     bank_canary_candidates=sub.add_parser("bank-pdf-canary-candidates")
     bank_canary_candidates.add_argument("pdf")
     bank_canary_candidates.add_argument("--account-alias",default="jibun-primary")
@@ -321,6 +332,58 @@ def main():
             ),
             ensure_ascii=False,sort_keys=True,
         ))
+    elif args.cmd=="bank-pdf-transfer-candidates":
+        parsed=BankPdfPipeline().parse(args.pdf,account_alias=args.account_alias)
+        groups=group_transfer_ownership_candidates(parsed)
+        print(json.dumps({
+            "local_console_only":True,
+            "operator_confirmation_candidate_groups":len(groups),
+            "candidates":[{
+                "normalized_description":item.normalized_description,
+                "direction":item.direction,
+                "account_alias":item.account_alias,
+                "occurrence_count":item.occurrence_count,
+            } for item in groups],
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-phase10-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        statements=()
+        statement_summary={
+            "gmail_configured":bool(s.gmail_token_json),
+            "found":0,"parsed_statements":0,"rejected_messages":0,
+            "collection_complete":False,"write_attempted":0,
+        }
+        if s.gmail_token_json:
+            statements,statement_summary=collect_aupay_card_statement_authorities(
+                gmail_readonly_service(s.gmail_token_json),
+                s.aupay_card_statement_gmail_query,
+                args.statement_max_results,
+            )
+            statement_summary={"gmail_configured":True,**statement_summary}
+        authorities=tuple(item.to_import_transaction() for item in statements)
+        transfer_rules=s.bank_confirmed_internal_transfers()
+        shadow=BankPdfShadowPipeline(db).preview(
+            args.pdf,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=transfer_rules,
+            card_statement_authorities=authorities,
+        )
+        loan=BankCanaryPreparationPipeline(db).loan_dry_run(
+            args.pdf,
+            imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=transfer_rules,
+            card_statement_authorities=authorities,
+        )
+        print(json.dumps({
+            "read_only":True,
+            "statement_authority":statement_summary,
+            "bank_shadow":shadow,
+            "loan_preview":loan,
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
     elif args.cmd=="bank-pdf-canary-candidates":
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())

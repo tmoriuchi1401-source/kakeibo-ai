@@ -26,8 +26,10 @@ from .aupay_card_executor import (
     SheetsCanonicalIdentityReader,
     execute_canonical_apply_plan,
 )
+from .reconciliation import CARD_STATEMENT_AUTHORITY_STATUS
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
+AUPAY_CARD_STATEMENT_AUTHORITY_STATUS = CARD_STATEMENT_AUTHORITY_STATUS
 
 
 def authorize_gmail(client_secret_file: str, token_output_file: str) -> None:
@@ -117,6 +119,38 @@ class CardMailParseResult:
 
     def reconciliation_inputs(self) -> list[dict]:
         return [item.to_reconciliation_input() for item in self.accepted_items]
+
+
+@dataclass(frozen=True)
+class AuPayCardStatementAuthority:
+    """Issuer-authored statement total; individual purchases are never summed."""
+
+    statement_identity: str
+    payment_date: str
+    statement_total_yen: int
+    billing_cycle: str
+    issuer: str = "au PAYカード"
+
+    def to_import_transaction(self):
+        from .reconciliation import ImportTransaction
+
+        row = [
+            self.statement_identity, "", self.issuer, self.statement_identity,
+            self.payment_date, "au PAYカード請求", self.statement_total_yen, "",
+            AUPAY_CARD_STATEMENT_AUTHORITY_STATUS, "", "", "issuer_statement",
+        ]
+        return ImportTransaction(
+            row_num=0,
+            import_id=self.statement_identity,
+            source=self.issuer,
+            date=self.payment_date,
+            merchant="au PAYカード請求",
+            amount=self.statement_total_yen,
+            status=AUPAY_CARD_STATEMENT_AUTHORITY_STATUS,
+            target_id="",
+            note="issuer_statement",
+            row=row,
+        )
 
 
 def _text(value: str) -> str:
@@ -330,6 +364,81 @@ def parse_aupay_card_eml(path: str) -> list[dict]:
         return parse_aupay_card_raw(handle.read())
 
 
+def _issuer_statement_dates(text: str, labels: tuple[str, ...]) -> frozenset[str]:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    matches = re.findall(
+        rf"(?:{label_pattern})\s*[：:]?\s*"
+        r"(20\d{2})[年/-](\d{1,2})[月/-](\d{1,2})日?",
+        text,
+    )
+    dates = set()
+    for year, month, day in matches:
+        try:
+            dates.add(datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d"))
+        except ValueError:
+            continue
+    return frozenset(dates)
+
+
+def parse_aupay_card_statement_raw(raw_mime: bytes) -> AuPayCardStatementAuthority:
+    """Parse one au PAY Card billing-total notice and fail closed.
+
+    This deliberately rejects usage-detail mail.  Authority comes from one
+    issuer statement total, payment date, billing cycle, and RFC Message-ID.
+    """
+    if not isinstance(raw_mime, bytes) or not raw_mime:
+        raise ValueError("issuer_statement_invalid_raw_mime")
+    message = BytesParser(policy=policy.default).parsebytes(raw_mime)
+    subject = unicodedata.normalize("NFKC", str(message.get("subject", "")))
+    if "ご利用詳細" in subject:
+        raise ValueError("issuer_statement_usage_detail_forbidden")
+    if "au PAY カード" not in subject or "請求" not in subject:
+        raise ValueError("issuer_statement_subject_not_authoritative")
+    message_id = str(message.get("Message-ID", "")).strip()
+    if not message_id:
+        raise ValueError("issuer_statement_message_id_required")
+    body_part = message.get_body(preferencelist=("plain",))
+    if body_part is None:
+        raise ValueError("issuer_statement_plain_text_required")
+    text = unicodedata.normalize("NFKC", body_part.get_content())
+
+    total_values = {
+        int(value.replace(",", ""))
+        for value in re.findall(
+        r"(?:ご請求金額|請求金額|ご請求額|お支払金額|お支払い金額)"
+        r"\s*[：:]?\s*[¥￥]?\s*([0-9][0-9,]*)\s*円",
+        text,
+        )
+    }
+    payment_dates = _issuer_statement_dates(
+        text, ("お支払日", "お支払い日", "口座振替日", "引落日"),
+    )
+    cycles = {
+        (int(year), int(month))
+        for year, month in re.findall(
+        r"(20\d{2})年\s*(\d{1,2})月(?:度|分)?\s*(?:ご)?請求",
+        subject + "\n" + text,
+        )
+    }
+    if len(total_values) != 1 or len(payment_dates) != 1 or len(cycles) != 1:
+        raise ValueError("issuer_statement_required_fields_missing")
+    total = next(iter(total_values))
+    payment_date = next(iter(payment_dates))
+    if total <= 0:
+        raise ValueError("issuer_statement_total_invalid")
+    cycle_year, cycle_month = next(iter(cycles))
+    if not 1 <= cycle_month <= 12:
+        raise ValueError("issuer_statement_billing_cycle_invalid")
+    billing_cycle = f"{cycle_year:04d}-{cycle_month:02d}"
+    digest = hashlib.sha256(message_id.encode("utf-8")).hexdigest()[:24]
+    return AuPayCardStatementAuthority(
+        statement_identity=f"aupay-card-statement:{digest}",
+        payment_date=payment_date,
+        statement_total_yen=total,
+        billing_cycle=billing_cycle,
+    )
+
+
 def _decode_gmail_body(payload: dict) -> str:
     texts = []
     if payload.get("mimeType") in ("text/plain", "text/html") and payload.get("body", {}).get("data"):
@@ -414,6 +523,79 @@ def gmail_service(token_json: str):
     info = json.loads(token_json)
     creds = Credentials.from_authorized_user_info(info, scopes=[GMAIL_READONLY])
     return build("gmail", "v1", credentials=creds, cache_discovery=False)
+
+
+def collect_aupay_card_statement_authorities(
+    service, query: str, max_results: int = 100,
+) -> tuple[tuple[AuPayCardStatementAuthority, ...], dict[str, int | bool]]:
+    """Collect issuer statements through Gmail readonly and return counts only."""
+    if not query.strip():
+        raise ValueError("issuer_statement_query_required")
+    if not 1 <= max_results <= 5000:
+        raise ValueError("issuer_statement_max_results_invalid")
+    summary: dict[str, int | bool] = {
+        "found": 0,
+        "parsed_statements": 0,
+        "rejected_messages": 0,
+        "duplicate_gmail_message": 0,
+        "gmail_list_failed": 0,
+        "gmail_read_failed": 0,
+        "gmail_retry_count": 0,
+        "collection_complete": True,
+        "write_attempted": 0,
+    }
+    statements: list[AuPayCardStatementAuthority] = []
+    seen_gmail_ids: set[str] = set()
+    page_token = None
+    while int(summary["found"]) < max_results:
+        try:
+            response, retries = _execute_gmail(
+                lambda: service.users().messages().list(
+                    userId="me", q=query,
+                    maxResults=min(100, max_results - int(summary["found"])),
+                    **({"pageToken": page_token} if page_token else {}),
+                )
+            )
+            summary["gmail_retry_count"] = int(summary["gmail_retry_count"]) + retries
+        except HttpError:
+            summary["gmail_list_failed"] = int(summary["gmail_list_failed"]) + 1
+            summary["collection_complete"] = False
+            break
+        messages = response.get("messages", [])
+        if not messages:
+            break
+        for item in messages:
+            if int(summary["found"]) >= max_results:
+                break
+            gmail_id = str(item.get("id") or "").strip()
+            if not gmail_id:
+                summary["rejected_messages"] = int(summary["rejected_messages"]) + 1
+                continue
+            if gmail_id in seen_gmail_ids:
+                summary["duplicate_gmail_message"] = int(summary["duplicate_gmail_message"]) + 1
+                continue
+            seen_gmail_ids.add(gmail_id)
+            summary["found"] = int(summary["found"]) + 1
+            try:
+                raw_response, retries = _execute_gmail(
+                    lambda: service.users().messages().get(
+                        userId="me", id=gmail_id, format="raw",
+                    )
+                )
+                summary["gmail_retry_count"] = int(summary["gmail_retry_count"]) + retries
+                statements.append(parse_aupay_card_statement_raw(
+                    _decode_gmail_raw(raw_response.get("raw", "")),
+                ))
+                summary["parsed_statements"] = int(summary["parsed_statements"]) + 1
+            except HttpError:
+                summary["gmail_read_failed"] = int(summary["gmail_read_failed"]) + 1
+                summary["collection_complete"] = False
+            except ValueError:
+                summary["rejected_messages"] = int(summary["rejected_messages"]) + 1
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    return tuple(statements), summary
 
 
 class AuPayMailPipeline:

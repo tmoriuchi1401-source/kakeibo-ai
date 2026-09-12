@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json, os, tempfile
+import re
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
@@ -32,6 +33,12 @@ class Settings:
         'in:anywhere from:kddi-fs.com '
         'subject:"【ご利用詳細】au PAY カード" newer_than:30d'
     ))
+    aupay_card_statement_gmail_query: str = field(default_factory=lambda: os.getenv(
+        "AUPAY_CARD_STATEMENT_GMAIL_QUERY",
+    ) or (
+        'in:anywhere from:kddi-fs.com "au PAY カード" '
+        '{subject:"ご請求額" subject:"請求額確定"} newer_than:1y'
+    ))
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,
@@ -56,7 +63,15 @@ class Settings:
                 return handle.read()
         return ""
 
-    def bank_confirmed_internal_transfers(self) -> frozenset[tuple[str, str]]:
+    def bank_confirmed_internal_transfers(self) -> frozenset[tuple[str, str, str]]:
+        """Load active, exact owned-account rules from private environment JSON.
+
+        The JSON remains outside Git.  Requiring already-normalized descriptions
+        makes the operator-approved value, rather than a fuzzy name heuristic,
+        the durable authority.
+        """
+        from .bank_reconciliation import normalize_bank_description
+
         try:
             values = json.loads(self.bank_internal_transfers_json)
         except json.JSONDecodeError as exc:
@@ -65,19 +80,40 @@ class Settings:
             ) from exc
         if not isinstance(values, list) or any(
             not isinstance(value, dict)
-            or set(value) != {"description", "direction"}
-            or not isinstance(value["description"], str)
-            or not value["description"].strip()
+            or set(value) != {
+                "normalized_description", "direction", "account_alias", "active",
+            }
+            or not isinstance(value["normalized_description"], str)
+            or not value["normalized_description"].strip()
             or value["direction"] not in {"incoming", "outgoing"}
+            or not isinstance(value["account_alias"], str)
+            or not value["account_alias"].strip()
+            or not isinstance(value["active"], bool)
             for value in values
         ):
             raise RuntimeError(
                 "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON must contain exact "
-                "description/direction objects"
+                "normalized_description/direction/account_alias/active objects"
+            )
+        if any(
+            value["normalized_description"]
+            != normalize_bank_description(value["normalized_description"])
+            or not re.fullmatch(
+                r"[a-z0-9][a-z0-9_-]{1,63}", value["account_alias"].strip(),
+            )
+            for value in values
+        ):
+            raise RuntimeError(
+                "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON descriptions must already "
+                "be normalized and account_alias must be non-sensitive"
             )
         return frozenset(
-            (value["description"].strip(), value["direction"])
+            (
+                value["normalized_description"], value["direction"],
+                value["account_alias"].strip(),
+            )
             for value in values
+            if value["active"]
         )
 
 
