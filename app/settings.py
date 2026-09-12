@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json, os, tempfile
+import base64, json, os, tempfile
+from pathlib import Path
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
@@ -29,6 +31,14 @@ class Settings:
         'in:anywhere from:kddi-fs.com '
         'subject:"【ご利用詳細】au PAY カード" newer_than:30d'
     ))
+    medical_review_store_path: str = os.getenv("MEDICAL_REVIEW_STORE_PATH") or str(
+        Path(os.getenv("LOCALAPPDATA") or (Path.home() / ".local" / "share"))
+        / "kakeibo-ai" / "medical-review.json"
+    )
+    medical_review_identity_key: str = os.getenv("MEDICAL_REVIEW_IDENTITY_KEY", "")
+    medical_review_shadow_enabled: bool = os.getenv(
+        "MEDICAL_REVIEW_SHADOW_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,
@@ -52,6 +62,54 @@ class Settings:
             with open(self.drive_backup_token_file, encoding="utf-8") as handle:
                 return handle.read()
         return ""
+
+    def medical_review_identity_key_bytes(self) -> bytes:
+        """Decode the pre-existing HMAC key contract without persisting it."""
+        raw = self.medical_review_identity_key.strip()
+        if not raw:
+            raise RuntimeError("未設定: MEDICAL_REVIEW_IDENTITY_KEY")
+        try:
+            key = base64.b64decode(raw, validate=True)
+        except Exception:
+            raise RuntimeError("MEDICAL_REVIEW_IDENTITY_KEY はbase64形式で設定してください") from None
+        if len(key) < 16:
+            raise RuntimeError("MEDICAL_REVIEW_IDENTITY_KEY が短すぎます")
+        return key
+
+    def medical_review_store_parent(self) -> Path:
+        path = Path(self.medical_review_store_path).expanduser()
+        if not path.is_absolute():
+            raise RuntimeError("MEDICAL_REVIEW_STORE_PATH は絶対パスで設定してください")
+        try:
+            path.resolve().relative_to(Path(__file__).resolve().parents[1])
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("MEDICAL_REVIEW_STORE_PATH はrepository外に設定してください")
+        return path.parent
+
+    def medical_review_store_file(self) -> Path:
+        self.medical_review_store_parent()
+        return Path(self.medical_review_store_path).expanduser()
+
+    def ensure_medical_review_store_parent(self) -> Path:
+        parent = self.medical_review_store_parent()
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            raise RuntimeError("MEDICAL_REVIEW_STORE_PATH の保存先を初期化できません") from None
+        return parent
+
+    def medical_review_handoff(self):
+        """Build the configured local handoff; callers opt in explicitly."""
+        from .medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
+
+        key = self.medical_review_identity_key_bytes()
+        self.ensure_medical_review_store_parent()
+        return MedicalInboxHandoffShadow(
+            identity_key=key,
+            store_path=self.medical_review_store_file(),
+        )
 
 
 def service_account_source() -> tuple[str|None, dict|None]:

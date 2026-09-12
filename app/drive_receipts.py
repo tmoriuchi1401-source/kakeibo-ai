@@ -3,6 +3,7 @@ import re
 from datetime import datetime, timezone
 from .google_clients import drive_service, download_drive_file
 from .receipt_pipeline import ReceiptPipeline
+from .medical_receipt_privacy import Classification
 
 
 def normalize_folder_id(value:str)->str:
@@ -26,7 +27,8 @@ def is_supported_receipt_mime(mime_type: str) -> bool:
     return mime_type.startswith("image/") or mime_type == "application/pdf"
 
 
-def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str=""):
+def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str="", *,
+                  known_source_classification: Classification | None = None):
     folder_id=normalize_folder_id(folder_id)
     processed_folder_id=normalize_folder_id(processed_folder_id) if processed_folder_id else ""
     svc=drive_service()
@@ -39,7 +41,9 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
     for f in files:
         if not is_supported_receipt_mime(f["mimeType"]): continue
         data=download_drive_file(f["id"])
-        res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""))
+        source_policy = ({"known_source_classification": known_source_classification}
+                         if known_source_classification is not None else {})
+        res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
         results.append((f["name"],res))
         if processed_folder_id and should_archive_result(res):
             prev=",".join(f.get("parents",[]))

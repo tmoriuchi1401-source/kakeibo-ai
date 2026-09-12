@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from .settings import Settings
 from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
+from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
@@ -92,6 +93,7 @@ from .amazon_production import (
 )
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
+from .medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -103,12 +105,46 @@ def make(require_gemini=True):
     ai=GeminiAI(s.gemini_api_key,s.gemini_model) if require_gemini else None
     return s,db,ai
 
+
+def make_receipt_pipeline(settings, db, ai):
+    observer = None
+    if settings is not None and getattr(settings, "medical_review_shadow_enabled", False):
+        try:
+            observer = settings.medical_review_handoff()
+        except Exception:
+            # Keep normal routing available; Medical remains blocked and the
+            # pipeline reports a safe handoff_failed status.
+            class _UnavailableMedicalObserver:
+                def observe(self, **kwargs):
+                    raise RuntimeError("medical shadow configuration unavailable")
+            observer = _UnavailableMedicalObserver()
+    return ReceiptPipeline(db, ai, medical_review_observer=observer)
+
+
+def print_drive_receipt_results(results):
+    for name,res in results:
+        if res.get("status") == "privacy_blocked":
+            print(res)
+        else:
+            print(name,res)
+
 def main():
     p=argparse.ArgumentParser(description="家計簿AI")
     sub=p.add_subparsers(dest="cmd",required=True)
     sub.add_parser("init")
     r=sub.add_parser("receipt"); r.add_argument("image")
     an=sub.add_parser("analyze"); an.add_argument("image")
+    grp=sub.add_parser("general-receipt-preview")
+    grp.add_argument("file")
+    grp.add_argument(
+        "--with-sheets", action="store_true",
+        help="Read existing import rows for duplicate/reconciliation diagnostics",
+    )
+    for receipt_parser in (r, an):
+        receipt_parser.add_argument(
+            "--source-classification", choices=("medical", "payroll", "sensitive_unknown"),
+            help="Preserve known sensitive source provenance; never permits external AI",
+        )
     a=sub.add_parser("amazon"); a.add_argument("csv")
     ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
     asp=sub.add_parser("amazon-shipping-backfill-preview"); asp.add_argument("csv")
@@ -143,6 +179,9 @@ def main():
     sub.add_parser("review-refresh")
     sub.add_parser("review-apply-preview")
     sub.add_parser("review-apply")
+    mr=sub.add_parser("medical-review")
+    mr.add_argument("action", choices=("list", "show"))
+    mr.add_argument("review_item_id", nargs="?")
     sub.add_parser("expenses-preview")
     sub.add_parser("expenses-refresh")
     sub.add_parser("auto-expense-preview")
@@ -198,7 +237,8 @@ def main():
     aue.add_argument("--output",required=True)
     aep=sub.add_parser("amazon-email-preview")
     aep.add_argument("eml")
-    sub.add_parser("drive-receipts")
+    dr=sub.add_parser("drive-receipts")
+    dr.add_argument("--source-classification", choices=("medical", "payroll", "sensitive_unknown"))
     sub.add_parser("drive-paypay-preview")
     sub.add_parser("drive-paypay")
     sub.add_parser("backup")
@@ -232,13 +272,37 @@ def main():
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
+    elif args.cmd=="general-receipt-preview":
+        from .general_receipt_preview import GeneralReceiptPreviewPipeline
+        data=open(args.file,"rb").read()
+        mime=mimetypes.guess_type(args.file)[0] or "image/jpeg"
+        db=None
+        if args.with_sheets:
+            s=Settings(); s.validate(need_sheet=True)
+            db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        result=GeneralReceiptPreviewPipeline(db).preview_bytes(
+            data,mime,source_id=os.path.basename(args.file),
+        )
+        print(json.dumps(result.as_dict(),ensure_ascii=False))
     elif args.cmd=="receipt":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
-        print(ReceiptPipeline(db,ai).process_bytes(data,mime,os.path.basename(args.image)))
+        try:
+            print(make_receipt_pipeline(s, db, ai).process_bytes(
+                data,mime,os.path.basename(args.image),
+                known_source_classification=args.source_classification,
+            ))
+        except ReceiptPrivacyBlocked:
+            print({"status":"privacy_blocked","gemini_allowed":False})
     elif args.cmd=="analyze":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
-        result=ai.analyze_receipt(data,mime,db.categories())
-        print(result.model_dump())
+        try:
+            result=ai.analyze_receipt(
+                data,mime,db.categories(),known_source_classification=args.source_classification,
+            )
+        except ReceiptPrivacyBlocked:
+            print({"status":"privacy_blocked","gemini_allowed":False})
+        else:
+            print(result.model_dump())
     elif args.cmd=="amazon":
         s,db,ai=make(); print(AmazonPipeline(db,ai).import_csv(args.csv))
     elif args.cmd=="amazon-baseline":
@@ -374,6 +438,19 @@ def main():
         s,db,_=make(False); print(ReviewApprovalPipeline(db).preview())
     elif args.cmd=="review-apply":
         s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
+    elif args.cmd=="medical-review":
+        if args.action == "show" and not args.review_item_id:
+            raise RuntimeError("medical-review show にはreview_item_idが必要です")
+        s = Settings()
+        items = MedicalInboxHandoffShadow.read_items(s.medical_review_store_file())
+        if args.action == "list":
+            pending = [item.model_dump(mode="json") for item in items if item.review_status == "pending"]
+            print(json.dumps(pending, ensure_ascii=False, sort_keys=True))
+        else:
+            found = next((item for item in items if item.review_item_id == args.review_item_id), None)
+            if found is None:
+                raise RuntimeError("指定されたreview itemが見つかりません")
+            print(json.dumps(found.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
     elif args.cmd=="expenses-preview":
         s,db,_=make(False); print(ExpenseViewPipeline(db).preview())
     elif args.cmd=="expenses-refresh":
@@ -572,7 +649,10 @@ def main():
             print(parse_amazon_email(f.read()).anonymized())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
-        for name,res in process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id): print(name,res)
+        print_drive_receipt_results(
+            process_inbox(s.receipt_drive_folder_id,make_receipt_pipeline(s, db, ai),s.processed_drive_folder_id,
+                          known_source_classification=args.source_classification)
+        )
     elif args.cmd=="drive-paypay-preview":
         s=Settings(); s.validate(need_paypay_drive=True)
         print(DrivePayPayPipeline(s.paypay_drive_folder_id).preview())

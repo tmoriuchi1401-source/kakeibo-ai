@@ -1,15 +1,55 @@
 from __future__ import annotations
 import mimetypes, uuid
 from .gemini_ai import GeminiAI
+from .receipt_privacy_gate import evaluate_receipt_privacy
+from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 
 class ReceiptPipeline:
-    def __init__(self,db:SheetsDB,ai:GeminiAI): self.db=db; self.ai=ai
-    def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str=""):
+    def __init__(self,db:SheetsDB,ai:GeminiAI, *, medical_review_observer=None):
+        self.db=db; self.ai=ai
+        self.medical_review_observer=medical_review_observer
+        # Restrictive source provenance survives retries within this pipeline.
+        # Callers carry known_source_classification across pipeline lifetimes.
+        self._source_privacy: dict[str, Classification] = {}
+    def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
+                      known_source_classification: Classification | None = None):
         import_id=f"receipt:{source_id}"
         if import_id in self.db.import_ids(): return {"status":"skipped","reason":"already_imported"}
-        cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats)
+        known_source_classification = self._source_privacy.get(source_id, known_source_classification)
+        if known_source_classification in ("medical", "payroll", "sensitive_unknown"):
+            self._source_privacy[source_id] = known_source_classification
+        source_policy = ({"known_source_classification": known_source_classification}
+                         if known_source_classification is not None else {})
+        privacy=evaluate_receipt_privacy(image_bytes,mime_type,**source_policy)
+        if privacy.classification != "normal" or not privacy.gemini_allowed:
+            self._source_privacy[source_id] = privacy.classification
+            medical_shadow_status = None
+            if privacy.classification == "medical" and self.medical_review_observer is not None:
+                try:
+                    observed = self.medical_review_observer.observe(source_id=source_id, gate=privacy)
+                    medical_shadow_status = getattr(observed, "action", "observed")
+                except Exception:
+                    # Shadow review generation must never weaken or replace the
+                    # existing fail-closed privacy decision.
+                    medical_shadow_status = "handoff_failed"
+            result = {
+                "status":"privacy_blocked",
+                "classification":privacy.classification,
+                "reason_code":privacy.reason_code,
+                "gemini_allowed":privacy.gemini_allowed,
+                "extraction_status":privacy.extraction_status,
+                "extraction_method":privacy.extraction_method,
+                "text_present":privacy.text_present,
+                "medical_payment_amount":privacy.medical_payment_amount,
+                "medical_candidate_count":privacy.medical_candidate_count,
+                "category":privacy.category,
+            }
+            if medical_shadow_status is not None:
+                result["medical_shadow_status"] = medical_shadow_status
+            return result
+        cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats,**source_policy)
         allowed=set(cats)
         invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]
         item_sum=sum(x.amount for x in result.items)

@@ -1,5 +1,9 @@
 # 家計簿AI — 無料運用を前提にした初期実装
 
+一般レシートのoffline read-only MVPは [GENERAL_RECEIPT_MVP.md](GENERAL_RECEIPT_MVP.md)
+を参照してください。画像/PDFから購入日・店舗名・支払総額を抽出し、既存transaction
+形式とduplicate/reconciliation結果をpreviewします。外部AI送信とSheets書込みは行いません。
+
 ## 現在実装済み
 - Google Sheets 7シートのヘッダー/カテゴリマスタ初期化
 - レシート画像 → Gemini structured output → カテゴリ検証 → Sheets登録
