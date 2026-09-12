@@ -219,6 +219,17 @@ absolute epoch windowを作り、overlapを既存identityで除外し、new=0で
 [`docs/aupay_card_production_persistence.md`](docs/aupay_card_production_persistence.md)、基本contractは
 [`docs/aupay_card_writer_safety_contract.md`](docs/aupay_card_writer_safety_contract.md)を参照。
 
+Amazon注文確認メールの本番候補は、書込み前に次の読み取り専用コマンドで確認する。
+
+```bash
+python -m app.cli amazon-production-preview --lookback-days 30 --max-results 100
+```
+
+取消・返品・返金・曖昧金額・parser failureは自動支出へ進めず、注文IDと固定支出IDで
+期間重複を排除する。canary、bounded authority、JST checkpoint、CSV商品明細への昇格時の
+二重計上防止は
+[`docs/amazon_recurring_production.md`](docs/amazon_recurring_production.md)を参照。
+
 カードメールの明細parseはmail-level resultの中でaccepted itemとprivacy-safeなreview
 itemを分離する。正額は `purchase` として正数を保持し、対象明細block自身が
 `-<金額>円(返品)` の形式と返品evidenceを持つ場合だけ `return` として負号を保持する。

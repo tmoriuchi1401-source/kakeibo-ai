@@ -1,6 +1,7 @@
 import pandas as pd
 
 from app.amazon_pipeline import AmazonPipeline
+from app.auto_expense import expense_id
 from app.models import ProductClassification, ProductClassificationBatch
 
 
@@ -14,8 +15,9 @@ class FakeAI:
 
 
 class FakeDB:
-    def __init__(self, baseline_keys=None):
+    def __init__(self, baseline_keys=None, expenses=None):
         self.baseline_keys = set(baseline_keys or [])
+        self.expenses = list(expenses or [])
         self.appended = {}
         self.updated = {}
 
@@ -24,6 +26,9 @@ class FakeDB:
     def product_master(self): return {}
     def categories(self): return [("その他", "未分類")]
     def expense_index(self): return {}
+    def expense_rows_for_import(self, import_id):
+        return [(index,row) for index,row in enumerate(self.expenses,start=2)
+                if len(row)>10 and row[10]==import_id]
     def import_index(self): return {}
     def ensure_expense_status_column(self): pass
     def append(self, sheet, rows): self.appended.setdefault(sheet, []).extend(rows)
@@ -63,3 +68,19 @@ def test_incremental_amazon_creates_item_expense_and_order_import(tmp_path):
     amazon = db.appended["Amazon注文"][0]
     assert amazon[13:] == ["2026-08-18", 1]
     assert "not-stored" not in amazon
+
+
+def test_item_materialization_supersedes_gmail_order_total(tmp_path):
+    path = tmp_path / "amazon.csv"
+    write_csv(path)
+    aggregate = [
+        expense_id("amazon:ORDER-1"), "2026-08-16", "Amazon.co.jp", "Amazon注文",
+        1200, "その他", "未分類", "カード", "Amazon", "", "amazon:ORDER-1",
+        "Amazon Gmail注文合計", "active",
+    ]
+    db = FakeDB(expenses=[aggregate])
+    AmazonPipeline(db, FakeAI()).import_csv(str(path))
+    row_num,row = db.updated["支出明細"][-1]
+    assert row_num == 2
+    assert row[0] == aggregate[0]
+    assert row[12] == "superseded_amazon_items"

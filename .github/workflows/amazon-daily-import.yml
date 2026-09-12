@@ -1,27 +1,86 @@
-name: Manual Amazon daily import
+name: Amazon bounded production flow
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 */3 * * *'
+    inputs:
+      apply:
+        description: Apply a canary (off is a read-only bounded preview)
+        required: true
+        type: boolean
+        default: false
+      lookback_days:
+        description: Read-only preview lookback (1-370 days)
+        required: true
+        type: number
+        default: 30
+      apply_limit:
+        description: Maximum purchases for this canary
+        required: true
+        type: number
+        default: 1
 
 permissions:
   contents: read
 
+concurrency:
+  group: amazon-bounded-production
+  cancel-in-progress: false
+
 jobs:
   import:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
+      AMAZON_RECURRING_AUTHORITY_JSON: ${{ secrets.AMAZON_RECURRING_AUTHORITY_JSON }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          cache: pip
       - run: pip install -r requirements.txt
-      - name: Import Amazon Gmail events and order headers
-        run: python -m app.cli amazon-daily-import
+      - name: Restore latest durable run state
+        if: inputs.apply
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: amazon-production-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            amazon-production-state-
+      - name: Read-only bounded write-plan preview
+        if: ${{ !inputs.apply }}
+        run: >-
+          python -m app.cli amazon-production-preview
+          --lookback-days "${{ inputs.lookback_days }}"
+          --max-results 100
+      - name: Materialize protected recurring authority
+        if: inputs.apply
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_GMAIL_TOKEN_JSON AMAZON_RECURRING_AUTHORITY_JSON; do
+            test -n "${!name}" || { echo "Required secret is not configured: $name"; exit 1; }
+          done
+          AMAZON_STATE_DIR="$RUNNER_TEMP/amazon-production-state"
+          AMAZON_RECURRING_AUTHORITY_FILE="$RUNNER_TEMP/amazon-recurring-authority.json"
+          {
+            echo "AMAZON_STATE_DIR=$AMAZON_STATE_DIR"
+            echo "AMAZON_RECURRING_AUTHORITY_FILE=$AMAZON_RECURRING_AUTHORITY_FILE"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$AMAZON_STATE_DIR"
+          umask 077
+          printf '%s' "$AMAZON_RECURRING_AUTHORITY_JSON" > "$AMAZON_RECURRING_AUTHORITY_FILE"
+      - name: Apply bounded canary
+        if: inputs.apply
+        run: >-
+          python -m app.cli amazon-gmail-recurring --apply
+          --apply-limit "${{ inputs.apply_limit }}"
+      - name: Save post-run durable state
+        if: ${{ always() && inputs.apply }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: amazon-production-state-${{ github.run_id }}-${{ github.run_attempt }}

@@ -83,6 +83,13 @@ from .google_clients import (
 from .aupay_card_batch import ProtectedRecurringAuthorityProvider
 from .aupay_card_production import ProtectedAuditKeyProvider
 from .aupay_card_recurring import SqliteRecurringRunState, run_recurring_ingestion
+from .amazon_production import (
+    ProtectedAmazonAuthorityProvider,
+    build_amazon_write_plan,
+    fetch_bounded_amazon_messages,
+    fixed_amazon_window,
+    run_amazon_recurring,
+)
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 
@@ -147,6 +154,16 @@ def main():
     sub.add_parser("amazon-schema-install")
     sub.add_parser("amazon-gmail-import")
     sub.add_parser("amazon-daily-import")
+    appv=sub.add_parser("amazon-production-preview")
+    appv.add_argument("--lookback-days",type=int,default=30)
+    appv.add_argument("--max-results",type=int,default=50)
+    agr=sub.add_parser("amazon-gmail-recurring")
+    agr.add_argument("--state-dir",default=os.getenv("AMAZON_STATE_DIR", ""))
+    agr.add_argument("--authority-file",default=os.getenv("AMAZON_RECURRING_AUTHORITY_FILE", ""))
+    agr.add_argument("--apply-limit",type=int)
+    agr_mode=agr.add_mutually_exclusive_group(required=True)
+    agr_mode.add_argument("--dry-run",action="store_true")
+    agr_mode.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-cancellation-return-preview")
     sub.add_parser("amazon-cancellation-order-id-diagnose")
     sub.add_parser("amazon-cancellation-scope-diagnose")
@@ -383,6 +400,65 @@ def main():
         db=SheetsDB(s.spreadsheet_id)
         service=gmail_readonly_service(s.gmail_token_json)
         print(run_amazon_daily_import(service,db))
+    elif args.cmd=="amazon-production-preview":
+        if not (1 <= args.lookback_days <= 370):
+            p.error("--lookback-days must be between 1 and 370")
+        if not (1 <= args.max_results <= 100):
+            p.error("--max-results must be between 1 and 100")
+        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
+        now=datetime.now(ZoneInfo("Asia/Tokyo")).replace(microsecond=0)
+        from datetime import timedelta
+        window=fixed_amazon_window(now-timedelta(days=args.lookback_days),now)
+        service=gmail_readonly_service(s.gmail_token_json)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        messages,complete=fetch_bounded_amazon_messages(service,window,args.max_results)
+        result=build_amazon_write_plan(
+            messages,db,window=window,collection_complete=complete,
+        ).anonymized()
+        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
+        if not complete:
+            raise SystemExit(1)
+    elif args.cmd=="amazon-gmail-recurring":
+        try:
+            s=Settings(); s.validate(need_gmail=True,need_sheet=True)
+            if not args.state_dir or not args.authority_file:
+                raise RuntimeError("amazon_state_and_authority_paths_required")
+            repo_root=Path(__file__).resolve().parents[1]
+            state_dir=Path(args.state_dir).resolve()
+            state=SqliteRecurringRunState(
+                state_dir / "recurring.sqlite3",repo_root=repo_root,
+            )
+            authority=ProtectedAmazonAuthorityProvider(
+                args.authority_file,repo_root=repo_root,
+            )
+            db=SheetsDB(
+                s.spreadsheet_id,
+                service=read_only_sheets_service() if args.dry_run else None,
+            )
+            result=run_amazon_recurring(
+                gmail_service=gmail_readonly_service(s.gmail_token_json),db=db,
+                state=state,authority_provider=authority,
+                now=datetime.now(ZoneInfo("Asia/Tokyo")),dry_run=args.dry_run,
+                apply_limit=args.apply_limit,
+            )
+        except Exception as exc:
+            result={
+                "schema_version":1,"run_id":"unavailable","status":"failed",
+                "source_window_start":"unavailable","source_window_end":"unavailable",
+                "source_timezone":"Asia/Tokyo","fetched":0,"new_event_rows":0,
+                "eligible_purchases":0,"new_header_rows":0,"failure":1,
+                "write_requests":0,"checkpoint_advanced":False,
+                "failure_reason":str(exc),
+            }
+        rendered=json.dumps(result,ensure_ascii=False,sort_keys=True)
+        print(rendered)
+        step_summary=os.getenv("GITHUB_STEP_SUMMARY","")
+        if step_summary:
+            with open(step_summary,"a",encoding="utf-8") as handle:
+                handle.write("## Amazon Gmail recurring ingestion\n\n```json\n")
+                handle.write(rendered+"\n```\n")
+        if result.get("failure"):
+            raise SystemExit(1)
     elif args.cmd=="amazon-cancellation-return-preview":
         s=Settings(); s.validate(need_gmail=True,need_sheet=True)
         service=gmail_readonly_service(s.gmail_token_json)
