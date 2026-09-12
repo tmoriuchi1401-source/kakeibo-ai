@@ -92,6 +92,7 @@ from .amazon_production import (
 )
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
+from .bank_pdf_pipeline import BankPdfPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -211,6 +212,9 @@ def main():
     payroll_preview=sub.add_parser("payroll-file-preview")
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-drive-preview")
+    bank_pdf=sub.add_parser("bank-pdf-preview")
+    bank_pdf.add_argument("pdf")
+    bank_pdf.add_argument("--account-alias",default="jibun-primary")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -230,6 +234,11 @@ def main():
     elif args.cmd=="payroll-drive-preview":
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
+    elif args.cmd=="bank-pdf-preview":
+        print(json.dumps(
+            BankPdfPipeline().preview(args.pdf,account_alias=args.account_alias),
+            ensure_ascii=False,sort_keys=True,
+        ))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="receipt":

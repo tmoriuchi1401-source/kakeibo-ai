@@ -65,6 +65,44 @@ class ReconciledTransaction:
     cross_source: CrossSourceEvidence
 
 
+@dataclass(frozen=True)
+class IdentityResolution:
+    """Source-agnostic identity deduplication used before domain reconciliation."""
+
+    unique: tuple[Transaction, ...]
+    duplicate_count: int
+    collision_groups: tuple[tuple[Transaction, ...], ...]
+
+
+def resolve_transaction_identities(
+    transactions: list[Transaction],
+    *,
+    signature=None,
+) -> IdentityResolution:
+    """Resolve exact replays while failing closed on identity collisions.
+
+    The identity remains the duplicate authority.  A same-date/same-amount
+    business match never grants duplicate authority.
+    """
+    signature = signature or (lambda transaction: transaction)
+    by_identity: dict[str, list[Transaction]] = {}
+    for transaction in transactions:
+        by_identity.setdefault(transaction.identity, []).append(transaction)
+
+    unique: list[Transaction] = []
+    collision_groups: list[tuple[Transaction, ...]] = []
+    duplicate_count = 0
+    for rows in by_identity.values():
+        if len({signature(row) for row in rows}) > 1:
+            collision_groups.append(tuple(rows))
+            continue
+        unique.append(rows[0])
+        duplicate_count += len(rows) - 1
+    return IdentityResolution(
+        tuple(unique), duplicate_count, tuple(collision_groups),
+    )
+
+
 def normalize_card_transaction(raw: dict) -> Transaction:
     """Normalize a parsed card row; missing core data is rejected."""
     date = _text(raw.get("date"))
@@ -146,29 +184,30 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
         _text(row[0]) for row in existing_rows if row and _text(row[0])
     }
     rejected = 0
-    by_identity: dict[str, list[Transaction]] = {}
+    normalized: list[Transaction] = []
     for raw in raw_rows:
         try:
             tx = normalize_card_transaction(raw)
         except ValueError:
             rejected += 1
             continue
-        by_identity.setdefault(tx.identity, []).append(tx)
+        normalized.append(tx)
 
-    collisions = 0
-    same_source_duplicates = 0
-    unique: list[Transaction] = []
-    review: list[Transaction] = []
-    for rows in by_identity.values():
-        variants = {(x.transaction_date, x.merchant, x.amount_yen, x.transaction_kind,
-                     x.payment_method, x.business_fingerprint, x.source_hash)
-                    for x in rows}
-        if len(variants) > 1:
-            collisions += 1
-            review.extend(rows)
-            continue
-        unique.append(rows[0])
-        same_source_duplicates += len(rows) - 1
+    identity_resolution = resolve_transaction_identities(
+        normalized,
+        signature=lambda x: (
+            x.transaction_date, x.merchant, x.amount_yen, x.transaction_kind,
+            x.payment_method, x.business_fingerprint, x.source_hash,
+        ),
+    )
+    collisions = len(identity_resolution.collision_groups)
+    same_source_duplicates = identity_resolution.duplicate_count
+    unique = list(identity_resolution.unique)
+    review = [
+        transaction
+        for group in identity_resolution.collision_groups
+        for transaction in group
+    ]
 
     by_fingerprint: dict[str, list[Transaction]] = {}
     for tx in unique:

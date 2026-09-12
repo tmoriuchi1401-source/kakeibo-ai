@@ -266,6 +266,20 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
+## auじぶん銀行PDFをread-onlyで確認する
+
+native text layerを持つ普通預金取引明細PDFを、Sheetsへ書き込まず確認する:
+
+```bash
+python -m app.cli bank-pdf-preview statement.pdf --account-alias jibun-primary
+```
+
+各ページの見出しと縦罫線から日付・内容・出金・入金・残高のcolumn boundaryを
+復元する。出金は負、入金は正のsigned amountとしてcanonical transactionへ投影し、
+残高は取引金額や通常出力にせず、identityと整合性検証だけに使う。同じPDFの再処理はstable source row identityでduplicateに
+なる。出力は件数とreason taxonomyだけで、取引本文や個別金額を表示しない。
+OCR、Sheets書き込み、production applyはこのコマンドから実行されない。
+
 ## Google DriveからPayPay CSVを取り込む
 
 `PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定する。
