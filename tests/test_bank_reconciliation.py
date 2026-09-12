@@ -320,6 +320,21 @@ def test_existing_identity_is_removed_from_new_plan():
     assert plan.candidate_identities == ()
 
 
+def test_existing_identity_does_not_change_classification_withheld_count():
+    transaction = bank("口座振替 公共サービス", identity="bank:existing")
+    existing = parse_import_rows([
+        import_row("bank:existing", "auじぶん銀行PDF", 1000, "accepted"),
+    ])
+    shadow = build_bank_shadow_result(parsed_for(transaction), existing)
+
+    plan = build_bank_preview_plan(shadow, existing)
+
+    assert plan.eligible_before_dedupe == 1
+    assert plan.withheld_by_classification == 0
+    assert plan.existing_duplicate == 1
+    assert plan.new_plan_candidates == 0
+
+
 def test_identity_collision_is_ambiguous_and_withheld():
     first = bank("口座振替 公共サービスA", identity="bank:collision")
     second = bank("口座振替 公共サービスB", identity="bank:collision")

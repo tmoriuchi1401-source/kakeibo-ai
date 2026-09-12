@@ -288,7 +288,7 @@ def build_bank_preview_plan(
         transaction.import_id for transaction in existing_transactions
     }
     eligible_before_dedupe = sum(
-        decision.write_eligibility == "preview_candidate"
+        decision.classification.classification in {"income", "expense"}
         for decision in decisions
     )
     eligible = {
@@ -320,7 +320,8 @@ def build_bank_preview_plan(
         ambiguous_collision=len(resolution.collision_groups),
         new_plan_candidates=len(candidate_identities),
         withheld_by_classification=sum(
-            decision.write_eligibility == "withheld" for decision in decisions
+            decision.classification.classification not in {"income", "expense"}
+            for decision in decisions
         ),
         candidate_identities=candidate_identities,
     )

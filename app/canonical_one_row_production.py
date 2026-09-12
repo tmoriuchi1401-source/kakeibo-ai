@@ -54,6 +54,7 @@ CANONICAL_TRANSPORT_ROW_BOUNDS = frozenset({
     CANONICAL_BOUNDED_BATCH_ROWS,
 })
 _CANDIDATE_AUTHORITY = object()
+_BATCH_CANDIDATE_AUTHORITY = object()
 _DISPATCH_AUTHORITY = object()
 _HEAD = re.compile(r"[0-9a-f]{40}")
 
@@ -95,11 +96,15 @@ class CanonicalOneRowCandidate:
         raise TypeError("canonical_one_row_candidate_is_projection_only")
 
     @classmethod
-    def _create(cls, **values) -> "CanonicalOneRowCandidate":
+    def _create(cls, *, authority_token: object, **values) -> "CanonicalOneRowCandidate":
+        if authority_token not in {
+            _CANDIDATE_AUTHORITY, _BATCH_CANDIDATE_AUTHORITY,
+        }:
+            raise TypeError("canonical_one_row_candidate_is_projection_only")
         candidate = object.__new__(cls)
         for name, value in values.items():
             object.__setattr__(candidate, name, value)
-        object.__setattr__(candidate, "_authority", _CANDIDATE_AUTHORITY)
+        object.__setattr__(candidate, "_authority", authority_token)
         return validate_canonical_one_row_candidate(candidate)
 
     def to_import_row(self, *, imported_at) -> list:
@@ -109,13 +114,17 @@ class CanonicalOneRowCandidate:
         )
 
 
-def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
-    """Bind classification authority without teaching the transport bank rules."""
-    from .bank_canary import validate_bank_canary_plan
-
-    plan = validate_bank_canary_plan(plan)
-    transaction = plan.transaction
+def _project_bank_candidate(
+    transaction,
+    *,
+    classification: str,
+    write_eligibility: str,
+    import_status: str,
+    max_rows: int,
+    authority_token: object = _CANDIDATE_AUTHORITY,
+) -> CanonicalOneRowCandidate:
     return CanonicalOneRowCandidate._create(
+        authority_token=authority_token,
         schema_version=CANONICAL_ONE_ROW_SCHEMA_VERSION,
         identity=transaction.identity,
         source=transaction.source,
@@ -123,7 +132,7 @@ def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
         transaction_date=transaction.transaction_date,
         merchant=transaction.merchant,
         amount_yen=transaction.amount_yen,
-        transaction_kind=plan.classification,
+        transaction_kind=classification,
         payment_method=transaction.payment_method,
         business_fingerprint=transaction.business_fingerprint,
         memo=transaction.memo,
@@ -134,8 +143,22 @@ def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
         source_identities=(transaction.identity,),
         cross_source_state="not_applicable",
         cross_source_candidate_identities=(),
-        import_status=plan.import_status,
+        import_status=import_status,
+        write_eligibility=write_eligibility,
+        max_rows=max_rows,
+    )
+
+
+def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
+    """Bind classification authority without teaching the transport bank rules."""
+    from .bank_canary import validate_bank_canary_plan
+
+    plan = validate_bank_canary_plan(plan)
+    return _project_bank_candidate(
+        plan.transaction,
+        classification=plan.classification,
         write_eligibility=plan.write_eligibility,
+        import_status=plan.import_status,
         max_rows=plan.authority.max_rows,
     )
 
@@ -143,7 +166,10 @@ def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
 def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandidate:
     if type(value) is not CanonicalOneRowCandidate:
         raise TypeError("canonical_one_row_candidate_required")
-    if getattr(value, "_authority", None) is not _CANDIDATE_AUTHORITY:
+    authority_token = getattr(value, "_authority", None)
+    if authority_token not in {
+        _CANDIDATE_AUTHORITY, _BATCH_CANDIDATE_AUTHORITY,
+    }:
         raise TypeError("unauthorized_canonical_one_row_candidate")
     if value.schema_version != CANONICAL_ONE_ROW_SCHEMA_VERSION:
         raise RuntimeError("canonical_one_row_schema_invalid")
@@ -153,8 +179,15 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
         raise RuntimeError("canonical_one_row_write_eligibility_invalid")
     if value.import_status != f"bank_{value.transaction_kind}":
         raise RuntimeError("canonical_one_row_import_status_invalid")
-    if value.max_rows != CANONICAL_ONE_ROW_MAX_ROWS:
-        raise RuntimeError("canonical_one_row_max_rows_must_be_one")
+    expected_rows = (
+        CANONICAL_ONE_ROW_MAX_ROWS
+        if authority_token is _CANDIDATE_AUTHORITY
+        else CANONICAL_BOUNDED_BATCH_ROWS
+    )
+    if value.max_rows != expected_rows:
+        if authority_token is _CANDIDATE_AUTHORITY:
+            raise RuntimeError("canonical_one_row_max_rows_must_be_one")
+        raise RuntimeError("canonical_batch_row_bound_invalid")
     if value.source_identities != (value.identity,):
         raise RuntimeError("canonical_one_row_source_identity_invalid")
     if value.source_record_id != value.identity:
@@ -171,6 +204,68 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
         value.transaction_kind == "expense" and value.amount_yen >= 0
     ):
         raise RuntimeError("canonical_one_row_amount_semantics_invalid")
+    return value
+
+
+@dataclass(frozen=True, init=False)
+class CanonicalFiveRowBatch:
+    candidates: tuple[CanonicalOneRowCandidate, ...] = field(repr=False)
+    min_rows: int = CANONICAL_BOUNDED_BATCH_ROWS
+    max_rows: int = CANONICAL_BOUNDED_BATCH_ROWS
+    _authority: object = field(repr=False, compare=False)
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("canonical_five_row_batch_is_projection_only")
+
+    @classmethod
+    def _create(cls, *, authority_token: object, **values) -> "CanonicalFiveRowBatch":
+        if authority_token is not _BATCH_CANDIDATE_AUTHORITY:
+            raise TypeError("canonical_five_row_batch_is_projection_only")
+        batch = object.__new__(cls)
+        for name, value in values.items():
+            object.__setattr__(batch, name, value)
+        object.__setattr__(batch, "_authority", _BATCH_CANDIDATE_AUTHORITY)
+        return validate_canonical_five_row_batch(batch)
+
+
+def project_bank_five_row_batch(plan) -> CanonicalFiveRowBatch:
+    from .bank_canary import validate_bank_batch_plan
+
+    plan = validate_bank_batch_plan(plan)
+    candidates = tuple(
+        _project_bank_candidate(
+            item.transaction,
+            classification=item.classification,
+            write_eligibility=item.write_eligibility,
+            import_status=item.import_status,
+            max_rows=plan.authority.max_rows,
+            authority_token=_BATCH_CANDIDATE_AUTHORITY,
+        )
+        for item in plan.items
+    )
+    return CanonicalFiveRowBatch._create(
+        authority_token=_BATCH_CANDIDATE_AUTHORITY,
+        candidates=candidates,
+    )
+
+
+def validate_canonical_five_row_batch(value: object) -> CanonicalFiveRowBatch:
+    if type(value) is not CanonicalFiveRowBatch:
+        raise TypeError("canonical_five_row_batch_required")
+    if getattr(value, "_authority", None) is not _BATCH_CANDIDATE_AUTHORITY:
+        raise TypeError("unauthorized_canonical_five_row_batch")
+    if value.min_rows != 5 or value.max_rows != 5 or len(value.candidates) != 5:
+        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    identities = tuple(candidate.identity for candidate in value.candidates)
+    if len(set(identities)) != 5:
+        raise RuntimeError("canonical_batch_duplicate_identity")
+    for candidate in value.candidates:
+        validate_canonical_one_row_candidate(candidate)
+        if (
+            getattr(candidate, "_authority", None) is not _BATCH_CANDIDATE_AUTHORITY
+            or candidate.max_rows != 5
+        ):
+            raise RuntimeError("canonical_batch_candidate_authority_invalid")
     return value
 
 
@@ -294,6 +389,165 @@ def validate_canonical_one_row_manifest(
     )
     if manifest != expected:
         raise RuntimeError("canonical_one_row_manifest_binding_mismatch")
+
+
+@dataclass(frozen=True)
+class CanonicalFiveRowManifest:
+    run_id: str
+    created_at: datetime
+    candidate_refs: tuple[str, ...] = field(repr=False)
+    batch_ref: str
+    target_ref: str
+    plan_binding_ref: str
+    expected_git_head: str
+    expected_branch: str
+    income_count: int
+    expense_count: int
+    authority_provenance: str = "phase7_exact_five_source_identities"
+    min_rows: int = CANONICAL_BOUNDED_BATCH_ROWS
+    max_rows: int = CANONICAL_BOUNDED_BATCH_ROWS
+    schema_version: int = CANONICAL_ONE_ROW_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        if self.schema_version != CANONICAL_ONE_ROW_SCHEMA_VERSION:
+            raise RuntimeError("canonical_batch_schema_invalid")
+        try:
+            UUID(self.run_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("canonical_batch_run_id_invalid") from exc
+        _aware(self.created_at, "canonical_batch_created_at_timezone_required")
+        if len(self.candidate_refs) != 5 or len(set(self.candidate_refs)) != 5:
+            raise RuntimeError("canonical_batch_requires_five_candidate_refs")
+        if any(
+            not re.fullmatch(r"canonical-item-v2:[0-9a-f]{32}", item)
+            for item in self.candidate_refs
+        ):
+            raise RuntimeError("canonical_batch_candidate_ref_invalid")
+        if not re.fullmatch(r"canonical-item-v2:[0-9a-f]{32}", self.batch_ref):
+            raise RuntimeError("canonical_batch_ref_invalid")
+        if not re.fullmatch(r"writer-target-v1:[0-9a-f]{32}", self.target_ref):
+            raise RuntimeError("canonical_batch_target_ref_invalid")
+        if not re.fullmatch(r"canonical-five-row-v1:[0-9a-f]{32}", self.plan_binding_ref):
+            raise RuntimeError("canonical_batch_plan_ref_invalid")
+        if not _HEAD.fullmatch(self.expected_git_head):
+            raise RuntimeError("canonical_batch_git_head_invalid")
+        if self.expected_branch != "agent/bank-csv-ingestion":
+            raise RuntimeError("canonical_batch_branch_invalid")
+        if self.income_count != 2 or self.expense_count != 3:
+            raise RuntimeError("canonical_batch_classification_mix_changed")
+        if self.authority_provenance != "phase7_exact_five_source_identities":
+            raise RuntimeError("canonical_batch_authority_provenance_invalid")
+        if self.min_rows != 5 or self.max_rows != 5:
+            raise RuntimeError("canonical_batch_row_bound_invalid")
+
+
+def _canonical_batch_refs(
+    batch: CanonicalFiveRowBatch,
+    key: PersistentAuditKey,
+) -> tuple[tuple[str, ...], str]:
+    batch = validate_canonical_five_row_batch(batch)
+    candidate_refs = tuple(
+        canonical_candidate_reference_v2(candidate, key)
+        for candidate in batch.candidates
+    )
+    payload = json.dumps({
+        "candidate_refs": candidate_refs,
+        "classifications": tuple(
+            candidate.transaction_kind for candidate in batch.candidates
+        ),
+        "min_rows": batch.min_rows,
+        "max_rows": batch.max_rows,
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    digest = hmac.new(
+        key.secret, f"canonical-five-row-batch\x00{payload}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    return candidate_refs, f"canonical-item-v2:{digest}"
+
+
+def _five_row_plan_binding_ref(
+    *,
+    batch_ref: str,
+    target_ref: str,
+    expected_git_head: str,
+    expected_branch: str,
+    key: PersistentAuditKey,
+) -> str:
+    payload = json.dumps({
+        "batch_ref": batch_ref,
+        "target_ref": target_ref,
+        "expected_git_head": expected_git_head,
+        "expected_branch": expected_branch,
+        "min_rows": 5,
+        "max_rows": 5,
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    digest = hmac.new(
+        key.secret, f"canonical-five-row-plan\x00{payload}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    return f"canonical-five-row-v1:{digest}"
+
+
+def create_canonical_five_row_manifest(
+    batch: CanonicalFiveRowBatch,
+    *,
+    binding: TargetBinding,
+    audit_key: PersistentAuditKey,
+    expected_git_head: str,
+    expected_branch: str,
+    created_at: datetime,
+    run_id: str,
+) -> CanonicalFiveRowManifest:
+    batch = validate_canonical_five_row_batch(batch)
+    binding.validate()
+    audit_key.validate()
+    candidate_refs, batch_ref = _canonical_batch_refs(batch, audit_key)
+    target_ref = target_binding_reference(binding, audit_key)
+    manifest = CanonicalFiveRowManifest(
+        run_id=run_id,
+        created_at=created_at,
+        candidate_refs=candidate_refs,
+        batch_ref=batch_ref,
+        target_ref=target_ref,
+        plan_binding_ref=_five_row_plan_binding_ref(
+            batch_ref=batch_ref,
+            target_ref=target_ref,
+            expected_git_head=expected_git_head,
+            expected_branch=expected_branch,
+            key=audit_key,
+        ),
+        expected_git_head=expected_git_head,
+        expected_branch=expected_branch,
+        income_count=sum(
+            candidate.transaction_kind == "income" for candidate in batch.candidates
+        ),
+        expense_count=sum(
+            candidate.transaction_kind == "expense" for candidate in batch.candidates
+        ),
+    )
+    manifest.validate()
+    return manifest
+
+
+def validate_canonical_five_row_manifest(
+    batch: CanonicalFiveRowBatch,
+    manifest: CanonicalFiveRowManifest,
+    *,
+    binding: TargetBinding,
+    audit_key: PersistentAuditKey,
+) -> None:
+    manifest.validate()
+    expected = create_canonical_five_row_manifest(
+        batch,
+        binding=binding,
+        audit_key=audit_key,
+        expected_git_head=manifest.expected_git_head,
+        expected_branch=manifest.expected_branch,
+        created_at=manifest.created_at,
+        run_id=manifest.run_id,
+    )
+    if manifest != expected:
+        raise RuntimeError("canonical_batch_manifest_binding_mismatch")
 
 
 @dataclass(frozen=True)
@@ -428,6 +682,68 @@ def issue_canonical_one_row_capability(
     return capability
 
 
+def issue_canonical_five_row_capability(
+    batch: CanonicalFiveRowBatch,
+    manifest: CanonicalFiveRowManifest,
+    *,
+    binding: TargetBinding,
+    inspector: TargetInspector,
+    key_provider: ProtectedAuditKeyProvider,
+    journal: SqliteAttemptJournal,
+    capability_store: SqliteCapabilityStore,
+    approval_provider: ProtectedCanaryApprovalProvider,
+    clock: Callable[[], datetime],
+) -> ProductionWriteCapability:
+    """Issue one short-lived capability bound to one exact ordered five-row batch."""
+    batch = validate_canonical_five_row_batch(batch)
+    now = _aware(clock(), "canonical_batch_clock_timezone_required")
+    if type(approval_provider) is not ProtectedCanaryApprovalProvider:
+        raise RuntimeError("protected_canary_approval_required")
+    if type(journal) is not SqliteAttemptJournal:
+        raise RuntimeError("durable_attempt_journal_required")
+    if type(capability_store) is not SqliteCapabilityStore:
+        raise RuntimeError("durable_capability_store_required")
+    key = _load_key(key_provider)
+    validate_canonical_five_row_manifest(
+        batch, manifest, binding=binding, audit_key=key,
+    )
+    approval: CanaryApproval = approval_provider.load()
+    if approval.batch_size != CANONICAL_BOUNDED_BATCH_ROWS:
+        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    expires_at = _aware(approval.expires_at, "canonical_batch_expiry_timezone_required")
+    ttl = (expires_at - now).total_seconds()
+    if ttl <= 0:
+        raise RuntimeError("production_capability_expired")
+    if ttl > MAX_CANARY_CAPABILITY_TTL_SECONDS:
+        raise RuntimeError("production_capability_ttl_too_long")
+    if approval.candidate_ref != manifest.batch_ref:
+        raise RuntimeError("approved_candidate_mismatch")
+    if approval.target_ref != manifest.target_ref:
+        raise RuntimeError("approved_target_mismatch")
+    if not approval.approval_reference.strip():
+        raise RuntimeError("human_approval_reference_required")
+    if not journal.ready(manifest.run_id):
+        raise RuntimeError("attempt_journal_unavailable")
+    if journal.has_events(manifest.run_id):
+        raise RuntimeError("attempt_journal_replay")
+    if not capability_store.ready():
+        raise RuntimeError("capability_store_unavailable")
+    validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
+    capability = ProductionWriteCapability(
+        capability_id=str(uuid4()),
+        run_id=manifest.run_id,
+        plan_binding_ref=manifest.plan_binding_ref,
+        target_ref=manifest.target_ref,
+        candidate_ref=manifest.batch_ref,
+        approval_reference=approval.approval_reference.strip(),
+        issued_at=now,
+        expires_at=expires_at,
+        token=hashlib.sha256(os.urandom(32)).hexdigest(),
+    )
+    capability_store.issue(capability)
+    return capability
+
+
 @dataclass(frozen=True, init=False)
 class CanonicalDispatchPermit:
     capability_id: str
@@ -447,7 +763,10 @@ class CanonicalDispatchPermit:
         capability: ProductionWriteCapability,
         *,
         attempt_id: str,
+        max_rows: int = CANONICAL_ONE_ROW_MAX_ROWS,
     ) -> "CanonicalDispatchPermit":
+        if max_rows not in CANONICAL_TRANSPORT_ROW_BOUNDS:
+            raise RuntimeError("canonical_dispatch_row_bound_invalid")
         permit = object.__new__(cls)
         for name, value in {
             "capability_id": capability.capability_id,
@@ -455,7 +774,7 @@ class CanonicalDispatchPermit:
             "attempt_id": attempt_id,
             "candidate_ref": capability.candidate_ref,
             "target_ref": capability.target_ref,
-            "max_rows": CANONICAL_ONE_ROW_MAX_ROWS,
+            "max_rows": max_rows,
             "_authority": _DISPATCH_AUTHORITY,
         }.items():
             object.__setattr__(permit, name, value)
@@ -467,13 +786,14 @@ def _validate_dispatch_permit(
     *,
     candidate_ref: str,
     target_ref: str,
+    max_rows: int = CANONICAL_ONE_ROW_MAX_ROWS,
 ) -> CanonicalDispatchPermit:
     if type(permit) is not CanonicalDispatchPermit:
         raise TypeError("canonical_dispatch_permit_required")
     if getattr(permit, "_authority", None) is not _DISPATCH_AUTHORITY:
         raise TypeError("unauthorized_canonical_dispatch_permit")
-    if permit.max_rows != CANONICAL_ONE_ROW_MAX_ROWS:
-        raise RuntimeError("canonical_one_row_max_rows_must_be_one")
+    if max_rows not in CANONICAL_TRANSPORT_ROW_BOUNDS or permit.max_rows != max_rows:
+        raise RuntimeError("canonical_dispatch_row_bound_invalid")
     if permit.candidate_ref != candidate_ref or permit.target_ref != target_ref:
         raise RuntimeError("canonical_dispatch_permit_binding_mismatch")
     return permit
@@ -507,6 +827,7 @@ class SealedCanonicalOneRowTransport:
         self.max_rows = max_rows
         self.invocation_count = 0
         self.last_row: tuple | None = None
+        self.last_rows: tuple[tuple, ...] | None = None
 
     def prepare_rows(
         self,
@@ -561,6 +882,45 @@ class SealedCanonicalOneRowTransport:
             valueInputOption="RAW",
             insertDataOption="INSERT_ROWS",
             body={"values": [row]},
+        ).execute()
+        return WriteRequestResult(WriteDisposition.ACKNOWLEDGED, "sheets_append_ack")
+
+    def write_batch_once(
+        self,
+        batch: CanonicalFiveRowBatch,
+        permit: CanonicalDispatchPermit,
+    ) -> WriteRequestResult:
+        if self.max_rows != CANONICAL_BOUNDED_BATCH_ROWS:
+            raise RuntimeError("canonical_batch_transport_bound_invalid")
+        batch = validate_canonical_five_row_batch(batch)
+        key = _load_key(self._key_provider)
+        validate_target_binding(
+            self._binding, self._inspector.inspect(self._binding.expected_worksheet),
+        )
+        _, batch_ref = _canonical_batch_refs(batch, key)
+        target_ref = target_binding_reference(self._binding, key)
+        permit = _validate_dispatch_permit(
+            permit,
+            candidate_ref=batch_ref,
+            target_ref=target_ref,
+            max_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+        )
+        history = self._journal.history(permit.run_id, permit.attempt_id)
+        if (
+            not history
+            or history[-1].stage != JournalStage.WRITE_ATTEMPTED
+            or history[-1].canonical_identity != batch_ref
+        ):
+            raise RuntimeError("write_attempt_journal_required")
+        rows = self.prepare_rows(batch.candidates)
+        self.last_rows = rows
+        self.invocation_count += 1
+        self._db.svc.spreadsheets().values().append(
+            spreadsheetId=self._binding.expected_spreadsheet_id,
+            range=f"{self._binding.expected_worksheet}!A:L",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [list(row) for row in rows]},
         ).execute()
         return WriteRequestResult(WriteDisposition.ACKNOWLEDGED, "sheets_append_ack")
 
@@ -919,5 +1279,375 @@ def execute_canonical_one_row_canary(
         lease_released=lease_released,
         readback_count=readback_count,
         recovered_from_ambiguous=recovered,
+        reason_code=reason,
+    )
+
+
+@dataclass(frozen=True)
+class CanonicalFiveRowExecutionResult:
+    status: str
+    final_state: CandidateState
+    requested_rows: int
+    write_request_count: int
+    actual_new_rows: int
+    exact_canonical_match: bool
+    matched_identity_count: int
+    duplicate_rows: int
+    unexpected_mutations: int
+    journal_committed: bool
+    capability_state: str
+    lease_released: bool
+    readback_count: int
+    recovered_from_ambiguous: bool
+    partial_write_outcome: bool
+    unknown_write_outcome: bool
+    reason_code: str
+
+    def summary(self) -> dict:
+        return {
+            "status": self.status,
+            "final_state": self.final_state.value,
+            "requested_rows": self.requested_rows,
+            "write_request_count": self.write_request_count,
+            "actual_new_rows": self.actual_new_rows,
+            "exact_canonical_match": self.exact_canonical_match,
+            "matched_identity_count": self.matched_identity_count,
+            "duplicate_rows": self.duplicate_rows,
+            "unexpected_mutations": self.unexpected_mutations,
+            "journal_committed": self.journal_committed,
+            "capability_state": self.capability_state,
+            "lease_released": self.lease_released,
+            "readback_count": self.readback_count,
+            "recovered_from_ambiguous": self.recovered_from_ambiguous,
+            "partial_write_outcome": self.partial_write_outcome,
+            "unknown_write_outcome": self.unknown_write_outcome,
+            "reason_code": self.reason_code,
+        }
+
+
+def _append_batch_journal(
+    journal: SqliteAttemptJournal,
+    *,
+    manifest: CanonicalFiveRowManifest,
+    attempt_id: str,
+    batch_id: str,
+    stage: JournalStage,
+    state: CandidateState,
+    reason: str,
+    clock: Callable[[], datetime],
+) -> None:
+    journal.append(JournalEvent(
+        run_id=manifest.run_id,
+        canonical_identity=manifest.batch_ref,
+        attempt_id=attempt_id,
+        batch_id=batch_id,
+        stage=stage,
+        state=state,
+        timestamp=_aware(clock(), "canonical_batch_journal_clock_invalid"),
+        reason_code=reason,
+    ))
+
+
+def execute_canonical_five_row_batch(
+    batch: CanonicalFiveRowBatch,
+    manifest: CanonicalFiveRowManifest,
+    *,
+    capability: ProductionWriteCapability,
+    capability_store: SqliteCapabilityStore,
+    binding: TargetBinding,
+    inspector: TargetInspector,
+    key_provider: ProtectedAuditKeyProvider,
+    journal: SqliteAttemptJournal,
+    leases: SqliteLeaseManager,
+    identity_reader: CanonicalIdentityReader,
+    rows_reader: CanonicalRowsReader,
+    transport,
+    readback_policy: ReadBackPolicy,
+    git_guard: GitCheckpointGuard | None,
+    owner_id: str,
+    clock: Callable[[], datetime],
+    sleeper: Callable[[float], None],
+    synthetic: bool = False,
+) -> CanonicalFiveRowExecutionResult:
+    """Consume one exact five-row capability once; the append is never retried."""
+    batch = validate_canonical_five_row_batch(batch)
+    key = _load_key(key_provider)
+    validate_canonical_five_row_manifest(
+        batch, manifest, binding=binding, audit_key=key,
+    )
+    readback_policy.validate()
+    if type(capability_store) is not SqliteCapabilityStore:
+        raise RuntimeError("durable_capability_store_required")
+    if type(journal) is not SqliteAttemptJournal:
+        raise RuntimeError("durable_attempt_journal_required")
+    if type(leases) is not SqliteLeaseManager:
+        raise RuntimeError("durable_execution_lease_required")
+    if synthetic:
+        if not getattr(transport, "synthetic_only", False):
+            raise RuntimeError("synthetic_transport_required")
+    elif type(transport) is not SealedCanonicalOneRowTransport:
+        raise RuntimeError("sealed_canonical_one_row_transport_required")
+    if (
+        manifest.min_rows != 5 or manifest.max_rows != 5
+        or batch.min_rows != 5 or batch.max_rows != 5
+        or getattr(transport, "max_rows", None) != 5
+    ):
+        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    if capability_store.state(capability.capability_id) != "issued":
+        raise RuntimeError("production_capability_reused")
+    try:
+        if capability.run_id != manifest.run_id:
+            raise RuntimeError("capability_run_mismatch")
+        if capability.plan_binding_ref != manifest.plan_binding_ref:
+            raise RuntimeError("capability_plan_mismatch")
+        if capability.candidate_ref != manifest.batch_ref:
+            raise RuntimeError("candidate_not_in_capability")
+        if capability.target_ref != manifest.target_ref:
+            raise RuntimeError("capability_target_mismatch")
+        if _aware(clock(), "canonical_batch_clock_timezone_required") >= capability.expires_at:
+            raise RuntimeError("production_capability_expired")
+        if not journal.ready(manifest.run_id):
+            raise RuntimeError("attempt_journal_unavailable")
+        if not synthetic:
+            if type(git_guard) is not GitCheckpointGuard:
+                raise RuntimeError("production_git_checkpoint_guard_required")
+            git_guard.validate(
+                expected_head=manifest.expected_git_head,
+                expected_branch=manifest.expected_branch,
+            )
+        validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
+    except Exception:
+        try:
+            capability_store.reseal(capability, "pre_dispatch_validation_failed")
+        except Exception:
+            pass
+        raise
+
+    identities = tuple(candidate.identity for candidate in batch.candidates)
+    expected_records = {
+        candidate.identity: ExistingCanonicalRecord.from_candidate(candidate)
+        for candidate in batch.candidates
+    }
+    lease = None
+    lease_released = False
+    attempt_id = str(uuid4())
+    batch_id = f"canonical-five-row-{manifest.run_id}"
+    final_state = CandidateState.FAILED
+    reason = "canonical_batch_execution_failed"
+    write_count = 0
+    actual_new_rows = 0
+    exact_match = False
+    matched_identity_count = 0
+    duplicate_rows = 0
+    unexpected_mutations = 0
+    readback_count = 0
+    recovered = False
+    partial = False
+    unknown = False
+    pre_rows = CanonicalRowsSnapshot(())
+    try:
+        lease = leases.acquire(manifest.target_ref, owner_id, manifest.run_id, 300)
+        if lease is None:
+            raise RuntimeError("writer_lock_unavailable")
+        renewed = leases.renew(lease, 300)
+        if renewed is None:
+            raise RuntimeError("writer_lease_lost")
+        lease = renewed
+        pre_rows = rows_reader.read_rows()
+        try:
+            observations: Mapping[str, IdentityRead] = identity_reader.read_identities(
+                identities,
+            )
+        except Exception:
+            observations = {}
+        if any(
+            identity not in observations or not observations[identity].readable
+            for identity in identities
+        ):
+            pre_state = CandidateState.FAILED
+            pre_reason = "canonical_batch_preread_unavailable"
+        elif any(observations[identity].records for identity in identities):
+            pre_state = CandidateState.CONFLICT
+            pre_reason = "canonical_batch_existing_identity"
+        else:
+            pre_state = CandidateState.VERIFIED_NEW
+            pre_reason = "all_five_still_new"
+        _append_batch_journal(
+            journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+            stage=JournalStage.PRE_READ, state=pre_state,
+            reason=pre_reason, clock=clock,
+        )
+        if pre_state != CandidateState.VERIFIED_NEW:
+            final_state = pre_state
+            reason = pre_reason
+            _append_batch_journal(
+                journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+                stage=JournalStage.FINAL, state=final_state,
+                reason=reason, clock=clock,
+            )
+        else:
+            capability_store.claim(capability, attempt_id, clock())
+            _append_batch_journal(
+                journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+                stage=JournalStage.WRITE_ATTEMPTED,
+                state=CandidateState.WRITE_ATTEMPTED,
+                reason="write_request_about_to_send", clock=clock,
+            )
+            capability_store.authorize_dispatch(capability, attempt_id, clock())
+            permit = CanonicalDispatchPermit._create(
+                capability, attempt_id=attempt_id,
+                max_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+            )
+            write_count = 1
+            try:
+                request_result = transport.write_batch_once(batch, permit)
+            except Exception:
+                request_result = WriteRequestResult(
+                    WriteDisposition.OUTCOME_UNKNOWN,
+                    "write_transport_outcome_unknown",
+                )
+            request_state = (
+                CandidateState.OUTCOME_UNKNOWN
+                if request_result.disposition == WriteDisposition.OUTCOME_UNKNOWN
+                else CandidateState.WRITE_ATTEMPTED
+            )
+            _append_batch_journal(
+                journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+                stage=JournalStage.WRITE_RESULT, state=request_state,
+                reason=request_result.reason_code, clock=clock,
+            )
+
+            post_state = CandidateState.OUTCOME_UNKNOWN
+            reason = "post_write_readback_unavailable"
+            saw_all_absent = False
+            for index in range(readback_policy.max_attempts):
+                readback_count += 1
+                try:
+                    current = identity_reader.read_identities(identities)
+                except Exception:
+                    current = {}
+                if all(
+                    identity in current and current[identity].readable
+                    for identity in identities
+                ):
+                    matched_identity_count = sum(
+                        len(current[identity].records) == 1
+                        and current[identity].records[0] == expected_records[identity]
+                        for identity in identities
+                    )
+                    present_count = sum(
+                        bool(current[identity].records) for identity in identities
+                    )
+                    duplicate_rows = sum(
+                        max(0, len(current[identity].records) - 1)
+                        for identity in identities
+                    )
+                    conflicting = any(
+                        current[identity].records
+                        and not (
+                            len(current[identity].records) == 1
+                            and current[identity].records[0] == expected_records[identity]
+                        )
+                        for identity in identities
+                    )
+                    if matched_identity_count == 5 and not conflicting:
+                        try:
+                            post_rows = rows_reader.read_rows()
+                            actual_new_rows = len(post_rows.rows) - len(pre_rows.rows)
+                            written_rows = getattr(transport, "last_rows", None)
+                            expected_rows = (
+                                pre_rows.rows + tuple(_normalize_row(row) for row in written_rows)
+                                if written_rows is not None else ()
+                            )
+                            exact_match = post_rows.rows == expected_rows
+                            if exact_match and actual_new_rows == 5 and duplicate_rows == 0:
+                                post_state = CandidateState.WRITE_CONFIRMED
+                                reason = "post_write_exact_confirmed"
+                            else:
+                                post_state = CandidateState.CONFLICT
+                                reason = "post_write_row_set_mismatch"
+                                unexpected_mutations = 1
+                        except Exception:
+                            post_state = CandidateState.OUTCOME_UNKNOWN
+                            reason = "post_write_row_snapshot_unavailable"
+                        break
+                    if 1 <= present_count <= 4:
+                        post_state = CandidateState.CONFLICT
+                        reason = "partial_write_outcome"
+                        partial = True
+                        break
+                    if conflicting or duplicate_rows:
+                        post_state = CandidateState.CONFLICT
+                        reason = "post_write_identity_conflict"
+                        unexpected_mutations = 1
+                        break
+                    if present_count == 0:
+                        saw_all_absent = True
+                if index < len(readback_policy.delays_seconds):
+                    sleeper(readback_policy.delays_seconds[index])
+
+            if post_state == CandidateState.WRITE_CONFIRMED:
+                final_state = CandidateState.WRITE_CONFIRMED
+                recovered = request_result.disposition == WriteDisposition.OUTCOME_UNKNOWN
+                if recovered:
+                    reason = "ambiguous_write_recovered_by_exact_readback"
+            elif post_state == CandidateState.CONFLICT:
+                final_state = CandidateState.CONFLICT
+            elif saw_all_absent:
+                final_state = CandidateState.FAILED
+                reason = "write_absence_confirmed_failure"
+            else:
+                final_state = CandidateState.OUTCOME_UNKNOWN
+                unknown = True
+            _append_batch_journal(
+                journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+                stage=JournalStage.POST_READ,
+                state=(post_state if post_state != CandidateState.FAILED
+                       else CandidateState.OUTCOME_UNKNOWN),
+                reason=reason, clock=clock,
+            )
+            _append_batch_journal(
+                journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
+                stage=JournalStage.FINAL, state=final_state,
+                reason=reason, clock=clock,
+            )
+    finally:
+        try:
+            if lease is not None:
+                leases.release(lease)
+                lease_released = True
+        finally:
+            capability_store.reseal(capability, reason)
+
+    history = journal.history(manifest.run_id, attempt_id)
+    journal_committed = bool(
+        history and history[-1].stage == JournalStage.FINAL
+        and history[-1].state == final_state
+    )
+    if final_state == CandidateState.WRITE_CONFIRMED:
+        status = "batch_complete"
+    elif partial:
+        status = "partial_write_outcome"
+    elif unknown:
+        status = "unknown_write_outcome"
+    else:
+        status = "batch_stopped"
+    return CanonicalFiveRowExecutionResult(
+        status=status,
+        final_state=final_state,
+        requested_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+        write_request_count=write_count,
+        actual_new_rows=actual_new_rows,
+        exact_canonical_match=exact_match,
+        matched_identity_count=matched_identity_count,
+        duplicate_rows=duplicate_rows,
+        unexpected_mutations=unexpected_mutations,
+        journal_committed=journal_committed,
+        capability_state=capability_store.state(capability.capability_id) or "missing",
+        lease_released=lease_released,
+        readback_count=readback_count,
+        recovered_from_ambiguous=recovered,
+        partial_write_outcome=partial,
+        unknown_write_outcome=unknown,
         reason_code=reason,
     )

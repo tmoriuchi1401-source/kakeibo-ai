@@ -662,3 +662,42 @@ class BankCanaryPreparationPipeline:
             ),
             "write_attempted": 0,
         }
+
+    def batch_replay_status(
+        self,
+        path: str | Path,
+        *,
+        selected_source_identities: tuple[str, ...],
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+    ) -> dict:
+        """Verify all five exact identities are suppressed, returning counts only."""
+        selected = tuple(selected_source_identities)
+        authority = BankBatchAuthority(
+            selected_source_identities=selected,
+            target_spreadsheet_id=str(self.db.sid),
+        )
+        authority.validate()
+        shadow, preview = self._context(
+            path,
+            account_alias=account_alias,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+        )
+        if any(len(_matching_decisions(shadow, identity)) != 1 for identity in selected):
+            raise RuntimeError("bank_batch_replay_selector_not_unique")
+        existing = parse_import_rows(self.db.get("取込データ!A2:L"))
+        existing_ids = tuple(row.import_id for row in existing)
+        return {
+            "parsed": preview.parsed,
+            "existing_duplicate": preview.existing_duplicate,
+            "new_plan_candidates": preview.new_plan_candidates,
+            "withheld_by_classification": preview.withheld_by_classification,
+            "ambiguous_collision": preview.ambiguous_collision,
+            "selected_existing_duplicate": sum(
+                existing_ids.count(identity) for identity in selected
+            ),
+            "selected_new_plan_candidate": sum(
+                preview.candidate_identities.count(identity) for identity in selected
+            ),
+            "write_attempted": 0,
+        }
