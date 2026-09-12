@@ -34,6 +34,7 @@ from app.canonical_one_row_production import (
     create_canonical_five_row_manifest,
     execute_canonical_five_row_batch,
     issue_canonical_five_row_capability,
+    project_bank_initial_backfill_batch,
     project_bank_five_row_batch,
     validate_canonical_five_row_batch,
 )
@@ -71,21 +72,31 @@ def bank(identity, amount):
     )
 
 
-def transactions():
-    return (
-        bank("bank:expense-1", -1000),
-        bank("bank:expense-2", -2000),
-        bank("bank:expense-3", -3000),
-        bank("bank:income-1", 4000),
-        bank("bank:income-2", 5000),
+def transactions(row_count=5):
+    if row_count == 5:
+        return (
+            bank("bank:expense-1", -1000),
+            bank("bank:expense-2", -2000),
+            bank("bank:expense-3", -3000),
+            bank("bank:income-1", 4000),
+            bank("bank:income-2", 5000),
+        )
+    expenses = tuple(
+        bank(f"bank:expense-{index}", -(index + 1) * 100)
+        for index in range(26)
     )
+    incomes = tuple(
+        bank(f"bank:income-{index}", (index + 1) * 100)
+        for index in range(25)
+    )
+    return expenses + incomes
 
 
-def batch_plan():
-    items = transactions()
+def batch_plan(row_count=5):
+    items = transactions(row_count)
     parsed = BankPdfResult(
         pages=1,
-        candidate_rows=5,
+        candidate_rows=row_count,
         transactions=items,
         issues=(),
         balance_consistency_failures=0,
@@ -102,6 +113,12 @@ def batch_plan():
                 item.source_row_identity for item in items
             ),
             target_spreadsheet_id="sheet-id",
+            min_rows=row_count,
+            max_rows=row_count,
+            authority_mode=(
+                "bank_initial_backfill" if row_count == 51
+                else "bank_batch_preparation"
+            ),
         ),
     )
 
@@ -142,11 +159,11 @@ class AppendRecorder:
 
 class SyntheticBatchTransport:
     synthetic_only = True
-    max_rows = 5
 
-    def __init__(self, db, *, mode="ack"):
+    def __init__(self, db, *, mode="ack", max_rows=5):
         self.db = db
         self.mode = mode
+        self.max_rows = max_rows
         self.invocation_count = 0
         self.last_rows = None
 
@@ -175,11 +192,15 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def unissued_parts(tmp_path, *, approval_batch_size=5, header=None):
+def unissued_parts(tmp_path, *, approval_batch_size=None, header=None, row_count=5):
     repo_root = tmp_path / "repository"
     repo_root.mkdir()
     db = FakeDB(header=header)
-    batch = project_bank_five_row_batch(batch_plan())
+    plan = batch_plan(row_count)
+    batch = (
+        project_bank_initial_backfill_batch(plan)
+        if row_count == 51 else project_bank_five_row_batch(plan)
+    )
     binding = TargetBinding(expected_spreadsheet_id=db.sid)
     manifest = create_canonical_five_row_manifest(
         batch,
@@ -200,7 +221,7 @@ def unissued_parts(tmp_path, *, approval_batch_size=5, header=None):
         "approval_reference": "phase8-test-approval",
         "candidate_ref": manifest.batch_ref,
         "target_ref": manifest.target_ref,
-        "batch_size": approval_batch_size,
+        "batch_size": row_count if approval_batch_size is None else approval_batch_size,
         "expires_at": (NOW + timedelta(seconds=60)).isoformat(),
     })
     state = tmp_path / "state.sqlite3"
@@ -286,8 +307,27 @@ def test_exact_five_succeeds_in_one_request_and_seals_authority(tmp_path):
     assert transport.invocation_count == 1
 
 
-def test_sealed_transport_sends_one_exact_five_row_append(tmp_path):
-    parts = unissued_parts(tmp_path)
+def test_exact_51_backfill_succeeds_in_one_request(tmp_path):
+    parts = unissued_parts(tmp_path, row_count=51)
+    issue(parts)
+    transport = SyntheticBatchTransport(parts["db"], max_rows=51)
+
+    result = execute(parts, transport)
+
+    assert result.status == "batch_complete"
+    assert result.requested_rows == 51
+    assert result.write_request_count == 1
+    assert result.actual_new_rows == 51
+    assert result.matched_identity_count == 51
+    assert result.exact_canonical_match
+    assert result.capability_state == "sealed"
+    assert result.lease_released
+    assert transport.invocation_count == 1
+
+
+@pytest.mark.parametrize("row_count", [5, 51])
+def test_sealed_transport_sends_one_exact_bounded_append(tmp_path, row_count):
+    parts = unissued_parts(tmp_path, row_count=row_count)
     capability = issue(parts)
     attempt_id = "22222222-2222-4222-8222-222222222222"
     parts["store"].claim(capability, attempt_id, NOW)
@@ -313,7 +353,7 @@ def test_sealed_transport_sends_one_exact_five_row_append(tmp_path):
     ))
     parts["store"].authorize_dispatch(capability, attempt_id, NOW)
     permit = CanonicalDispatchPermit._create(
-        capability, attempt_id=attempt_id, max_rows=5,
+        capability, attempt_id=attempt_id, max_rows=row_count,
     )
     transport = SealedCanonicalOneRowTransport(
         parts["db"],
@@ -322,7 +362,7 @@ def test_sealed_transport_sends_one_exact_five_row_append(tmp_path):
         key_provider=parts["key_provider"],
         journal=parts["journal"],
         clock=lambda: NOW,
-        max_rows=5,
+        max_rows=row_count,
     )
 
     result = transport.write_batch_once(parts["batch"], permit)
@@ -330,7 +370,7 @@ def test_sealed_transport_sends_one_exact_five_row_append(tmp_path):
     assert result.disposition == WriteDisposition.ACKNOWLEDGED
     assert transport.invocation_count == 1
     assert len(parts["db"].svc.requests) == 1
-    assert len(parts["db"].svc.requests[0]["body"]["values"]) == 5
+    assert len(parts["db"].svc.requests[0]["body"]["values"]) == row_count
     assert all(len(row) == 12 for row in parts["db"].svc.requests[0]["body"]["values"])
 
 
@@ -342,6 +382,22 @@ def test_non_five_approval_and_corrupted_batch_are_rejected(tmp_path):
     changed = corrupt_frozen(parts["batch"], candidates=parts["batch"].candidates[:4])
     with pytest.raises(RuntimeError, match="exactly_five_rows"):
         validate_canonical_five_row_batch(changed)
+
+
+@pytest.mark.parametrize("row_count", [50, 52])
+def test_initial_backfill_rejects_non_51_authority(row_count):
+    authority = BankBatchAuthority(
+        selected_source_identities=tuple(
+            f"bank:{index}" for index in range(row_count)
+        ),
+        target_spreadsheet_id="sheet-id",
+        min_rows=row_count,
+        max_rows=row_count,
+        authority_mode="bank_initial_backfill",
+    )
+
+    with pytest.raises(RuntimeError, match="row_bound_invalid"):
+        authority.validate()
 
 
 def test_existing_one_of_five_stops_whole_batch_before_dispatch(tmp_path):
@@ -364,6 +420,20 @@ def test_partial_outcome_stops_without_retry_or_cleanup(tmp_path):
     parts = unissued_parts(tmp_path)
     issue(parts)
     transport = SyntheticBatchTransport(parts["db"], mode="partial")
+
+    result = execute(parts, transport)
+
+    assert result.status == "partial_write_outcome"
+    assert result.matched_identity_count == 2
+    assert result.write_request_count == 1
+    assert len(parts["db"].rows) == 2
+    assert transport.invocation_count == 1
+
+
+def test_51_row_partial_outcome_stops_without_retry(tmp_path):
+    parts = unissued_parts(tmp_path, row_count=51)
+    issue(parts)
+    transport = SyntheticBatchTransport(parts["db"], mode="partial", max_rows=51)
 
     result = execute(parts, transport)
 

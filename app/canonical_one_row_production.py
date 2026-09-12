@@ -49,9 +49,11 @@ from .sheets import HEADERS
 CANONICAL_ONE_ROW_SCHEMA_VERSION = 1
 CANONICAL_ONE_ROW_MAX_ROWS = 1
 CANONICAL_BOUNDED_BATCH_ROWS = 5
+CANONICAL_INITIAL_BACKFILL_ROWS = 51
 CANONICAL_TRANSPORT_ROW_BOUNDS = frozenset({
     CANONICAL_ONE_ROW_MAX_ROWS,
     CANONICAL_BOUNDED_BATCH_ROWS,
+    CANONICAL_INITIAL_BACKFILL_ROWS,
 })
 _CANDIDATE_AUTHORITY = object()
 _BATCH_CANDIDATE_AUTHORITY = object()
@@ -179,14 +181,12 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
         raise RuntimeError("canonical_one_row_write_eligibility_invalid")
     if value.import_status != f"bank_{value.transaction_kind}":
         raise RuntimeError("canonical_one_row_import_status_invalid")
-    expected_rows = (
-        CANONICAL_ONE_ROW_MAX_ROWS
-        if authority_token is _CANDIDATE_AUTHORITY
-        else CANONICAL_BOUNDED_BATCH_ROWS
-    )
-    if value.max_rows != expected_rows:
-        if authority_token is _CANDIDATE_AUTHORITY:
+    if authority_token is _CANDIDATE_AUTHORITY:
+        if value.max_rows != CANONICAL_ONE_ROW_MAX_ROWS:
             raise RuntimeError("canonical_one_row_max_rows_must_be_one")
+    elif value.max_rows not in {
+        CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+    }:
         raise RuntimeError("canonical_batch_row_bound_invalid")
     if value.source_identities != (value.identity,):
         raise RuntimeError("canonical_one_row_source_identity_invalid")
@@ -229,6 +229,18 @@ class CanonicalFiveRowBatch:
 
 
 def project_bank_five_row_batch(plan) -> CanonicalFiveRowBatch:
+    if plan.authority.max_rows != CANONICAL_BOUNDED_BATCH_ROWS:
+        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    return _project_bank_batch(plan)
+
+
+def project_bank_initial_backfill_batch(plan) -> CanonicalFiveRowBatch:
+    if plan.authority.max_rows != CANONICAL_INITIAL_BACKFILL_ROWS:
+        raise RuntimeError("canonical_backfill_requires_exactly_51_rows")
+    return _project_bank_batch(plan)
+
+
+def _project_bank_batch(plan) -> CanonicalFiveRowBatch:
     from .bank_canary import validate_bank_batch_plan
 
     plan = validate_bank_batch_plan(plan)
@@ -246,6 +258,8 @@ def project_bank_five_row_batch(plan) -> CanonicalFiveRowBatch:
     return CanonicalFiveRowBatch._create(
         authority_token=_BATCH_CANDIDATE_AUTHORITY,
         candidates=candidates,
+        min_rows=plan.authority.min_rows,
+        max_rows=plan.authority.max_rows,
     )
 
 
@@ -254,16 +268,24 @@ def validate_canonical_five_row_batch(value: object) -> CanonicalFiveRowBatch:
         raise TypeError("canonical_five_row_batch_required")
     if getattr(value, "_authority", None) is not _BATCH_CANDIDATE_AUTHORITY:
         raise TypeError("unauthorized_canonical_five_row_batch")
-    if value.min_rows != 5 or value.max_rows != 5 or len(value.candidates) != 5:
-        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    if (
+        value.min_rows != value.max_rows
+        or value.max_rows not in {
+            CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+        }
+        or len(value.candidates) != value.max_rows
+    ):
+        if value.max_rows == CANONICAL_BOUNDED_BATCH_ROWS:
+            raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+        raise RuntimeError("canonical_batch_requires_exact_authorized_rows")
     identities = tuple(candidate.identity for candidate in value.candidates)
-    if len(set(identities)) != 5:
+    if len(set(identities)) != value.max_rows:
         raise RuntimeError("canonical_batch_duplicate_identity")
     for candidate in value.candidates:
         validate_canonical_one_row_candidate(candidate)
         if (
             getattr(candidate, "_authority", None) is not _BATCH_CANDIDATE_AUTHORITY
-            or candidate.max_rows != 5
+            or candidate.max_rows != value.max_rows
         ):
             raise RuntimeError("canonical_batch_candidate_authority_invalid")
     return value
@@ -416,8 +438,11 @@ class CanonicalFiveRowManifest:
         except (TypeError, ValueError) as exc:
             raise RuntimeError("canonical_batch_run_id_invalid") from exc
         _aware(self.created_at, "canonical_batch_created_at_timezone_required")
-        if len(self.candidate_refs) != 5 or len(set(self.candidate_refs)) != 5:
-            raise RuntimeError("canonical_batch_requires_five_candidate_refs")
+        if (
+            len(self.candidate_refs) != self.max_rows
+            or len(set(self.candidate_refs)) != self.max_rows
+        ):
+            raise RuntimeError("canonical_batch_requires_exact_candidate_refs")
         if any(
             not re.fullmatch(r"canonical-item-v2:[0-9a-f]{32}", item)
             for item in self.candidate_refs
@@ -427,17 +452,41 @@ class CanonicalFiveRowManifest:
             raise RuntimeError("canonical_batch_ref_invalid")
         if not re.fullmatch(r"writer-target-v1:[0-9a-f]{32}", self.target_ref):
             raise RuntimeError("canonical_batch_target_ref_invalid")
-        if not re.fullmatch(r"canonical-five-row-v1:[0-9a-f]{32}", self.plan_binding_ref):
+        plan_namespace = (
+            "canonical-five-row"
+            if self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
+            else "canonical-initial-backfill"
+        )
+        if not re.fullmatch(
+            rf"{plan_namespace}-v1:[0-9a-f]{{32}}", self.plan_binding_ref,
+        ):
             raise RuntimeError("canonical_batch_plan_ref_invalid")
         if not _HEAD.fullmatch(self.expected_git_head):
             raise RuntimeError("canonical_batch_git_head_invalid")
         if self.expected_branch != "agent/bank-csv-ingestion":
             raise RuntimeError("canonical_batch_branch_invalid")
-        if self.income_count != 2 or self.expense_count != 3:
+        if (
+            self.income_count < 0 or self.expense_count < 0
+            or self.income_count + self.expense_count != self.max_rows
+            or (
+                self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
+                and (self.income_count != 2 or self.expense_count != 3)
+            )
+        ):
             raise RuntimeError("canonical_batch_classification_mix_changed")
-        if self.authority_provenance != "phase7_exact_five_source_identities":
+        expected_provenance = (
+            "phase7_exact_five_source_identities"
+            if self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
+            else "phase9_exact_remaining_initial_backfill"
+        )
+        if self.authority_provenance != expected_provenance:
             raise RuntimeError("canonical_batch_authority_provenance_invalid")
-        if self.min_rows != 5 or self.max_rows != 5:
+        if (
+            self.min_rows != self.max_rows
+            or self.max_rows not in {
+                CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+            }
+        ):
             raise RuntimeError("canonical_batch_row_bound_invalid")
 
 
@@ -472,20 +521,26 @@ def _five_row_plan_binding_ref(
     expected_git_head: str,
     expected_branch: str,
     key: PersistentAuditKey,
+    row_count: int,
 ) -> str:
     payload = json.dumps({
         "batch_ref": batch_ref,
         "target_ref": target_ref,
         "expected_git_head": expected_git_head,
         "expected_branch": expected_branch,
-        "min_rows": 5,
-        "max_rows": 5,
+        "min_rows": row_count,
+        "max_rows": row_count,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    namespace = (
+        "canonical-five-row"
+        if row_count == CANONICAL_BOUNDED_BATCH_ROWS
+        else "canonical-initial-backfill"
+    )
     digest = hmac.new(
-        key.secret, f"canonical-five-row-plan\x00{payload}".encode("utf-8"),
+        key.secret, f"{namespace}-plan\x00{payload}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()[:32]
-    return f"canonical-five-row-v1:{digest}"
+    return f"{namespace}-v1:{digest}"
 
 
 def create_canonical_five_row_manifest(
@@ -515,6 +570,7 @@ def create_canonical_five_row_manifest(
             expected_git_head=expected_git_head,
             expected_branch=expected_branch,
             key=audit_key,
+            row_count=batch.max_rows,
         ),
         expected_git_head=expected_git_head,
         expected_branch=expected_branch,
@@ -524,6 +580,13 @@ def create_canonical_five_row_manifest(
         expense_count=sum(
             candidate.transaction_kind == "expense" for candidate in batch.candidates
         ),
+        authority_provenance=(
+            "phase7_exact_five_source_identities"
+            if batch.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
+            else "phase9_exact_remaining_initial_backfill"
+        ),
+        min_rows=batch.min_rows,
+        max_rows=batch.max_rows,
     )
     manifest.validate()
     return manifest
@@ -708,8 +771,10 @@ def issue_canonical_five_row_capability(
         batch, manifest, binding=binding, audit_key=key,
     )
     approval: CanaryApproval = approval_provider.load()
-    if approval.batch_size != CANONICAL_BOUNDED_BATCH_ROWS:
-        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+    if approval.batch_size != batch.max_rows:
+        if batch.max_rows == CANONICAL_BOUNDED_BATCH_ROWS:
+            raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+        raise RuntimeError("canonical_batch_requires_exact_authorized_rows")
     expires_at = _aware(approval.expires_at, "canonical_batch_expiry_timezone_required")
     ttl = (expires_at - now).total_seconds()
     if ttl <= 0:
@@ -800,7 +865,7 @@ def _validate_dispatch_permit(
 
 
 class SealedCanonicalOneRowTransport:
-    """Append pre-authorized canonical rows under a 1- or 5-row bound."""
+    """Append pre-authorized canonical rows under an explicit supported bound."""
 
     synthetic_only = False
     max_rows = CANONICAL_ONE_ROW_MAX_ROWS
@@ -890,7 +955,9 @@ class SealedCanonicalOneRowTransport:
         batch: CanonicalFiveRowBatch,
         permit: CanonicalDispatchPermit,
     ) -> WriteRequestResult:
-        if self.max_rows != CANONICAL_BOUNDED_BATCH_ROWS:
+        if self.max_rows not in {
+            CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+        }:
             raise RuntimeError("canonical_batch_transport_bound_invalid")
         batch = validate_canonical_five_row_batch(batch)
         key = _load_key(self._key_provider)
@@ -903,7 +970,7 @@ class SealedCanonicalOneRowTransport:
             permit,
             candidate_ref=batch_ref,
             target_ref=target_ref,
-            max_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+            max_rows=batch.max_rows,
         )
         history = self._journal.history(permit.run_id, permit.attempt_id)
         if (
@@ -1369,8 +1436,9 @@ def execute_canonical_five_row_batch(
     sleeper: Callable[[float], None],
     synthetic: bool = False,
 ) -> CanonicalFiveRowExecutionResult:
-    """Consume one exact five-row capability once; the append is never retried."""
+    """Consume one exact supported batch capability; the append is never retried."""
     batch = validate_canonical_five_row_batch(batch)
+    batch_rows = batch.max_rows
     key = _load_key(key_provider)
     validate_canonical_five_row_manifest(
         batch, manifest, binding=binding, audit_key=key,
@@ -1388,11 +1456,14 @@ def execute_canonical_five_row_batch(
     elif type(transport) is not SealedCanonicalOneRowTransport:
         raise RuntimeError("sealed_canonical_one_row_transport_required")
     if (
-        manifest.min_rows != 5 or manifest.max_rows != 5
-        or batch.min_rows != 5 or batch.max_rows != 5
-        or getattr(transport, "max_rows", None) != 5
+        manifest.min_rows != batch_rows or manifest.max_rows != batch_rows
+        or batch.min_rows != batch_rows
+        or batch_rows not in {
+            CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+        }
+        or getattr(transport, "max_rows", None) != batch_rows
     ):
-        raise RuntimeError("canonical_batch_requires_exactly_five_rows")
+        raise RuntimeError("canonical_batch_requires_exact_authorized_rows")
     if capability_store.state(capability.capability_id) != "issued":
         raise RuntimeError("production_capability_reused")
     try:
@@ -1431,7 +1502,7 @@ def execute_canonical_five_row_batch(
     lease = None
     lease_released = False
     attempt_id = str(uuid4())
-    batch_id = f"canonical-five-row-{manifest.run_id}"
+    batch_id = f"canonical-bounded-{manifest.run_id}"
     final_state = CandidateState.FAILED
     reason = "canonical_batch_execution_failed"
     write_count = 0
@@ -1471,7 +1542,7 @@ def execute_canonical_five_row_batch(
             pre_reason = "canonical_batch_existing_identity"
         else:
             pre_state = CandidateState.VERIFIED_NEW
-            pre_reason = "all_five_still_new"
+            pre_reason = "all_rows_still_new"
         _append_batch_journal(
             journal, manifest=manifest, attempt_id=attempt_id, batch_id=batch_id,
             stage=JournalStage.PRE_READ, state=pre_state,
@@ -1496,7 +1567,7 @@ def execute_canonical_five_row_batch(
             capability_store.authorize_dispatch(capability, attempt_id, clock())
             permit = CanonicalDispatchPermit._create(
                 capability, attempt_id=attempt_id,
-                max_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+                max_rows=batch_rows,
             )
             write_count = 1
             try:
@@ -1550,7 +1621,7 @@ def execute_canonical_five_row_batch(
                         )
                         for identity in identities
                     )
-                    if matched_identity_count == 5 and not conflicting:
+                    if matched_identity_count == batch_rows and not conflicting:
                         try:
                             post_rows = rows_reader.read_rows()
                             actual_new_rows = len(post_rows.rows) - len(pre_rows.rows)
@@ -1560,7 +1631,10 @@ def execute_canonical_five_row_batch(
                                 if written_rows is not None else ()
                             )
                             exact_match = post_rows.rows == expected_rows
-                            if exact_match and actual_new_rows == 5 and duplicate_rows == 0:
+                            if (
+                                exact_match and actual_new_rows == batch_rows
+                                and duplicate_rows == 0
+                            ):
                                 post_state = CandidateState.WRITE_CONFIRMED
                                 reason = "post_write_exact_confirmed"
                             else:
@@ -1571,7 +1645,7 @@ def execute_canonical_five_row_batch(
                             post_state = CandidateState.OUTCOME_UNKNOWN
                             reason = "post_write_row_snapshot_unavailable"
                         break
-                    if 1 <= present_count <= 4:
+                    if 1 <= present_count < batch_rows:
                         post_state = CandidateState.CONFLICT
                         reason = "partial_write_outcome"
                         partial = True
@@ -1635,7 +1709,7 @@ def execute_canonical_five_row_batch(
     return CanonicalFiveRowExecutionResult(
         status=status,
         final_state=final_state,
-        requested_rows=CANONICAL_BOUNDED_BATCH_ROWS,
+        requested_rows=batch_rows,
         write_request_count=write_count,
         actual_new_rows=actual_new_rows,
         exact_canonical_match=exact_match,

@@ -263,6 +263,16 @@ def main():
     bank_batch_apply.add_argument("--audit-key-file",required=True)
     bank_batch_apply.add_argument("--approval-file",required=True)
     bank_batch_apply.add_argument("--apply",action="store_true")
+    bank_backfill=sub.add_parser("bank-pdf-initial-backfill-apply")
+    bank_backfill.add_argument("pdf")
+    bank_backfill.add_argument("--account-alias",default="jibun-primary")
+    bank_backfill.add_argument("--identity-manifest",required=True)
+    bank_backfill.add_argument("--approved-target",required=True)
+    bank_backfill.add_argument("--expected-head",required=True)
+    bank_backfill.add_argument("--state-dir",required=True)
+    bank_backfill.add_argument("--audit-key-file",required=True)
+    bank_backfill.add_argument("--approval-file",required=True)
+    bank_backfill.add_argument("--apply",action="store_true")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -404,6 +414,43 @@ def main():
                 approved_target_spreadsheet_id=args.approved_target,
                 expected_git_head=args.expected_head,
                 repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                clock=lambda: datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-initial-backfill-apply":
+        if not args.apply:
+            raise SystemExit("bank initial backfill apply requires --apply")
+        repo_root=Path(__file__).resolve().parents[1]
+        identity_manifest=Path(args.identity_manifest).expanduser().resolve()
+        try:
+            identity_manifest.relative_to(repo_root)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("bank_identity_manifest_must_be_outside_repository")
+        payload=json.loads(identity_manifest.read_text(encoding="utf-8"))
+        if set(payload) != {"source_identities"}:
+            raise RuntimeError("bank_identity_manifest_schema_invalid")
+        selected=tuple(str(value) for value in payload["source_identities"])
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_batch(
+                db,args.pdf,
+                selected_source_identities=selected,
+                phase6_canary_identity=None,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=repo_root,
                 state_dir=args.state_dir,
                 audit_key_file=args.audit_key_file,
                 approval_file=args.approval_file,

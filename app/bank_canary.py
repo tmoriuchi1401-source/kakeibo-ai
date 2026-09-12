@@ -27,6 +27,8 @@ from .transaction_plan import Transaction
 CANARY_TARGET_SHEET = "取込データ"
 CANARY_MAX_ROWS = 1
 BANK_BATCH_ROWS = 5
+BANK_INITIAL_BACKFILL_ROWS = 51
+BANK_BATCH_ROW_BOUNDS = frozenset({BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS})
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
 _BANK_CANARY_PLAN_AUTHORITY = object()
 _BANK_BATCH_PLAN_AUTHORITY = object()
@@ -98,7 +100,7 @@ class BankCanaryPlan:
 
 @dataclass(frozen=True)
 class BankBatchAuthority:
-    """Explicit, read-only authority envelope for exactly five identities."""
+    """Explicit authority envelope for one exact, supported identity set."""
 
     selected_source_identities: tuple[str, ...]
     target_spreadsheet_id: str = field(repr=False)
@@ -108,9 +110,16 @@ class BankBatchAuthority:
     authority_mode: str = "bank_batch_preparation"
 
     def validate(self) -> None:
-        if len(self.selected_source_identities) != BANK_BATCH_ROWS:
-            raise RuntimeError("bank_batch_requires_exactly_five_identities")
-        if len(set(self.selected_source_identities)) != BANK_BATCH_ROWS:
+        expected_rows = self.max_rows
+        if self.min_rows != expected_rows or expected_rows not in BANK_BATCH_ROW_BOUNDS:
+            if self.min_rows == BANK_BATCH_ROWS:
+                raise RuntimeError("bank_batch_rows_bound_must_be_five")
+            raise RuntimeError("bank_batch_row_bound_invalid")
+        if len(self.selected_source_identities) != expected_rows:
+            if expected_rows == BANK_BATCH_ROWS:
+                raise RuntimeError("bank_batch_requires_exactly_five_identities")
+            raise RuntimeError("bank_batch_requires_exact_authorized_identities")
+        if len(set(self.selected_source_identities)) != expected_rows:
             raise RuntimeError("bank_batch_selector_duplicate_identity")
         for identity in self.selected_source_identities:
             if (
@@ -123,9 +132,12 @@ class BankBatchAuthority:
             raise RuntimeError("bank_batch_target_spreadsheet_required")
         if self.target_worksheet != CANARY_TARGET_SHEET:
             raise RuntimeError("bank_batch_target_sheet_invalid")
-        if self.min_rows != BANK_BATCH_ROWS or self.max_rows != BANK_BATCH_ROWS:
-            raise RuntimeError("bank_batch_rows_bound_must_be_five")
-        if self.authority_mode != "bank_batch_preparation":
+        expected_mode = (
+            "bank_batch_preparation"
+            if expected_rows == BANK_BATCH_ROWS
+            else "bank_initial_backfill"
+        )
+        if self.authority_mode != expected_mode:
             raise RuntimeError("bank_batch_production_authority_forbidden")
 
 
@@ -139,7 +151,7 @@ class BankBatchItem:
 
 @dataclass(frozen=True, init=False)
 class BankBatchPlan:
-    """Projection-only five-row plan; it never carries write capability."""
+    """Projection-only exact batch plan; it never carries write capability."""
 
     authority: BankBatchAuthority = field(repr=False)
     items: tuple[BankBatchItem, ...] = field(repr=False)
@@ -170,7 +182,7 @@ class BankBatchPlan:
             ))
             for item in self.items
         )
-        if len(rows) != BANK_BATCH_ROWS or any(
+        if len(rows) != self.authority.max_rows or any(
             len(row) != len(HEADERS[CANARY_TARGET_SHEET]) for row in rows
         ):
             raise RuntimeError("bank_batch_row_schema_invalid")
@@ -359,7 +371,7 @@ def build_bank_batch_plan(
     preview: BankPreviewPlan,
     authority: BankBatchAuthority,
 ) -> BankBatchPlan:
-    """Bind five explicit stable identities to eligible canonical projections."""
+    """Bind an explicit supported identity set to eligible canonical projections."""
     authority.validate()
     items: list[BankBatchItem] = []
     for identity in authority.selected_source_identities:
@@ -390,6 +402,8 @@ def build_bank_batch_plan(
         authority_token=_BANK_BATCH_PLAN_AUTHORITY,
         authority=authority,
         items=tuple(items),
+        planned_rows=authority.max_rows,
+        authorized_rows=authority.max_rows,
     )
     return validate_bank_batch_plan(plan)
 
@@ -400,10 +414,11 @@ def validate_bank_batch_plan(value: object) -> BankBatchPlan:
     if getattr(value, "_authority", None) is not _BANK_BATCH_PLAN_AUTHORITY:
         raise TypeError("unauthorized_bank_batch_plan")
     value.authority.validate()
-    if value.planned_rows != BANK_BATCH_ROWS or value.authorized_rows != BANK_BATCH_ROWS:
-        raise RuntimeError("bank_batch_requires_exactly_five_rows")
-    if len(value.items) != BANK_BATCH_ROWS:
-        raise RuntimeError("bank_batch_requires_exactly_five_items")
+    expected_rows = value.authority.max_rows
+    if value.planned_rows != expected_rows or value.authorized_rows != expected_rows:
+        raise RuntimeError("bank_batch_requires_exact_authorized_rows")
+    if len(value.items) != expected_rows:
+        raise RuntimeError("bank_batch_requires_exact_authorized_items")
     if tuple(item.transaction.identity for item in value.items) != (
         value.authority.selected_source_identities
     ):
@@ -433,7 +448,7 @@ def dry_run_bank_batch(
     *,
     imported_at,
 ) -> BankBatchDryRunResult:
-    """Perform complete five-item pre-read and row projection without a writer."""
+    """Perform complete exact-set pre-read and row projection without a writer."""
     plan = validate_bank_batch_plan(plan)
     binding = TargetBinding(
         expected_spreadsheet_id=plan.authority.target_spreadsheet_id,
@@ -457,7 +472,8 @@ def dry_run_bank_batch(
                 raise RuntimeError("bank_batch_existing_identity_duplicate")
             raise RuntimeError("bank_batch_existing_identity_collision")
     rows = plan.materialize(imported_at=imported_at)
-    if len(rows) != BANK_BATCH_ROWS or any(
+    expected_rows = plan.authority.max_rows
+    if len(rows) != expected_rows or any(
         len(row) != len(HEADERS[CANARY_TARGET_SHEET]) for row in rows
     ):
         raise RuntimeError("bank_batch_row_schema_invalid")
@@ -465,9 +481,9 @@ def dry_run_bank_batch(
     expense = sum(item.classification == "expense" for item in plan.items)
     return BankBatchDryRunResult(
         authority_mode=plan.authority.authority_mode,
-        selected=BANK_BATCH_ROWS,
-        planned=BANK_BATCH_ROWS,
-        authorized=BANK_BATCH_ROWS,
+        selected=expected_rows,
+        planned=expected_rows,
+        authorized=expected_rows,
         withheld=0,
         existing_duplicate=0,
         ambiguous_collision=0,
@@ -673,9 +689,17 @@ class BankCanaryPreparationPipeline:
     ) -> dict:
         """Verify all five exact identities are suppressed, returning counts only."""
         selected = tuple(selected_source_identities)
+        selected_count = len(selected)
         authority = BankBatchAuthority(
             selected_source_identities=selected,
             target_spreadsheet_id=str(self.db.sid),
+            min_rows=selected_count,
+            max_rows=selected_count,
+            authority_mode=(
+                "bank_initial_backfill"
+                if selected_count == BANK_INITIAL_BACKFILL_ROWS
+                else "bank_batch_preparation"
+            ),
         )
         authority.validate()
         shadow, preview = self._context(
