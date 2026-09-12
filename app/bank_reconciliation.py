@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 import unicodedata
@@ -22,7 +22,8 @@ from .sheets import SheetsDB
 
 
 CLASSIFICATIONS = (
-    "card_settlement", "transfer", "income", "expense", "needs_review",
+    "card_settlement", "transfer", "income", "expense", "loan_repayment",
+    "cash_withdrawal", "needs_review",
 )
 RECONCILIATION_STATUSES = (
     "matched", "identified_unlinked", "not_applicable", "unmatched",
@@ -48,6 +49,7 @@ class BankReconciliation:
     reconciliation_status: str
     matched_source: str = ""
     matched_identity: str = ""
+    write_eligibility: str = "withheld"
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,9 @@ class BankShadowResult:
             decision.classification.reason for decision in self.decisions
             if decision.classification.classification == "needs_review"
         )
+        write_eligibility = Counter(
+            decision.write_eligibility for decision in self.decisions
+        )
         return {
             "read_only": True,
             "source": self.parsed.summary()["source"],
@@ -80,6 +85,10 @@ class BankShadowResult:
                 name: reconciliation_counts[name]
                 for name in RECONCILIATION_STATUSES
             },
+            "write_eligibility": {
+                "preview_candidate": write_eligibility["preview_candidate"],
+                "withheld": write_eligibility["withheld"],
+            },
             "needs_review_reasons": dict(sorted(review_reasons.items())),
         }
 
@@ -92,16 +101,20 @@ def _compact(value: str) -> str:
 def classify_bank_transaction(
     transaction: NormalizedBankTransaction,
     *,
-    confirmed_internal_descriptions: frozenset[str] = frozenset(),
+    confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
 ) -> BankClassification:
     """Classify only cases supported by explicit bank-row evidence."""
     description = _compact(transaction.description)
-    confirmed = {_compact(value) for value in confirmed_internal_descriptions}
+    direction = "incoming" if transaction.signed_amount > 0 else "outgoing"
+    confirmed = {
+        (_compact(value), configured_direction)
+        for value, configured_direction in confirmed_internal_transfers
+    }
 
     if transaction.signed_amount < 0 and "AUPAYカード" in description:
         return BankClassification(transaction, "card_settlement", "au_pay_card_settlement")
 
-    if description in confirmed:
+    if (description, direction) in confirmed:
         return BankClassification(transaction, "transfer", "confirmed_internal_transfer")
 
     if transaction.signed_amount > 0:
@@ -111,6 +124,11 @@ def classify_bank_transaction(
             return BankClassification(transaction, "income", "salary")
         if "利息" in description:
             return BankClassification(transaction, "income", "bank_interest")
+        if (
+            "特典" in description or "トクテン" in description
+            or "金利優遇" in description or "キンリユウグウ" in description
+        ):
+            return BankClassification(transaction, "income", "bank_reward")
         if "定額自動入金" in description:
             return BankClassification(transaction, "transfer", "automatic_own_account_deposit")
         if "振込" in description or "振替" in description:
@@ -124,7 +142,7 @@ def classify_bank_transaction(
             return BankClassification(transaction, "transfer", "paypay_charge")
         return BankClassification(transaction, "needs_review", "paypay_candidate")
     if "ATM" in description:
-        return BankClassification(transaction, "needs_review", "cash_withdrawal")
+        return BankClassification(transaction, "cash_withdrawal", "atm_cash_withdrawal")
     if "振込" in description or (
         "振替" in description and "口座振替" not in description
     ):
@@ -132,7 +150,9 @@ def classify_bank_transaction(
             transaction, "needs_review", "ambiguous_outgoing_transfer",
         )
     if "約定返済" in description:
-        return BankClassification(transaction, "needs_review", "loan_repayment")
+        return BankClassification(
+            transaction, "loan_repayment", "contractual_loan_repayment",
+        )
     if "手数料" in description:
         return BankClassification(transaction, "expense", "bank_fee")
     if "口座振替" in description:
@@ -175,29 +195,42 @@ def reconcile_bank_classification(
             )
         return BankReconciliation(classified, "unmatched")
 
-    return BankReconciliation(classified, "not_applicable")
+    eligibility = (
+        "preview_candidate"
+        if classified.classification in {"income", "expense"}
+        else "withheld"
+    )
+    return BankReconciliation(
+        classified, "not_applicable", write_eligibility=eligibility,
+    )
 
 
 def build_bank_shadow_result(
     parsed: BankPdfResult,
     existing_transactions: list[ImportTransaction],
     *,
-    confirmed_internal_descriptions: frozenset[str] = frozenset(),
+    confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
 ) -> BankShadowResult:
     classified = [
         classify_bank_transaction(
             transaction,
-            confirmed_internal_descriptions=confirmed_internal_descriptions,
+            confirmed_internal_transfers=confirmed_internal_transfers,
         )
         for transaction in parsed.transactions
     ]
-    return BankShadowResult(
-        parsed,
-        tuple(
-            reconcile_bank_classification(item, existing_transactions)
-            for item in classified
-        ),
-    )
+    eligible_identities = {
+        transaction.identity for transaction in parsed.canonical_transactions
+    }
+    decisions = []
+    for item in classified:
+        decision = reconcile_bank_classification(item, existing_transactions)
+        if (
+            decision.write_eligibility == "preview_candidate"
+            and item.transaction.source_row_identity not in eligible_identities
+        ):
+            decision = replace(decision, write_eligibility="withheld")
+        decisions.append(decision)
+    return BankShadowResult(parsed, tuple(decisions))
 
 
 class BankPdfShadowPipeline:
@@ -211,7 +244,7 @@ class BankPdfShadowPipeline:
         path: str | Path,
         *,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
-        confirmed_internal_descriptions: frozenset[str] = frozenset(),
+        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
     ) -> dict:
         existing_rows = self.db.get("取込データ!A2:L")
         existing_transactions = parse_import_rows(existing_rows)
@@ -225,5 +258,5 @@ class BankPdfShadowPipeline:
         return build_bank_shadow_result(
             parsed,
             existing_transactions,
-            confirmed_internal_descriptions=confirmed_internal_descriptions,
+            confirmed_internal_transfers=confirmed_internal_transfers,
         ).summary()

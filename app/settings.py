@@ -20,6 +20,9 @@ class Settings:
     drive_backup_token_json: str = os.getenv("GOOGLE_DRIVE_BACKUP_TOKEN_JSON", "")
     drive_backup_token_file: str = os.getenv("GOOGLE_DRIVE_BACKUP_TOKEN_FILE", "drive-backup-token.json")
     reconciliation_lookback_months: int = int(os.getenv("RECONCILIATION_LOOKBACK_MONTHS", "6"))
+    bank_internal_transfers_json: str = field(default_factory=lambda: os.getenv(
+        "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON", "[]",
+    ))
     gmail_token_json: str = os.getenv("GOOGLE_GMAIL_TOKEN_JSON", "")
     aupay_gmail_query: str = os.getenv("AUPAY_GMAIL_QUERY") or (
         'in:anywhere from:info@wallet.auone.jp '
@@ -52,6 +55,30 @@ class Settings:
             with open(self.drive_backup_token_file, encoding="utf-8") as handle:
                 return handle.read()
         return ""
+
+    def bank_confirmed_internal_transfers(self) -> frozenset[tuple[str, str]]:
+        try:
+            values = json.loads(self.bank_internal_transfers_json)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON must be a JSON array"
+            ) from exc
+        if not isinstance(values, list) or any(
+            not isinstance(value, dict)
+            or set(value) != {"description", "direction"}
+            or not isinstance(value["description"], str)
+            or not value["description"].strip()
+            or value["direction"] not in {"incoming", "outgoing"}
+            for value in values
+        ):
+            raise RuntimeError(
+                "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON must contain exact "
+                "description/direction objects"
+            )
+        return frozenset(
+            (value["description"].strip(), value["direction"])
+            for value in values
+        )
 
 
 def service_account_source() -> tuple[str|None, dict|None]:

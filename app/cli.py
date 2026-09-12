@@ -249,6 +249,9 @@ def main():
         print(json.dumps(
             BankPdfShadowPipeline(db).preview(
                 args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
             ),
             ensure_ascii=False,sort_keys=True,
         ))

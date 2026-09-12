@@ -289,9 +289,20 @@ python -m app.cli bank-pdf-shadow-preview statement.pdf --account-alias jibun-pr
 分類と照合は分離される。au PAYカード引落は `card_settlement` のまま、明示的な
 statement-total authorityがなければ `identified_unlinked` とし、通常支出へ落とさない。
 PayPayは摘要に明示される場合だけ照合対象にする。日付・同額だけの既存購入row、
-個別カード購入の合算、摘要の部分一致は照合根拠にしない。給与・賞与・利息、明確な
+個別カード購入の合算、摘要の部分一致は照合根拠にしない。給与・賞与・利息・銀行の
+特典／金利優遇、明確な
 口座振替、確認済みの資金移動以外は安全側に `needs_review` とする。出力は分類・照合・
 review reasonの件数のみで、取引内容、個別金額、残高、照合identityは表示しない。
+`loan_repayment` と `cash_withdrawal` は意味が明確な分類として保持するが、write候補には
+しない。`income` と `expense` のみを将来のpreview候補とし、classificationと
+write eligibilityを別フィールドで集計する。
+
+operatorが所有関係を確認した自口座transferのexact descriptionとdirectionは、Git管理外の
+`.env` にJSON配列で設定できる。名称の部分一致や同姓名・同額・反復回数はauthorityにしない:
+
+```dotenv
+BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON=[]
+```
 
 ## Google DriveからPayPay CSVを取り込む
 

@@ -1,6 +1,8 @@
 import json
 import sys
 
+import pytest
+
 from app.bank_pdf_pipeline import (
     BankPdfResult,
     NormalizedBankTransaction,
@@ -15,6 +17,7 @@ from app.bank_reconciliation import (
 )
 from app.cli import main
 from app.reconciliation import parse_import_rows
+from app.settings import Settings
 
 
 def bank(description, amount=-1000, identity="bank:1"):
@@ -86,12 +89,21 @@ def test_salary_bonus_and_interest_are_clear_income():
         assert decision.reason == reason
 
 
+def test_explicit_bank_reward_is_income_not_transfer_candidate():
+    for description in ("振込 キヤンペーントクテン", "振込 マトメテキンリユウグウ"):
+        decision = classify_bank_transaction(bank(description, 1000))
+        assert decision.classification == "income"
+        assert decision.reason == "bank_reward"
+
+
 def test_confirmed_internal_transfer_requires_exact_configured_description():
     transaction = bank("振込 匿名資金移動", 1000)
     unconfirmed = classify_bank_transaction(transaction)
     confirmed = classify_bank_transaction(
         transaction,
-        confirmed_internal_descriptions=frozenset({"振込 匿名資金移動"}),
+        confirmed_internal_transfers=frozenset({
+            ("振込 匿名資金移動", "incoming"),
+        }),
     )
 
     assert unconfirmed.classification == "needs_review"
@@ -99,8 +111,38 @@ def test_confirmed_internal_transfer_requires_exact_configured_description():
     assert confirmed.classification == "transfer"
     assert confirmed.reason == "confirmed_internal_transfer"
 
+    wrong_direction = classify_bank_transaction(
+        bank("振込 匿名資金移動", -1000),
+        confirmed_internal_transfers=frozenset({
+            ("振込 匿名資金移動", "incoming"),
+        }),
+    )
+    assert wrong_direction.classification == "needs_review"
 
-def test_ambiguous_transfer_and_atm_withdrawal_are_not_expenses():
+
+def test_private_transfer_config_requires_exact_description_and_direction():
+    settings = Settings(bank_internal_transfers_json=json.dumps([
+        {"description": "振込 匿名資金移動", "direction": "incoming"},
+    ], ensure_ascii=False))
+
+    assert settings.bank_confirmed_internal_transfers() == frozenset({
+        ("振込 匿名資金移動", "incoming"),
+    })
+
+
+@pytest.mark.parametrize("value", [
+    "not-json",
+    '["description only"]',
+    '[{"description":"匿名","direction":"both"}]',
+])
+def test_private_transfer_config_fails_closed(value):
+    settings = Settings(bank_internal_transfers_json=value)
+
+    with pytest.raises(RuntimeError, match="BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON"):
+        settings.bank_confirmed_internal_transfers()
+
+
+def test_ambiguous_transfer_and_atm_withdrawal_have_separate_semantics():
     transfer = classify_bank_transaction(bank("振込 匿名宛先"))
     atm = classify_bank_transaction(bank("ATM 現金引出"))
 
@@ -108,8 +150,17 @@ def test_ambiguous_transfer_and_atm_withdrawal_are_not_expenses():
         "needs_review", "ambiguous_outgoing_transfer",
     )
     assert (atm.classification, atm.reason) == (
-        "needs_review", "cash_withdrawal",
+        "cash_withdrawal", "atm_cash_withdrawal",
     )
+
+
+def test_loan_repayment_is_separate_and_withheld_from_write_preview():
+    decision = reconcile(bank("約定返済"))
+
+    assert decision.classification.classification == "loan_repayment"
+    assert decision.classification.reason == "contractual_loan_repayment"
+    assert decision.reconciliation_status == "not_applicable"
+    assert decision.write_eligibility == "withheld"
 
 
 def test_paypay_candidate_matches_only_explicit_transfer_authority():
@@ -169,9 +220,13 @@ def test_shadow_summary_contains_only_counts_and_reason_taxonomy():
     summary = build_bank_shadow_result(parsed, []).summary()
 
     assert summary["classification"]["card_settlement"] == 1
-    assert summary["classification"]["needs_review"] == 1
+    assert summary["classification"]["cash_withdrawal"] == 1
+    assert summary["classification"]["needs_review"] == 0
     assert summary["reconciliation"]["identified_unlinked"] == 1
-    assert summary["needs_review_reasons"] == {"cash_withdrawal": 1}
+    assert summary["needs_review_reasons"] == {}
+    assert summary["write_eligibility"] == {
+        "preview_candidate": 0, "withheld": 2,
+    }
     rendered = repr(summary)
     assert "AU PAY" not in rendered
     assert "現金引出" not in rendered
@@ -201,6 +256,19 @@ def test_replay_is_counted_without_changing_classification(monkeypatch):
 
     assert summary["duplicate"] == 1
     assert summary["classification"]["expense"] == 1
+    assert summary["write_eligibility"] == {
+        "preview_candidate": 0, "withheld": 1,
+    }
+
+
+def test_income_and_expense_are_only_preview_candidates():
+    income = reconcile(bank("給与 匿名勤務先", 1000))
+    expense = reconcile(bank("口座振替 公共サービス"))
+    cash = reconcile(bank("ATM 現金引出"))
+
+    assert income.write_eligibility == "preview_candidate"
+    assert expense.write_eligibility == "preview_candidate"
+    assert cash.write_eligibility == "withheld"
 
 
 def test_shadow_cli_uses_read_only_sheets_and_prints_summary(monkeypatch, capsys):
