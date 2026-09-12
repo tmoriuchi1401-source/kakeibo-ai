@@ -59,7 +59,8 @@ must be complete and match the exact source digest or parsing stops.
 
 ## Phase checkpoint
 
-Phase 1 decision: **B — implementation ready, real-receipt evaluation pending**.
+Phase 1 decision: **A — ship the read-only preview behind human review; keep
+production writes disabled**.
 
 - Synthetic, human-readable layouts: 8/8 minimum-field success.
 - Local runtime materialization check: 2/6 ready with exact ground truth and 4/6
@@ -70,9 +71,18 @@ Phase 1 decision: **B — implementation ready, real-receipt evaluation pending*
 - Safety cases: non-total money excluded; Medical input privacy-blocked; arbitrary
   non-receipt rejected; incomplete RapidOCR observation rejected; low-confidence
   selected merchant rejected from the write plan.
-- Remaining: evaluate 5–10 user-provided ordinary receipts with human-confirmed
-  ground truth. No ordinary receipt media was present in the local workspace;
-  the available private fixtures are Medical and must not be repurposed.
-- Next-phase cost/benefit: high value and low scope. A small local fixture set is
-  enough to tune only observed labels/layouts before considering any product-line
-  extraction or production write path.
+- Private real-receipt evaluation: 8 ordinary receipts plus 2 medical controls,
+  all visually checked before comparison. The media and raw OCR stayed in the
+  ignored local evaluation directory and were not added to Git.
+- Ordinary receipts: 2/8 produced an exact minimum-field preview; 6/8 stopped at
+  review/not-receipt/privacy-blocked because OCR could not safely establish every
+  required field. No incorrect preview was placed in the write plan.
+- Medical controls: 2/2 were blocked before general parsing (one `medical`, one
+  fail-closed `sensitive_unknown`). No external AI was used in any evaluation.
+- Observed tuning stayed bounded: transaction-copy evidence, invalid/whitespace
+  thousands separators, tax/deposit total exclusions, explicit corporate
+  merchant lines, trailing OCR punctuation, and all-conflicting-date review.
+- Next-phase cost/benefit: local OCR quality is now the limiting factor. Improving
+  rotation/preprocessing or the already-bound RapidOCR route is higher value than
+  broadening amount or merchant guesses. Product-line extraction and production
+  writes remain out of scope.

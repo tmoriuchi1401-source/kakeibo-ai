@@ -46,7 +46,7 @@ _TOTAL_LABELS: tuple[tuple[str, int], ...] = (
 )
 _NEGATIVE_TOTAL_CONTEXT = (
     "小計", "税抜", "消費税", "外税", "内税", "預り", "お預り", "釣銭", "お釣り",
-    "ポイント", "クーポン", "値引", "割引", "残高", "税額",
+    "ポイント", "クーポン", "値引", "割引", "残高", "税額", "税合計", "入金額合計",
 )
 _MERCHANT_NOISE = (
     "領収書", "レシート", "receipt", "お買上", "毎度", "ありがとう", "合計", "小計",
@@ -55,7 +55,12 @@ _MERCHANT_NOISE = (
 )
 _MERCHANT_HINTS = ("店", "ストア", "マーケット", "スーパー", "マート", "薬局", "株式会社", "有限会社")
 _AMOUNT = re.compile(
-    r"(?<![0-9A-Za-z])(?:[¥￥]\s*)?([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{1,9})(?:\s*円|\s*[-―ー])?(?![0-9A-Za-z])"
+    r"(?<![0-9A-Za-z,，.])(?:[¥￥]\s*)?([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{1,9})(?:\s*円|\s*[-―ー])?(?![0-9A-Za-z,，.])"
+)
+_CURRENCY_AMOUNT = re.compile(
+    r"(?<![0-9A-Za-z,，.])[¥￥\\]\s*"
+    r"([0-9０-９]{1,3}(?:[,，.]\s*[0-9０-９]{3})+|[0-9０-９]{1,9})"
+    r"(?:\s*円|\s*[-―ー])?(?![0-9A-Za-z,，.])"
 )
 _DATE_PATTERNS = (
     re.compile(r"(?<!\d)(20\d{2})[年/\.\-]\s*(\d{1,2})[月/\.\-]\s*(\d{1,2})日?(?!\d)"),
@@ -138,8 +143,10 @@ def _evidence(source_sha256: str, kind: str, line_index: int, value: object) -> 
 def _amounts(line: str) -> tuple[int, ...]:
     values = []
     normalized = unicodedata.normalize("NFKC", line)
-    for match in _AMOUNT.finditer(normalized):
-        token = match.group(1).replace(",", "")
+    currency_matches = tuple(_CURRENCY_AMOUNT.finditer(normalized))
+    matches = currency_matches or tuple(_AMOUNT.finditer(normalized))
+    for match in matches:
+        token = re.sub(r"[,，.\s]", "", match.group(1))
         try:
             value = int(token)
         except ValueError:
@@ -217,10 +224,27 @@ def extract_date_candidates(text: str, source_sha256: str) -> tuple[FieldCandida
 
 def extract_merchant_candidates(text: str, source_sha256: str) -> tuple[FieldCandidate, ...]:
     found: dict[str, FieldCandidate] = {}
-    for index, raw in enumerate(text.splitlines()[:12]):
-        value = unicodedata.normalize("NFKC", raw).strip(" \t|:：*#")
+    lines = text.splitlines()
+    candidates = list(enumerate(lines[:12]))
+    candidates.extend(
+        (index, raw) for index, raw in enumerate(lines[12:], start=12)
+        if any(hint in _compact(raw) for hint in ("株式会社", "有限会社"))
+    )
+    for index, raw in candidates:
+        value = unicodedata.normalize("NFKC", raw).strip(
+            " \t|:：*#\"'”“’‘()（）[]【】<>＜＞=~"
+        )
         compact = _compact(value).casefold()
         if not (2 <= len(compact) <= 80) or any(term in compact for term in _MERCHANT_NOISE):
+            continue
+        if len(compact) < 3 and compact.isascii():
+            continue
+        latin_tokens = re.findall(r"[A-Za-z]+", value)
+        if (
+            latin_tokens
+            and re.fullmatch(r"[A-Za-z\s]+", value)
+            and sum(len(token) < 3 for token in latin_tokens) >= 2
+        ):
             continue
         digits = sum(char.isdigit() for char in compact)
         if digits > max(3, len(compact) // 2) or _amounts(value):
@@ -229,11 +253,13 @@ def extract_merchant_candidates(text: str, source_sha256: str) -> tuple[FieldCan
             continue
         # Receipt headers strongly favour reading order.  A generic branch line
         # such as "中央店" must not outrank the brand printed directly above it.
-        score = 60 - index * 4
+        score = 60 - min(index, 12) * 4
         if index <= 2:
             score += 8
         if any(hint in compact for hint in _MERCHANT_HINTS):
             score += 6
+        if "株式会社" in compact or "有限会社" in compact:
+            score = max(score + 30, 75)
         if re.search(r"[A-Za-z]{3}", value) and value.upper() == value:
             score += 12
         if "住所" in compact or re.search(r"\d{2,}[-ー]\d", compact):
@@ -319,7 +345,7 @@ def preview_general_receipt_text(
     dates = extract_date_candidates(text, digest)
     merchants = extract_merchant_candidates(text, digest)
     totals = extract_total_candidates(text, digest)
-    selected_date, date_ambiguous = _select(dates)
+    selected_date, date_ambiguous = _select(dates, margin=10_000)
     selected_merchant, merchant_ambiguous = _select(merchants, margin=5)
     selected_total, total_ambiguous = _select(totals, margin=10_000)
     issues = []

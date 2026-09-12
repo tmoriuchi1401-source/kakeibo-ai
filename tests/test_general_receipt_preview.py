@@ -85,6 +85,49 @@ def test_non_total_monetary_context_never_becomes_total(line):
     assert extract_total_candidates(line, "a" * 64) == ()
 
 
+def test_real_ocr_tax_total_is_excluded_and_currency_grouping_is_bounded():
+    text = "合計/ 11点 ¥3. 788\n(税合計 ¥313)"
+
+    candidates = extract_total_candidates(text, "a" * 64)
+
+    assert tuple(candidate.value for candidate in candidates) == (3788,)
+
+
+def test_invalid_grouping_is_review_instead_of_partial_total():
+    assert extract_total_candidates(r"合計 \5,4065", "a" * 64) == ()
+
+
+def test_real_ocr_deposit_total_is_not_final_total():
+    text = "入金額合計 6,367\n合計 ¥6, 365"
+
+    candidates = extract_total_candidates(text, "a" * 64)
+
+    assert tuple(candidate.value for candidate in candidates) == (6365,)
+
+
+def test_payment_detail_and_customer_copy_are_normal_receipt_evidence():
+    assert classify_receipt_text("決済利用明細\n総合計 530円").classification == "normal"
+    assert classify_receipt_text("お客様控え\nコード決済支払\n金額 394円").classification == "normal"
+
+
+def test_explicit_corporate_merchant_can_be_below_header():
+    result = preview_general_receipt_text(
+        "読取ノイズ\n2026/08/29\n合計 6,365円\n株式会社 ベルク",
+        source_id="corporate",
+    )
+
+    assert result.merchant == "株式会社 ベルク"
+
+
+def test_trailing_ocr_punctuation_is_removed_from_merchant():
+    result = preview_general_receipt_text(
+        "STARBUCKS”\n決済利用明細\n2026/09/10\n総合計 206円",
+        source_id="punctuation",
+    )
+
+    assert result.merchant == "STARBUCKS"
+
+
 def test_conflicting_total_candidates_require_review_and_withhold_total():
     result = preview_general_receipt_text(
         "青空ストア\n2026/09/01\n合計 1,000円\nお支払金額 900円",
