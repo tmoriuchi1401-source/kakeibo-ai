@@ -152,6 +152,7 @@ jobs:
               --approved-target "$APPROVED_TARGET" \
               --expected-event-rows "$EXPECTED_EVENT_ROWS" \
               --expected-header-rows "$EXPECTED_HEADER_ROWS"
+          fi
       - name: Save post-run durable state
         if: ${{ always() && (inputs.apply || inputs.recurring_preview || github.event_name == 'schedule') }}
         uses: actions/cache/save@v4
