@@ -8,7 +8,6 @@ from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
-from .general_receipt_preview import GeneralReceiptPreviewPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
 from .drive_paypay import DrivePayPayPipeline
@@ -274,6 +273,7 @@ def main():
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="general-receipt-preview":
+        from .general_receipt_preview import GeneralReceiptPreviewPipeline
         data=open(args.file,"rb").read()
         mime=mimetypes.guess_type(args.file)[0] or "image/jpeg"
         db=None
