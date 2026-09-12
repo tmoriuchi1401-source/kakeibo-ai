@@ -1,17 +1,64 @@
-name: Manual Amazon daily import
+name: Amazon bounded production flow
 
 on:
   workflow_dispatch:
+    inputs:
+      recurring_preview:
+        description: Preview the new-mail recurring window without writes
+        required: true
+        type: boolean
+        default: false
+      apply:
+        description: Apply a canary (off is a read-only bounded preview)
+        required: true
+        type: boolean
+        default: false
+      lookback_days:
+        description: Read-only preview lookback (1-370 days)
+        required: true
+        type: number
+        default: 30
+      apply_limit:
+        description: Maximum purchases for this canary
+        required: true
+        type: number
+        default: 1
+      approved_window_start:
+        description: Approved preview window start (required for apply)
+        required: false
+        type: string
+      approved_window_end:
+        description: Approved preview window end (required for apply)
+        required: false
+        type: string
+      approved_target:
+        description: Approved anonymized order reference (required for apply)
+        required: false
+        type: string
+      expected_event_rows:
+        description: Approved new event row count
+        required: false
+        type: number
+        default: 0
+      expected_header_rows:
+        description: Approved new header row count
+        required: false
+        type: number
+        default: 0
   schedule:
-    - cron: '17 */3 * * *'
+    - cron: '23 20 * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: amazon-bounded-production
+  cancel-in-progress: false
+
 jobs:
   import:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     env:
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -21,7 +68,94 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
+          cache: pip
       - run: pip install -r requirements.txt
-      - name: Import Amazon Gmail events and order headers
-        run: python -m app.cli amazon-daily-import
+      - name: Restore latest durable run state
+        if: inputs.apply || inputs.recurring_preview || github.event_name == 'schedule'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: amazon-production-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            amazon-production-state-
+      - name: Read-only bounded write-plan preview
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.apply && !inputs.recurring_preview }}
+        run: >-
+          python -m app.cli amazon-production-preview
+          --lookback-days "${{ inputs.lookback_days }}"
+          --max-results 100
+      - name: Materialize protected recurring authority
+        if: inputs.apply || inputs.recurring_preview || github.event_name == 'schedule'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_APPLY: ${{ inputs.apply || false }}
+          RECURRING_PREVIEW: ${{ inputs.recurring_preview || false }}
+          APPROVED_WINDOW_START: ${{ inputs.approved_window_start }}
+          APPROVED_WINDOW_END: ${{ inputs.approved_window_end }}
+          APPROVED_TARGET: ${{ inputs.approved_target }}
+        run: |
+          set -euo pipefail
+          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_GMAIL_TOKEN_JSON; do
+            test -n "${!name}" || { echo "Required secret is not configured: $name"; exit 1; }
+          done
+          if [[ "$MANUAL_APPLY" == "true" && "$RECURRING_PREVIEW" == "true" ]]; then
+            echo "apply and recurring_preview are mutually exclusive"
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$MANUAL_APPLY" == "true" ]]; then
+            test -n "$APPROVED_WINDOW_START" || { echo "approved_window_start is required"; exit 1; }
+            test -n "$APPROVED_WINDOW_END" || { echo "approved_window_end is required"; exit 1; }
+            test -n "$APPROVED_TARGET" || { echo "approved_target is required"; exit 1; }
+            POLICY_ID="amazon-canary-v1"
+            INITIAL_START="$APPROVED_WINDOW_START"
+            OVERLAP_SECONDS=0
+            MAX_WINDOW_SECONDS=2764800
+          else
+            POLICY_ID="amazon-daily-v1"
+            INITIAL_START="2026-09-12T12:26:44+09:00"
+            OVERLAP_SECONDS=7200
+            MAX_WINDOW_SECONDS=259200
+          fi
+          AMAZON_STATE_DIR="$RUNNER_TEMP/amazon-production-state"
+          AMAZON_RECURRING_AUTHORITY_FILE="$RUNNER_TEMP/amazon-recurring-authority.json"
+          {
+            echo "AMAZON_STATE_DIR=$AMAZON_STATE_DIR"
+            echo "AMAZON_RECURRING_AUTHORITY_FILE=$AMAZON_RECURRING_AUTHORITY_FILE"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$AMAZON_STATE_DIR"
+          umask 077
+          printf '{"policy_id":"%s","source":"amazon_gmail","expected_spreadsheet_id":"%s","max_messages":100,"max_purchases":3,"overlap_seconds":%s,"max_window_seconds":%s,"initial_start":"%s","valid_from":"2026-08-01T00:00:00+09:00","expires_at":"2027-09-13T00:00:00+09:00"}' \
+            "$POLICY_ID" "$SPREADSHEET_ID" "$OVERLAP_SECONDS" "$MAX_WINDOW_SECONDS" "$INITIAL_START" > "$AMAZON_RECURRING_AUTHORITY_FILE"
+      - name: Run bounded recurring ingestion or canary
+        if: inputs.apply || inputs.recurring_preview || github.event_name == 'schedule'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_APPLY: ${{ inputs.apply || false }}
+          RECURRING_PREVIEW: ${{ inputs.recurring_preview || false }}
+          APPLY_LIMIT: ${{ inputs.apply_limit }}
+          APPROVED_WINDOW_END: ${{ inputs.approved_window_end }}
+          APPROVED_TARGET: ${{ inputs.approved_target }}
+          EXPECTED_EVENT_ROWS: ${{ inputs.expected_event_rows }}
+          EXPECTED_HEADER_ROWS: ${{ inputs.expected_header_rows }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            python -m app.cli amazon-gmail-recurring --apply
+          elif [[ "$RECURRING_PREVIEW" == "true" ]]; then
+            python -m app.cli amazon-gmail-recurring --dry-run
+          else
+            python -m app.cli amazon-gmail-recurring --apply \
+              --apply-limit "$APPLY_LIMIT" \
+              --now "$APPROVED_WINDOW_END" \
+              --approved-target "$APPROVED_TARGET" \
+              --expected-event-rows "$EXPECTED_EVENT_ROWS" \
+              --expected-header-rows "$EXPECTED_HEADER_ROWS"
+          fi
+      - name: Save post-run durable state
+        if: ${{ always() && (inputs.apply || inputs.recurring_preview || github.event_name == 'schedule') }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: amazon-production-state-${{ github.run_id }}-${{ github.run_attempt }}

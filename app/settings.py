@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64, json, os, tempfile
 from pathlib import Path
 from dataclasses import dataclass
+from dataclasses import field
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +35,10 @@ class Settings:
     medical_review_shadow_enabled: bool = os.getenv(
         "MEDICAL_REVIEW_SHADOW_ENABLED", "false"
     ).strip().lower() in {"1", "true", "yes", "on"}
+    aupay_card_gmail_query: str = field(default_factory=lambda: os.getenv("AUPAY_CARD_GMAIL_QUERY") or (
+        'in:anywhere from:kddi-fs.com '
+        'subject:"【ご利用詳細】au PAY カード" newer_than:30d'
+    ))
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,

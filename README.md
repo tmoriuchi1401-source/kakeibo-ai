@@ -143,8 +143,105 @@ python -m app.cli card-eml-import "【ご利用詳細】au PAY カード.eml"
 一意キーにする。オートチャージ、Amazon、その他利用の判定はカードCSVと同じ
 ルールを使用する。
 
+カード利用詳細をGmailから読む場合は、残高通知用の `AUPAY_GMAIL_QUERY` とは別の
+`AUPAY_CARD_GMAIL_QUERY` を設定する。まず書込みを行わない確認を実行する:
+
+```bash
+python -m app.cli card-gmail-preview --max-results 100
+```
+
+旧raw Gmail import経路は安全境界で無効化されており、次のコマンドは書込み前に
+明示的に拒否される。raw transactionはproduction apply authorityではない。
+
+```bash
+python -m app.cli card-gmail-import --max-results 100
+```
+
 伝票番号を `aupay:<伝票番号>` という取込IDにするため、同じメールを何度検索しても
 二重登録されない。必須項目が欠けるメールは自動登録せず `needs_review` として集計する。
+
+次の保存候補を、GmailとSheetsの読み取りだけで評価するには:
+
+```bash
+python -m app.cli card-gmail-write-plan-preview --max-results 5000
+```
+
+write-planのtransaction schemaは `schema_version`, `source`, `source_record_id`,
+`transaction_date`, `merchant`, `amount_yen`, `payment_method`, `identity`,
+`business_fingerprint`, `memo` である。identityはRFC Message-IDのハッシュと明細番号
+からなるカードメール固有キーで、同じメールの再処理と期間重複取得を吸収する。
+日付・店舗・金額・支払方法・会員・明細番号から作るbusiness fingerprintは監査と
+collision検知に使い、同日同額の別取引を自動重複扱いしない。不明な必須項目やidentity
+collisionはinsertせずreview/rejectedとして停止する。
+
+別Message-IDで同じ明細が再送された場合もsource identityは変更しない。日付・金額・
+merchant・会員区分・メール内明細番号を含むbusiness fingerprintが完全一致し、
+Message-ID由来部分だけが異なる明細を `probable_resend` として束ね、全source identityを
+evidenceとして保持しながらcanonical 1件だけをwrite-plan候補へ投影する。明細番号が
+異なる同日同額同merchant取引は別取引のまま保持する。
+
+既存カードCSVとは日付・金額・正規化merchantで比較し、一意なら
+`cross_source_strong_match`、候補が複数またはmerchant不一致なら
+`cross_source_ambiguous`、候補なしなら `cross_source_no_match` とする。これはpreview
+evidenceであり、この段階では自動duplicate authorityではない。Gmail読み取りは間隔を
+空け、429、一時的rate-limit 403、一時的5xxだけを指数backoff付きで最大6回試行する。
+
+reconciliation済みcanonical projectionのproduction apply候補を安全に評価するには:
+
+```bash
+python -m app.cli card-gmail-apply-plan-preview --max-results 5000
+```
+
+このapply-plan previewもGmail/Sheetsの読み取りだけを行い、writerは呼ばない。
+collection途中終了、Gmail list/read failure、identity collision、reconciliation不整合は
+global blockerとしてplan全体のcandidateを空にする。return、CSV ambiguous、exact既存Gmail
+identity、item-level reviewはcanonical item単位でwithholdし、安全gateを通過したpurchaseと
+同じplan内で監査できる。strong matchはevidenceのままでduplicate authorityにはせず、
+no-matchと同様にcandidateになれる。candidate、withheld、duplicate、reviewの排他的statusと
+canonical総数のaccounting invariantもsummaryへ出力する。将来のexecutor境界はsafe plan型と
+明示的なapply指定を必須とする。
+
+previewはplan作成後にSheets identityをもう一度読み、executor直前の状態を
+`still_new`、`already_present_exact`、`conflict`、`revalidation_failure`として再検証する。
+このPhaseのexecutorにはwriterが存在せず、`apply=True`でも
+`apply_blocked_writer_unavailable`となる。timeout等で前回結果が不明な
+`outcome_unknown`はblind retryせず、再読で存在・不在・判定不能を確定する。
+詳細な状態遷移、鍵付きaudit reference、deterministic canary contractは
+[`docs/aupay_card_executor_contract.md`](docs/aupay_card_executor_contract.md)を参照。
+
+production writerのwrite-adjacent safety layerは固定source window、target binding、
+persistent HMAC key、attempt journal、exclusive lease、最大100件のbounded batch、
+write前journalとwrite後exact read-backをcontract化している。repo外protected key adapter、
+SQLite durable journal / immutable manifest / cross-process lease、fixed-range Sheets adapter、
+repo外承認fileと短命one-shot capabilityも実装済みである。人手承認を要するhistorical
+one-shot canaryは引き続きCLIへ公開しない。一方、通常の新着だけを対象とするbounded recurring
+authorityと専用CLIは `card-gmail-recurring` として分離実装している。前回成功endからJSTの
+absolute epoch windowを作り、overlapを既存identityで除外し、new=0ではmanifest/capabilityを
+作成しない。scheduled production、必要secret、failure recoveryの詳細は
+[`docs/aupay_card_recurring_production.md`](docs/aupay_card_recurring_production.md)を参照。
+永続化とsealの詳細は
+[`docs/aupay_card_production_persistence.md`](docs/aupay_card_production_persistence.md)、基本contractは
+[`docs/aupay_card_writer_safety_contract.md`](docs/aupay_card_writer_safety_contract.md)を参照。
+
+Amazon注文確認メールの本番候補は、書込み前に次の読み取り専用コマンドで確認する。
+
+```bash
+python -m app.cli amazon-production-preview --lookback-days 30 --max-results 100
+```
+
+取消・返品・返金・曖昧金額・parser failureは自動支出へ進めず、注文IDと固定支出IDで
+期間重複を排除する。canary、bounded authority、JST checkpoint、CSV商品明細への昇格時の
+二重計上防止は
+[`docs/amazon_recurring_production.md`](docs/amazon_recurring_production.md)を参照。
+
+カードメールの明細parseはmail-level resultの中でaccepted itemとprivacy-safeなreview
+itemを分離する。正額は `purchase` として正数を保持し、対象明細block自身が
+`-<金額>円(返品)` の形式と返品evidenceを持つ場合だけ `return` として負号を保持する。
+メール内に返品という語があるだけでは、同居する正額明細をreturnへ変更しない。
+未知の負額形式や必須field欠落はitem番号・reason code・field reasonだけをreview evidence
+として保持し、merchantや本文は保存しない。正常な兄弟明細はreconciliation inputへ残る。
+partial parse reviewは別manifestへ隔離し、return canonicalは全件 `withheld_return` として
+candidateから除外するため、いずれもproduction writerへは到達しない。
 
 ## 取込データの統合・重複排除
 

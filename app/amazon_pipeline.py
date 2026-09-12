@@ -4,6 +4,7 @@ import pandas as pd
 from .gemini_ai import GeminiAI
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
+from .auto_expense import expense_id as canonical_expense_id
 
 def money(v)->int:
     if pd.isna(v): return 0
@@ -185,6 +186,16 @@ class AmazonPipeline:
         self.db.update_rows("Amazon注文",update_rows)
         if materialized:
             self.db.ensure_expense_status_column()
+        # Gmail production initially records a safe order-total expense.  When the
+        # item CSV later arrives, retire that aggregate before activating details.
+        materialized_order_ids={str(r["Order ID"]) for r,_ in materialized}
+        for order_id in sorted(materialized_order_ids):
+            aggregate_id=canonical_expense_id(f"amazon:{order_id}")
+            for row_num,raw in self.db.expense_rows_for_import(f"amazon:{order_id}"):
+                row=list(raw)+[""]*max(0,13-len(raw))
+                if row[0]==aggregate_id and row[12] != "superseded_amazon_items":
+                    row[12]="superseded_amazon_items"
+                    expense_updates.append((row_num,row[:13]))
         self.db.append("支出明細",expense_new)
         self.db.update_rows("支出明細",expense_updates)
 

@@ -1,0 +1,81 @@
+name: au PAY card recurring production
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply new eligible items (off is a read-only preview)
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    - cron: '23 20 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aupay-card-recurring-production
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
+      AUPAY_CARD_AUDIT_KEY_JSON: ${{ secrets.AUPAY_CARD_AUDIT_KEY_JSON }}
+      AUPAY_CARD_RECURRING_AUTHORITY_JSON: ${{ secrets.AUPAY_CARD_RECURRING_AUTHORITY_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Restore latest durable run state
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aupay-card-production-state
+          key: aupay-card-production-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            aupay-card-production-state-
+      - run: pip install -r requirements.txt
+      - name: Materialize protected authority inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_GMAIL_TOKEN_JSON AUPAY_CARD_AUDIT_KEY_JSON AUPAY_CARD_RECURRING_AUTHORITY_JSON; do
+            test -n "${!name}" || { echo "Required secret is not configured: $name"; exit 1; }
+          done
+          AUPAY_CARD_STATE_DIR="$RUNNER_TEMP/aupay-card-production-state"
+          AUPAY_CARD_AUDIT_KEY_FILE="$RUNNER_TEMP/aupay-card-audit-key.json"
+          AUPAY_CARD_RECURRING_AUTHORITY_FILE="$RUNNER_TEMP/aupay-card-recurring-authority.json"
+          {
+            echo "AUPAY_CARD_STATE_DIR=$AUPAY_CARD_STATE_DIR"
+            echo "AUPAY_CARD_AUDIT_KEY_FILE=$AUPAY_CARD_AUDIT_KEY_FILE"
+            echo "AUPAY_CARD_RECURRING_AUTHORITY_FILE=$AUPAY_CARD_RECURRING_AUTHORITY_FILE"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$AUPAY_CARD_STATE_DIR"
+          umask 077
+          printf '%s' "$AUPAY_CARD_AUDIT_KEY_JSON" > "$AUPAY_CARD_AUDIT_KEY_FILE"
+          printf '%s' "$AUPAY_CARD_RECURRING_AUTHORITY_JSON" > "$AUPAY_CARD_RECURRING_AUTHORITY_FILE"
+      - name: Run bounded incremental ingestion
+        shell: bash
+        env:
+          MANUAL_APPLY: ${{ inputs.apply || false }}
+        run: |
+          set -euo pipefail
+          args=()
+          event="${{ github.event_name }}"
+          if [[ "$event" == "workflow_dispatch" && "$MANUAL_APPLY" != "true" ]]; then
+            args+=(--dry-run)
+          fi
+          python -m app.cli card-gmail-recurring "${args[@]}"
+      - name: Save post-run durable state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/aupay-card-production-state
+          key: aupay-card-production-state-${{ github.run_id }}-${{ github.run_attempt }}
