@@ -93,6 +93,7 @@ from .amazon_production import (
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 from .bank_pdf_pipeline import BankPdfPipeline
+from .bank_reconciliation import BankPdfShadowPipeline
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -215,6 +216,9 @@ def main():
     bank_pdf=sub.add_parser("bank-pdf-preview")
     bank_pdf.add_argument("pdf")
     bank_pdf.add_argument("--account-alias",default="jibun-primary")
+    bank_shadow=sub.add_parser("bank-pdf-shadow-preview")
+    bank_shadow.add_argument("pdf")
+    bank_shadow.add_argument("--account-alias",default="jibun-primary")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -237,6 +241,15 @@ def main():
     elif args.cmd=="bank-pdf-preview":
         print(json.dumps(
             BankPdfPipeline().preview(args.pdf,account_alias=args.account_alias),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-shadow-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankPdfShadowPipeline(db).preview(
+                args.pdf,account_alias=args.account_alias,
+            ),
             ensure_ascii=False,sort_keys=True,
         ))
     elif args.cmd=="init":

@@ -403,6 +403,20 @@ def materialize_native_pdf(path: str | Path) -> list[PageGeometry]:
 
 
 class BankPdfPipeline:
+    def parse(
+        self,
+        path: str | Path,
+        *,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        existing_identities: set[str] | None = None,
+    ) -> BankPdfResult:
+        pages = materialize_native_pdf(path)
+        return parse_jibun_bank_pages(
+            pages,
+            account_alias=account_alias,
+            existing_identities=existing_identities,
+        )
+
     def preview(
         self,
         path: str | Path,
@@ -410,9 +424,8 @@ class BankPdfPipeline:
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
         existing_identities: set[str] | None = None,
     ) -> dict[str, int | dict[str, int] | str]:
-        pages = materialize_native_pdf(path)
-        return parse_jibun_bank_pages(
-            pages,
+        return self.parse(
+            path,
             account_alias=account_alias,
             existing_identities=existing_identities,
         ).summary()

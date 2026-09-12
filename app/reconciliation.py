@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .sheets import SheetsDB
+from .transaction_plan import Transaction
 from .utils import normalize_store
 
 
@@ -29,6 +30,53 @@ class ReconcileDecision:
     target_id: str
     candidate_ids: tuple[str, ...]
     reason: str
+
+
+@dataclass(frozen=True)
+class ExactAuthorityMatch:
+    """Result of matching against explicitly authoritative source rows.
+
+    Ordinary purchases are intentionally ineligible.  A caller must name the
+    source/status pairs that carry aggregate or transfer authority.
+    """
+
+    state: str
+    matched_source: str = ""
+    matched_identity: str = ""
+
+
+def match_exact_import_authority(
+    subject: Transaction,
+    transactions: list[ImportTransaction],
+    *,
+    source_priority: tuple[str, ...],
+    authority_statuses: dict[str, frozenset[str]],
+) -> ExactAuthorityMatch:
+    """Match one canonical transaction without fuzzy or inferred evidence.
+
+    Exact date and amount are necessary but not sufficient: the existing row
+    must also have an explicitly authoritative status for its source.  Multiple
+    candidates fail closed instead of selecting one.
+    """
+    wanted_amount = abs(subject.amount_yen)
+    for source in source_priority:
+        statuses = authority_statuses.get(source, frozenset())
+        if not statuses:
+            continue
+        candidates = [
+            transaction for transaction in transactions
+            if transaction.source == source
+            and transaction.status in statuses
+            and transaction.date == subject.transaction_date
+            and abs(transaction.amount) == wanted_amount
+        ]
+        if len(candidates) == 1:
+            return ExactAuthorityMatch(
+                "matched", source, candidates[0].import_id,
+            )
+        if candidates:
+            return ExactAuthorityMatch("ambiguous")
+    return ExactAuthorityMatch("no_match")
 
 
 def _money(value) -> int:

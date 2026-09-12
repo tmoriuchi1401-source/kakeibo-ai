@@ -280,6 +280,19 @@ python -m app.cli bank-pdf-preview statement.pdf --account-alias jibun-primary
 なる。出力は件数とreason taxonomyだけで、取引本文や個別金額を表示しない。
 OCR、Sheets書き込み、production applyはこのコマンドから実行されない。
 
+既存の `取込データ` をread-onlyで参照し、銀行rowの分類と照合状況を集計する:
+
+```bash
+python -m app.cli bank-pdf-shadow-preview statement.pdf --account-alias jibun-primary
+```
+
+分類と照合は分離される。au PAYカード引落は `card_settlement` のまま、明示的な
+statement-total authorityがなければ `identified_unlinked` とし、通常支出へ落とさない。
+PayPayは摘要に明示される場合だけ照合対象にする。日付・同額だけの既存購入row、
+個別カード購入の合算、摘要の部分一致は照合根拠にしない。給与・賞与・利息、明確な
+口座振替、確認済みの資金移動以外は安全側に `needs_review` とする。出力は分類・照合・
+review reasonの件数のみで、取引内容、個別金額、残高、照合identityは表示しない。
+
 ## Google DriveからPayPay CSVを取り込む
 
 `PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定する。
