@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, csv, json, mimetypes, os
+import argparse, csv, json, mimetypes, os, time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -95,6 +95,7 @@ from .drive_payroll import DrivePayrollPreview
 from .bank_pdf_pipeline import BankPdfPipeline
 from .bank_reconciliation import BankPdfShadowPipeline
 from .bank_canary import BankCanaryPreparationPipeline
+from .bank_canary_production import run_bank_production_canary
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -230,6 +231,20 @@ def main():
     bank_canary.add_argument("pdf")
     bank_canary.add_argument("--account-alias",default="jibun-primary")
     bank_canary.add_argument("--source-identity",required=True)
+    bank_replay=sub.add_parser("bank-pdf-canary-replay-preview")
+    bank_replay.add_argument("pdf")
+    bank_replay.add_argument("--account-alias",default="jibun-primary")
+    bank_replay.add_argument("--source-identity",required=True)
+    bank_apply=sub.add_parser("bank-pdf-canary-apply")
+    bank_apply.add_argument("pdf")
+    bank_apply.add_argument("--account-alias",default="jibun-primary")
+    bank_apply.add_argument("--source-identity",required=True)
+    bank_apply.add_argument("--approved-target",required=True)
+    bank_apply.add_argument("--expected-head",required=True)
+    bank_apply.add_argument("--state-dir",required=True)
+    bank_apply.add_argument("--audit-key-file",required=True)
+    bank_apply.add_argument("--approval-file",required=True)
+    bank_apply.add_argument("--apply",action="store_true")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -302,6 +317,44 @@ def main():
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
                 ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-replay-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).replay_status(
+                args.pdf,
+                selected_source_identity=args.source_identity,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-apply":
+        if not args.apply:
+            raise SystemExit("bank canary production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_canary(
+                db,args.pdf,
+                selected_source_identity=args.source_identity,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                clock=lambda: datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
             ),
             ensure_ascii=False,sort_keys=True,
         ))

@@ -347,6 +347,15 @@ class SqliteAttemptJournal(AttemptJournal):
             ).fetchall()
         return tuple(_row_to_event(row) for row in rows)
 
+    def has_events(self, run_id: str) -> bool:
+        """Return whether a durable attempt already exists for this run id."""
+        if not self.ready(run_id):
+            raise RuntimeError("attempt_journal_corrupt_or_unavailable")
+        with _connect(self._path) as connection:
+            return connection.execute(
+                "SELECT 1 FROM journal_events WHERE run_id=? LIMIT 1", (run_id,),
+            ).fetchone() is not None
+
 
 def _row_to_event(row) -> JournalEvent:
     return JournalEvent(

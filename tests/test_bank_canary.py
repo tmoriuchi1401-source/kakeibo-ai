@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import datetime, timezone
 
 import pytest
@@ -17,6 +17,15 @@ from app.sheets import HEADERS
 
 
 NOW = datetime(2026, 9, 12, 12, 0, tzinfo=timezone.utc)
+
+
+def corrupt_frozen(value, **changes):
+    clone = object.__new__(type(value))
+    for item in fields(value):
+        object.__setattr__(
+            clone, item.name, changes.get(item.name, getattr(value, item.name)),
+        )
+    return clone
 
 
 def bank(description, amount=-1000, identity="bank:1"):
@@ -209,7 +218,7 @@ def test_source_identity_change_invalidates_plan():
     transaction = bank("給与 匿名勤務先", 1000, "bank:original")
     shadow, preview = context(transaction)
     plan = build_bank_canary_plan(shadow, preview, authority("bank:original"))
-    changed = replace(
+    changed = corrupt_frozen(
         plan,
         transaction=replace(plan.transaction, identity="bank:changed"),
     )
@@ -226,7 +235,7 @@ def test_batch_greater_than_one_is_rejected_by_authority_and_plan():
     shadow, preview = context(transaction)
     plan = build_bank_canary_plan(shadow, preview, authority("bank:1"))
     with pytest.raises(RuntimeError, match="exactly_one_row_required"):
-        validate_bank_canary_plan(replace(plan, planned_rows=2))
+        validate_bank_canary_plan(corrupt_frozen(plan, planned_rows=2))
 
 
 def test_dry_run_replay_is_deterministic_and_writer_is_not_invoked():
@@ -241,6 +250,28 @@ def test_dry_run_replay_is_deterministic_and_writer_is_not_invoked():
     assert first == second
     assert first["external_write_count"] == 0
     assert set(db.reads) == {"取込データ!A1:L1", "取込データ!A2:L"}
+
+
+def test_selected_replay_reports_duplicate_and_suppresses_candidate(monkeypatch):
+    transaction = bank("給与 匿名勤務先", 1000, "bank:replay")
+    db = ReadOnlyDB(rows=(import_row(transaction),))
+    monkeypatch.setattr(
+        "app.bank_canary.BankPdfPipeline.parse",
+        lambda _self, _path, **_kwargs: parsed_for(transaction),
+    )
+
+    result = BankCanaryPreparationPipeline(db).replay_status(
+        "synthetic.pdf", selected_source_identity="bank:replay",
+    )
+
+    assert result == {
+        "parsed": 1,
+        "existing_duplicate": 1,
+        "new_plan_candidates": 0,
+        "selected_existing_duplicate": 1,
+        "selected_new_plan_candidate": 0,
+        "write_attempted": 0,
+    }
 
 
 def test_pipeline_candidate_listing_exposes_only_stable_identities(monkeypatch):

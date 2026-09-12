@@ -27,6 +27,7 @@ from .transaction_plan import Transaction
 CANARY_TARGET_SHEET = "取込データ"
 CANARY_MAX_ROWS = 1
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
+_BANK_CANARY_PLAN_AUTHORITY = object()
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,7 @@ class BankCanaryAuthority:
             raise RuntimeError("bank_canary_production_authority_forbidden")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class BankCanaryPlan:
     """A single canonical row projection; it is not a production capability."""
 
@@ -68,6 +69,20 @@ class BankCanaryPlan:
     target_binding: TargetBinding = field(repr=False)
     planned_rows: int = 1
     authorized_rows: int = 1
+    _authority: object = field(repr=False, compare=False)
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("bank_canary_plan_is_builder_only")
+
+    @classmethod
+    def _create(cls, *, authority_token: object, **values) -> "BankCanaryPlan":
+        if authority_token is not _BANK_CANARY_PLAN_AUTHORITY:
+            raise TypeError("bank_canary_plan_is_builder_only")
+        plan = object.__new__(cls)
+        for name, value in values.items():
+            object.__setattr__(plan, name, value)
+        object.__setattr__(plan, "_authority", _BANK_CANARY_PLAN_AUTHORITY)
+        return plan
 
     def materialize(self, *, imported_at) -> tuple[tuple, ...]:
         validate_bank_canary_plan(self)
@@ -164,7 +179,8 @@ def build_bank_canary_plan(
         expected_spreadsheet_id=authority.target_spreadsheet_id,
         expected_worksheet=authority.target_worksheet,
     )
-    plan = BankCanaryPlan(
+    plan = BankCanaryPlan._create(
+        authority_token=_BANK_CANARY_PLAN_AUTHORITY,
         authority=authority,
         transaction=transaction,
         classification=classification,
@@ -178,6 +194,8 @@ def build_bank_canary_plan(
 def validate_bank_canary_plan(value: object) -> BankCanaryPlan:
     if type(value) is not BankCanaryPlan:
         raise TypeError("bank_canary_plan_required")
+    if getattr(value, "_authority", None) is not _BANK_CANARY_PLAN_AUTHORITY:
+        raise TypeError("unauthorized_bank_canary_plan")
     value.authority.validate()
     value.target_binding.validate()
     if (
@@ -322,3 +340,35 @@ class BankCanaryPreparationPipeline:
             "withheld_by_classification": preview.withheld_by_classification,
         })
         return summary
+
+    def replay_status(
+        self,
+        path: str | Path,
+        *,
+        selected_source_identity: str,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers: frozenset[tuple[str, str]] = frozenset(),
+    ) -> dict:
+        """Confirm the selected identity is suppressed without exposing row data."""
+        shadow, preview = self._context(
+            path,
+            account_alias=account_alias,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+        )
+        matches = _matching_decisions(shadow, selected_source_identity)
+        if len(matches) != 1:
+            raise RuntimeError("bank_canary_replay_selector_not_unique")
+        existing = parse_import_rows(self.db.get("取込データ!A2:L"))
+        selected_existing = sum(
+            row.import_id == selected_source_identity for row in existing
+        )
+        return {
+            "parsed": preview.parsed,
+            "existing_duplicate": preview.existing_duplicate,
+            "new_plan_candidates": preview.new_plan_candidates,
+            "selected_existing_duplicate": selected_existing,
+            "selected_new_plan_candidate": preview.candidate_identities.count(
+                selected_source_identity,
+            ),
+            "write_attempted": 0,
+        }
