@@ -93,6 +93,21 @@ def make(require_gemini=True):
     return s,db,ai
 
 
+def make_receipt_pipeline(settings, db, ai):
+    observer = None
+    if settings is not None and getattr(settings, "medical_review_shadow_enabled", False):
+        try:
+            observer = settings.medical_review_handoff()
+        except Exception:
+            # Keep normal routing available; Medical remains blocked and the
+            # pipeline reports a safe handoff_failed status.
+            class _UnavailableMedicalObserver:
+                def observe(self, **kwargs):
+                    raise RuntimeError("medical shadow configuration unavailable")
+            observer = _UnavailableMedicalObserver()
+    return ReceiptPipeline(db, ai, medical_review_observer=observer)
+
+
 def print_drive_receipt_results(results):
     for name,res in results:
         if res.get("status") == "privacy_blocked":
@@ -235,7 +250,7 @@ def main():
     elif args.cmd=="receipt":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
         try:
-            print(ReceiptPipeline(db,ai).process_bytes(
+            print(make_receipt_pipeline(s, db, ai).process_bytes(
                 data,mime,os.path.basename(args.image),
                 known_source_classification=args.source_classification,
             ))
@@ -468,7 +483,7 @@ def main():
     elif args.cmd=="drive-receipts":
         s,db,ai=make(); s.validate(need_drive=True)
         print_drive_receipt_results(
-            process_inbox(s.receipt_drive_folder_id,ReceiptPipeline(db,ai),s.processed_drive_folder_id,
+            process_inbox(s.receipt_drive_folder_id,make_receipt_pipeline(s, db, ai),s.processed_drive_folder_id,
                           known_source_classification=args.source_classification)
         )
     elif args.cmd=="drive-paypay-preview":

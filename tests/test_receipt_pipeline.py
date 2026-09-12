@@ -229,6 +229,7 @@ def test_medical_review_observer_failure_preserves_privacy_block(monkeypatch):
 
     assert result["status"] == "privacy_blocked"
     assert result["classification"] == "medical"
+    assert result["medical_shadow_status"] == "handoff_failed"
     ai.analyze_receipt.assert_not_called()
     assert db.append_calls == []
 

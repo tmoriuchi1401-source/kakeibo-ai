@@ -25,14 +25,16 @@ class ReceiptPipeline:
         privacy=evaluate_receipt_privacy(image_bytes,mime_type,**source_policy)
         if privacy.classification != "normal" or not privacy.gemini_allowed:
             self._source_privacy[source_id] = privacy.classification
+            medical_shadow_status = None
             if privacy.classification == "medical" and self.medical_review_observer is not None:
                 try:
-                    self.medical_review_observer.observe(source_id=source_id, gate=privacy)
+                    observed = self.medical_review_observer.observe(source_id=source_id, gate=privacy)
+                    medical_shadow_status = getattr(observed, "action", "observed")
                 except Exception:
                     # Shadow review generation must never weaken or replace the
                     # existing fail-closed privacy decision.
-                    pass
-            return {
+                    medical_shadow_status = "handoff_failed"
+            result = {
                 "status":"privacy_blocked",
                 "classification":privacy.classification,
                 "reason_code":privacy.reason_code,
@@ -44,6 +46,9 @@ class ReceiptPipeline:
                 "medical_candidate_count":privacy.medical_candidate_count,
                 "category":privacy.category,
             }
+            if medical_shadow_status is not None:
+                result["medical_shadow_status"] = medical_shadow_status
+            return result
         cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats,**source_policy)
         allowed=set(cats)
         invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]

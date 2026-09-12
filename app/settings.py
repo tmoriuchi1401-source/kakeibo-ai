@@ -31,6 +31,9 @@ class Settings:
         / "kakeibo-ai" / "medical-review.json"
     )
     medical_review_identity_key: str = os.getenv("MEDICAL_REVIEW_IDENTITY_KEY", "")
+    medical_review_shadow_enabled: bool = os.getenv(
+        "MEDICAL_REVIEW_SHADOW_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,

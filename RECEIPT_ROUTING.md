@@ -81,6 +81,16 @@ python -m app.cli medical-review show <review_item_id>
 
 These commands are read-only and show only the persisted review metadata.
 
+Production shadow enablement is explicit: set
+`MEDICAL_REVIEW_SHADOW_ENABLED=true` together with a valid absolute store path
+and base64 identity key. `app/cli.py:make_receipt_pipeline` injects the
+configured observer into the existing receipt pipeline used by both the local
+receipt command and `drive-receipts`. If configuration, validation, or a local
+write fails, the pipeline returns the existing `privacy_blocked` Medical result
+with the safe operational marker `medical_shadow_status=handoff_failed`;
+normal receipts remain on their existing path. There is no Gemini fallback,
+automatic repair, archive change, or write authority in this mode.
+
 ## Role of `general_receipt_preview.py`
 
 `app/general_receipt_preview.py` remains a local, read-only diagnostic preview.

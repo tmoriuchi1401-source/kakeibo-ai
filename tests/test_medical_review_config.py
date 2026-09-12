@@ -9,6 +9,7 @@ from app import cli
 from app.medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 from app.settings import Settings
 from tests.test_medical_inbox_handoff_shadow import medical_gate
+from tests.test_receipt_pipeline import FakeDB, FakeAI, _normal_receipt_result
 
 
 def test_configured_store_parent_is_initialized_and_key_decoded(tmp_path):
@@ -23,6 +24,21 @@ def test_configured_store_parent_is_initialized_and_key_decoded(tmp_path):
     assert settings.ensure_medical_review_store_parent() == store.parent
     assert store.parent.is_dir()
     assert settings.medical_review_identity_key_bytes() == b"configured-medical-key"
+
+
+def test_explicit_handoff_factory_uses_configured_persistent_store(tmp_path):
+    store = tmp_path / "nested" / "medical-review.json"
+    key = base64.b64encode(b"configured-medical-key").decode("ascii")
+    settings = Settings(
+        medical_review_store_path=str(store),
+        medical_review_identity_key=key,
+        medical_review_shadow_enabled=True,
+    )
+
+    handoff = settings.medical_review_handoff()
+    assert store.parent.is_dir()
+    handoff.observe(source_id="factory-source", gate=medical_gate())
+    assert store.exists()
 
 
 @pytest.mark.parametrize(
@@ -79,3 +95,21 @@ def test_cli_lists_and_shows_persistent_pending_item_read_only(tmp_path, monkeyp
     shown = capsys.readouterr().out
     assert handoff.items()[0].review_item_id in shown
     assert "cli-source" not in shown
+
+
+def test_enabled_but_invalid_handoff_config_keeps_medical_blocked(monkeypatch):
+    settings = Settings(medical_review_shadow_enabled=True)
+    db = FakeDB()
+    ai = FakeAI(_normal_receipt_result())
+    monkeypatch.setattr(
+        "app.receipt_pipeline.evaluate_receipt_privacy", lambda content, mime: medical_gate()
+    )
+
+    result = cli.make_receipt_pipeline(settings, db, ai).process_bytes(
+        b"medical", "image/png", "invalid-config-source"
+    )
+
+    assert result["status"] == "privacy_blocked"
+    assert result["medical_shadow_status"] == "handoff_failed"
+    ai.analyze_receipt.assert_not_called()
+    assert db.append_calls == []
