@@ -1,7 +1,7 @@
 """Bounded Amazon Gmail write planning and recurring production execution."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -470,6 +470,9 @@ def run_amazon_recurring(
     *, gmail_service, db, state: SqliteRecurringRunState,
     authority_provider: ProtectedAmazonAuthorityProvider, now: datetime,
     dry_run: bool = False, apply_limit: int | None = None,
+    approved_reference: str | None = None,
+    expected_event_rows: int | None = None,
+    expected_header_rows: int | None = None,
 ) -> dict[str, object]:
     policy = authority_provider.load()
     if not (policy.valid_from <= now < policy.expires_at):
@@ -481,6 +484,7 @@ def run_amazon_recurring(
         gmail_service, window, policy.max_messages,
     )
     plan = build_amazon_write_plan(messages, db, window=window, collection_complete=complete)
+    original_purchase_count = len(plan.purchases)
     run_id = str(uuid4())
     summary = {"schema_version": 1, "run_id": run_id, **plan.anonymized()}
     summary.update({
@@ -501,9 +505,30 @@ def run_amazon_recurring(
         summary["status"] = "dry_run_ready" if plan.purchases or plan.event_rows else "dry_run_noop"
         state.record(summary, advance_checkpoint=False)
         return summary
+    if approved_reference is not None:
+        selected = tuple(
+            candidate for candidate in plan.purchases
+            if candidate.reference == approved_reference
+        )
+        if len(selected) != 1:
+            raise RuntimeError("amazon_approved_target_not_uniquely_eligible")
+        selected_order_ids = {candidate.order_id for candidate in selected}
+        plan = replace(
+            plan,
+            purchases=selected,
+            header_rows=tuple(
+                row for row in plan.header_rows if _text(list(row), 0) in selected_order_ids
+            ),
+        )
+        if expected_event_rows is None or len(plan.event_rows) != expected_event_rows:
+            raise RuntimeError("amazon_approved_event_row_count_changed")
+        if expected_header_rows is None or len(plan.header_rows) != expected_header_rows:
+            raise RuntimeError("amazon_approved_header_row_count_changed")
     result = apply_amazon_write_plan(db, plan, max_purchases=limit)
     summary.update(result)
-    fully_applied = len(plan.purchases) <= limit
+    fully_applied = (
+        approved_reference is None and original_purchase_count <= limit
+    )
     summary["checkpoint_advanced"] = fully_applied
     state.record(summary, advance_checkpoint=fully_applied)
     return summary

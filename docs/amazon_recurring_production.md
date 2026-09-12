@@ -21,8 +21,9 @@ investigate pagination before continuing.
 
 ## Protected authority
 
-Production requires `AMAZON_RECURRING_AUTHORITY_JSON` as a GitHub Actions secret.
-The file materialized from it must remain outside the repository. Example shape:
+For a canary, the workflow materializes an authority file under `RUNNER_TEMP` from
+the approved fixed window and the existing `SPREADSHEET_ID` secret. The file stays
+outside the repository. Its enforced shape is:
 
 ```json
 {
@@ -33,16 +34,17 @@ The file materialized from it must remain outside the repository. Example shape:
   "max_purchases": 3,
   "overlap_seconds": 7200,
   "max_window_seconds": 259200,
-  "initial_start": "2026-09-11T00:00:00+09:00",
-  "valid_from": "2026-09-12T00:00:00+09:00",
-  "expires_at": "2027-09-12T00:00:00+09:00"
+  "initial_start": "approved preview start",
+  "valid_from": "2026-08-01T00:00:00+09:00",
+  "expires_at": "2027-09-13T00:00:00+09:00"
 }
 ```
 
-Authority validation limits a run to at most 100 messages, 20 purchases, a
-370-day absolute window, the named spreadsheet, and the validity interval. A
-canary must use `apply=true` and `apply_limit=1`; do this only after explicit
-approval of the immediately preceding write plan.
+Authority validation limits a run to 100 messages, at most 3 purchases, a
+32-day absolute window, the named spreadsheet, and the validity interval. A
+canary must use `apply=true`, `apply_limit=1`, the exact preview start/end,
+approved hashed target, and expected event/header counts. Any drift fails before
+writing. Do this only after explicit approval of the immediately preceding plan.
 
 ## Persistence and recovery
 

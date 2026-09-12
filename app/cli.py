@@ -161,6 +161,10 @@ def main():
     agr.add_argument("--state-dir",default=os.getenv("AMAZON_STATE_DIR", ""))
     agr.add_argument("--authority-file",default=os.getenv("AMAZON_RECURRING_AUTHORITY_FILE", ""))
     agr.add_argument("--apply-limit",type=int)
+    agr.add_argument("--now")
+    agr.add_argument("--approved-target")
+    agr.add_argument("--expected-event-rows",type=int)
+    agr.add_argument("--expected-header-rows",type=int)
     agr_mode=agr.add_mutually_exclusive_group(required=True)
     agr_mode.add_argument("--dry-run",action="store_true")
     agr_mode.add_argument("--apply",action="store_true")
@@ -435,11 +439,18 @@ def main():
                 s.spreadsheet_id,
                 service=read_only_sheets_service() if args.dry_run else None,
             )
+            run_now=(
+                datetime.fromisoformat(args.now)
+                if args.now else datetime.now(ZoneInfo("Asia/Tokyo"))
+            )
             result=run_amazon_recurring(
                 gmail_service=gmail_readonly_service(s.gmail_token_json),db=db,
                 state=state,authority_provider=authority,
-                now=datetime.now(ZoneInfo("Asia/Tokyo")),dry_run=args.dry_run,
+                now=run_now,dry_run=args.dry_run,
                 apply_limit=args.apply_limit,
+                approved_reference=args.approved_target,
+                expected_event_rows=args.expected_event_rows,
+                expected_header_rows=args.expected_header_rows,
             )
         except Exception as exc:
             result={

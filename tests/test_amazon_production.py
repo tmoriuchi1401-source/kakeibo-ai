@@ -201,7 +201,7 @@ class Gmail:
 
 
 def authority_components(tmp_path, *, max_messages=10):
-    repo = tmp_path / "repo"; repo.mkdir()
+    repo = tmp_path / "repo"; repo.mkdir(parents=True)
     state_dir = tmp_path / "state"; state_dir.mkdir()
     authority = state_dir / "authority.json"
     authority.write_text(json.dumps({
@@ -267,10 +267,37 @@ def test_incomplete_collection_and_zero_result_do_not_write(tmp_path):
     assert state.successful_window_end() == NOW
 
 
+def test_canary_is_bound_to_approved_target_and_counts_without_checkpoint(tmp_path):
+    state, provider, db = authority_components(tmp_path)
+    approved = plan(db=db).purchases[0].reference
+    result = run_amazon_recurring(
+        gmail_service=Gmail(order_mail()), db=db, state=state,
+        authority_provider=provider, now=NOW, apply_limit=1,
+        approved_reference=approved, expected_event_rows=1,
+        expected_header_rows=1,
+    )
+    assert result["selected_targets"] == [approved]
+    assert result["written_purchases"] == 1
+    assert result["checkpoint_advanced"] is False
+    assert state.successful_window_end() is None
+
+    drift_state, drift_provider, drift_db = authority_components(tmp_path / "drift")
+    with pytest.raises(RuntimeError, match="approved_event_row_count_changed"):
+        run_amazon_recurring(
+            gmail_service=Gmail(order_mail()), db=drift_db, state=drift_state,
+            authority_provider=drift_provider, now=NOW, apply_limit=1,
+            approved_reference=approved, expected_event_rows=0,
+            expected_header_rows=1,
+        )
+    assert drift_db.write_calls == []
+
+
 def test_workflow_is_manual_only_before_canary():
     text = open(".github/workflows/amazon-daily-import.yml", encoding="utf-8").read()
     assert "workflow_dispatch:" in text
     assert "schedule:" not in text
     assert "amazon-production-preview" in text
     assert "amazon-gmail-recurring --apply" in text
+    assert "--approved-target" in text
+    assert "--expected-event-rows" in text
     assert "cancel-in-progress: false" in text

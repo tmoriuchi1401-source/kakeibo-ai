@@ -18,6 +18,28 @@ on:
         required: true
         type: number
         default: 1
+      approved_window_start:
+        description: Approved preview window start (required for apply)
+        required: false
+        type: string
+      approved_window_end:
+        description: Approved preview window end (required for apply)
+        required: false
+        type: string
+      approved_target:
+        description: Approved anonymized order reference (required for apply)
+        required: false
+        type: string
+      expected_event_rows:
+        description: Approved new event row count
+        required: false
+        type: number
+        default: 0
+      expected_header_rows:
+        description: Approved new header row count
+        required: false
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -34,7 +56,6 @@ jobs:
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
-      AMAZON_RECURRING_AUTHORITY_JSON: ${{ secrets.AMAZON_RECURRING_AUTHORITY_JSON }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,11 +80,18 @@ jobs:
       - name: Materialize protected recurring authority
         if: inputs.apply
         shell: bash
+        env:
+          APPROVED_WINDOW_START: ${{ inputs.approved_window_start }}
+          APPROVED_WINDOW_END: ${{ inputs.approved_window_end }}
+          APPROVED_TARGET: ${{ inputs.approved_target }}
         run: |
           set -euo pipefail
-          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_GMAIL_TOKEN_JSON AMAZON_RECURRING_AUTHORITY_JSON; do
+          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON GOOGLE_GMAIL_TOKEN_JSON; do
             test -n "${!name}" || { echo "Required secret is not configured: $name"; exit 1; }
           done
+          test -n "$APPROVED_WINDOW_START" || { echo "approved_window_start is required"; exit 1; }
+          test -n "$APPROVED_WINDOW_END" || { echo "approved_window_end is required"; exit 1; }
+          test -n "$APPROVED_TARGET" || { echo "approved_target is required"; exit 1; }
           AMAZON_STATE_DIR="$RUNNER_TEMP/amazon-production-state"
           AMAZON_RECURRING_AUTHORITY_FILE="$RUNNER_TEMP/amazon-recurring-authority.json"
           {
@@ -72,12 +100,23 @@ jobs:
           } >> "$GITHUB_ENV"
           mkdir -p "$AMAZON_STATE_DIR"
           umask 077
-          printf '%s' "$AMAZON_RECURRING_AUTHORITY_JSON" > "$AMAZON_RECURRING_AUTHORITY_FILE"
+          printf '{"policy_id":"amazon-canary-v1","source":"amazon_gmail","expected_spreadsheet_id":"%s","max_messages":100,"max_purchases":3,"overlap_seconds":0,"max_window_seconds":2764800,"initial_start":"%s","valid_from":"2026-08-01T00:00:00+09:00","expires_at":"2027-09-13T00:00:00+09:00"}' \
+            "$SPREADSHEET_ID" "$APPROVED_WINDOW_START" > "$AMAZON_RECURRING_AUTHORITY_FILE"
       - name: Apply bounded canary
         if: inputs.apply
+        env:
+          APPLY_LIMIT: ${{ inputs.apply_limit }}
+          APPROVED_WINDOW_END: ${{ inputs.approved_window_end }}
+          APPROVED_TARGET: ${{ inputs.approved_target }}
+          EXPECTED_EVENT_ROWS: ${{ inputs.expected_event_rows }}
+          EXPECTED_HEADER_ROWS: ${{ inputs.expected_header_rows }}
         run: >-
           python -m app.cli amazon-gmail-recurring --apply
-          --apply-limit "${{ inputs.apply_limit }}"
+          --apply-limit "$APPLY_LIMIT"
+          --now "$APPROVED_WINDOW_END"
+          --approved-target "$APPROVED_TARGET"
+          --expected-event-rows "$EXPECTED_EVENT_ROWS"
+          --expected-header-rows "$EXPECTED_HEADER_ROWS"
       - name: Save post-run durable state
         if: ${{ always() && inputs.apply }}
         uses: actions/cache/save@v4
