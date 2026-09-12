@@ -49,11 +49,15 @@ this contract. Observer failures are contained and cannot change the privacy
 block, Gemini eligibility, Sheets authority, or Drive archive behaviour.
 
 `app/medical_inbox_handoff_shadow.py:MedicalInboxHandoffShadow` is the opt-in
-adapter. For unresolved Medical decisions it calls the existing canonical
+adapter. With `store_path` configured, it persists only a versioned JSON
+document containing value-free review metadata. Writes use a same-directory
+temporary file, `fsync`, and atomic replace; malformed stores fail closed.
+For unresolved Medical decisions it calls the existing canonical
 `build_medical_review_item` and `reconcile_medical_review_item` functions. The
 source identity becomes a keyed opaque digest, repeated observations are
-suppressed, and the retained item contains no amount, issuer, patient data, or
-OCR text. The adapter is in-memory/read-only: it performs no external AI call,
+suppressed across process restarts, and the retained item contains no amount,
+issuer, patient data, or OCR text. A missing/short identity key is rejected;
+the key itself is never serialized. The adapter performs no external AI call,
 Sheets write, Drive move, or production decision handoff. `sensitive_unknown`
 remains on hold and is not coerced into the Medical queue.
 
