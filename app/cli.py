@@ -1,10 +1,11 @@
 from __future__ import annotations
-import argparse, csv, mimetypes, os
+import argparse, csv, json, mimetypes, os
 from .settings import Settings
 from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
+from .general_receipt_preview import GeneralReceiptPreviewPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
 from .drive_paypay import DrivePayPayPipeline
@@ -104,6 +105,12 @@ def main():
     sub.add_parser("init")
     r=sub.add_parser("receipt"); r.add_argument("image")
     an=sub.add_parser("analyze"); an.add_argument("image")
+    grp=sub.add_parser("general-receipt-preview")
+    grp.add_argument("file")
+    grp.add_argument(
+        "--with-sheets", action="store_true",
+        help="Read existing import rows for duplicate/reconciliation diagnostics",
+    )
     for receipt_parser in (r, an):
         receipt_parser.add_argument(
             "--source-classification", choices=("medical", "payroll", "sensitive_unknown"),
@@ -204,14 +211,23 @@ def main():
             raise SystemExit(1)
         print("開発環境チェック完了")
     elif args.cmd=="payroll-file-preview":
-        import json
         print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
     elif args.cmd=="payroll-drive-preview":
-        import json
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
+    elif args.cmd=="general-receipt-preview":
+        data=open(args.file,"rb").read()
+        mime=mimetypes.guess_type(args.file)[0] or "image/jpeg"
+        db=None
+        if args.with_sheets:
+            s=Settings(); s.validate(need_sheet=True)
+            db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        result=GeneralReceiptPreviewPipeline(db).preview_bytes(
+            data,mime,source_id=os.path.basename(args.file),
+        )
+        print(json.dumps(result.as_dict(),ensure_ascii=False))
     elif args.cmd=="receipt":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
         try:
