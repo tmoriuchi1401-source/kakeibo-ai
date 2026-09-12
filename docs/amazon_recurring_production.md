@@ -59,6 +59,7 @@ When a later Amazon Order History CSV materializes item rows, the earlier Gmail
 order-total expense is marked `superseded_amazon_items` before item expenses are
 used, preventing double counting.
 
-After a successful canary and duplicate-safe rerun are verified, add the daily
-`schedule` trigger to the workflow. Scheduled runs use the same authority,
-checkpoint, overlap, bounded collection, concurrency, and exact-readback gates.
+After the successful canary, the daily schedule starts at the canary window end
+and runs at 05:23 JST. A manual `recurring_preview=true` run exercises the same
+new-mail window with zero writes. Scheduled runs use the same checkpoint,
+two-hour overlap, bounded collection, concurrency, and exact-readback gates.
