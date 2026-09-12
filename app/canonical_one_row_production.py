@@ -48,6 +48,11 @@ from .sheets import HEADERS
 
 CANONICAL_ONE_ROW_SCHEMA_VERSION = 1
 CANONICAL_ONE_ROW_MAX_ROWS = 1
+CANONICAL_BOUNDED_BATCH_ROWS = 5
+CANONICAL_TRANSPORT_ROW_BOUNDS = frozenset({
+    CANONICAL_ONE_ROW_MAX_ROWS,
+    CANONICAL_BOUNDED_BATCH_ROWS,
+})
 _CANDIDATE_AUTHORITY = object()
 _DISPATCH_AUTHORITY = object()
 _HEAD = re.compile(r"[0-9a-f]{40}")
@@ -475,7 +480,7 @@ def _validate_dispatch_permit(
 
 
 class SealedCanonicalOneRowTransport:
-    """Append exactly one pre-authorized canonical 12-column row."""
+    """Append pre-authorized canonical rows under a 1- or 5-row bound."""
 
     synthetic_only = False
     max_rows = CANONICAL_ONE_ROW_MAX_ROWS
@@ -489,21 +494,47 @@ class SealedCanonicalOneRowTransport:
         key_provider: ProtectedAuditKeyProvider,
         journal: SqliteAttemptJournal,
         clock: Callable[[], datetime],
+        max_rows: int = CANONICAL_ONE_ROW_MAX_ROWS,
     ):
+        if max_rows not in CANONICAL_TRANSPORT_ROW_BOUNDS:
+            raise RuntimeError("canonical_transport_row_bound_invalid")
         self._db = db
         self._binding = binding
         self._inspector = inspector
         self._key_provider = key_provider
         self._journal = journal
         self._clock = clock
+        self.max_rows = max_rows
         self.invocation_count = 0
         self.last_row: tuple | None = None
+
+    def prepare_rows(
+        self,
+        candidates: tuple[CanonicalOneRowCandidate, ...],
+        *,
+        imported_at: datetime | None = None,
+    ) -> tuple[tuple, ...]:
+        """Materialize a bounded canonical block without invoking Sheets."""
+        if len(candidates) != self.max_rows:
+            raise RuntimeError("canonical_transport_exact_batch_size")
+        timestamp = self._clock() if imported_at is None else imported_at
+        rows = tuple(
+            tuple(validate_canonical_one_row_candidate(candidate).to_import_row(
+                imported_at=timestamp,
+            ))
+            for candidate in candidates
+        )
+        if any(len(row) != len(HEADERS["取込データ"]) for row in rows):
+            raise RuntimeError("canonical_transport_row_schema_invalid")
+        return rows
 
     def write_once(
         self,
         candidate: CanonicalOneRowCandidate,
         permit: CanonicalDispatchPermit,
     ) -> WriteRequestResult:
+        if self.max_rows != CANONICAL_ONE_ROW_MAX_ROWS:
+            raise RuntimeError("canonical_one_row_transport_bound_invalid")
         candidate = validate_canonical_one_row_candidate(candidate)
         key = _load_key(self._key_provider)
         validate_target_binding(
@@ -521,9 +552,7 @@ class SealedCanonicalOneRowTransport:
             or history[-1].canonical_identity != candidate.identity
         ):
             raise RuntimeError("write_attempt_journal_required")
-        row = candidate.to_import_row(imported_at=self._clock())
-        if self.max_rows != 1 or len(row) != len(HEADERS["取込データ"]):
-            raise RuntimeError("canonical_one_row_transport_bound_invalid")
+        row = self.prepare_rows((candidate,))[0]
         self.last_row = tuple(row)
         self.invocation_count += 1
         self._db.svc.spreadsheets().values().append(

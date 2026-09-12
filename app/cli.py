@@ -231,6 +231,10 @@ def main():
     bank_canary.add_argument("pdf")
     bank_canary.add_argument("--account-alias",default="jibun-primary")
     bank_canary.add_argument("--source-identity",required=True)
+    bank_batch=sub.add_parser("bank-pdf-batch-dry-run")
+    bank_batch.add_argument("pdf")
+    bank_batch.add_argument("--account-alias",default="jibun-primary")
+    bank_batch.add_argument("--source-identity",action="append",required=True)
     bank_replay=sub.add_parser("bank-pdf-canary-replay-preview")
     bank_replay.add_argument("pdf")
     bank_replay.add_argument("--account-alias",default="jibun-primary")
@@ -327,6 +331,21 @@ def main():
             BankCanaryPreparationPipeline(db).replay_status(
                 args.pdf,
                 selected_source_identity=args.source_identity,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-batch-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).batch_dry_run(
+                args.pdf,
+                selected_source_identities=tuple(args.source_identity),
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
                 account_alias=args.account_alias,
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
