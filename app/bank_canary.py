@@ -11,7 +11,12 @@ from .aupay_card_writer import (
     TargetBinding,
     validate_target_binding,
 )
-from .bank_pdf_pipeline import DEFAULT_ACCOUNT_ALIAS, BankPdfPipeline, SOURCE
+from .bank_pdf_pipeline import (
+    DEFAULT_ACCOUNT_ALIAS,
+    DOCOMO_SMTB_SOURCE,
+    BankPdfPipeline,
+    SOURCE,
+)
 from .bank_reconciliation import (
     BankPreviewPlan,
     BankShadowResult,
@@ -37,6 +42,7 @@ BANK_BATCH_ROW_BOUNDS = frozenset({
     BANK_LOAN_ROWS, BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS,
 })
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
+BANK_SOURCES = frozenset({SOURCE, DOCOMO_SMTB_SOURCE})
 LOAN_CLASSIFICATION = "loan_repayment"
 LOAN_EXPENSE_CATEGORY = ("住まい", "住宅ローン")
 _BANK_CANARY_PLAN_AUTHORITY = object()
@@ -165,6 +171,7 @@ class BankBatchItem:
     projected_classification: str
     write_eligibility: str
     import_status: str
+    category: tuple[str, str] = ("", "")
 
 
 @dataclass(frozen=True, init=False)
@@ -358,7 +365,7 @@ def build_bank_canary_plan(
         raise RuntimeError("bank_canary_candidate_identity_not_unique")
 
     transaction = decision.classification.transaction.to_canonical()
-    if transaction.source != SOURCE or transaction.identity != authority.selected_source_identity:
+    if transaction.source not in BANK_SOURCES or transaction.identity != authority.selected_source_identity:
         raise RuntimeError("bank_canary_source_identity_changed")
     if (
         classification == "income"
@@ -415,7 +422,7 @@ def validate_bank_canary_plan(value: object) -> BankCanaryPlan:
 
 
 def _validate_bank_transaction_semantics(transaction: Transaction, classification: str) -> None:
-    if transaction.source != SOURCE:
+    if transaction.source not in BANK_SOURCES:
         raise RuntimeError("bank_batch_source_changed")
     if (
         classification == "income"
@@ -474,6 +481,7 @@ def build_bank_batch_plan(
                 if classification == LOAN_CLASSIFICATION
                 else f"bank_{classification}"
             ),
+            category=decision.classification.category,
         ))
     plan = BankBatchPlan._create(
         authority_token=_BANK_BATCH_PLAN_AUTHORITY,
@@ -691,7 +699,7 @@ def preview_bank_loan_repayments(
     ):
         raise RuntimeError("bank_loan_preview_identity_not_unique")
     if any(
-        transaction.source != SOURCE
+        transaction.source not in BANK_SOURCES
         or transaction.transaction_kind != "withdrawal"
         or transaction.amount_yen >= 0
         for transaction in transactions

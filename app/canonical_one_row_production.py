@@ -100,6 +100,7 @@ class CanonicalOneRowCandidate:
     member: str
     source_occurrence: int
     source_hash: str
+    category: tuple[str, str]
     reconciliation_state: str
     source_identities: tuple[str, ...]
     cross_source_state: str
@@ -139,6 +140,7 @@ def _project_bank_candidate(
     import_status: str,
     max_rows: int,
     authority_token: object = _CANDIDATE_AUTHORITY,
+    category: tuple[str, str] = ("", ""),
 ) -> CanonicalOneRowCandidate:
     return CanonicalOneRowCandidate._create(
         authority_token=authority_token,
@@ -156,6 +158,7 @@ def _project_bank_candidate(
         member=transaction.member,
         source_occurrence=transaction.source_occurrence,
         source_hash=transaction.source_hash,
+        category=category,
         reconciliation_state="bank_preview_eligible",
         source_identities=(transaction.identity,),
         cross_source_state="not_applicable",
@@ -207,6 +210,12 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
         raise RuntimeError("canonical_batch_row_bound_invalid")
     if value.source_identities != (value.identity,):
         raise RuntimeError("canonical_one_row_source_identity_invalid")
+    if (
+        type(value.category) is not tuple
+        or len(value.category) != 2
+        or any(type(item) is not str for item in value.category)
+    ):
+        raise RuntimeError("canonical_one_row_category_invalid")
     if value.source_record_id != value.identity:
         raise RuntimeError("canonical_one_row_source_record_invalid")
     if value.reconciliation_state != "bank_preview_eligible":
@@ -283,6 +292,7 @@ def _project_bank_batch(plan) -> CanonicalFiveRowBatch:
             import_status=item.import_status,
             max_rows=plan.authority.max_rows,
             authority_token=_BATCH_CANDIDATE_AUTHORITY,
+            category=item.category,
         )
         for item in plan.items
     )

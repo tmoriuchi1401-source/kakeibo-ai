@@ -26,7 +26,7 @@ from .transaction_plan import resolve_transaction_identities
 
 CLASSIFICATIONS = (
     "card_settlement", "transfer", "income", "expense", "loan_repayment",
-    "cash_withdrawal", "reimbursement", "needs_review",
+    "cash_withdrawal", "reimbursement", "other_nonwrite", "needs_review",
 )
 WRITE_ELIGIBLE_CLASSIFICATIONS = frozenset({
     "income", "expense", "loan_repayment",
@@ -41,6 +41,7 @@ RECONCILIATION_STATUSES = (
 # deliberately narrow contract for a future statement-total or explicit
 # funding record; no current importer creates them implicitly.
 PAYPAY_BANK_AUTHORITY_STATUS = "paypay_bank_transfer"
+ASSET_FORMATION_CATEGORY = ("資産形成", "")
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class BankClassification:
     transaction: NormalizedBankTransaction
     classification: str
     reason: str
+    category: tuple[str, str] = ("", "")
 
 
 @dataclass(frozen=True)
@@ -200,6 +202,23 @@ def classify_bank_transaction(
     if operator_classification == "reimbursement":
         return BankClassification(
             transaction, "reimbursement", "operator_confirmed_reimbursement",
+        )
+    if operator_classification in {"income", "expense", "other_nonwrite"}:
+        category = (
+            ASSET_FORMATION_CATEGORY
+            if (
+                operator_classification == "expense"
+                and transaction.source == DOCOMO_SMTB_SOURCE
+                and description == "SBIハイブリッド預金"
+                and direction == "outgoing"
+            )
+            else ("", "")
+        )
+        return BankClassification(
+            transaction,
+            operator_classification,
+            f"operator_confirmed_{operator_classification}",
+            category,
         )
     if operator_classification == "needs_review":
         return BankClassification(

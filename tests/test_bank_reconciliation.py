@@ -7,6 +7,7 @@ from app.bank_pdf_pipeline import (
     BankPdfResult,
     NormalizedBankTransaction,
 )
+from app.bank_canary import BankBatchAuthority, build_bank_batch_plan
 from app.bank_reconciliation import (
     CARD_STATEMENT_AUTHORITY_STATUS,
     PAYPAY_BANK_AUTHORITY_STATUS,
@@ -21,6 +22,7 @@ from app.aupay_mail_pipeline import AuPayCardStatementAuthority
 from app.cli import main
 from app.reconciliation import parse_import_rows
 from app.settings import Settings
+from app.canonical_one_row_production import project_bank_bounded_batch
 
 
 def bank(description, amount=-1000, identity="bank:1"):
@@ -228,6 +230,102 @@ def test_operator_reimbursement_is_withheld_from_preview_plan():
     assert build_bank_preview_plan(shadow, []).new_plan_candidates == 0
 
 
+@pytest.mark.parametrize("operator_classification", [
+    "income", "expense", "other_nonwrite",
+])
+def test_operator_exact_classifications_are_supported(operator_classification):
+    transaction = bank("振込 オペレーター確認", 1000)
+    configured = frozenset({
+        ("振込オペレーター確認", "incoming", "test-account", operator_classification),
+    })
+
+    decision = classify_bank_transaction(
+        transaction, confirmed_non_own_classifications=configured,
+    )
+
+    assert decision.classification == operator_classification
+    assert decision.reason == f"operator_confirmed_{operator_classification}"
+
+
+def test_docomo_sbi_hybrid_directional_private_policy():
+    outgoing = bank("SBIハイブリッド預金", -1000)
+    outgoing = NormalizedBankTransaction(
+        **{**outgoing.__dict__, "source": "ドコモSMTBネット銀行PDF", "account_alias": "docomo-smtb-primary"},
+    )
+    incoming = NormalizedBankTransaction(
+        **{**outgoing.__dict__, "signed_amount": 1000, "transaction_kind": "deposit"},
+    )
+    configured = frozenset({
+        ("SBIハイブリッド預金", "outgoing", "docomo-smtb-primary", "expense"),
+    })
+    own = frozenset({
+        ("SBIハイブリッド預金", "incoming", "docomo-smtb-primary"),
+    })
+
+    outgoing_decision = classify_bank_transaction(
+        outgoing, confirmed_non_own_classifications=configured,
+    )
+    incoming_decision = classify_bank_transaction(
+        incoming, confirmed_internal_transfers=own,
+    )
+
+    assert outgoing_decision.classification == "expense"
+    assert outgoing_decision.category == ("資産形成", "")
+    assert incoming_decision.classification == "transfer"
+    assert incoming_decision.category == ("", "")
+
+
+def test_docomo_sbi_outgoing_canonical_projection_keeps_asset_category():
+    transaction = NormalizedBankTransaction(
+        source="ドコモSMTBネット銀行PDF",
+        account_alias="docomo-smtb-primary",
+        transaction_date="2026-09-01",
+        description="SBIハイブリッド預金",
+        signed_amount=-1000,
+        source_page=1,
+        source_row=1,
+        source_row_identity="docomo:asset:1",
+        source_row_hash="b" * 64,
+        transaction_kind="withdrawal",
+    )
+    parsed = BankPdfResult(
+        pages=1,
+        candidate_rows=1,
+        transactions=(transaction,),
+        issues=(),
+        balance_consistency_failures=0,
+        duplicate_candidates=0,
+        canonical_transactions=(transaction.to_canonical(),),
+    )
+    shadow = build_bank_shadow_result(
+        parsed,
+        [],
+        confirmed_non_own_classifications=frozenset({
+            ("SBIハイブリッド預金", "outgoing", "docomo-smtb-primary", "expense"),
+        }),
+    )
+    preview = build_bank_preview_plan(shadow, [])
+    plan = build_bank_batch_plan(
+        shadow,
+        preview,
+        BankBatchAuthority(
+            selected_source_identities=("docomo:asset:1",),
+            target_spreadsheet_id="test-sheet",
+            min_rows=1,
+            max_rows=1,
+            authority_mode="bank_steady_state",
+        ),
+    )
+    projected = project_bank_bounded_batch(plan).candidates[0]
+
+    assert projected.transaction_kind == "expense"
+    assert projected.amount_yen == -1000
+    assert projected.category == ("資産形成", "")
+    assert projected.identity == "docomo:asset:1"
+    assert projected.source_record_id == projected.identity
+    assert projected.reconciliation_state == "bank_preview_eligible"
+
+
 def test_operator_non_own_review_keeps_needs_review_without_transfer_semantics():
     transaction = bank("振込 例外送金", -1000)
     configured = frozenset({
@@ -257,7 +355,7 @@ def test_private_transfer_config_requires_exact_description_and_direction():
             "account_alias": "test-account",
             "active": False,
         },
-    ], ensure_ascii=False))
+    ], ensure_ascii=False), bank_docomo_operator_rules_json="[]")
 
     assert settings.bank_confirmed_internal_transfers() == frozenset({
         ("振込匿名資金移動", "incoming", "test-account"),
@@ -273,7 +371,7 @@ def test_private_non_own_config_requires_exact_reimbursement_rule():
             "classification": "reimbursement",
             "active": True,
         },
-    ], ensure_ascii=False))
+    ], ensure_ascii=False), bank_docomo_operator_rules_json="[]")
 
     assert settings.bank_confirmed_non_own_classifications() == frozenset({
         ("振込勤務先立替", "incoming", "test-account", "reimbursement"),
@@ -289,17 +387,43 @@ def test_private_non_own_config_accepts_explicit_review_rule():
             "classification": "needs_review",
             "active": True,
         },
-    ], ensure_ascii=False))
+    ], ensure_ascii=False), bank_docomo_operator_rules_json="[]")
 
     assert settings.bank_confirmed_non_own_classifications() == frozenset({
         ("振込例外送金", "outgoing", "test-account", "needs_review"),
     })
 
 
+def test_private_docomo_operator_rules_extend_exact_authority():
+    settings = Settings(bank_docomo_operator_rules_json=json.dumps([
+        {
+            "normalized_description": "振込ドコモ収入",
+            "direction": "incoming",
+            "account_alias": "docomo-smtb-primary",
+            "classification": "income",
+            "active": True,
+        },
+        {
+            "normalized_description": "定額自動入金",
+            "direction": "incoming",
+            "account_alias": "docomo-smtb-primary",
+            "classification": "transfer",
+            "active": True,
+        },
+    ], ensure_ascii=False))
+
+    assert ("定額自動入金", "incoming", "docomo-smtb-primary") in (
+        settings.bank_confirmed_internal_transfers()
+    )
+    assert ("振込ドコモ収入", "incoming", "docomo-smtb-primary", "income") in (
+        settings.bank_confirmed_non_own_classifications()
+    )
+
+
 @pytest.mark.parametrize("value", [
     "not-json",
     '[{"normalized_description":"振込勤務先立替","direction":"incoming",'
-    '"account_alias":"test-account","classification":"expense","active":true}]',
+    '"account_alias":"test-account","classification":"invalid","active":true}]',
     '[{"normalized_description":"振込 勤務先立替","direction":"incoming",'
     '"account_alias":"test-account","classification":"reimbursement","active":true}]',
 ])
