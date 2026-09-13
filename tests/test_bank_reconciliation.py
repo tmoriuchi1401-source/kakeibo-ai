@@ -321,6 +321,7 @@ def test_docomo_sbi_outgoing_canonical_projection_keeps_asset_category():
     assert projected.transaction_kind == "expense"
     assert projected.amount_yen == -1000
     assert projected.category == ("資産形成", "")
+    assert projected.import_status == "bank_asset_formation_expense"
     assert projected.identity == "docomo:asset:1"
     assert projected.source_record_id == projected.identity
     assert projected.reconciliation_state == "bank_preview_eligible"

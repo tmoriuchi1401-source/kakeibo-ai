@@ -5,6 +5,11 @@ import re
 from dataclasses import dataclass
 
 from .reconciliation import ImportTransaction, parse_import_rows, reconcile_transactions
+from .bank_pdf_pipeline import DOCOMO_SMTB_SOURCE
+from .bank_reconciliation import (
+    ASSET_FORMATION_CATEGORY,
+    ASSET_FORMATION_IMPORT_STATUS,
+)
 from .sheets import SheetsDB
 from .utils import normalize_store
 
@@ -91,6 +96,21 @@ def auto_expense_decisions(
     }
     decisions = []
     for tx in transactions:
+        if (
+            tx.source == DOCOMO_SMTB_SOURCE
+            and tx.status == ASSET_FORMATION_IMPORT_STATUS
+        ):
+            if tx.amount >= 0:
+                decisions.append(AutoExpenseDecision(
+                    tx, "review", "needs_review_asset_formation_sign",
+                    "資産形成支出の金額符号が不正",
+                ))
+            else:
+                decisions.append(AutoExpenseDecision(
+                    tx, "post", "auto_expense",
+                    "銀行の資産形成支出authority", ASSET_FORMATION_CATEGORY,
+                ))
+            continue
         if tx.status not in ELIGIBLE_STATUSES or tx.source not in PAYMENT_SOURCES:
             continue
         text = _combined_text(tx)
@@ -148,8 +168,12 @@ class AutoExpensePipeline:
                 spend_id = expense_id(tx.import_id)
                 updated[9] = spend_id
                 category = decision.category or FALLBACK_CATEGORY
+                posted_amount = (
+                    abs(tx.amount)
+                    if tx.status == ASSET_FORMATION_IMPORT_STATUS else tx.amount
+                )
                 expense = [
-                    spend_id, tx.date, tx.merchant, "自動計上", tx.amount,
+                    spend_id, tx.date, tx.merchant, "自動計上", posted_amount,
                     category[0], category[1], tx.row[7], tx.source, "", tx.import_id,
                     decision.reason, "active",
                 ]

@@ -18,6 +18,8 @@ from .bank_pdf_pipeline import (
     SOURCE,
 )
 from .bank_reconciliation import (
+    ASSET_FORMATION_CATEGORY,
+    ASSET_FORMATION_IMPORT_STATUS,
     BankPreviewPlan,
     BankShadowResult,
     ConfirmedInternalTransfers,
@@ -47,6 +49,14 @@ LOAN_CLASSIFICATION = "loan_repayment"
 LOAN_EXPENSE_CATEGORY = ("住まい", "住宅ローン")
 _BANK_CANARY_PLAN_AUTHORITY = object()
 _BANK_BATCH_PLAN_AUTHORITY = object()
+
+
+def _bank_import_status(classification: str, category: tuple[str, str]) -> str:
+    if classification == LOAN_CLASSIFICATION:
+        return "bank_loan_repayment"
+    if classification == "expense" and category == ASSET_FORMATION_CATEGORY:
+        return ASSET_FORMATION_IMPORT_STATUS
+    return f"bank_{classification}"
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,7 @@ class BankCanaryPlan:
     classification: str
     write_eligibility: str
     import_status: str
+    category: tuple[str, str]
     target_binding: TargetBinding = field(repr=False)
     planned_rows: int = 1
     authorized_rows: int = 1
@@ -386,7 +397,10 @@ def build_bank_canary_plan(
         transaction=transaction,
         classification=classification,
         write_eligibility="eligible",
-        import_status=f"bank_{classification}",
+        import_status=_bank_import_status(
+            classification, decision.classification.category,
+        ),
+        category=decision.classification.category,
         target_binding=binding,
     )
     return validate_bank_canary_plan(plan)
@@ -412,7 +426,9 @@ def validate_bank_canary_plan(value: object) -> BankCanaryPlan:
         raise RuntimeError("bank_canary_classification_withheld")
     if value.write_eligibility != "eligible":
         raise RuntimeError("bank_canary_write_eligibility_withheld")
-    if value.import_status != f"bank_{value.classification}":
+    if value.import_status != _bank_import_status(
+        value.classification, value.category,
+    ):
         raise RuntimeError("bank_canary_import_status_invalid")
     if value.planned_rows != 1 or value.authorized_rows != 1:
         raise RuntimeError("bank_canary_exactly_one_row_required")
@@ -476,10 +492,8 @@ def build_bank_batch_plan(
             classification=classification,
             projected_classification=projected_classification,
             write_eligibility="eligible",
-            import_status=(
-                "bank_loan_repayment"
-                if classification == LOAN_CLASSIFICATION
-                else f"bank_{classification}"
+            import_status=_bank_import_status(
+                classification, decision.classification.category,
             ),
             category=decision.classification.category,
         ))
@@ -535,11 +549,7 @@ def validate_bank_batch_plan(value: object) -> BankBatchPlan:
             raise RuntimeError("bank_batch_projected_classification_invalid")
         if item.write_eligibility != "eligible":
             raise RuntimeError("bank_batch_write_eligibility_withheld")
-        expected_status = (
-            "bank_loan_repayment"
-            if item.classification == LOAN_CLASSIFICATION
-            else f"bank_{item.classification}"
-        )
+        expected_status = _bank_import_status(item.classification, item.category)
         if item.import_status != expected_status:
             raise RuntimeError("bank_batch_import_status_invalid")
         _validate_bank_transaction_semantics(

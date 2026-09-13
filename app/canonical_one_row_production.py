@@ -43,6 +43,7 @@ from .aupay_card_writer import (
     validate_target_binding,
 )
 from .canonical_import import materialize_import_row
+from .bank_reconciliation import ASSET_FORMATION_IMPORT_STATUS
 from .sheets import HEADERS
 
 
@@ -185,6 +186,7 @@ def project_bank_canary_candidate(plan) -> CanonicalOneRowCandidate:
         write_eligibility=plan.write_eligibility,
         import_status=plan.import_status,
         max_rows=plan.authority.max_rows,
+        category=plan.category,
     )
 
 
@@ -205,6 +207,7 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
     expected_statuses = {
         f"bank_{value.transaction_kind}",
         "bank_loan_repayment" if value.transaction_kind == "expense" else "",
+        ASSET_FORMATION_IMPORT_STATUS if value.transaction_kind == "expense" else "",
     }
     if value.import_status not in expected_statuses:
         raise RuntimeError("canonical_one_row_import_status_invalid")

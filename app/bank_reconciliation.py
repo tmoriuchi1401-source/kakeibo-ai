@@ -42,6 +42,7 @@ RECONCILIATION_STATUSES = (
 # funding record; no current importer creates them implicitly.
 PAYPAY_BANK_AUTHORITY_STATUS = "paypay_bank_transfer"
 ASSET_FORMATION_CATEGORY = ("資産形成", "")
+ASSET_FORMATION_IMPORT_STATUS = "bank_asset_formation_expense"
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from app.bank_pdf_pipeline import (
 )
 from app.bank_reconciliation import (
     ASSET_FORMATION_CATEGORY,
+    ASSET_FORMATION_IMPORT_STATUS,
     build_bank_preview_plan,
     build_bank_shadow_result,
 )
@@ -93,7 +94,9 @@ def test_docomo_sbi_canary_binds_asset_formation_policy_to_approval_reference():
     assert candidate.transaction_kind == "expense"
     assert candidate.amount_yen < 0
     assert candidate.category == ASSET_FORMATION_CATEGORY
+    assert candidate.import_status == ASSET_FORMATION_IMPORT_STATUS
     assert candidate.write_eligibility == "eligible"
+    assert candidate.to_import_row(imported_at=NOW)[8] == ASSET_FORMATION_IMPORT_STATUS
 
     baseline = canonical_candidate_reference_v2(candidate, KEY)
     changed = _copy_frozen(candidate, category=("", ""))

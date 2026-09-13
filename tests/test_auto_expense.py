@@ -1,4 +1,7 @@
 from app.auto_expense import AutoExpensePipeline, expense_id
+from app.bank_pdf_pipeline import DOCOMO_SMTB_SOURCE
+from app.bank_reconciliation import ASSET_FORMATION_IMPORT_STATUS
+from app.expense_view import active_expenses
 
 
 def import_row(import_id="p1", source="PayPay", merchant="テスト商店", amount=100,
@@ -115,3 +118,43 @@ def test_existing_receipt_candidate_is_not_auto_posted_first():
     result = AutoExpensePipeline(db).apply()
     assert result["skipped"] == 1
     assert posted_expenses(db) == []
+
+
+def test_docomo_asset_formation_status_persists_into_expense_category():
+    db = FakeDB([
+        import_row(
+            "docomo:asset", DOCOMO_SMTB_SOURCE, "SBIハイブリッド預金",
+            -1000, ASSET_FORMATION_IMPORT_STATUS,
+        ),
+        import_row(
+            "docomo:ordinary", DOCOMO_SMTB_SOURCE, "通常の銀行支出",
+            -2000, "bank_expense",
+        ),
+    ])
+
+    result = AutoExpensePipeline(db).apply()
+
+    assert result["auto_expense"] == 1
+    assert result["expenses_created"] == 1
+    expense = posted_expenses(db)[0]
+    assert expense[4] == 1000
+    assert expense[5:7] == ["資産形成", ""]
+    assert expense[10] == "docomo:asset"
+    assert active_expenses([expense])[0].major_category == "資産形成"
+    assert db.updated["取込データ"][0][1][8] == "auto_expense"
+    assert db.updated["取込データ"][0][1][9] == expense_id("docomo:asset")
+
+
+def test_docomo_asset_formation_status_rejects_non_expense_sign():
+    db = FakeDB([
+        import_row(
+            "docomo:bad-sign", DOCOMO_SMTB_SOURCE, "SBIハイブリッド預金",
+            1000, ASSET_FORMATION_IMPORT_STATUS,
+        ),
+    ])
+
+    result = AutoExpensePipeline(db).apply()
+
+    assert result["needs_review"] == 1
+    assert posted_expenses(db) == []
+    assert db.updated["取込データ"][0][1][8] == "needs_review_asset_formation_sign"
