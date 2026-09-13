@@ -3,13 +3,16 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 import re
 import unicodedata
 
 from .bank_pdf_pipeline import (
+    CHIBA_BANK_SOURCE,
     DEFAULT_ACCOUNT_ALIAS,
     DOCOMO_SMTB_SOURCE,
+    SOURCE,
     BankPdfPipeline,
     BankPdfResult,
     NormalizedBankTransaction,
@@ -139,6 +142,31 @@ class TransferOwnershipCandidateGroup:
     occurrence_count: int
 
 
+@dataclass(frozen=True)
+class BankDescriptionDiagnosticGroup:
+    """Ephemeral exact-description grouping for local operator diagnostics."""
+
+    normalized_description: str
+    direction: str
+    occurrence_count: int
+    classification: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class CrossBankTransferDiagnosticGroup:
+    """Non-authoritative cross-bank candidate summary.
+
+    Same amount, opposite direction, and a narrow date window are deliberately
+    diagnostic only.  They never create ownership or write eligibility.
+    """
+
+    normalized_description: str
+    direction: str
+    occurrence_count: int
+    counterpart_candidate_count: int
+
+
 def group_transfer_ownership_candidates(
     parsed: BankPdfResult,
 ) -> tuple[TransferOwnershipCandidateGroup, ...]:
@@ -157,6 +185,90 @@ def group_transfer_ownership_candidates(
     return tuple(
         TransferOwnershipCandidateGroup(description, direction, account_alias, count)
         for (description, direction, account_alias), count in sorted(counts.items())
+    )
+
+
+def group_bank_description_diagnostics(
+    parsed: BankPdfResult,
+    *,
+    confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+    confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
+) -> tuple[BankDescriptionDiagnosticGroup, ...]:
+    """Group parsed rows by exact normalized description and direction."""
+    counts = Counter()
+    for transaction in parsed.transactions:
+        classified = classify_bank_transaction(
+            transaction,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
+        )
+        counts[(
+            normalize_bank_description(transaction.description),
+            "incoming" if transaction.signed_amount > 0 else "outgoing",
+            classified.classification,
+            classified.reason,
+        )] += 1
+    return tuple(
+        BankDescriptionDiagnosticGroup(
+            description, direction, count, classification, reason,
+        )
+        for (
+            description, direction, classification, reason,
+        ), count in sorted(
+            counts.items(), key=lambda item: (
+                -item[1], item[0][0], item[0][1], item[0][2], item[0][3],
+            ),
+        )
+    )
+
+
+def diagnose_cross_bank_transfer_groups(
+    parsed: BankPdfResult,
+    existing_transactions: list[ImportTransaction],
+    *,
+    max_days: int = 3,
+) -> tuple[CrossBankTransferDiagnosticGroup, ...]:
+    """Find non-authoritative opposite-direction candidates in other banks."""
+    if max_days < 0:
+        raise ValueError("max_days_invalid")
+    other_bank_sources = {SOURCE, DOCOMO_SMTB_SOURCE, CHIBA_BANK_SOURCE} - {
+        parsed.source,
+    }
+    grouped: dict[tuple[str, str], list[int]] = {}
+    for transaction in parsed.transactions:
+        classified = classify_bank_transaction(transaction)
+        if classified.classification != "needs_review":
+            continue
+        direction = "incoming" if transaction.signed_amount > 0 else "outgoing"
+        try:
+            transaction_date = datetime.strptime(
+                transaction.transaction_date, "%Y-%m-%d",
+            ).date()
+        except ValueError:
+            continue
+        candidates = []
+        for existing in existing_transactions:
+            if existing.source not in other_bank_sources:
+                continue
+            if existing.amount == 0 or existing.amount * transaction.signed_amount >= 0:
+                continue
+            if abs(existing.amount) != abs(transaction.signed_amount):
+                continue
+            try:
+                existing_date = datetime.strptime(existing.date, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if abs((existing_date - transaction_date).days) <= max_days:
+                candidates.append(existing)
+        if not candidates:
+            continue
+        key = (normalize_bank_description(transaction.description), direction)
+        values = grouped.setdefault(key, [0, 0])
+        values[0] += 1
+        values[1] += len(candidates)
+    return tuple(
+        CrossBankTransferDiagnosticGroup(description, direction, counts[0], counts[1])
+        for (description, direction), counts in sorted(grouped.items())
     )
 
 

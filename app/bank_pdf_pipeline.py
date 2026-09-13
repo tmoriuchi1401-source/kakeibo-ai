@@ -22,6 +22,8 @@ SOURCE = "auじぶん銀行PDF"
 DEFAULT_ACCOUNT_ALIAS = "jibun-primary"
 DOCOMO_SMTB_SOURCE = "ドコモSMTBネット銀行PDF"
 DEFAULT_DOCOMO_SMTB_ACCOUNT_ALIAS = "docomo-smtb-primary"
+CHIBA_BANK_SOURCE = "千葉銀行PDF"
+DEFAULT_CHIBA_BANK_ACCOUNT_ALIAS = "chiba-primary"
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,11 @@ class BankPdfAdapter:
     date_format: str
     document_markers: tuple[str, ...]
     zero_filled_opposite_amount: bool = False
+    column_order: tuple[str, str, str, str, str] = (
+        "date", "description", "debit", "credit", "balance",
+    )
+    boundary_mode: str = "vertical_lines"
+    balance_order: str = "descending"
 
 
 JIBUN_BANK_ADAPTER = BankPdfAdapter(
@@ -58,6 +65,20 @@ DOCOMO_SMTB_BANK_ADAPTER = BankPdfAdapter(
     date_format="%Y年%m月%d日",
     document_markers=("株式会社ドコモSMTBネット銀行",),
     zero_filled_opposite_amount=True,
+)
+
+CHIBA_BANK_ADAPTER = BankPdfAdapter(
+    key="chiba",
+    source=CHIBA_BANK_SOURCE,
+    identity_namespace="chiba",
+    default_account_alias=DEFAULT_CHIBA_BANK_ACCOUNT_ALIAS,
+    headers=("年月日", "お支払い金額", "お預り金額", "お取引き内容", "差引残高"),
+    date_pattern=re.compile(r"20\d{2}/\d{2}/\d{2}"),
+    date_format="%Y/%m/%d",
+    document_markers=("千葉銀行", "取引明細照会"),
+    column_order=("date", "debit", "credit", "description", "balance"),
+    boundary_mode="header_gaps",
+    balance_order="ascending",
 )
 
 
@@ -187,6 +208,8 @@ def _header_span(
 def infer_column_boundaries(
     page: PageGeometry,
     headers: tuple[str, str, str, str, str] | None = None,
+    *,
+    boundary_mode: str = "vertical_lines",
 ) -> tuple[float, float, float, float]:
     headers = headers or JIBUN_BANK_ADAPTER.headers
     date_headers = [word for word in page.words if _text(word.text) == headers[0]]
@@ -200,7 +223,20 @@ def infer_column_boundaries(
     spans = [_header_span(band, label) for label in headers]
     if any(span is None for span in spans):
         raise BankPdfError("header_geometry_unresolved")
-    centers = [(span[0] + span[1]) / 2 for span in spans if span is not None]
+    resolved_spans = [span for span in spans if span is not None]
+    if any(
+        left[1] >= right[0]
+        for left, right in zip(resolved_spans, resolved_spans[1:])
+    ):
+        raise BankPdfError("header_geometry_unresolved")
+    if boundary_mode == "header_gaps":
+        return tuple(
+            (left[1] + right[0]) / 2
+            for left, right in zip(resolved_spans, resolved_spans[1:])
+        )  # type: ignore[return-value]
+    if boundary_mode != "vertical_lines":
+        raise BankPdfError("column_boundary_mode_invalid")
+    centers = [(span[0] + span[1]) / 2 for span in resolved_spans]
     lines = sorted(set(page.vertical_lines))
     boundaries = []
     for left, right in zip(centers, centers[1:]):
@@ -215,7 +251,10 @@ def infer_column_boundaries(
 def _parse_money(words: list[PositionedWord], *, allow_negative: bool = False) -> int | None:
     if not words:
         return None
-    value = "".join(_text(word.text).replace(" ", "") for word in sorted(words, key=lambda word: word.x0))
+    value = "".join(
+        _text(word.text).replace(" ", "")
+        for word in sorted(words, key=lambda word: word.x0)
+    ).replace("¥", "").replace("￥", "")
     pattern = r"-?[0-9][0-9,]*" if allow_negative else r"[0-9][0-9,]*"
     if not re.fullmatch(pattern, value):
         raise ValueError("amount_invalid")
@@ -237,7 +276,9 @@ def _parse_page(
     adapter: BankPdfAdapter,
 ) -> tuple[list[_ParsedRow], list[BankParseIssue], int]:
     try:
-        boundaries = infer_column_boundaries(page, adapter.headers)
+        boundaries = infer_column_boundaries(
+            page, adapter.headers, boundary_mode=adapter.boundary_mode,
+        )
     except BankPdfError as exc:
         return [], [BankParseIssue(page.page_number, 0, str(exc))], 0
     header_top = min(
@@ -259,21 +300,27 @@ def _parse_page(
             word for word in page.words
             if abs(word.top - date_word.top) <= 2.0
         ]
-        description_words = [
-            word for word in row_words
-            if boundaries[0] < word.center_x < boundaries[1]
+        columns = [
+            [word for word in row_words if word.center_x < boundaries[0]],
+            [
+                word for word in row_words
+                if boundaries[0] < word.center_x < boundaries[1]
+            ],
+            [
+                word for word in row_words
+                if boundaries[1] < word.center_x < boundaries[2]
+            ],
+            [
+                word for word in row_words
+                if boundaries[2] < word.center_x < boundaries[3]
+            ],
+            [word for word in row_words if word.center_x > boundaries[3]],
         ]
-        debit_words = [
-            word for word in row_words
-            if boundaries[1] < word.center_x < boundaries[2]
-        ]
-        credit_words = [
-            word for word in row_words
-            if boundaries[2] < word.center_x < boundaries[3]
-        ]
-        balance_words = [
-            word for word in row_words if word.center_x > boundaries[3]
-        ]
+        cells = dict(zip(adapter.column_order, columns))
+        description_words = cells["description"]
+        debit_words = cells["debit"]
+        credit_words = cells["credit"]
+        balance_words = cells["balance"]
         description = _text(" ".join(
             word.text for word in sorted(description_words, key=lambda word: word.x0)
         ))
@@ -384,21 +431,30 @@ def parse_bank_pages(
             transaction_kind="withdrawal" if row.signed_amount < 0 else "deposit",
         ))
 
-    def adjacent(current, older) -> bool:
+    def adjacent(first, second) -> bool:
         return (
-            current.page == older.page
-            and older.row == current.row + 1
+            first.page == second.page
+            and second.row == first.row + 1
         ) or (
-            older.page == current.page + 1
-            and current.row == page_candidate_counts[current.page]
-            and older.row == 1
+            second.page == first.page + 1
+            and first.row == page_candidate_counts[first.page]
+            and second.row == 1
         )
 
-    balance_failures = sum(
-        adjacent(current, older)
-        and current.balance != older.balance + current.signed_amount
-        for current, older in zip(raw_rows, raw_rows[1:])
-    )
+    if adapter.balance_order == "descending":
+        balance_failures = sum(
+            adjacent(newer, older)
+            and newer.balance != older.balance + newer.signed_amount
+            for newer, older in zip(raw_rows, raw_rows[1:])
+        )
+    elif adapter.balance_order == "ascending":
+        balance_failures = sum(
+            adjacent(older, newer)
+            and newer.balance != older.balance + newer.signed_amount
+            for older, newer in zip(raw_rows, raw_rows[1:])
+        )
+    else:
+        raise BankPdfError("balance_order_invalid")
     canonical = [transaction.to_canonical() for transaction in normalized]
     resolution = resolve_transaction_identities(
         canonical,
@@ -469,6 +525,20 @@ def parse_docomo_smtb_bank_pages(
     )
 
 
+def parse_chiba_bank_pages(
+    pages: list[PageGeometry],
+    *,
+    account_alias: str = DEFAULT_CHIBA_BANK_ACCOUNT_ALIAS,
+    existing_identities: set[str] | None = None,
+) -> BankPdfResult:
+    return parse_bank_pages(
+        pages,
+        adapter=CHIBA_BANK_ADAPTER,
+        account_alias=account_alias,
+        existing_identities=existing_identities,
+    )
+
+
 def detect_bank_pdf_adapter(pages: list[PageGeometry]) -> BankPdfAdapter:
     if not pages:
         raise BankPdfError("bank_document_empty")
@@ -476,7 +546,9 @@ def detect_bank_pdf_adapter(pages: list[PageGeometry]) -> BankPdfAdapter:
         _text(word.text).replace(" ", "")
         for word in sorted(pages[0].words, key=lambda word: (word.top, word.x0))
     )
-    adapters = (DOCOMO_SMTB_BANK_ADAPTER, JIBUN_BANK_ADAPTER)
+    adapters = (
+        CHIBA_BANK_ADAPTER, DOCOMO_SMTB_BANK_ADAPTER, JIBUN_BANK_ADAPTER,
+    )
     for adapter in adapters:
         if not all(
             marker.replace(" ", "") in first_page_text
@@ -484,7 +556,10 @@ def detect_bank_pdf_adapter(pages: list[PageGeometry]) -> BankPdfAdapter:
         ):
             continue
         try:
-            infer_column_boundaries(pages[0], adapter.headers)
+            infer_column_boundaries(
+                pages[0], adapter.headers,
+                boundary_mode=adapter.boundary_mode,
+            )
         except BankPdfError:
             continue
         return adapter
