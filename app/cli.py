@@ -341,6 +341,9 @@ def main():
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
                 ),
+                confirmed_non_own_classifications=(
+                    s.bank_confirmed_non_own_classifications()
+                ),
             ),
             ensure_ascii=False,sort_keys=True,
         ))
@@ -352,6 +355,9 @@ def main():
                 args.pdf,account_alias=args.account_alias,
                 confirmed_internal_transfers=(
                     s.bank_confirmed_internal_transfers()
+                ),
+                confirmed_non_own_classifications=(
+                    s.bank_confirmed_non_own_classifications()
                 ),
             ),
             ensure_ascii=False,sort_keys=True,
@@ -453,10 +459,12 @@ def main():
             statement_summary={"gmail_configured":True,**statement_summary}
         authorities=tuple(item.to_import_transaction() for item in statements)
         transfer_rules=s.bank_confirmed_internal_transfers()
+        non_own_rules=s.bank_confirmed_non_own_classifications()
         shadow=BankPdfShadowPipeline(db).preview(
             args.pdf,
             account_alias=args.account_alias,
             confirmed_internal_transfers=transfer_rules,
+            confirmed_non_own_classifications=non_own_rules,
             card_statement_authorities=authorities,
         )
         loan=BankCanaryPreparationPipeline(db).loan_dry_run(

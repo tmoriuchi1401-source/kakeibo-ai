@@ -187,6 +187,62 @@ def test_confirmed_internal_transfer_requires_exact_configured_description():
     assert fuzzy_description.classification == "needs_review"
 
 
+def test_operator_reimbursement_is_exact_non_write_classification():
+    transaction = bank("振込 勤務先立替", 1000)
+    configured = frozenset({
+        ("振込勤務先立替", "incoming", "test-account", "reimbursement"),
+    })
+
+    decision = classify_bank_transaction(
+        transaction, confirmed_non_own_classifications=configured,
+    )
+    wrong_direction = classify_bank_transaction(
+        bank("振込 勤務先立替", -1000),
+        confirmed_non_own_classifications=configured,
+    )
+    fuzzy = classify_bank_transaction(
+        bank("振込 勤務先立替 追加", 1000),
+        confirmed_non_own_classifications=configured,
+    )
+
+    assert (decision.classification, decision.reason) == (
+        "reimbursement", "operator_confirmed_reimbursement",
+    )
+    assert wrong_direction.classification == "needs_review"
+    assert fuzzy.classification == "needs_review"
+
+
+def test_operator_reimbursement_is_withheld_from_preview_plan():
+    transaction = bank("振込 勤務先立替", 1000)
+    shadow = build_bank_shadow_result(
+        parsed_for(transaction), [],
+        confirmed_non_own_classifications=frozenset({
+            ("振込勤務先立替", "incoming", "test-account", "reimbursement"),
+        }),
+    )
+
+    assert shadow.summary()["classification"]["reimbursement"] == 1
+    assert shadow.summary()["write_eligibility"] == {
+        "preview_candidate": 0, "withheld": 1,
+    }
+    assert build_bank_preview_plan(shadow, []).new_plan_candidates == 0
+
+
+def test_operator_non_own_review_keeps_needs_review_without_transfer_semantics():
+    transaction = bank("振込 例外送金", -1000)
+    configured = frozenset({
+        ("振込例外送金", "outgoing", "test-account", "needs_review"),
+    })
+
+    decision = classify_bank_transaction(
+        transaction, confirmed_non_own_classifications=configured,
+    )
+
+    assert (decision.classification, decision.reason) == (
+        "needs_review", "operator_confirmed_non_own_review",
+    )
+
+
 def test_private_transfer_config_requires_exact_description_and_direction():
     settings = Settings(bank_internal_transfers_json=json.dumps([
         {
@@ -206,6 +262,52 @@ def test_private_transfer_config_requires_exact_description_and_direction():
     assert settings.bank_confirmed_internal_transfers() == frozenset({
         ("振込匿名資金移動", "incoming", "test-account"),
     })
+
+
+def test_private_non_own_config_requires_exact_reimbursement_rule():
+    settings = Settings(bank_non_own_classifications_json=json.dumps([
+        {
+            "normalized_description": "振込勤務先立替",
+            "direction": "incoming",
+            "account_alias": "test-account",
+            "classification": "reimbursement",
+            "active": True,
+        },
+    ], ensure_ascii=False))
+
+    assert settings.bank_confirmed_non_own_classifications() == frozenset({
+        ("振込勤務先立替", "incoming", "test-account", "reimbursement"),
+    })
+
+
+def test_private_non_own_config_accepts_explicit_review_rule():
+    settings = Settings(bank_non_own_classifications_json=json.dumps([
+        {
+            "normalized_description": "振込例外送金",
+            "direction": "outgoing",
+            "account_alias": "test-account",
+            "classification": "needs_review",
+            "active": True,
+        },
+    ], ensure_ascii=False))
+
+    assert settings.bank_confirmed_non_own_classifications() == frozenset({
+        ("振込例外送金", "outgoing", "test-account", "needs_review"),
+    })
+
+
+@pytest.mark.parametrize("value", [
+    "not-json",
+    '[{"normalized_description":"振込勤務先立替","direction":"incoming",'
+    '"account_alias":"test-account","classification":"expense","active":true}]',
+    '[{"normalized_description":"振込 勤務先立替","direction":"incoming",'
+    '"account_alias":"test-account","classification":"reimbursement","active":true}]',
+])
+def test_private_non_own_config_fails_closed(value):
+    settings = Settings(bank_non_own_classifications_json=value)
+
+    with pytest.raises(RuntimeError, match="BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON"):
+        settings.bank_confirmed_non_own_classifications()
 
 
 @pytest.mark.parametrize("value", [

@@ -24,6 +24,9 @@ class Settings:
     bank_internal_transfers_json: str = field(default_factory=lambda: os.getenv(
         "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON", "[]",
     ))
+    bank_non_own_classifications_json: str = field(default_factory=lambda: os.getenv(
+        "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON", "[]",
+    ))
     gmail_token_json: str = os.getenv("GOOGLE_GMAIL_TOKEN_JSON", "")
     aupay_gmail_query: str = os.getenv("AUPAY_GMAIL_QUERY") or (
         'in:anywhere from:info@wallet.auone.jp '
@@ -112,6 +115,63 @@ class Settings:
             (
                 value["normalized_description"], value["direction"],
                 value["account_alias"].strip(),
+            )
+            for value in values
+            if value["active"]
+        )
+
+    def bank_confirmed_non_own_classifications(
+        self,
+    ) -> frozenset[tuple[str, str, str, str]]:
+        """Load exact operator-confirmed non-write classifications privately.
+
+        This is intentionally separate from owned-account transfer authority.
+        Only exact normalized description/direction/account matches are accepted;
+        no fuzzy ownership or amount-based inference is permitted.
+        """
+        from .bank_reconciliation import normalize_bank_description
+
+        try:
+            values = json.loads(self.bank_non_own_classifications_json)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON must be a JSON array"
+            ) from exc
+        if not isinstance(values, list) or any(
+            not isinstance(value, dict)
+            or set(value) != {
+                "normalized_description", "direction", "account_alias",
+                "classification", "active",
+            }
+            or not isinstance(value["normalized_description"], str)
+            or not value["normalized_description"].strip()
+            or value["direction"] not in {"incoming", "outgoing"}
+            or not isinstance(value["account_alias"], str)
+            or not value["account_alias"].strip()
+            or value["classification"] not in {"reimbursement", "needs_review"}
+            or not isinstance(value["active"], bool)
+            for value in values
+        ):
+            raise RuntimeError(
+                "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON must contain exact "
+                "normalized_description/direction/account_alias/classification/active objects"
+            )
+        if any(
+            value["normalized_description"]
+            != normalize_bank_description(value["normalized_description"])
+            or not re.fullmatch(
+                r"[a-z0-9][a-z0-9_-]{1,63}", value["account_alias"].strip(),
+            )
+            for value in values
+        ):
+            raise RuntimeError(
+                "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON descriptions must already "
+                "be normalized and account_alias must be non-sensitive"
+            )
+        return frozenset(
+            (
+                value["normalized_description"], value["direction"],
+                value["account_alias"].strip(), value["classification"],
             )
             for value in values
             if value["active"]

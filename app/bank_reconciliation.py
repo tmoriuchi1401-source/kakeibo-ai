@@ -25,12 +25,13 @@ from .transaction_plan import resolve_transaction_identities
 
 CLASSIFICATIONS = (
     "card_settlement", "transfer", "income", "expense", "loan_repayment",
-    "cash_withdrawal", "needs_review",
+    "cash_withdrawal", "reimbursement", "needs_review",
 )
 WRITE_ELIGIBLE_CLASSIFICATIONS = frozenset({
     "income", "expense", "loan_repayment",
 })
 ConfirmedInternalTransfers = frozenset[tuple[str, str, str]]
+ConfirmedNonOwnClassifications = frozenset[tuple[str, str, str, str]]
 RECONCILIATION_STATUSES = (
     "matched", "identified_unlinked", "not_applicable", "unmatched",
 )
@@ -169,6 +170,7 @@ def classify_bank_transaction(
     transaction: NormalizedBankTransaction,
     *,
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+    confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
 ) -> BankClassification:
     """Classify only cases supported by explicit bank-row evidence."""
     description = normalize_bank_description(transaction.description)
@@ -184,6 +186,23 @@ def classify_bank_transaction(
 
     if (description, direction, transaction.account_alias) in confirmed:
         return BankClassification(transaction, "transfer", "confirmed_internal_transfer")
+
+    non_own = {
+        (value, configured_direction, account_alias): classification
+        for value, configured_direction, account_alias, classification
+        in confirmed_non_own_classifications
+    }
+    operator_classification = non_own.get(
+        (description, direction, transaction.account_alias),
+    )
+    if operator_classification == "reimbursement":
+        return BankClassification(
+            transaction, "reimbursement", "operator_confirmed_reimbursement",
+        )
+    if operator_classification == "needs_review":
+        return BankClassification(
+            transaction, "needs_review", "operator_confirmed_non_own_review",
+        )
 
     if transaction.signed_amount > 0:
         if "賞与" in description:
@@ -280,12 +299,14 @@ def build_bank_shadow_result(
     existing_transactions: list[ImportTransaction],
     *,
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+    confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
     card_statement_authorities: tuple[ImportTransaction, ...] = (),
 ) -> BankShadowResult:
     classified = [
         classify_bank_transaction(
             transaction,
             confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
         )
         for transaction in parsed.transactions
     ]
@@ -426,6 +447,7 @@ class BankPdfShadowPipeline:
         *,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
         confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+        confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
         card_statement_authorities: tuple[ImportTransaction, ...] = (),
     ) -> dict:
         existing_rows = self.db.get("取込データ!A2:L")
@@ -441,6 +463,7 @@ class BankPdfShadowPipeline:
             parsed,
             existing_transactions,
             confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
             card_statement_authorities=card_statement_authorities,
         ).summary()
 
@@ -450,6 +473,7 @@ class BankPdfShadowPipeline:
         *,
         account_alias: str = DEFAULT_ACCOUNT_ALIAS,
         confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+        confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
         card_statement_authorities: tuple[ImportTransaction, ...] = (),
     ) -> dict:
         existing_rows = self.db.get("取込データ!A2:L")
@@ -465,6 +489,7 @@ class BankPdfShadowPipeline:
             parsed,
             existing_transactions,
             confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
             card_statement_authorities=card_statement_authorities,
         )
         result = shadow.summary()
