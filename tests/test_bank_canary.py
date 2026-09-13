@@ -10,7 +10,11 @@ from app.bank_canary import (
     dry_run_bank_canary,
     validate_bank_canary_plan,
 )
-from app.bank_pdf_pipeline import BankPdfResult, NormalizedBankTransaction
+from app.bank_pdf_pipeline import (
+    CHIBA_BANK_SOURCE,
+    BankPdfResult,
+    NormalizedBankTransaction,
+)
 from app.bank_reconciliation import build_bank_preview_plan, build_bank_shadow_result
 from app.reconciliation import parse_import_rows
 from app.sheets import HEADERS
@@ -136,6 +140,21 @@ def test_eligible_income_and_direct_expense_make_one_row_plan(
         "max_writes": 1,
         "external_write_count": 0,
     }
+
+
+def test_chiba_expense_is_allowed_through_common_bank_authority():
+    transaction = replace(
+        bank("口座振替 公共サービス", -1000, "bankpdf:chiba:test"),
+        source=CHIBA_BANK_SOURCE,
+    )
+    shadow, preview = context(transaction)
+
+    plan = build_bank_canary_plan(
+        shadow, preview, authority(transaction.source_row_identity),
+    )
+
+    assert plan.classification == "expense"
+    assert plan.transaction.source == CHIBA_BANK_SOURCE
 
 
 @pytest.mark.parametrize("transaction", [

@@ -12,6 +12,7 @@ from .aupay_card_writer import (
     validate_target_binding,
 )
 from .bank_pdf_pipeline import (
+    CHIBA_BANK_SOURCE,
     DEFAULT_ACCOUNT_ALIAS,
     DOCOMO_SMTB_SOURCE,
     BankPdfPipeline,
@@ -44,7 +45,7 @@ BANK_BATCH_ROW_BOUNDS = frozenset({
     BANK_LOAN_ROWS, BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS,
 })
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
-BANK_SOURCES = frozenset({SOURCE, DOCOMO_SMTB_SOURCE})
+BANK_SOURCES = frozenset({SOURCE, DOCOMO_SMTB_SOURCE, CHIBA_BANK_SOURCE})
 LOAN_CLASSIFICATION = "loan_repayment"
 LOAN_EXPENSE_CATEGORY = ("住まい", "住宅ローン")
 _BANK_CANARY_PLAN_AUTHORITY = object()
