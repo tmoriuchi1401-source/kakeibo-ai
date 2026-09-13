@@ -48,10 +48,12 @@ from .sheets import HEADERS
 
 CANONICAL_ONE_ROW_SCHEMA_VERSION = 1
 CANONICAL_ONE_ROW_MAX_ROWS = 1
+CANONICAL_LOAN_BATCH_ROWS = 4
 CANONICAL_BOUNDED_BATCH_ROWS = 5
 CANONICAL_INITIAL_BACKFILL_ROWS = 51
 CANONICAL_TRANSPORT_ROW_BOUNDS = frozenset({
     CANONICAL_ONE_ROW_MAX_ROWS,
+    CANONICAL_LOAN_BATCH_ROWS,
     CANONICAL_BOUNDED_BATCH_ROWS,
     CANONICAL_INITIAL_BACKFILL_ROWS,
 })
@@ -179,13 +181,21 @@ def validate_canonical_one_row_candidate(value: object) -> CanonicalOneRowCandid
         raise RuntimeError("canonical_one_row_classification_withheld")
     if value.write_eligibility != "eligible":
         raise RuntimeError("canonical_one_row_write_eligibility_invalid")
-    if value.import_status != f"bank_{value.transaction_kind}":
+    expected_status = (
+        "bank_loan_repayment"
+        if value.max_rows == CANONICAL_LOAN_BATCH_ROWS
+        and value.transaction_kind == "expense"
+        else f"bank_{value.transaction_kind}"
+    )
+    if value.import_status != expected_status:
         raise RuntimeError("canonical_one_row_import_status_invalid")
     if authority_token is _CANDIDATE_AUTHORITY:
         if value.max_rows != CANONICAL_ONE_ROW_MAX_ROWS:
             raise RuntimeError("canonical_one_row_max_rows_must_be_one")
     elif value.max_rows not in {
-        CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+        CANONICAL_LOAN_BATCH_ROWS,
+        CANONICAL_BOUNDED_BATCH_ROWS,
+        CANONICAL_INITIAL_BACKFILL_ROWS,
     }:
         raise RuntimeError("canonical_batch_row_bound_invalid")
     if value.source_identities != (value.identity,):
@@ -234,9 +244,26 @@ def project_bank_five_row_batch(plan) -> CanonicalFiveRowBatch:
     return _project_bank_batch(plan)
 
 
+def project_bank_loan_repayment_batch(plan) -> CanonicalFiveRowBatch:
+    if plan.authority.max_rows != CANONICAL_LOAN_BATCH_ROWS:
+        raise RuntimeError("canonical_loan_batch_requires_exactly_four_rows")
+    return _project_bank_batch(plan)
+
+
 def project_bank_initial_backfill_batch(plan) -> CanonicalFiveRowBatch:
     if plan.authority.max_rows != CANONICAL_INITIAL_BACKFILL_ROWS:
         raise RuntimeError("canonical_backfill_requires_exactly_51_rows")
+    return _project_bank_batch(plan)
+
+
+def project_bank_bounded_batch(plan) -> CanonicalFiveRowBatch:
+    """Project a validated 4/5/51-row plan without granting write authority."""
+    if plan.authority.max_rows not in {
+        CANONICAL_LOAN_BATCH_ROWS,
+        CANONICAL_BOUNDED_BATCH_ROWS,
+        CANONICAL_INITIAL_BACKFILL_ROWS,
+    }:
+        raise RuntimeError("canonical_batch_row_bound_invalid")
     return _project_bank_batch(plan)
 
 
@@ -247,7 +274,7 @@ def _project_bank_batch(plan) -> CanonicalFiveRowBatch:
     candidates = tuple(
         _project_bank_candidate(
             item.transaction,
-            classification=item.classification,
+            classification=item.projected_classification,
             write_eligibility=item.write_eligibility,
             import_status=item.import_status,
             max_rows=plan.authority.max_rows,
@@ -271,7 +298,9 @@ def validate_canonical_five_row_batch(value: object) -> CanonicalFiveRowBatch:
     if (
         value.min_rows != value.max_rows
         or value.max_rows not in {
-            CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
+            CANONICAL_LOAN_BATCH_ROWS,
+            CANONICAL_BOUNDED_BATCH_ROWS,
+            CANONICAL_INITIAL_BACKFILL_ROWS,
         }
         or len(value.candidates) != value.max_rows
     ):

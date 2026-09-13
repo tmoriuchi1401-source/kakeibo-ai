@@ -538,6 +538,9 @@ def collect_aupay_card_statement_authorities(
         "parsed_statements": 0,
         "rejected_messages": 0,
         "duplicate_gmail_message": 0,
+        "duplicate_statement_notification": 0,
+        "conflicting_statement_cycle": 0,
+        "unique_statement_authorities": 0,
         "gmail_list_failed": 0,
         "gmail_read_failed": 0,
         "gmail_retry_count": 0,
@@ -595,7 +598,33 @@ def collect_aupay_card_statement_authorities(
         page_token = response.get("nextPageToken")
         if not page_token:
             break
-    return tuple(statements), summary
+    by_cycle: dict[tuple[str, str], list[AuPayCardStatementAuthority]] = {}
+    for statement in statements:
+        by_cycle.setdefault((statement.issuer, statement.billing_cycle), []).append(
+            statement,
+        )
+    authorities: list[AuPayCardStatementAuthority] = []
+    for cycle_statements in by_cycle.values():
+        facts = {
+            (statement.payment_date, statement.statement_total_yen)
+            for statement in cycle_statements
+        }
+        if len(facts) != 1:
+            summary["conflicting_statement_cycle"] = (
+                int(summary["conflicting_statement_cycle"]) + 1
+            )
+            summary["collection_complete"] = False
+            continue
+        selected = min(
+            cycle_statements, key=lambda statement: statement.statement_identity,
+        )
+        authorities.append(selected)
+        summary["duplicate_statement_notification"] = (
+            int(summary["duplicate_statement_notification"])
+            + len(cycle_statements) - 1
+        )
+    summary["unique_statement_authorities"] = len(authorities)
+    return tuple(authorities), summary
 
 
 class AuPayMailPipeline:

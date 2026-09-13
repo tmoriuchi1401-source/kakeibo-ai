@@ -99,6 +99,11 @@ from .bank_reconciliation import (
     group_transfer_ownership_candidates,
 )
 from .bank_canary import BankCanaryPreparationPipeline
+from .bank_loan_manifest import (
+    BankLoanExactManifest,
+    load_bank_loan_manifest,
+    write_bank_loan_manifest,
+)
 from .bank_canary_production import (
     run_bank_production_batch,
     run_bank_production_canary,
@@ -238,6 +243,14 @@ def main():
     bank_phase10.add_argument("pdf")
     bank_phase10.add_argument("--account-alias",default="jibun-primary")
     bank_phase10.add_argument("--statement-max-results",type=int,default=100)
+    loan_manifest=sub.add_parser("bank-pdf-loan-manifest-freeze")
+    loan_manifest.add_argument("pdf")
+    loan_manifest.add_argument("--account-alias",default="jibun-primary")
+    loan_manifest.add_argument("--output",required=True)
+    loan_batch=sub.add_parser("bank-pdf-loan-batch-dry-run")
+    loan_batch.add_argument("pdf")
+    loan_batch.add_argument("--account-alias",default="jibun-primary")
+    loan_batch.add_argument("--identity-manifest",required=True)
     bank_canary_candidates=sub.add_parser("bank-pdf-canary-candidates")
     bank_canary_candidates.add_argument("pdf")
     bank_canary_candidates.add_argument("--account-alias",default="jibun-primary")
@@ -339,13 +352,56 @@ def main():
             "local_console_only":True,
             "operator_confirmation_candidate_groups":len(groups),
             "candidates":[{
+                "candidate_number":number,
                 "normalized_description":item.normalized_description,
                 "direction":item.direction,
                 "account_alias":item.account_alias,
                 "occurrence_count":item.occurrence_count,
-            } for item in groups],
+            } for number,item in enumerate(groups,start=1)],
             "write_attempted":0,
         },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-loan-manifest-freeze":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        pipeline=BankCanaryPreparationPipeline(db)
+        identities=pipeline.loan_candidate_identities(
+            args.pdf,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+        )
+        manifest=BankLoanExactManifest(
+            created_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+            source_identities=identities,
+            target_spreadsheet_id=s.spreadsheet_id,
+        )
+        write_bank_loan_manifest(
+            args.output,manifest,
+            repository_root=Path(__file__).resolve().parents[1],
+        )
+        print(json.dumps({
+            "manifest_created":True,
+            "identity_count":len(identities),
+            "classification":"loan_repayment",
+            "projected_classification":"expense",
+            "target_sheet":"取込データ",
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-loan-batch-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        manifest=load_bank_loan_manifest(args.identity_manifest)
+        if manifest.target_spreadsheet_id != s.spreadsheet_id:
+            raise RuntimeError("bank_loan_manifest_target_changed")
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).loan_batch_dry_run(
+                args.pdf,
+                selected_source_identities=manifest.source_identities,
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
     elif args.cmd=="bank-pdf-phase10-preview":
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())

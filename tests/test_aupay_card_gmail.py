@@ -196,6 +196,44 @@ def test_statement_collector_uses_gmail_readonly_shape_and_returns_counts_only()
     assert "12345" not in str(summary)
 
 
+def test_same_billing_cycle_resend_is_deduplicated_without_purchase_summing():
+    first = statement_message(message_id="<statement-first@example.invalid>")
+    resend = statement_message(message_id="<statement-resend@example.invalid>")
+    service = GmailService(
+        [{"messages": [{"id": "gmail-1"}, {"id": "gmail-2"}]}],
+        {"gmail-1": encoded(first), "gmail-2": encoded(resend)},
+    )
+
+    statements, summary = collect_aupay_card_statement_authorities(
+        service, 'from:kddi-fs.com subject:"ご請求額"', max_results=10,
+    )
+
+    assert len(statements) == 1
+    assert summary["parsed_statements"] == 2
+    assert summary["unique_statement_authorities"] == 1
+    assert summary["duplicate_statement_notification"] == 1
+    assert summary["conflicting_statement_cycle"] == 0
+
+
+def test_conflicting_same_cycle_statement_notifications_fail_closed():
+    first = statement_message(message_id="<statement-first@example.invalid>")
+    conflict = statement_message(
+        amount=12346, message_id="<statement-conflict@example.invalid>",
+    )
+    service = GmailService(
+        [{"messages": [{"id": "gmail-1"}, {"id": "gmail-2"}]}],
+        {"gmail-1": encoded(first), "gmail-2": encoded(conflict)},
+    )
+
+    statements, summary = collect_aupay_card_statement_authorities(
+        service, 'from:kddi-fs.com subject:"ご請求額"', max_results=10,
+    )
+
+    assert statements == ()
+    assert summary["conflicting_statement_cycle"] == 1
+    assert summary["collection_complete"] is False
+
+
 def test_partial_parser_preserves_signed_return_semantics():
     result = parse_aupay_card_raw_partial(raw_message(
         return_detail(1, "匿名返品先", 1200),

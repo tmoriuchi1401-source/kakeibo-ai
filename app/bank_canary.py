@@ -28,8 +28,11 @@ from .transaction_plan import Transaction
 CANARY_TARGET_SHEET = "取込データ"
 CANARY_MAX_ROWS = 1
 BANK_BATCH_ROWS = 5
+BANK_LOAN_ROWS = 4
 BANK_INITIAL_BACKFILL_ROWS = 51
-BANK_BATCH_ROW_BOUNDS = frozenset({BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS})
+BANK_BATCH_ROW_BOUNDS = frozenset({
+    BANK_LOAN_ROWS, BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS,
+})
 CANARY_CLASSIFICATIONS = frozenset({"income", "expense"})
 LOAN_CLASSIFICATION = "loan_repayment"
 LOAN_EXPENSE_CATEGORY = ("住まい", "住宅ローン")
@@ -135,11 +138,11 @@ class BankBatchAuthority:
             raise RuntimeError("bank_batch_target_spreadsheet_required")
         if self.target_worksheet != CANARY_TARGET_SHEET:
             raise RuntimeError("bank_batch_target_sheet_invalid")
-        expected_mode = (
-            "bank_batch_preparation"
-            if expected_rows == BANK_BATCH_ROWS
-            else "bank_initial_backfill"
-        )
+        expected_mode = {
+            BANK_LOAN_ROWS: "bank_loan_repayment_preparation",
+            BANK_BATCH_ROWS: "bank_batch_preparation",
+            BANK_INITIAL_BACKFILL_ROWS: "bank_initial_backfill",
+        }[expected_rows]
         if self.authority_mode != expected_mode:
             raise RuntimeError("bank_batch_production_authority_forbidden")
 
@@ -148,6 +151,7 @@ class BankBatchAuthority:
 class BankBatchItem:
     transaction: Transaction = field(repr=False)
     classification: str
+    projected_classification: str
     write_eligibility: str
     import_status: str
 
@@ -207,11 +211,13 @@ class BankBatchDryRunResult:
     max_writes: int
     income: int
     expense: int
+    loan_repayment: int = 0
+    projected_expense: int = 0
     write_attempted: int = 0
     external_write_count: int = 0
 
     def summary(self) -> dict:
-        return {
+        result = {
             "authority_mode": self.authority_mode,
             "selected": self.selected,
             "planned": self.planned,
@@ -228,6 +234,12 @@ class BankBatchDryRunResult:
             "write_attempted": self.write_attempted,
             "external_write_count": self.external_write_count,
         }
+        if self.loan_repayment:
+            result.update({
+                "loan_repayment": self.loan_repayment,
+                "projected_expense": self.projected_expense,
+            })
+        return result
 
 
 @dataclass(frozen=True)
@@ -420,7 +432,12 @@ def build_bank_batch_plan(
             raise RuntimeError("bank_batch_selector_multiple_matches")
         decision = matches[0]
         classification = decision.classification.classification
-        if classification not in CANARY_CLASSIFICATIONS:
+        loan_mode = authority.max_rows == BANK_LOAN_ROWS
+        allowed_classifications = (
+            frozenset({LOAN_CLASSIFICATION}) if loan_mode
+            else CANARY_CLASSIFICATIONS
+        )
+        if classification not in allowed_classifications:
             raise RuntimeError("bank_batch_classification_withheld")
         if decision.write_eligibility != "preview_candidate":
             raise RuntimeError("bank_batch_write_eligibility_withheld")
@@ -429,12 +446,20 @@ def build_bank_batch_plan(
         transaction = decision.classification.transaction.to_canonical()
         if transaction.identity != identity:
             raise RuntimeError("bank_batch_source_identity_changed")
-        _validate_bank_transaction_semantics(transaction, classification)
+        projected_classification = (
+            "expense" if classification == LOAN_CLASSIFICATION else classification
+        )
+        _validate_bank_transaction_semantics(transaction, projected_classification)
         items.append(BankBatchItem(
             transaction=transaction,
             classification=classification,
+            projected_classification=projected_classification,
             write_eligibility="eligible",
-            import_status=f"bank_{classification}",
+            import_status=(
+                "bank_loan_repayment"
+                if classification == LOAN_CLASSIFICATION
+                else f"bank_{classification}"
+            ),
         ))
     plan = BankBatchPlan._create(
         authority_token=_BANK_BATCH_PLAN_AUTHORITY,
@@ -469,14 +494,31 @@ def validate_bank_batch_plan(value: object) -> BankBatchPlan:
     binding.validate()
     if binding.expected_header != expected_header:
         raise RuntimeError("bank_batch_target_binding_mismatch")
+    loan_mode = expected_rows == BANK_LOAN_ROWS
+    allowed_classifications = (
+        frozenset({LOAN_CLASSIFICATION}) if loan_mode else CANARY_CLASSIFICATIONS
+    )
     for item in value.items:
-        if item.classification not in CANARY_CLASSIFICATIONS:
+        if item.classification not in allowed_classifications:
             raise RuntimeError("bank_batch_classification_withheld")
+        expected_projection = (
+            "expense" if item.classification == LOAN_CLASSIFICATION
+            else item.classification
+        )
+        if item.projected_classification != expected_projection:
+            raise RuntimeError("bank_batch_projected_classification_invalid")
         if item.write_eligibility != "eligible":
             raise RuntimeError("bank_batch_write_eligibility_withheld")
-        if item.import_status != f"bank_{item.classification}":
+        expected_status = (
+            "bank_loan_repayment"
+            if item.classification == LOAN_CLASSIFICATION
+            else f"bank_{item.classification}"
+        )
+        if item.import_status != expected_status:
             raise RuntimeError("bank_batch_import_status_invalid")
-        _validate_bank_transaction_semantics(item.transaction, item.classification)
+        _validate_bank_transaction_semantics(
+            item.transaction, item.projected_classification,
+        )
     return value
 
 
@@ -509,7 +551,22 @@ def dry_run_bank_batch(
             ):
                 raise RuntimeError("bank_batch_existing_identity_duplicate")
             raise RuntimeError("bank_batch_existing_identity_collision")
-    rows = plan.materialize(imported_at=imported_at)
+    from .canonical_one_row_production import (
+        SealedCanonicalOneRowTransport,
+        project_bank_bounded_batch,
+    )
+
+    projected = project_bank_bounded_batch(plan)
+    transport = SealedCanonicalOneRowTransport(
+        db,
+        binding=binding,
+        inspector=None,
+        key_provider=None,
+        journal=None,
+        clock=lambda: imported_at,
+        max_rows=plan.authority.max_rows,
+    )
+    rows = transport.prepare_rows(projected.candidates, imported_at=imported_at)
     expected_rows = plan.authority.max_rows
     if len(rows) != expected_rows or any(
         len(row) != len(HEADERS[CANARY_TARGET_SHEET]) for row in rows
@@ -517,6 +574,9 @@ def dry_run_bank_batch(
         raise RuntimeError("bank_batch_row_schema_invalid")
     income = sum(item.classification == "income" for item in plan.items)
     expense = sum(item.classification == "expense" for item in plan.items)
+    loan_repayment = sum(
+        item.classification == LOAN_CLASSIFICATION for item in plan.items
+    )
     return BankBatchDryRunResult(
         authority_mode=plan.authority.authority_mode,
         selected=expected_rows,
@@ -531,6 +591,10 @@ def dry_run_bank_batch(
         max_writes=plan.authority.max_rows,
         income=income,
         expense=expense,
+        loan_repayment=loan_repayment,
+        projected_expense=sum(
+            item.projected_classification == "expense" for item in plan.items
+        ) if loan_repayment else 0,
     )
 
 
@@ -726,6 +790,76 @@ class BankCanaryPreparationPipeline:
             "withheld_by_classification": preview.withheld_by_classification,
         })
         return result
+
+    def loan_candidate_identities(
+        self,
+        path: str | Path,
+        *,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+        card_statement_authorities=(),
+    ) -> tuple[str, ...]:
+        """Discover the current four loans only for one-time manifest freezing."""
+        shadow, preview = self._context(
+            path,
+            account_alias=account_alias,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+            card_statement_authorities=card_statement_authorities,
+        )
+        identities = tuple(
+            decision.classification.transaction.source_row_identity
+            for decision in shadow.decisions
+            if decision.classification.classification == LOAN_CLASSIFICATION
+        )
+        if len(identities) != BANK_LOAN_ROWS or len(set(identities)) != BANK_LOAN_ROWS:
+            raise RuntimeError("bank_loan_manifest_requires_exactly_four_identities")
+        if any(preview.candidate_identities.count(identity) != 1 for identity in identities):
+            raise RuntimeError("bank_loan_manifest_duplicate_or_collision")
+        return identities
+
+    def loan_batch_dry_run(
+        self,
+        path: str | Path,
+        *,
+        selected_source_identities: tuple[str, ...],
+        imported_at,
+        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+        card_statement_authorities=(),
+    ) -> dict:
+        """Preflight the exact private four-loan manifest without write authority."""
+        shadow, preview = self._context(
+            path,
+            account_alias=account_alias,
+            confirmed_internal_transfers=confirmed_internal_transfers,
+            card_statement_authorities=card_statement_authorities,
+        )
+        authority = BankBatchAuthority(
+            selected_source_identities=tuple(selected_source_identities),
+            target_spreadsheet_id=str(self.db.sid),
+            min_rows=BANK_LOAN_ROWS,
+            max_rows=BANK_LOAN_ROWS,
+            authority_mode="bank_loan_repayment_preparation",
+        )
+        plan = build_bank_batch_plan(shadow, preview, authority)
+        if LOAN_EXPENSE_CATEGORY not in set(self.db.categories()):
+            raise RuntimeError("bank_loan_preview_housing_category_unavailable")
+        result = dry_run_bank_batch(plan, self.db, imported_at=imported_at)
+        summary = result.summary()
+        summary.update({
+            "classification": LOAN_CLASSIFICATION,
+            "projected_classification": "expense",
+            "expense_category": {
+                "major": LOAN_EXPENSE_CATEGORY[0],
+                "minor": LOAN_EXPENSE_CATEGORY[1],
+            },
+            "category_authority_valid": True,
+            "parsed": preview.parsed,
+            "existing_bank_duplicates": preview.existing_duplicate,
+            "new_plan_candidates": preview.new_plan_candidates,
+            "withheld_by_classification": preview.withheld_by_classification,
+        })
+        return summary
 
     def candidate_identities(
         self,
