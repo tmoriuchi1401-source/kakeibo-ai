@@ -322,7 +322,7 @@ def run_bank_production_batch(
                 or preview.new_plan_candidates != 4
                 or preview.withheld_by_classification != 31
                 or preview.ambiguous_collision != 0
-                or tuple(preview.candidate_identities) != selected
+                or frozenset(preview.candidate_identities) != frozenset(selected)
                 or LOAN_EXPENSE_CATEGORY not in set(db.categories())
             )
         )

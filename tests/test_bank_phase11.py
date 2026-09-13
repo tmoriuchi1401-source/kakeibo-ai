@@ -208,3 +208,16 @@ def test_private_loan_manifest_round_trip_is_external_exact_and_one_shot(tmp_pat
             repository / "loan-manifest.json", manifest,
             repository_root=repository,
         )
+
+
+def test_loan_manifest_order_controls_payload_without_changing_exact_set_authority():
+    transactions = tuple(reversed(four_loans()))
+    shadow, preview = context(transactions)
+    selected = tuple(reversed(tuple(
+        item.source_row_identity for item in transactions
+    )))
+
+    plan = build_bank_batch_plan(shadow, preview, authority(selected))
+
+    assert tuple(item.transaction.identity for item in plan.items) == selected
+    assert frozenset(preview.candidate_identities) == frozenset(selected)
