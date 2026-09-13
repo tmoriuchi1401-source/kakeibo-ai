@@ -142,7 +142,7 @@ def test_exact_four_loan_manifest_projects_expense_through_transport_without_wri
         "bank_loan_repayment",
     }
     assert len(transport.prepare_rows(projected.candidates, imported_at=NOW)) == 4
-    with pytest.raises(RuntimeError, match="batch_transport_bound_invalid"):
+    with pytest.raises(RuntimeError, match="protected_audit_key_provider_required"):
         transport.write_batch_once(projected, None)
     assert not db.writer_invoked
 

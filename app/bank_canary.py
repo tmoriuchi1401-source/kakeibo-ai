@@ -987,11 +987,11 @@ class BankCanaryPreparationPipeline:
             target_spreadsheet_id=str(self.db.sid),
             min_rows=selected_count,
             max_rows=selected_count,
-            authority_mode=(
-                "bank_initial_backfill"
-                if selected_count == BANK_INITIAL_BACKFILL_ROWS
-                else "bank_batch_preparation"
-            ),
+            authority_mode={
+                BANK_LOAN_ROWS: "bank_loan_repayment_preparation",
+                BANK_BATCH_ROWS: "bank_batch_preparation",
+                BANK_INITIAL_BACKFILL_ROWS: "bank_initial_backfill",
+            }.get(selected_count, "invalid"),
         )
         authority.validate()
         shadow, preview = self._context(

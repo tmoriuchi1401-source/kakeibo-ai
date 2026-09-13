@@ -481,11 +481,7 @@ class CanonicalFiveRowManifest:
             raise RuntimeError("canonical_batch_ref_invalid")
         if not re.fullmatch(r"writer-target-v1:[0-9a-f]{32}", self.target_ref):
             raise RuntimeError("canonical_batch_target_ref_invalid")
-        plan_namespace = (
-            "canonical-five-row"
-            if self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
-            else "canonical-initial-backfill"
-        )
+        plan_namespace = _batch_plan_namespace(self.max_rows)
         if not re.fullmatch(
             rf"{plan_namespace}-v1:[0-9a-f]{{32}}", self.plan_binding_ref,
         ):
@@ -501,18 +497,19 @@ class CanonicalFiveRowManifest:
                 self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
                 and (self.income_count != 2 or self.expense_count != 3)
             )
+            or (
+                self.max_rows == CANONICAL_LOAN_BATCH_ROWS
+                and (self.income_count != 0 or self.expense_count != 4)
+            )
         ):
             raise RuntimeError("canonical_batch_classification_mix_changed")
-        expected_provenance = (
-            "phase7_exact_five_source_identities"
-            if self.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
-            else "phase9_exact_remaining_initial_backfill"
-        )
+        expected_provenance = _batch_authority_provenance(self.max_rows)
         if self.authority_provenance != expected_provenance:
             raise RuntimeError("canonical_batch_authority_provenance_invalid")
         if (
             self.min_rows != self.max_rows
             or self.max_rows not in {
+                CANONICAL_LOAN_BATCH_ROWS,
                 CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
             }
         ):
@@ -543,6 +540,28 @@ def _canonical_batch_refs(
     return candidate_refs, f"canonical-item-v2:{digest}"
 
 
+def _batch_plan_namespace(row_count: int) -> str:
+    try:
+        return {
+            CANONICAL_LOAN_BATCH_ROWS: "canonical-loan-four-row",
+            CANONICAL_BOUNDED_BATCH_ROWS: "canonical-five-row",
+            CANONICAL_INITIAL_BACKFILL_ROWS: "canonical-initial-backfill",
+        }[row_count]
+    except KeyError as exc:
+        raise RuntimeError("canonical_batch_row_bound_invalid") from exc
+
+
+def _batch_authority_provenance(row_count: int) -> str:
+    try:
+        return {
+            CANONICAL_LOAN_BATCH_ROWS: "phase11_exact_four_loan_repayments",
+            CANONICAL_BOUNDED_BATCH_ROWS: "phase7_exact_five_source_identities",
+            CANONICAL_INITIAL_BACKFILL_ROWS: "phase9_exact_remaining_initial_backfill",
+        }[row_count]
+    except KeyError as exc:
+        raise RuntimeError("canonical_batch_row_bound_invalid") from exc
+
+
 def _five_row_plan_binding_ref(
     *,
     batch_ref: str,
@@ -560,11 +579,7 @@ def _five_row_plan_binding_ref(
         "min_rows": row_count,
         "max_rows": row_count,
     }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    namespace = (
-        "canonical-five-row"
-        if row_count == CANONICAL_BOUNDED_BATCH_ROWS
-        else "canonical-initial-backfill"
-    )
+    namespace = _batch_plan_namespace(row_count)
     digest = hmac.new(
         key.secret, f"{namespace}-plan\x00{payload}".encode("utf-8"),
         hashlib.sha256,
@@ -609,11 +624,7 @@ def create_canonical_five_row_manifest(
         expense_count=sum(
             candidate.transaction_kind == "expense" for candidate in batch.candidates
         ),
-        authority_provenance=(
-            "phase7_exact_five_source_identities"
-            if batch.max_rows == CANONICAL_BOUNDED_BATCH_ROWS
-            else "phase9_exact_remaining_initial_backfill"
-        ),
+        authority_provenance=_batch_authority_provenance(batch.max_rows),
         min_rows=batch.min_rows,
         max_rows=batch.max_rows,
     )
@@ -985,6 +996,7 @@ class SealedCanonicalOneRowTransport:
         permit: CanonicalDispatchPermit,
     ) -> WriteRequestResult:
         if self.max_rows not in {
+            CANONICAL_LOAN_BATCH_ROWS,
             CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
         }:
             raise RuntimeError("canonical_batch_transport_bound_invalid")
@@ -1488,6 +1500,7 @@ def execute_canonical_five_row_batch(
         manifest.min_rows != batch_rows or manifest.max_rows != batch_rows
         or batch.min_rows != batch_rows
         or batch_rows not in {
+            CANONICAL_LOAN_BATCH_ROWS,
             CANONICAL_BOUNDED_BATCH_ROWS, CANONICAL_INITIAL_BACKFILL_ROWS,
         }
         or getattr(transport, "max_rows", None) != batch_rows

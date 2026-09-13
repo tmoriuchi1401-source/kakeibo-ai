@@ -35,6 +35,7 @@ from app.canonical_one_row_production import (
     execute_canonical_five_row_batch,
     issue_canonical_five_row_capability,
     project_bank_initial_backfill_batch,
+    project_bank_loan_repayment_batch,
     project_bank_five_row_batch,
     validate_canonical_five_row_batch,
 )
@@ -73,6 +74,22 @@ def bank(identity, amount):
 
 
 def transactions(row_count=5):
+    if row_count == 4:
+        return tuple(
+            NormalizedBankTransaction(
+                source="auじぶん銀行PDF",
+                account_alias="test-account",
+                transaction_date="2026-09-01",
+                description="約定返済",
+                signed_amount=-(index + 1) * 100,
+                source_page=1,
+                source_row=index + 1,
+                source_row_identity=f"bank:loan-{index}",
+                source_row_hash=(f"loan-{index}".encode().hex() * 8)[:64],
+                transaction_kind="withdrawal",
+            )
+            for index in range(4)
+        )
     if row_count == 5:
         return (
             bank("bank:expense-1", -1000),
@@ -116,8 +133,11 @@ def batch_plan(row_count=5):
             min_rows=row_count,
             max_rows=row_count,
             authority_mode=(
-                "bank_initial_backfill" if row_count == 51
-                else "bank_batch_preparation"
+                "bank_loan_repayment_preparation" if row_count == 4
+                else (
+                    "bank_initial_backfill" if row_count == 51
+                    else "bank_batch_preparation"
+                )
             ),
         ),
     )
@@ -198,8 +218,11 @@ def unissued_parts(tmp_path, *, approval_batch_size=None, header=None, row_count
     db = FakeDB(header=header)
     plan = batch_plan(row_count)
     batch = (
-        project_bank_initial_backfill_batch(plan)
-        if row_count == 51 else project_bank_five_row_batch(plan)
+        project_bank_loan_repayment_batch(plan)
+        if row_count == 4 else (
+            project_bank_initial_backfill_batch(plan)
+            if row_count == 51 else project_bank_five_row_batch(plan)
+        )
     )
     binding = TargetBinding(expected_spreadsheet_id=db.sid)
     manifest = create_canonical_five_row_manifest(
@@ -325,7 +348,28 @@ def test_exact_51_backfill_succeeds_in_one_request(tmp_path):
     assert transport.invocation_count == 1
 
 
-@pytest.mark.parametrize("row_count", [5, 51])
+def test_exact_four_loan_batch_succeeds_and_seals_authority(tmp_path):
+    parts = unissued_parts(tmp_path, row_count=4)
+    issue(parts)
+    transport = SyntheticBatchTransport(parts["db"], max_rows=4)
+
+    result = execute(parts, transport)
+
+    assert result.status == "batch_complete"
+    assert result.requested_rows == 4
+    assert result.write_request_count == 1
+    assert result.actual_new_rows == 4
+    assert result.matched_identity_count == 4
+    assert result.exact_canonical_match
+    assert result.duplicate_rows == 0
+    assert result.unexpected_mutations == 0
+    assert result.journal_committed
+    assert result.capability_state == "sealed"
+    assert result.lease_released
+    assert transport.invocation_count == 1
+
+
+@pytest.mark.parametrize("row_count", [4, 5, 51])
 def test_sealed_transport_sends_one_exact_bounded_append(tmp_path, row_count):
     parts = unissued_parts(tmp_path, row_count=row_count)
     capability = issue(parts)

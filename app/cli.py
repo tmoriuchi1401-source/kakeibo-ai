@@ -105,6 +105,7 @@ from .bank_loan_manifest import (
     write_bank_loan_manifest,
 )
 from .bank_canary_production import (
+    run_bank_production_loan_batch,
     run_bank_production_batch,
     run_bank_production_canary,
 )
@@ -251,6 +252,16 @@ def main():
     loan_batch.add_argument("pdf")
     loan_batch.add_argument("--account-alias",default="jibun-primary")
     loan_batch.add_argument("--identity-manifest",required=True)
+    loan_apply=sub.add_parser("bank-pdf-loan-apply")
+    loan_apply.add_argument("pdf")
+    loan_apply.add_argument("--account-alias",default="jibun-primary")
+    loan_apply.add_argument("--identity-manifest",required=True)
+    loan_apply.add_argument("--approved-target",required=True)
+    loan_apply.add_argument("--expected-head",required=True)
+    loan_apply.add_argument("--state-dir",required=True)
+    loan_apply.add_argument("--audit-key-file",required=True)
+    loan_apply.add_argument("--approval-file",required=True)
+    loan_apply.add_argument("--apply",action="store_true")
     bank_canary_candidates=sub.add_parser("bank-pdf-canary-candidates")
     bank_canary_candidates.add_argument("pdf")
     bank_canary_candidates.add_argument("--account-alias",default="jibun-primary")
@@ -399,6 +410,28 @@ def main():
                 imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
                 account_alias=args.account_alias,
                 confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-loan-apply":
+        if not args.apply:
+            raise SystemExit("bank loan production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_loan_batch(
+                db,args.pdf,
+                loan_identity_manifest_path=args.identity_manifest,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+                clock=lambda:datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
             ),
             ensure_ascii=False,sort_keys=True,
         ))
