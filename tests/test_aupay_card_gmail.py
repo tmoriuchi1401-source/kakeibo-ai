@@ -10,10 +10,13 @@ from httplib2 import Response
 
 from app import cli
 from app.aupay_mail_pipeline import (
+    AUPAY_CARD_STATEMENT_AUTHORITY_STATUS,
     AuPayCardMailPipeline,
     _execute_gmail,
+    collect_aupay_card_statement_authorities,
     parse_aupay_card_raw,
     parse_aupay_card_raw_partial,
+    parse_aupay_card_statement_raw,
 )
 from app.settings import Settings
 
@@ -49,6 +52,33 @@ def raw_message(*blocks, message_id="<unit-card-message@example.invalid>",
     message.set_content(
         "▼カード情報\nau PAY カード\n本会員さま ご利用分\n\n"
         + "\n".join(blocks)
+    )
+    return message.as_bytes()
+
+
+def statement_message(*, amount=12345, payment_date="2026年9月10日",
+                      cycle="2026年8月ご請求分",
+                      message_id="<unit-statement@example.invalid>"):
+    message = EmailMessage()
+    message["Subject"] = f"【au PAY カード】{cycle} ご請求額確定のお知らせ"
+    if message_id is not None:
+        message["Message-ID"] = message_id
+    message.set_content(
+        f"{cycle}\nご請求額：{amount:,}円\nお支払日：{payment_date}\n"
+    )
+    return message.as_bytes()
+
+
+def real_format_statement_message(*, amount=513152,
+                                  payment_date="2026年9月10日",
+                                  cycle="2026年9月"):
+    message = EmailMessage()
+    message["Subject"] = "【au PAY カード】ご請求金額確定のお知らせ"
+    message["Message-ID"] = "<real-format-statement@example.invalid>"
+    message.set_content(
+        f"お客さまの{cycle}のお支払金額が確定しましたので、ご案内いたします。\n"
+        f"▼お支払日 {payment_date}\n"
+        f"▼ご請求金額 {amount}円\n"
     )
     return message.as_bytes()
 
@@ -132,6 +162,106 @@ def test_raw_parser_preserves_multiple_card_details():
     assert rows[0]["import_id"].startswith("aupaycard-mail:")
     assert rows[0]["import_id"] != rows[1]["import_id"]
     assert [row["transaction_kind"] for row in rows] == ["purchase", "purchase"]
+
+
+def test_card_statement_parser_extracts_issuer_total_date_cycle_and_identity():
+    statement = parse_aupay_card_statement_raw(statement_message())
+
+    assert statement.issuer == "au PAYカード"
+    assert statement.statement_total_yen == 12345
+    assert statement.payment_date == "2026-09-10"
+    assert statement.billing_cycle == "2026-08"
+    assert statement.statement_identity.startswith("aupay-card-statement:")
+    assert statement.to_import_transaction().status == AUPAY_CARD_STATEMENT_AUTHORITY_STATUS
+
+
+def test_card_statement_parser_accepts_real_issuer_billing_wording():
+    statement = parse_aupay_card_statement_raw(real_format_statement_message())
+
+    assert statement.statement_total_yen == 513152
+    assert statement.payment_date == "2026-09-10"
+    assert statement.billing_cycle == "2026-09"
+
+
+def test_default_statement_query_covers_real_issuer_subject(monkeypatch):
+    monkeypatch.delenv("AUPAY_CARD_STATEMENT_GMAIL_QUERY", raising=False)
+
+    query = Settings().aupay_card_statement_gmail_query
+
+    assert 'subject:"ご請求金額確定"' in query
+
+
+def test_usage_detail_mail_is_never_statement_total_authority():
+    with pytest.raises(ValueError, match="usage_detail_forbidden"):
+        parse_aupay_card_statement_raw(raw_message(detail(1, "匿名店舗", 1200)))
+
+
+@pytest.mark.parametrize("raw", [
+    statement_message(amount=0),
+    statement_message(payment_date="不明"),
+    statement_message(cycle="請求月不明"),
+    statement_message(message_id=None),
+])
+def test_card_statement_parser_fails_closed_without_exact_authority(raw):
+    with pytest.raises(ValueError):
+        parse_aupay_card_statement_raw(raw)
+
+
+def test_statement_collector_uses_gmail_readonly_shape_and_returns_counts_only():
+    raw = statement_message()
+    service = service_for(raw)
+
+    statements, summary = collect_aupay_card_statement_authorities(
+        service, 'from:kddi-fs.com subject:"ご請求額"', max_results=10,
+    )
+
+    assert len(statements) == 1
+    assert summary["found"] == 1
+    assert summary["parsed_statements"] == 1
+    assert summary["rejected_messages"] == 0
+    assert summary["write_attempted"] == 0
+    assert service.messages_api.get_calls == [
+        {"userId": "me", "id": "gmail-unit-1", "format": "raw"},
+    ]
+    assert "12345" not in str(summary)
+
+
+def test_same_billing_cycle_resend_is_deduplicated_without_purchase_summing():
+    first = statement_message(message_id="<statement-first@example.invalid>")
+    resend = statement_message(message_id="<statement-resend@example.invalid>")
+    service = GmailService(
+        [{"messages": [{"id": "gmail-1"}, {"id": "gmail-2"}]}],
+        {"gmail-1": encoded(first), "gmail-2": encoded(resend)},
+    )
+
+    statements, summary = collect_aupay_card_statement_authorities(
+        service, 'from:kddi-fs.com subject:"ご請求額"', max_results=10,
+    )
+
+    assert len(statements) == 1
+    assert summary["parsed_statements"] == 2
+    assert summary["unique_statement_authorities"] == 1
+    assert summary["duplicate_statement_notification"] == 1
+    assert summary["conflicting_statement_cycle"] == 0
+
+
+def test_conflicting_same_cycle_statement_notifications_fail_closed():
+    first = statement_message(message_id="<statement-first@example.invalid>")
+    conflict = statement_message(
+        amount=12346, message_id="<statement-conflict@example.invalid>",
+    )
+    service = GmailService(
+        [{"messages": [{"id": "gmail-1"}, {"id": "gmail-2"}]}],
+        {"gmail-1": encoded(first), "gmail-2": encoded(conflict)},
+    )
+
+    statements, summary = collect_aupay_card_statement_authorities(
+        service, 'from:kddi-fs.com subject:"ご請求額"', max_results=10,
+    )
+
+    assert statements == ()
+    assert summary["conflicting_statement_cycle"] == 1
+    assert summary["collection_complete"] is False
 
 
 def test_partial_parser_preserves_signed_return_semantics():

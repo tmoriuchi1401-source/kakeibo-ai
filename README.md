@@ -270,6 +270,96 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
+## auじぶん銀行PDFをread-onlyで確認する
+
+native text layerを持つ普通預金取引明細PDFを、Sheetsへ書き込まず確認する:
+
+```bash
+python -m app.cli bank-pdf-preview statement.pdf --account-alias jibun-primary
+```
+
+各ページの見出しと縦罫線から日付・内容・出金・入金・残高のcolumn boundaryを
+復元する。出金は負、入金は正のsigned amountとしてcanonical transactionへ投影し、
+残高は取引金額や通常出力にせず、identityと整合性検証だけに使う。同じPDFの再処理はstable source row identityでduplicateに
+なる。出力は件数とreason taxonomyだけで、取引本文や個別金額を表示しない。
+OCR、Sheets書き込み、production applyはこのコマンドから実行されない。
+
+既存の `取込データ` をread-onlyで参照し、銀行rowの分類と照合状況を集計する:
+
+```bash
+python -m app.cli bank-pdf-shadow-preview statement.pdf --account-alias jibun-primary
+```
+
+分類と照合は分離される。au PAYカード引落は `card_settlement` のまま、明示的な
+statement-total authorityがなければ `identified_unlinked` とし、通常支出へ落とさない。
+PayPayは摘要に明示される場合だけ照合対象にする。日付・同額だけの既存購入row、
+個別カード購入の合算、摘要の部分一致は照合根拠にしない。給与・賞与・利息・銀行の
+特典／金利優遇、明確な
+口座振替、確認済みの資金移動以外は安全側に `needs_review` とする。出力は分類・照合・
+review reasonの件数のみで、取引内容、個別金額、残高、照合identityは表示しない。
+`loan_repayment` は `expense` / `住まい／住宅ローン` へ投影できるwrite候補とし、
+`cash_withdrawal` はwriteしない。`income`、`expense`、`loan_repayment`だけを
+production preview候補とし、classificationと
+write eligibilityを別フィールドで集計する。
+
+canonical identity resolverを使ったproduction-equivalentのwrite-free planだけを確認する:
+
+```bash
+python -m app.cli bank-pdf-production-preview statement.pdf --account-alias jibun-primary
+```
+
+既存取込データはread-onlyで再取得し、既存identity・identity collision・分類withholdを
+集計する。`write_attempted` は常に0で、Sheets writerへは到達しない。
+
+production canaryの準備では、まずwrite候補のstable source identityだけを列挙し、
+operatorがexact identityを1件指定してread-only preflightを行う:
+
+```bash
+python -m app.cli bank-pdf-canary-candidates statement.pdf --account-alias jibun-primary
+python -m app.cli bank-pdf-canary-dry-run statement.pdf --account-alias jibun-primary --source-identity '<stable-source-identity>'
+```
+
+選択は日付・金額・row番号では行わず、`--source-identity` の完全一致だけをauthorityとする。
+`income` / `expense` 以外、既存identity、collision、0件または複数件一致、target spreadsheet・
+`取込データ` headerの不一致はすべてfail closedになる。dry-runは既存のtarget bindingと
+canonical identity readerで事前読取し、共通12列schemaへ1行だけ投影するが、writerや
+production capabilityは呼び出さず、`external_write_count` は常に0である。
+
+operatorが所有関係を確認した自口座transferのexact descriptionとdirectionは、Git管理外の
+`.env` にJSON配列で設定できる。名称の部分一致や同姓名・同額・反復回数はauthorityにしない:
+
+```dotenv
+BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON=[]
+```
+
+### 日常運用（銀行PDF）
+
+通常は次の2操作だけを使う。previewはSheets/Gmailをread-onlyで参照し、
+新しい `income` / `expense` / `loan_repayment` だけを外部manifestへ固定する。
+カード引落、確認済み自口座transfer、ATM、reimbursement、non-own review、
+true unknown、duplicate、collisionはwrite対象外である。
+
+```bash
+# preview（write_attempted=0）
+python -m app.cli bank-pdf statement.pdf
+
+# 明示承認後のみapply（同一PDF・同一manifestに限定）
+python -m app.cli bank-pdf statement.pdf --apply
+```
+
+`--apply` を使う場合は、Git管理外のruntime領域と既存transportの承認材料を
+次の環境変数で指定する。未設定、target/header不一致、candidate集合の変化、
+上限超過はすべてfail-closedする。
+
+```dotenv
+BANK_STATE_DIR=/path/outside/repository/bank-runtime
+BANK_AUDIT_KEY_FILE=/path/outside/repository/bank-runtime/audit-key.json
+BANK_APPROVAL_FILE=/path/outside/repository/bank-runtime/approval.json
+```
+
+同じPDFを再previewした結果が全件duplicateなら、manifest・capability・lease・
+appendを作らないsafe no-opになる。日常操作では過去backfill用のcanary/batchコマンドを使わない。
+
 ## Google DriveからPayPay CSVを取り込む
 
 `PAYPAY_DRIVE_FOLDER_ID` に専用受信フォルダのIDまたはURLを設定する。

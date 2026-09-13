@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, csv, json, mimetypes, os
+import argparse, csv, json, mimetypes, os, subprocess, time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -17,6 +17,7 @@ from .aupay_mail_pipeline import (
     AuPayCardMailPipeline,
     AuPayMailPipeline,
     authorize_gmail,
+    collect_aupay_card_statement_authorities,
     parse_eml,
     parse_aupay_card_eml,
 )
@@ -94,6 +95,29 @@ from .amazon_production import (
 from .payroll_statement_parser import preview_payroll_file
 from .drive_payroll import DrivePayrollPreview
 from .medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
+from .bank_pdf_pipeline import BankPdfPipeline
+from .bank_reconciliation import (
+    BankPdfShadowPipeline,
+    group_transfer_ownership_candidates,
+)
+from .bank_canary import BankCanaryPreparationPipeline
+from .bank_loan_manifest import (
+    BankLoanExactManifest,
+    load_bank_loan_manifest,
+    write_bank_loan_manifest,
+)
+from .bank_canary_production import (
+    run_bank_production_loan_batch,
+    run_bank_production_batch,
+    run_bank_production_canary,
+)
+from .bank_steady_state import (
+    build_bank_daily_preview,
+    freeze_manifest,
+    load_manifest,
+    manifest_path,
+    pdf_digest,
+)
 
 def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
@@ -260,6 +284,93 @@ def main():
     payroll_preview=sub.add_parser("payroll-file-preview")
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-drive-preview")
+    bank_pdf=sub.add_parser("bank-pdf-preview")
+    bank_pdf.add_argument("pdf")
+    bank_pdf.add_argument("--account-alias",default="jibun-primary")
+    bank_daily=sub.add_parser("bank-pdf")
+    bank_daily.add_argument("pdf")
+    bank_daily.add_argument("--apply",action="store_true")
+    bank_daily.add_argument("--account-alias",default="jibun-primary")
+    bank_daily.add_argument("--state-dir",default=os.getenv("BANK_STATE_DIR", ""))
+    bank_daily.add_argument("--audit-key-file",default=os.getenv("BANK_AUDIT_KEY_FILE", ""))
+    bank_daily.add_argument("--approval-file",default=os.getenv("BANK_APPROVAL_FILE", ""))
+    bank_shadow=sub.add_parser("bank-pdf-shadow-preview")
+    bank_shadow.add_argument("pdf")
+    bank_shadow.add_argument("--account-alias",default="jibun-primary")
+    bank_production=sub.add_parser("bank-pdf-production-preview")
+    bank_production.add_argument("pdf")
+    bank_production.add_argument("--account-alias",default="jibun-primary")
+    bank_transfer_candidates=sub.add_parser("bank-pdf-transfer-candidates")
+    bank_transfer_candidates.add_argument("pdf")
+    bank_transfer_candidates.add_argument("--account-alias",default="jibun-primary")
+    bank_phase10=sub.add_parser("bank-pdf-phase10-preview")
+    bank_phase10.add_argument("pdf")
+    bank_phase10.add_argument("--account-alias",default="jibun-primary")
+    bank_phase10.add_argument("--statement-max-results",type=int,default=100)
+    loan_manifest=sub.add_parser("bank-pdf-loan-manifest-freeze")
+    loan_manifest.add_argument("pdf")
+    loan_manifest.add_argument("--account-alias",default="jibun-primary")
+    loan_manifest.add_argument("--output",required=True)
+    loan_batch=sub.add_parser("bank-pdf-loan-batch-dry-run")
+    loan_batch.add_argument("pdf")
+    loan_batch.add_argument("--account-alias",default="jibun-primary")
+    loan_batch.add_argument("--identity-manifest",required=True)
+    loan_apply=sub.add_parser("bank-pdf-loan-apply")
+    loan_apply.add_argument("pdf")
+    loan_apply.add_argument("--account-alias",default="jibun-primary")
+    loan_apply.add_argument("--identity-manifest",required=True)
+    loan_apply.add_argument("--approved-target",required=True)
+    loan_apply.add_argument("--expected-head",required=True)
+    loan_apply.add_argument("--state-dir",required=True)
+    loan_apply.add_argument("--audit-key-file",required=True)
+    loan_apply.add_argument("--approval-file",required=True)
+    loan_apply.add_argument("--apply",action="store_true")
+    bank_canary_candidates=sub.add_parser("bank-pdf-canary-candidates")
+    bank_canary_candidates.add_argument("pdf")
+    bank_canary_candidates.add_argument("--account-alias",default="jibun-primary")
+    bank_canary=sub.add_parser("bank-pdf-canary-dry-run")
+    bank_canary.add_argument("pdf")
+    bank_canary.add_argument("--account-alias",default="jibun-primary")
+    bank_canary.add_argument("--source-identity",required=True)
+    bank_batch=sub.add_parser("bank-pdf-batch-dry-run")
+    bank_batch.add_argument("pdf")
+    bank_batch.add_argument("--account-alias",default="jibun-primary")
+    bank_batch.add_argument("--source-identity",action="append",required=True)
+    bank_replay=sub.add_parser("bank-pdf-canary-replay-preview")
+    bank_replay.add_argument("pdf")
+    bank_replay.add_argument("--account-alias",default="jibun-primary")
+    bank_replay.add_argument("--source-identity",required=True)
+    bank_apply=sub.add_parser("bank-pdf-canary-apply")
+    bank_apply.add_argument("pdf")
+    bank_apply.add_argument("--account-alias",default="jibun-primary")
+    bank_apply.add_argument("--source-identity",required=True)
+    bank_apply.add_argument("--approved-target",required=True)
+    bank_apply.add_argument("--expected-head",required=True)
+    bank_apply.add_argument("--state-dir",required=True)
+    bank_apply.add_argument("--audit-key-file",required=True)
+    bank_apply.add_argument("--approval-file",required=True)
+    bank_apply.add_argument("--apply",action="store_true")
+    bank_batch_apply=sub.add_parser("bank-pdf-batch-apply")
+    bank_batch_apply.add_argument("pdf")
+    bank_batch_apply.add_argument("--account-alias",default="jibun-primary")
+    bank_batch_apply.add_argument("--source-identity",action="append",required=True)
+    bank_batch_apply.add_argument("--phase6-canary-identity",required=True)
+    bank_batch_apply.add_argument("--approved-target",required=True)
+    bank_batch_apply.add_argument("--expected-head",required=True)
+    bank_batch_apply.add_argument("--state-dir",required=True)
+    bank_batch_apply.add_argument("--audit-key-file",required=True)
+    bank_batch_apply.add_argument("--approval-file",required=True)
+    bank_batch_apply.add_argument("--apply",action="store_true")
+    bank_backfill=sub.add_parser("bank-pdf-initial-backfill-apply")
+    bank_backfill.add_argument("pdf")
+    bank_backfill.add_argument("--account-alias",default="jibun-primary")
+    bank_backfill.add_argument("--identity-manifest",required=True)
+    bank_backfill.add_argument("--approved-target",required=True)
+    bank_backfill.add_argument("--expected-head",required=True)
+    bank_backfill.add_argument("--state-dir",required=True)
+    bank_backfill.add_argument("--audit-key-file",required=True)
+    bank_backfill.add_argument("--approval-file",required=True)
+    bank_backfill.add_argument("--apply",action="store_true")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -279,6 +390,386 @@ def main():
     elif args.cmd=="payroll-drive-preview":
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))
+    elif args.cmd=="bank-pdf-preview":
+        print(json.dumps(
+            BankPdfPipeline().preview(args.pdf,account_alias=args.account_alias),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf":
+        s=Settings(); s.validate(need_sheet=True)
+        repo_root=Path(__file__).resolve().parents[1]
+        expected_head=subprocess.check_output(
+            ["git","rev-parse","HEAD"],cwd=repo_root,text=True,
+        ).strip()
+        statement_authorities=()
+        gmail_status="unavailable"
+        if s.gmail_token_json:
+            try:
+                statements,_=collect_aupay_card_statement_authorities(
+                    gmail_readonly_service(s.gmail_token_json),
+                    s.aupay_card_statement_gmail_query,
+                    100,
+                )
+                statement_authorities=tuple(
+                    item.to_import_transaction() for item in statements
+                )
+                gmail_status="available"
+            except Exception:
+                statement_authorities=()
+                gmail_status="unavailable"
+        read_db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        daily=build_bank_daily_preview(
+            read_db,args.pdf,
+            target_spreadsheet_id=s.spreadsheet_id,
+            expected_git_head=expected_head,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+            card_statement_authorities=statement_authorities,
+        )
+        summary={**daily.summary,"gmail_statement_authority":gmail_status}
+        selection_path=None
+        if daily.candidate_identities:
+            if not args.state_dir:
+                summary["manifest_status"]="state_dir_required"
+                if args.apply:
+                    raise RuntimeError("bank_steady_state_state_dir_required")
+            else:
+                selection_path=manifest_path(args.state_dir)
+                freeze_manifest(selection_path,daily,repository_root=repo_root)
+                summary["manifest_status"]="frozen_external"
+                summary["manifest_path"]="external"
+        else:
+            summary["manifest_status"]="safe_noop"
+        if not args.apply:
+            print(json.dumps(summary,ensure_ascii=False,sort_keys=True))
+        else:
+            if not daily.candidate_identities:
+                print(json.dumps(summary,ensure_ascii=False,sort_keys=True))
+            else:
+                if not selection_path:
+                    raise RuntimeError("bank_steady_state_manifest_required")
+                manifest=load_manifest(selection_path)
+                if (
+                    manifest.pdf_sha256 != pdf_digest(args.pdf)
+                    or manifest.source_identities != daily.candidate_identities
+                    or manifest.target_spreadsheet_id != s.spreadsheet_id
+                    or manifest.expected_git_head != expected_head
+                ):
+                    raise RuntimeError("bank_steady_state_manifest_changed_repreview_required")
+                if not args.audit_key_file or not args.approval_file:
+                    raise RuntimeError("bank_steady_state_apply_authority_files_required")
+                write_db=SheetsDB(s.spreadsheet_id)
+                result=run_bank_production_batch(
+                    write_db,args.pdf,
+                    selected_source_identities=manifest.source_identities,
+                    phase6_canary_identity=None,
+                    approved_target_spreadsheet_id=s.spreadsheet_id,
+                    expected_git_head=manifest.expected_git_head,
+                    repo_root=repo_root,
+                    state_dir=args.state_dir,
+                    audit_key_file=args.audit_key_file,
+                    approval_file=args.approval_file,
+                    account_alias=args.account_alias,
+                    confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+                    confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+                    card_statement_authorities=statement_authorities,
+                    steady_state=True,
+                    clock=lambda:datetime.now(ZoneInfo("UTC")),
+                    sleeper=time.sleep,
+                )
+                print(json.dumps(result,ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-shadow-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankPdfShadowPipeline(db).preview(
+                args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                confirmed_non_own_classifications=(
+                    s.bank_confirmed_non_own_classifications()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-production-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankPdfShadowPipeline(db).production_preview(
+                args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                confirmed_non_own_classifications=(
+                    s.bank_confirmed_non_own_classifications()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-transfer-candidates":
+        parsed=BankPdfPipeline().parse(args.pdf,account_alias=args.account_alias)
+        groups=group_transfer_ownership_candidates(parsed)
+        print(json.dumps({
+            "local_console_only":True,
+            "operator_confirmation_candidate_groups":len(groups),
+            "candidates":[{
+                "candidate_number":number,
+                "normalized_description":item.normalized_description,
+                "direction":item.direction,
+                "account_alias":item.account_alias,
+                "occurrence_count":item.occurrence_count,
+            } for number,item in enumerate(groups,start=1)],
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-loan-manifest-freeze":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        pipeline=BankCanaryPreparationPipeline(db)
+        identities=pipeline.loan_candidate_identities(
+            args.pdf,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+        )
+        manifest=BankLoanExactManifest(
+            created_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+            source_identities=identities,
+            target_spreadsheet_id=s.spreadsheet_id,
+        )
+        write_bank_loan_manifest(
+            args.output,manifest,
+            repository_root=Path(__file__).resolve().parents[1],
+        )
+        print(json.dumps({
+            "manifest_created":True,
+            "identity_count":len(identities),
+            "classification":"loan_repayment",
+            "projected_classification":"expense",
+            "target_sheet":"取込データ",
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-loan-batch-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        manifest=load_bank_loan_manifest(args.identity_manifest)
+        if manifest.target_spreadsheet_id != s.spreadsheet_id:
+            raise RuntimeError("bank_loan_manifest_target_changed")
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).loan_batch_dry_run(
+                args.pdf,
+                selected_source_identities=manifest.source_identities,
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-loan-apply":
+        if not args.apply:
+            raise SystemExit("bank loan production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_loan_batch(
+                db,args.pdf,
+                loan_identity_manifest_path=args.identity_manifest,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+                clock=lambda:datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-phase10-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        statements=()
+        statement_summary={
+            "gmail_configured":bool(s.gmail_token_json),
+            "found":0,"parsed_statements":0,"rejected_messages":0,
+            "collection_complete":False,"write_attempted":0,
+        }
+        if s.gmail_token_json:
+            statements,statement_summary=collect_aupay_card_statement_authorities(
+                gmail_readonly_service(s.gmail_token_json),
+                s.aupay_card_statement_gmail_query,
+                args.statement_max_results,
+            )
+            statement_summary={"gmail_configured":True,**statement_summary}
+        authorities=tuple(item.to_import_transaction() for item in statements)
+        transfer_rules=s.bank_confirmed_internal_transfers()
+        non_own_rules=s.bank_confirmed_non_own_classifications()
+        shadow=BankPdfShadowPipeline(db).preview(
+            args.pdf,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=transfer_rules,
+            confirmed_non_own_classifications=non_own_rules,
+            card_statement_authorities=authorities,
+        )
+        loan=BankCanaryPreparationPipeline(db).loan_dry_run(
+            args.pdf,
+            imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=transfer_rules,
+            card_statement_authorities=authorities,
+        )
+        print(json.dumps({
+            "read_only":True,
+            "statement_authority":statement_summary,
+            "bank_shadow":shadow,
+            "loan_preview":loan,
+            "write_attempted":0,
+        },ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-pdf-canary-candidates":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).candidate_identities(
+                args.pdf,account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).dry_run(
+                args.pdf,
+                selected_source_identity=args.source_identity,
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-replay-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).replay_status(
+                args.pdf,
+                selected_source_identity=args.source_identity,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-batch-dry-run":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        print(json.dumps(
+            BankCanaryPreparationPipeline(db).batch_dry_run(
+                args.pdf,
+                selected_source_identities=tuple(args.source_identity),
+                imported_at=datetime.now(ZoneInfo("Asia/Tokyo")),
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-canary-apply":
+        if not args.apply:
+            raise SystemExit("bank canary production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_canary(
+                db,args.pdf,
+                selected_source_identity=args.source_identity,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                clock=lambda: datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-batch-apply":
+        if not args.apply:
+            raise SystemExit("bank batch production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_batch(
+                db,args.pdf,
+                selected_source_identities=tuple(args.source_identity),
+                phase6_canary_identity=args.phase6_canary_identity,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=Path(__file__).resolve().parents[1],
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                clock=lambda: datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
+    elif args.cmd=="bank-pdf-initial-backfill-apply":
+        if not args.apply:
+            raise SystemExit("bank initial backfill apply requires --apply")
+        repo_root=Path(__file__).resolve().parents[1]
+        identity_manifest=Path(args.identity_manifest).expanduser().resolve()
+        try:
+            identity_manifest.relative_to(repo_root)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("bank_identity_manifest_must_be_outside_repository")
+        payload=json.loads(identity_manifest.read_text(encoding="utf-8"))
+        if set(payload) != {"source_identities"}:
+            raise RuntimeError("bank_identity_manifest_schema_invalid")
+        selected=tuple(str(value) for value in payload["source_identities"])
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(
+            run_bank_production_batch(
+                db,args.pdf,
+                selected_source_identities=selected,
+                phase6_canary_identity=None,
+                approved_target_spreadsheet_id=args.approved_target,
+                expected_git_head=args.expected_head,
+                repo_root=repo_root,
+                state_dir=args.state_dir,
+                audit_key_file=args.audit_key_file,
+                approval_file=args.approval_file,
+                account_alias=args.account_alias,
+                confirmed_internal_transfers=(
+                    s.bank_confirmed_internal_transfers()
+                ),
+                clock=lambda: datetime.now(ZoneInfo("UTC")),
+                sleeper=time.sleep,
+            ),
+            ensure_ascii=False,sort_keys=True,
+        ))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="general-receipt-preview":
