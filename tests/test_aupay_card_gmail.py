@@ -183,6 +183,14 @@ def test_card_statement_parser_accepts_real_issuer_billing_wording():
     assert statement.billing_cycle == "2026-09"
 
 
+def test_default_statement_query_covers_real_issuer_subject(monkeypatch):
+    monkeypatch.delenv("AUPAY_CARD_STATEMENT_GMAIL_QUERY", raising=False)
+
+    query = Settings().aupay_card_statement_gmail_query
+
+    assert 'subject:"ご請求金額確定"' in query
+
+
 def test_usage_detail_mail_is_never_statement_total_authority():
     with pytest.raises(ValueError, match="usage_detail_forbidden"):
         parse_aupay_card_statement_raw(raw_message(detail(1, "匿名店舗", 1200)))

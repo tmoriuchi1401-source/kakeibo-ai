@@ -37,7 +37,8 @@ class Settings:
         "AUPAY_CARD_STATEMENT_GMAIL_QUERY",
     ) or (
         'in:anywhere from:kddi-fs.com "au PAY カード" '
-        '{subject:"ご請求額" subject:"請求額確定"} newer_than:1y'
+        '{subject:"ご請求金額確定" subject:"ご請求額" '
+        'subject:"請求額確定"} newer_than:1y'
     ))
 
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
