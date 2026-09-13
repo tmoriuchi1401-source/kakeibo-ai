@@ -293,8 +293,9 @@ PayPayは摘要に明示される場合だけ照合対象にする。日付・�
 特典／金利優遇、明確な
 口座振替、確認済みの資金移動以外は安全側に `needs_review` とする。出力は分類・照合・
 review reasonの件数のみで、取引内容、個別金額、残高、照合identityは表示しない。
-`loan_repayment` と `cash_withdrawal` は意味が明確な分類として保持するが、write候補には
-しない。`income` と `expense` のみを将来のpreview候補とし、classificationと
+`loan_repayment` は `expense` / `住まい／住宅ローン` へ投影できるwrite候補とし、
+`cash_withdrawal` はwriteしない。`income`、`expense`、`loan_repayment`だけを
+production preview候補とし、classificationと
 write eligibilityを別フィールドで集計する。
 
 canonical identity resolverを使ったproduction-equivalentのwrite-free planだけを確認する:
@@ -326,6 +327,34 @@ operatorが所有関係を確認した自口座transferのexact descriptionとdi
 ```dotenv
 BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON=[]
 ```
+
+### 日常運用（銀行PDF）
+
+通常は次の2操作だけを使う。previewはSheets/Gmailをread-onlyで参照し、
+新しい `income` / `expense` / `loan_repayment` だけを外部manifestへ固定する。
+カード引落、確認済み自口座transfer、ATM、reimbursement、non-own review、
+true unknown、duplicate、collisionはwrite対象外である。
+
+```bash
+# preview（write_attempted=0）
+python -m app.cli bank-pdf statement.pdf
+
+# 明示承認後のみapply（同一PDF・同一manifestに限定）
+python -m app.cli bank-pdf statement.pdf --apply
+```
+
+`--apply` を使う場合は、Git管理外のruntime領域と既存transportの承認材料を
+次の環境変数で指定する。未設定、target/header不一致、candidate集合の変化、
+上限超過はすべてfail-closedする。
+
+```dotenv
+BANK_STATE_DIR=/path/outside/repository/bank-runtime
+BANK_AUDIT_KEY_FILE=/path/outside/repository/bank-runtime/audit-key.json
+BANK_APPROVAL_FILE=/path/outside/repository/bank-runtime/approval.json
+```
+
+同じPDFを再previewした結果が全件duplicateなら、manifest・capability・lease・
+appendを作らないsafe no-opになる。日常操作では過去backfill用のcanary/batchコマンドを使わない。
 
 ## Google DriveからPayPay CSVを取り込む
 

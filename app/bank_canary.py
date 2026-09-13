@@ -16,6 +16,7 @@ from .bank_reconciliation import (
     BankPreviewPlan,
     BankShadowResult,
     ConfirmedInternalTransfers,
+    ConfirmedNonOwnClassifications,
     build_bank_preview_plan,
     build_bank_shadow_result,
 )
@@ -30,6 +31,8 @@ CANARY_MAX_ROWS = 1
 BANK_BATCH_ROWS = 5
 BANK_LOAN_ROWS = 4
 BANK_INITIAL_BACKFILL_ROWS = 51
+BANK_STEADY_STATE_MIN_ROWS = 1
+BANK_STEADY_STATE_MAX_ROWS = 100
 BANK_BATCH_ROW_BOUNDS = frozenset({
     BANK_LOAN_ROWS, BANK_BATCH_ROWS, BANK_INITIAL_BACKFILL_ROWS,
 })
@@ -117,7 +120,15 @@ class BankBatchAuthority:
 
     def validate(self) -> None:
         expected_rows = self.max_rows
-        if self.min_rows != expected_rows or expected_rows not in BANK_BATCH_ROW_BOUNDS:
+        steady_state = self.authority_mode == "bank_steady_state"
+        valid_count = (
+            self.min_rows == expected_rows
+            and (
+                BANK_STEADY_STATE_MIN_ROWS <= expected_rows <= BANK_STEADY_STATE_MAX_ROWS
+                if steady_state else expected_rows in BANK_BATCH_ROW_BOUNDS
+            )
+        )
+        if not valid_count:
             if self.min_rows == BANK_BATCH_ROWS:
                 raise RuntimeError("bank_batch_rows_bound_must_be_five")
             raise RuntimeError("bank_batch_row_bound_invalid")
@@ -138,7 +149,7 @@ class BankBatchAuthority:
             raise RuntimeError("bank_batch_target_spreadsheet_required")
         if self.target_worksheet != CANARY_TARGET_SHEET:
             raise RuntimeError("bank_batch_target_sheet_invalid")
-        expected_mode = {
+        expected_mode = "bank_steady_state" if steady_state else {
             BANK_LOAN_ROWS: "bank_loan_repayment_preparation",
             BANK_BATCH_ROWS: "bank_batch_preparation",
             BANK_INITIAL_BACKFILL_ROWS: "bank_initial_backfill",
@@ -432,9 +443,12 @@ def build_bank_batch_plan(
             raise RuntimeError("bank_batch_selector_multiple_matches")
         decision = matches[0]
         classification = decision.classification.classification
-        loan_mode = authority.max_rows == BANK_LOAN_ROWS
+        steady_state = authority.authority_mode == "bank_steady_state"
+        loan_mode = authority.max_rows == BANK_LOAN_ROWS and not steady_state
         allowed_classifications = (
             frozenset({LOAN_CLASSIFICATION}) if loan_mode
+            else frozenset({*CANARY_CLASSIFICATIONS, LOAN_CLASSIFICATION})
+            if steady_state
             else CANARY_CLASSIFICATIONS
         )
         if classification not in allowed_classifications:
@@ -494,9 +508,13 @@ def validate_bank_batch_plan(value: object) -> BankBatchPlan:
     binding.validate()
     if binding.expected_header != expected_header:
         raise RuntimeError("bank_batch_target_binding_mismatch")
-    loan_mode = expected_rows == BANK_LOAN_ROWS
+    steady_state = value.authority.authority_mode == "bank_steady_state"
+    loan_mode = expected_rows == BANK_LOAN_ROWS and not steady_state
     allowed_classifications = (
-        frozenset({LOAN_CLASSIFICATION}) if loan_mode else CANARY_CLASSIFICATIONS
+        frozenset({LOAN_CLASSIFICATION}) if loan_mode
+        else frozenset({*CANARY_CLASSIFICATIONS, LOAN_CLASSIFICATION})
+        if steady_state
+        else CANARY_CLASSIFICATIONS
     )
     for item in value.items:
         if item.classification not in allowed_classifications:
@@ -745,6 +763,7 @@ class BankCanaryPreparationPipeline:
         *,
         account_alias: str,
         confirmed_internal_transfers: ConfirmedInternalTransfers,
+        confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
         card_statement_authorities=(),
     ) -> tuple[BankShadowResult, BankPreviewPlan]:
         existing_rows = self.db.get("取込データ!A2:L")
@@ -758,6 +777,7 @@ class BankCanaryPreparationPipeline:
             parsed,
             existing,
             confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
             card_statement_authorities=tuple(card_statement_authorities),
         )
         return shadow, build_bank_preview_plan(shadow, existing)

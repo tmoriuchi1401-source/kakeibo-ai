@@ -1,5 +1,5 @@
 from __future__ import annotations
-import argparse, csv, json, mimetypes, os, time
+import argparse, csv, json, mimetypes, os, subprocess, time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -108,6 +108,13 @@ from .bank_canary_production import (
     run_bank_production_loan_batch,
     run_bank_production_batch,
     run_bank_production_canary,
+)
+from .bank_steady_state import (
+    build_bank_daily_preview,
+    freeze_manifest,
+    load_manifest,
+    manifest_path,
+    pdf_digest,
 )
 
 def load_categories(path="config/categories.tsv"):
@@ -231,6 +238,13 @@ def main():
     bank_pdf=sub.add_parser("bank-pdf-preview")
     bank_pdf.add_argument("pdf")
     bank_pdf.add_argument("--account-alias",default="jibun-primary")
+    bank_daily=sub.add_parser("bank-pdf")
+    bank_daily.add_argument("pdf")
+    bank_daily.add_argument("--apply",action="store_true")
+    bank_daily.add_argument("--account-alias",default="jibun-primary")
+    bank_daily.add_argument("--state-dir",default=os.getenv("BANK_STATE_DIR", ""))
+    bank_daily.add_argument("--audit-key-file",default=os.getenv("BANK_AUDIT_KEY_FILE", ""))
+    bank_daily.add_argument("--approval-file",default=os.getenv("BANK_APPROVAL_FILE", ""))
     bank_shadow=sub.add_parser("bank-pdf-shadow-preview")
     bank_shadow.add_argument("pdf")
     bank_shadow.add_argument("--account-alias",default="jibun-primary")
@@ -332,6 +346,90 @@ def main():
             BankPdfPipeline().preview(args.pdf,account_alias=args.account_alias),
             ensure_ascii=False,sort_keys=True,
         ))
+    elif args.cmd=="bank-pdf":
+        s=Settings(); s.validate(need_sheet=True)
+        repo_root=Path(__file__).resolve().parents[1]
+        expected_head=subprocess.check_output(
+            ["git","rev-parse","HEAD"],cwd=repo_root,text=True,
+        ).strip()
+        statement_authorities=()
+        gmail_status="unavailable"
+        if s.gmail_token_json:
+            try:
+                statements,_=collect_aupay_card_statement_authorities(
+                    gmail_readonly_service(s.gmail_token_json),
+                    s.aupay_card_statement_gmail_query,
+                    100,
+                )
+                statement_authorities=tuple(
+                    item.to_import_transaction() for item in statements
+                )
+                gmail_status="available"
+            except Exception:
+                statement_authorities=()
+                gmail_status="unavailable"
+        read_db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        daily=build_bank_daily_preview(
+            read_db,args.pdf,
+            target_spreadsheet_id=s.spreadsheet_id,
+            expected_git_head=expected_head,
+            account_alias=args.account_alias,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+            card_statement_authorities=statement_authorities,
+        )
+        summary={**daily.summary,"gmail_statement_authority":gmail_status}
+        selection_path=None
+        if daily.candidate_identities:
+            if not args.state_dir:
+                summary["manifest_status"]="state_dir_required"
+                if args.apply:
+                    raise RuntimeError("bank_steady_state_state_dir_required")
+            else:
+                selection_path=manifest_path(args.state_dir)
+                freeze_manifest(selection_path,daily,repository_root=repo_root)
+                summary["manifest_status"]="frozen_external"
+                summary["manifest_path"]="external"
+        else:
+            summary["manifest_status"]="safe_noop"
+        if not args.apply:
+            print(json.dumps(summary,ensure_ascii=False,sort_keys=True))
+        else:
+            if not daily.candidate_identities:
+                print(json.dumps(summary,ensure_ascii=False,sort_keys=True))
+            else:
+                if not selection_path:
+                    raise RuntimeError("bank_steady_state_manifest_required")
+                manifest=load_manifest(selection_path)
+                if (
+                    manifest.pdf_sha256 != pdf_digest(args.pdf)
+                    or manifest.source_identities != daily.candidate_identities
+                    or manifest.target_spreadsheet_id != s.spreadsheet_id
+                    or manifest.expected_git_head != expected_head
+                ):
+                    raise RuntimeError("bank_steady_state_manifest_changed_repreview_required")
+                if not args.audit_key_file or not args.approval_file:
+                    raise RuntimeError("bank_steady_state_apply_authority_files_required")
+                write_db=SheetsDB(s.spreadsheet_id)
+                result=run_bank_production_batch(
+                    write_db,args.pdf,
+                    selected_source_identities=manifest.source_identities,
+                    phase6_canary_identity=None,
+                    approved_target_spreadsheet_id=s.spreadsheet_id,
+                    expected_git_head=manifest.expected_git_head,
+                    repo_root=repo_root,
+                    state_dir=args.state_dir,
+                    audit_key_file=args.audit_key_file,
+                    approval_file=args.approval_file,
+                    account_alias=args.account_alias,
+                    confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+                    confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+                    card_statement_authorities=statement_authorities,
+                    steady_state=True,
+                    clock=lambda:datetime.now(ZoneInfo("UTC")),
+                    sleeper=time.sleep,
+                )
+                print(json.dumps(result,ensure_ascii=False,sort_keys=True))
     elif args.cmd=="bank-pdf-shadow-preview":
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())

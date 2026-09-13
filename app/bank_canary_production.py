@@ -33,7 +33,10 @@ from .bank_canary import (
     dry_run_bank_canary,
 )
 from .bank_loan_manifest import load_bank_loan_manifest
-from .bank_reconciliation import ConfirmedInternalTransfers
+from .bank_reconciliation import (
+    ConfirmedInternalTransfers,
+    ConfirmedNonOwnClassifications,
+)
 from .canonical_one_row_production import (
     GitCheckpointGuard,
     SealedCanonicalOneRowTransport,
@@ -211,16 +214,21 @@ def run_bank_production_batch(
     confirmed_internal_transfers: ConfirmedInternalTransfers,
     clock: Callable[[], datetime],
     sleeper: Callable[[float], None],
+    confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
+    card_statement_authorities: tuple = (),
     loan_identity_manifest_path: str | Path | None = None,
+    steady_state: bool = False,
 ) -> dict:
     """Execute one exact supported batch append without fallback or retry."""
     repo = Path(repo_root).resolve()
     selected = tuple(selected_source_identities)
     selected_count = len(selected)
-    if selected_count not in {4, 5, 51}:
+    if steady_state and not 1 <= selected_count <= 100:
+        raise RuntimeError("bank_steady_state_row_bound_invalid")
+    if not steady_state and selected_count not in {4, 5, 51}:
         raise RuntimeError("bank_batch_row_bound_invalid")
-    is_loan_batch = selected_count == BANK_LOAN_ROWS
-    is_initial_backfill = selected_count == 51
+    is_loan_batch = selected_count == BANK_LOAN_ROWS and not steady_state
+    is_initial_backfill = selected_count == 51 and not steady_state
     loan_manifest_digest = ""
     if is_loan_batch:
         if loan_identity_manifest_path is None:
@@ -261,6 +269,8 @@ def run_bank_production_batch(
         pdf_path,
         account_alias=account_alias,
         confirmed_internal_transfers=confirmed_internal_transfers,
+        confirmed_non_own_classifications=confirmed_non_own_classifications,
+        card_statement_authorities=tuple(card_statement_authorities),
     )
     authority = BankBatchAuthority(
         selected_source_identities=selected,
@@ -268,10 +278,12 @@ def run_bank_production_batch(
         min_rows=selected_count,
         max_rows=selected_count,
         authority_mode=(
-            "bank_loan_repayment_preparation" if is_loan_batch
+            "bank_steady_state" if steady_state else (
+                "bank_loan_repayment_preparation" if is_loan_batch
             else (
                 "bank_initial_backfill" if is_initial_backfill
                 else "bank_batch_preparation"
+                )
             )
         ),
     )
@@ -292,6 +304,13 @@ def run_bank_production_batch(
         or preflight.authorized != selected_count
         or preflight.max_writes != selected_count
         or (
+            steady_state
+            and (
+                preflight.income + preflight.expense + preflight.loan_repayment
+                != selected_count
+            )
+        )
+        or (
             is_loan_batch
             and (
                 preflight.loan_repayment != BANK_LOAN_ROWS
@@ -301,11 +320,11 @@ def run_bank_production_batch(
             )
         )
         or (
-            not is_loan_batch
+            not is_loan_batch and not steady_state
             and preflight.income + preflight.expense != selected_count
         )
         or (
-            not is_initial_backfill
+            not is_initial_backfill and not steady_state
             and not is_loan_batch
             and (preflight.income != 2 or preflight.expense != 3)
         )
@@ -314,6 +333,14 @@ def run_bank_production_batch(
         or preflight.withheld
         or preflight.external_write_count
         or any(preview.candidate_identities.count(identity) != 1 for identity in selected)
+        or (
+            steady_state
+            and (
+                preview.parsed <= 0
+                or preview.ambiguous_collision != 0
+                or preview.withheld_by_classification < 0
+            )
+        )
         or (
             is_loan_batch
             and (
@@ -351,7 +378,10 @@ def run_bank_production_batch(
         project_bank_loan_repayment_batch(plan)
         if is_loan_batch else (
             project_bank_initial_backfill_batch(plan)
-            if is_initial_backfill else project_bank_five_row_batch(plan)
+            if is_initial_backfill else (
+                project_bank_bounded_batch(plan)
+                if steady_state else project_bank_five_row_batch(plan)
+            )
         )
     )
     binding = TargetBinding(
@@ -389,7 +419,10 @@ def run_bank_production_batch(
         raise RuntimeError("bank_batch_state_directory_must_be_outside_repository")
     manifest_path = resolved_state_dir / (
         "exact-loan-batch-manifest.json"
-        if is_loan_batch else "exact-batch-manifest.json"
+        if is_loan_batch else (
+            "exact-steady-state-manifest.json"
+            if steady_state else "exact-batch-manifest.json"
+        )
     )
     try:
         with manifest_path.open("x", encoding="utf-8", errors="strict") as handle:
@@ -415,7 +448,10 @@ def run_bank_production_batch(
         "bank-loan-four-row.sqlite3"
         if is_loan_batch else (
             "bank-initial-backfill.sqlite3"
-            if is_initial_backfill else "bank-five-row.sqlite3"
+            if is_initial_backfill else (
+                "bank-steady-state.sqlite3"
+                if steady_state else "bank-five-row.sqlite3"
+            )
         )
     )
     journal = SqliteAttemptJournal(state_path, repo_root=repo)
