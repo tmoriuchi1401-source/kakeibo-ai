@@ -67,6 +67,7 @@ _HEAD = re.compile(r"[0-9a-f]{40}")
 _SUPPORTED_BANK_PRODUCTION_BRANCHES = frozenset({
     "agent/bank-csv-ingestion",
     "agent/bank-pdf-docomo-smtb",
+    "agent/bank-pdf-chiba",
     "main",
 })
 

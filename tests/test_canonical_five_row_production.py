@@ -212,7 +212,10 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def unissued_parts(tmp_path, *, approval_batch_size=None, header=None, row_count=5):
+def unissued_parts(
+    tmp_path, *, approval_batch_size=None, header=None, row_count=5,
+    expected_branch="agent/bank-csv-ingestion",
+):
     repo_root = tmp_path / "repository"
     repo_root.mkdir()
     db = FakeDB(header=header)
@@ -230,7 +233,7 @@ def unissued_parts(tmp_path, *, approval_batch_size=None, header=None, row_count
         binding=binding,
         audit_key=KEY,
         expected_git_head="a" * 40,
-        expected_branch="agent/bank-csv-ingestion",
+        expected_branch=expected_branch,
         created_at=NOW,
         run_id="11111111-1111-4111-8111-111111111111",
     )
@@ -268,6 +271,15 @@ def unissued_parts(tmp_path, *, approval_batch_size=None, header=None, row_count
         "approval_provider": approval_provider,
         "inspector": ReadOnlySheetsTargetInspector(db),
     }
+
+
+def test_chiba_branch_is_supported_by_common_bounded_transport(tmp_path):
+    parts = unissued_parts(
+        tmp_path,
+        expected_branch="agent/bank-pdf-chiba",
+    )
+
+    assert parts["manifest"].expected_branch == "agent/bank-pdf-chiba"
 
 
 def issue(parts):
