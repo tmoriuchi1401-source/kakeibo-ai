@@ -9,6 +9,9 @@ from app.aupay_card_writer import (
     canonical_candidate_reference_v2,
 )
 from app.bank_canary import BankBatchAuthority, build_bank_batch_plan
+from app.bank_canary_production import (
+    project_bank_bounded_batch as production_project_bank_bounded_batch,
+)
 from app.bank_pdf_pipeline import (
     DOCOMO_SMTB_SOURCE,
     BankPdfResult,
@@ -84,7 +87,7 @@ def _copy_frozen(value, **changes):
 
 
 def test_docomo_sbi_canary_binds_asset_formation_policy_to_approval_reference():
-    batch = project_bank_bounded_batch(_plan())
+    batch = production_project_bank_bounded_batch(_plan())
     candidate = batch.candidates[0]
 
     assert candidate.transaction_kind == "expense"

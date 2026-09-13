@@ -50,6 +50,7 @@ from .canonical_one_row_production import (
     project_bank_initial_backfill_batch,
     project_bank_loan_repayment_batch,
     project_bank_five_row_batch,
+    project_bank_bounded_batch,
     project_bank_canary_candidate,
 )
 
