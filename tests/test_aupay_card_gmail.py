@@ -69,6 +69,20 @@ def statement_message(*, amount=12345, payment_date="2026年9月10日",
     return message.as_bytes()
 
 
+def real_format_statement_message(*, amount=513152,
+                                  payment_date="2026年9月10日",
+                                  cycle="2026年9月"):
+    message = EmailMessage()
+    message["Subject"] = "【au PAY カード】ご請求金額確定のお知らせ"
+    message["Message-ID"] = "<real-format-statement@example.invalid>"
+    message.set_content(
+        f"お客さまの{cycle}のお支払金額が確定しましたので、ご案内いたします。\n"
+        f"▼お支払日 {payment_date}\n"
+        f"▼ご請求金額 {amount}円\n"
+    )
+    return message.as_bytes()
+
+
 def encoded(raw):
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
@@ -159,6 +173,14 @@ def test_card_statement_parser_extracts_issuer_total_date_cycle_and_identity():
     assert statement.billing_cycle == "2026-08"
     assert statement.statement_identity.startswith("aupay-card-statement:")
     assert statement.to_import_transaction().status == AUPAY_CARD_STATEMENT_AUTHORITY_STATUS
+
+
+def test_card_statement_parser_accepts_real_issuer_billing_wording():
+    statement = parse_aupay_card_statement_raw(real_format_statement_message())
+
+    assert statement.statement_total_yen == 513152
+    assert statement.payment_date == "2026-09-10"
+    assert statement.billing_cycle == "2026-09"
 
 
 def test_usage_detail_mail_is_never_statement_total_authority():

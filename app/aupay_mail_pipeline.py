@@ -413,13 +413,13 @@ def parse_aupay_card_statement_raw(raw_mime: bytes) -> AuPayCardStatementAuthori
     payment_dates = _issuer_statement_dates(
         text, ("お支払日", "お支払い日", "口座振替日", "引落日"),
     )
-    cycles = {
-        (int(year), int(month))
-        for year, month in re.findall(
-        r"(20\d{2})年\s*(\d{1,2})月(?:度|分)?\s*(?:ご)?請求",
-        subject + "\n" + text,
-        )
-    }
+    cycle_text = subject + "\n" + text
+    cycle_matches = re.findall(
+        r"(20\d{2})年\s*(\d{1,2})月\s*(?:度|分)?\s*"
+        r"(?:の\s*)?(?:(?:ご)?請求|お支払)(?:金額)?",
+        cycle_text,
+    )
+    cycles = {(int(year), int(month)) for year, month in cycle_matches}
     if len(total_values) != 1 or len(payment_dates) != 1 or len(cycles) != 1:
         raise ValueError("issuer_statement_required_fields_missing")
     total = next(iter(total_values))
