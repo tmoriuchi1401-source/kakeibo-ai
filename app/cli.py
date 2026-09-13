@@ -286,7 +286,7 @@ def main():
     sub.add_parser("payroll-drive-preview")
     bank_pdf=sub.add_parser("bank-pdf-preview")
     bank_pdf.add_argument("pdf")
-    bank_pdf.add_argument("--account-alias",default="jibun-primary")
+    bank_pdf.add_argument("--account-alias")
     bank_daily=sub.add_parser("bank-pdf")
     bank_daily.add_argument("pdf")
     bank_daily.add_argument("--apply",action="store_true")

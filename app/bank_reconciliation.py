@@ -9,6 +9,7 @@ import unicodedata
 
 from .bank_pdf_pipeline import (
     DEFAULT_ACCOUNT_ALIAS,
+    DOCOMO_SMTB_SOURCE,
     BankPdfPipeline,
     BankPdfResult,
     NormalizedBankTransaction,
@@ -175,6 +176,7 @@ def classify_bank_transaction(
     """Classify only cases supported by explicit bank-row evidence."""
     description = normalize_bank_description(transaction.description)
     direction = "incoming" if transaction.signed_amount > 0 else "outgoing"
+
     confirmed = {
         (value, configured_direction, account_alias)
         for value, configured_direction, account_alias
@@ -203,6 +205,19 @@ def classify_bank_transaction(
         return BankClassification(
             transaction, "needs_review", "operator_confirmed_non_own_review",
         )
+
+    # These d NEOBANK labels describe funding mechanisms, not their economic
+    # owner.  An exact private rule may override them above; without that
+    # authority they must not inherit generic transfer/income semantics.
+    if transaction.source == DOCOMO_SMTB_SOURCE:
+        if "定額自動入金" in description:
+            return BankClassification(
+                transaction, "needs_review", "docomo_fixed_auto_deposit",
+            )
+        if "SBIハイブリッド預金" in description:
+            return BankClassification(
+                transaction, "needs_review", "docomo_sbi_hybrid_deposit",
+            )
 
     if transaction.signed_amount > 0:
         if "賞与" in description:

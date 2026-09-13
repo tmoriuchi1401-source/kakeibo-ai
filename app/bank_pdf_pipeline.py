@@ -1,8 +1,9 @@
-"""Read-only au Jibun Bank statement PDF adapter.
+"""Read-only native-text bank statement PDF adapters.
 
-The adapter uses native PDF word coordinates and the statement's header/vertical
-rules.  OCR, storage mutation, and expense classification are deliberately out
-of scope.
+Adapters describe only bank-specific document markers, headers, date syntax,
+and amount-cell semantics.  Geometry reconstruction, normalization, stable
+identity, and canonical projection remain shared.  OCR and storage mutation
+are deliberately out of scope.
 """
 from __future__ import annotations
 
@@ -19,8 +20,45 @@ from .utils import canonical_hash
 
 SOURCE = "auじぶん銀行PDF"
 DEFAULT_ACCOUNT_ALIAS = "jibun-primary"
-_HEADERS = ("取引日付", "取引内容", "出金", "入金", "残高")
-_DATE = re.compile(r"20\d{2}/\d{2}/\d{2}")
+DOCOMO_SMTB_SOURCE = "ドコモSMTBネット銀行PDF"
+DEFAULT_DOCOMO_SMTB_ACCOUNT_ALIAS = "docomo-smtb-primary"
+
+
+@dataclass(frozen=True)
+class BankPdfAdapter:
+    key: str
+    source: str
+    identity_namespace: str
+    default_account_alias: str
+    headers: tuple[str, str, str, str, str]
+    date_pattern: re.Pattern[str]
+    date_format: str
+    document_markers: tuple[str, ...]
+    zero_filled_opposite_amount: bool = False
+
+
+JIBUN_BANK_ADAPTER = BankPdfAdapter(
+    key="au-jibun",
+    source=SOURCE,
+    identity_namespace="au-jibun",
+    default_account_alias=DEFAULT_ACCOUNT_ALIAS,
+    headers=("取引日付", "取引内容", "出金", "入金", "残高"),
+    date_pattern=re.compile(r"20\d{2}/\d{2}/\d{2}"),
+    date_format="%Y/%m/%d",
+    document_markers=("取引日付", "取引内容"),
+)
+
+DOCOMO_SMTB_BANK_ADAPTER = BankPdfAdapter(
+    key="docomo-smtb",
+    source=DOCOMO_SMTB_SOURCE,
+    identity_namespace="docomo-smtb",
+    default_account_alias=DEFAULT_DOCOMO_SMTB_ACCOUNT_ALIAS,
+    headers=("日付", "内容", "出金金額", "入金金額", "残高"),
+    date_pattern=re.compile(r"20\d{2}年\d{2}月\d{2}日"),
+    date_format="%Y年%m月%d日",
+    document_markers=("株式会社ドコモSMTBネット銀行",),
+    zero_filled_opposite_amount=True,
+)
 
 
 class BankPdfError(ValueError):
@@ -102,11 +140,14 @@ class BankPdfResult:
     balance_consistency_failures: int
     duplicate_candidates: int
     canonical_transactions: tuple[Transaction, ...]
+    source: str = SOURCE
+    adapter_key: str = JIBUN_BANK_ADAPTER.key
 
     def summary(self) -> dict[str, int | dict[str, int] | str]:
         reasons = Counter(issue.reason for issue in self.issues)
         return {
-            "source": SOURCE,
+            "source": self.source,
+            "adapter": self.adapter_key,
             "extraction_method": "native_pdf_words",
             "pages": self.pages,
             "candidate_rows": self.candidate_rows,
@@ -143,8 +184,12 @@ def _header_span(
     return None
 
 
-def infer_column_boundaries(page: PageGeometry) -> tuple[float, float, float, float]:
-    date_headers = [word for word in page.words if _text(word.text) == _HEADERS[0]]
+def infer_column_boundaries(
+    page: PageGeometry,
+    headers: tuple[str, str, str, str, str] | None = None,
+) -> tuple[float, float, float, float]:
+    headers = headers or JIBUN_BANK_ADAPTER.headers
+    date_headers = [word for word in page.words if _text(word.text) == headers[0]]
     if not date_headers:
         raise BankPdfError("header_geometry_unresolved")
     header_top = date_headers[0].top
@@ -152,7 +197,7 @@ def infer_column_boundaries(page: PageGeometry) -> tuple[float, float, float, fl
         (word for word in page.words if abs(word.top - header_top) <= 2.0),
         key=lambda word: word.x0,
     )
-    spans = [_header_span(band, label) for label in _HEADERS]
+    spans = [_header_span(band, label) for label in headers]
     if any(span is None for span in spans):
         raise BankPdfError("header_geometry_unresolved")
     centers = [(span[0] + span[1]) / 2 for span in spans if span is not None]
@@ -187,20 +232,23 @@ class _ParsedRow:
     row: int
 
 
-def _parse_page(page: PageGeometry) -> tuple[list[_ParsedRow], list[BankParseIssue], int]:
+def _parse_page(
+    page: PageGeometry,
+    adapter: BankPdfAdapter,
+) -> tuple[list[_ParsedRow], list[BankParseIssue], int]:
     try:
-        boundaries = infer_column_boundaries(page)
+        boundaries = infer_column_boundaries(page, adapter.headers)
     except BankPdfError as exc:
         return [], [BankParseIssue(page.page_number, 0, str(exc))], 0
     header_top = min(
-        word.top for word in page.words if _text(word.text) == _HEADERS[0]
+        word.top for word in page.words if _text(word.text) == adapter.headers[0]
     )
     date_words = sorted(
         (
             word for word in page.words
             if word.top > header_top + 5
             and word.center_x < boundaries[0]
-            and _DATE.fullmatch(_text(word.text))
+            and adapter.date_pattern.fullmatch(_text(word.text))
         ),
         key=lambda word: word.top,
     )
@@ -230,28 +278,50 @@ def _parse_page(page: PageGeometry) -> tuple[list[_ParsedRow], list[BankParseIss
             word.text for word in sorted(description_words, key=lambda word: word.x0)
         ))
         try:
-            date = datetime.strptime(_text(date_word.text), "%Y/%m/%d").strftime("%Y-%m-%d")
+            date = datetime.strptime(
+                _text(date_word.text), adapter.date_format,
+            ).strftime("%Y-%m-%d")
             debit = _parse_money(debit_words)
             credit = _parse_money(credit_words)
             balance = _parse_money(balance_words, allow_negative=True)
         except ValueError as exc:
             issues.append(BankParseIssue(page.page_number, row_number, str(exc)))
             continue
+        signed_amount = None
+        amount_issue = None
+        if adapter.zero_filled_opposite_amount:
+            if debit is None or credit is None:
+                amount_issue = "amount_missing"
+            elif debit > 0 and credit == 0:
+                signed_amount = -debit
+            elif credit > 0 and debit == 0:
+                signed_amount = credit
+            elif debit > 0 and credit > 0:
+                amount_issue = "both_debit_and_credit_positive"
+            elif debit == 0 and credit == 0:
+                amount_issue = "both_amounts_zero"
+            else:
+                amount_issue = "amount_non_positive"
+        elif debit is not None and credit is not None:
+            amount_issue = "both_debit_and_credit"
+        elif debit is None and credit is None:
+            amount_issue = "amount_missing"
+        elif (debit or credit or 0) <= 0:
+            amount_issue = "amount_non_positive"
+        else:
+            signed_amount = -debit if debit is not None else int(credit)
+
         if not description:
             issues.append(BankParseIssue(page.page_number, row_number, "description_missing"))
-        elif debit is not None and credit is not None:
-            issues.append(BankParseIssue(page.page_number, row_number, "both_debit_and_credit"))
-        elif debit is None and credit is None:
-            issues.append(BankParseIssue(page.page_number, row_number, "amount_missing"))
+        elif amount_issue:
+            issues.append(BankParseIssue(page.page_number, row_number, amount_issue))
         elif balance is None:
             issues.append(BankParseIssue(page.page_number, row_number, "balance_missing"))
-        elif (debit or credit or 0) <= 0:
-            issues.append(BankParseIssue(page.page_number, row_number, "amount_non_positive"))
         else:
             parsed.append(_ParsedRow(
                 date=date,
                 description=description,
-                signed_amount=-debit if debit is not None else int(credit),
+                signed_amount=int(signed_amount),
                 balance=balance,
                 page=page.page_number,
                 row=row_number,
@@ -259,10 +329,11 @@ def _parse_page(page: PageGeometry) -> tuple[list[_ParsedRow], list[BankParseIss
     return parsed, issues, len(date_words)
 
 
-def parse_jibun_bank_pages(
+def parse_bank_pages(
     pages: list[PageGeometry],
     *,
-    account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+    adapter: BankPdfAdapter,
+    account_alias: str,
     existing_identities: set[str] | None = None,
 ) -> BankPdfResult:
     alias = _text(account_alias)
@@ -273,7 +344,7 @@ def parse_jibun_bank_pages(
     candidate_rows = 0
     page_candidate_counts: dict[int, int] = {}
     for page in pages:
-        rows, page_issues, page_candidates = _parse_page(page)
+        rows, page_issues, page_candidates = _parse_page(page, adapter)
         raw_rows.extend(rows)
         issues.extend(page_issues)
         candidate_rows += page_candidates
@@ -281,7 +352,7 @@ def parse_jibun_bank_pages(
 
     materials = [
         canonical_hash({
-            "source": SOURCE,
+            "source": adapter.source,
             "account_alias": alias,
             "date": row.date,
             "description": row.description,
@@ -294,12 +365,14 @@ def parse_jibun_bank_pages(
     occurrences: Counter[str] = Counter()
     normalized = []
     for row, material in zip(raw_rows, materials):
-        identity = f"bankpdf:au-jibun:{alias}:{material[:24]}"
+        identity = (
+            f"bankpdf:{adapter.identity_namespace}:{alias}:{material[:24]}"
+        )
         if material_counts[material] > 1:
             occurrences[material] += 1
             identity += f":{occurrences[material]:03d}"
         normalized.append(NormalizedBankTransaction(
-            source=SOURCE,
+            source=adapter.source,
             account_alias=alias,
             transaction_date=row.date,
             description=row.description,
@@ -363,7 +436,59 @@ def parse_jibun_bank_pages(
         balance_consistency_failures=balance_failures,
         duplicate_candidates=resolution.duplicate_count + existing_duplicates,
         canonical_transactions=eligible,
+        source=adapter.source,
+        adapter_key=adapter.key,
     )
+
+
+def parse_jibun_bank_pages(
+    pages: list[PageGeometry],
+    *,
+    account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+    existing_identities: set[str] | None = None,
+) -> BankPdfResult:
+    return parse_bank_pages(
+        pages,
+        adapter=JIBUN_BANK_ADAPTER,
+        account_alias=account_alias,
+        existing_identities=existing_identities,
+    )
+
+
+def parse_docomo_smtb_bank_pages(
+    pages: list[PageGeometry],
+    *,
+    account_alias: str = DEFAULT_DOCOMO_SMTB_ACCOUNT_ALIAS,
+    existing_identities: set[str] | None = None,
+) -> BankPdfResult:
+    return parse_bank_pages(
+        pages,
+        adapter=DOCOMO_SMTB_BANK_ADAPTER,
+        account_alias=account_alias,
+        existing_identities=existing_identities,
+    )
+
+
+def detect_bank_pdf_adapter(pages: list[PageGeometry]) -> BankPdfAdapter:
+    if not pages:
+        raise BankPdfError("bank_document_empty")
+    first_page_text = "".join(
+        _text(word.text).replace(" ", "")
+        for word in sorted(pages[0].words, key=lambda word: (word.top, word.x0))
+    )
+    adapters = (DOCOMO_SMTB_BANK_ADAPTER, JIBUN_BANK_ADAPTER)
+    for adapter in adapters:
+        if not all(
+            marker.replace(" ", "") in first_page_text
+            for marker in adapter.document_markers
+        ):
+            continue
+        try:
+            infer_column_boundaries(pages[0], adapter.headers)
+        except BankPdfError:
+            continue
+        return adapter
+    raise BankPdfError("bank_document_unrecognized")
 
 
 def materialize_native_pdf(path: str | Path) -> list[PageGeometry]:
@@ -407,13 +532,19 @@ class BankPdfPipeline:
         self,
         path: str | Path,
         *,
-        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        account_alias: str | None = None,
         existing_identities: set[str] | None = None,
     ) -> BankPdfResult:
         pages = materialize_native_pdf(path)
-        return parse_jibun_bank_pages(
+        adapter = detect_bank_pdf_adapter(pages)
+        alias = (
+            adapter.default_account_alias
+            if account_alias is None else account_alias
+        )
+        return parse_bank_pages(
             pages,
-            account_alias=account_alias,
+            adapter=adapter,
+            account_alias=alias,
             existing_identities=existing_identities,
         )
 
@@ -421,7 +552,7 @@ class BankPdfPipeline:
         self,
         path: str | Path,
         *,
-        account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+        account_alias: str | None = None,
         existing_identities: set[str] | None = None,
     ) -> dict[str, int | dict[str, int] | str]:
         return self.parse(
