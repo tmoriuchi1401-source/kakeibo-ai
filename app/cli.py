@@ -290,7 +290,9 @@ def main():
     bank_daily=sub.add_parser("bank-pdf")
     bank_daily.add_argument("pdf")
     bank_daily.add_argument("--apply",action="store_true")
-    bank_daily.add_argument("--account-alias",default="jibun-primary")
+    # Let the PDF detector select the adapter's default account alias.  An
+    # explicit alias remains available for private multi-account setups.
+    bank_daily.add_argument("--account-alias")
     bank_daily.add_argument("--state-dir",default=os.getenv("BANK_STATE_DIR", ""))
     bank_daily.add_argument("--audit-key-file",default=os.getenv("BANK_AUDIT_KEY_FILE", ""))
     bank_daily.add_argument("--approval-file",default=os.getenv("BANK_APPROVAL_FILE", ""))

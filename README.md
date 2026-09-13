@@ -270,9 +270,10 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
-## auじぶん銀行PDFをread-onlyで確認する
+## 銀行PDFをread-onlyで確認する（auじぶん銀行 / ドコモSMTBネット銀行）
 
-native text layerを持つ普通預金取引明細PDFを、Sheetsへ書き込まず確認する:
+native text layerを持つ普通預金取引明細PDFを、Sheetsへ書き込まず確認する。
+発行元marker・header・geometryから対応adapterを自動選択し、未知形式はfail-closedする。
 
 ```bash
 python -m app.cli bank-pdf-preview statement.pdf --account-alias jibun-primary

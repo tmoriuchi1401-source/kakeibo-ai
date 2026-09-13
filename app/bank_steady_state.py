@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from .bank_pdf_pipeline import BankPdfPipeline, DEFAULT_ACCOUNT_ALIAS
+from .bank_pdf_pipeline import BankPdfPipeline
 from .bank_reconciliation import (
     BankPreviewPlan,
     BankShadowResult,
@@ -94,7 +94,7 @@ def build_bank_daily_preview(
     *,
     target_spreadsheet_id: str,
     expected_git_head: str,
-    account_alias: str = DEFAULT_ACCOUNT_ALIAS,
+    account_alias: str | None = None,
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
     card_statement_authorities: Iterable = (),
