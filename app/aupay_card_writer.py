@@ -555,7 +555,7 @@ def _keyed_ref_v2(key: bytes, namespace: str, payload: object) -> str:
 
 
 def _candidate_reference_payload(candidate: CanonicalApplyCandidate) -> dict:
-    return {
+    payload = {
         "candidate_schema_version": candidate.schema_version,
         "identity": candidate.identity,
         "source": candidate.source,
@@ -573,6 +573,16 @@ def _candidate_reference_payload(candidate: CanonicalApplyCandidate) -> dict:
         "source_identities": list(candidate.source_identities),
         "cross_source_state": candidate.cross_source_state,
     }
+    # Bank projections carry policy metadata that is not part of the fixed
+    # 12-column import row. Bind it into the approval reference when present,
+    # without changing the existing au PAY card reference contract.
+    if hasattr(candidate, "category"):
+        payload["category"] = list(candidate.category)
+    if hasattr(candidate, "import_status"):
+        payload["import_status"] = candidate.import_status
+    if hasattr(candidate, "write_eligibility"):
+        payload["write_eligibility"] = candidate.write_eligibility
+    return payload
 
 
 def canonical_candidate_reference_v2(

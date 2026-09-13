@@ -63,6 +63,11 @@ _CANDIDATE_AUTHORITY = object()
 _BATCH_CANDIDATE_AUTHORITY = object()
 _DISPATCH_AUTHORITY = object()
 _HEAD = re.compile(r"[0-9a-f]{40}")
+_SUPPORTED_BANK_PRODUCTION_BRANCHES = frozenset({
+    "agent/bank-csv-ingestion",
+    "agent/bank-pdf-docomo-smtb",
+    "main",
+})
 
 
 def _valid_canonical_batch_count(value: int) -> bool:
@@ -371,7 +376,7 @@ class CanonicalOneRowManifest:
             raise RuntimeError("canonical_one_row_plan_ref_invalid")
         if not _HEAD.fullmatch(self.expected_git_head):
             raise RuntimeError("canonical_one_row_git_head_invalid")
-        if self.expected_branch != "agent/bank-csv-ingestion":
+        if self.expected_branch not in _SUPPORTED_BANK_PRODUCTION_BRANCHES:
             raise RuntimeError("canonical_one_row_branch_invalid")
         if self.authority_provenance != "phase5_exact_source_identity":
             raise RuntimeError("canonical_one_row_authority_provenance_invalid")
@@ -508,7 +513,7 @@ class CanonicalFiveRowManifest:
             raise RuntimeError("canonical_batch_plan_ref_invalid")
         if not _HEAD.fullmatch(self.expected_git_head):
             raise RuntimeError("canonical_batch_git_head_invalid")
-        if self.expected_branch != "agent/bank-csv-ingestion":
+        if self.expected_branch not in _SUPPORTED_BANK_PRODUCTION_BRANCHES:
             raise RuntimeError("canonical_batch_branch_invalid")
         if (
             self.income_count < 0 or self.expense_count < 0

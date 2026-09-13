@@ -206,6 +206,7 @@ def run_bank_production_batch(
     phase6_canary_identity: str | None,
     approved_target_spreadsheet_id: str,
     expected_git_head: str,
+    expected_branch: str = "agent/bank-csv-ingestion",
     repo_root: str | Path,
     state_dir: str | Path,
     audit_key_file: str | Path,
@@ -218,6 +219,7 @@ def run_bank_production_batch(
     card_statement_authorities: tuple = (),
     loan_identity_manifest_path: str | Path | None = None,
     steady_state: bool = False,
+    expected_categories: tuple[tuple[str, str], ...] | None = None,
 ) -> dict:
     """Execute one exact supported batch append without fallback or retry."""
     repo = Path(repo_root).resolve()
@@ -258,7 +260,7 @@ def run_bank_production_batch(
     git_guard = GitCheckpointGuard(repo)
     checkpoint = git_guard.validate(
         expected_head=expected_git_head,
-        expected_branch="agent/bank-csv-ingestion",
+        expected_branch=expected_branch,
     )
 
     titles = tuple(db.sheet_titles())
@@ -384,6 +386,9 @@ def run_bank_production_batch(
             )
         )
     )
+    actual_categories = tuple(candidate.category for candidate in batch.candidates)
+    if expected_categories is not None and actual_categories != expected_categories:
+        raise RuntimeError("bank_batch_category_authority_changed")
     binding = TargetBinding(
         expected_spreadsheet_id=approved_target_spreadsheet_id,
         expected_worksheet="取込データ",
@@ -520,6 +525,10 @@ def run_bank_production_batch(
         "collision_before_write": preflight.ambiguous_collision,
         "withheld_before_write": preflight.withheld,
         "capability_max_rows": batch.max_rows,
+        "category_authority_valid": (
+            actual_categories == expected_categories
+            if expected_categories is not None else None
+        ),
         "previous_bank_existing_duplicate": preview.existing_duplicate,
         "phase6_canary_existing_duplicate": (
             canary_replay["selected_existing_duplicate"]
