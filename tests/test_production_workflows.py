@@ -31,6 +31,8 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     inputs = parent["on"]["workflow_dispatch"]["inputs"]
     assert inputs["mode"]["default"] == "preview"
     assert inputs["bank_apply"]["default"] == "false"
+    assert inputs["scope"]["default"] == "all"
+    assert inputs["scope"]["options"] == ["all", "amazon_canary"]
     job = parent["jobs"]["production"]
     assert "vars.KAKEIBO_PRODUCTION_ENABLED == 'true'" in job["if"]
     assert "vars.KAKEIBO_LEGACY_DISABLED == 'true'" in job["if"]
@@ -39,6 +41,10 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     uses = [step.get("uses", "") for step in job["steps"]]
     assert not any("cache/save" in value or "upload-artifact" in value for value in uses)
     assert all("continue-on-error" not in step for step in job["steps"])
+    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "main"
+    guard = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("Bind verified"))
+    assert 'test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"' in guard
 
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():

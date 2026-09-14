@@ -86,13 +86,27 @@ def category_for(tx: ImportTransaction, categories: set[tuple[str, str]]) -> tup
     return FALLBACK_CATEGORY
 
 
+def _eligible_for_posting(tx: ImportTransaction) -> bool:
+    # The sealed canonical card writer already assigns auto_expense, but only
+    # appends the import row. An empty target means common posting is still due.
+    # Keep its authorized status intact; do not promote review/matched rows or
+    # reinterpret legacy/payment rows that merely have the same status.
+    canonical_card_pending = (
+        tx.source == "au PAYカード" and tx.status == "auto_expense" and not tx.target_id
+        and re.fullmatch(r"aupaycard-mail:[0-9a-f]{24}:[0-9]{3}", tx.import_id) is not None
+        and re.fullmatch(r"[0-9a-f]{64}", str(tx.row[10])) is not None
+        and bool(tx.imported_at)
+    )
+    return tx.status in ELIGIBLE_STATUSES or canonical_card_pending
+
+
 def auto_expense_decisions(
     transactions: list[ImportTransaction], categories: set[tuple[str, str]],
 ) -> list[AutoExpenseDecision]:
     receipt_candidates = {
         decision.transaction.import_id
         for decision in reconcile_transactions(transactions)
-        if decision.transaction.status in ELIGIBLE_STATUSES
+        if _eligible_for_posting(decision.transaction)
     }
     decisions = []
     for tx in transactions:
@@ -111,7 +125,7 @@ def auto_expense_decisions(
                     "銀行の資産形成支出authority", ASSET_FORMATION_CATEGORY,
                 ))
             continue
-        if tx.status not in ELIGIBLE_STATUSES or tx.source not in PAYMENT_SOURCES:
+        if not _eligible_for_posting(tx) or tx.source not in PAYMENT_SOURCES:
             continue
         text = _combined_text(tx)
         if _amazon_installment(text):

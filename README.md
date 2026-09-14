@@ -286,6 +286,51 @@ export先の既存ファイルは上書きしない。inspectはsource/phase/gen
 manual既定`mode=preview`、applyには`mode=apply, confirm=APPLY`が必要。
 銀行はさらに`bank_apply=true`を明示したmanualだけapply可。scheduleでは常に銀行preview。
 レシートpreviewは既存IDとlocal privacy gateの確認までで、AI解析・支出write予定件数の証明とは区別する。
+共通後処理5種のpreviewも読み取り専用Sheets接続を使う。
+checkoutはmainのtracking refを取得し、実HEADと承認SHA/実行イベントSHAの一致を検証する。
+待機中にmainが進んだ場合は、更新後のコードを無審査で動かさず停止する。
+
+**通し合成検証で判明した受け渡し修正:** canonicalカードwriterは取込行へ`auto_expense`を設定するが、
+旧共通後処理は`unclassified_card`だけを対象とし、支出明細が作られなかった。
+branchではcanonical ID/hash/取込時刻を持つカードの`auto_expense`かつ統合先空欄を共通計上対象にする。
+既存stable支出IDで重複を防ぎ、レシート照合待ち・matched/review/transferは昇格させない。
+初回previewでは過去の同条件の未反映行も候補になり得るため、新着と既存未反映の件数を分けて承認する。
+実データの修復はこのGoalでは未実施。
+
+##### 最初の限定canaryと確認記録
+
+親のmanual `scope=amazon_canary`は**Amazon通常購入1件だけ**を実行する。
+他source・銀行・共通後処理・表示更新は起動しない。`scope=all`が通常運用で、scheduleは常にall。
+初回canaryは次の入力・確認を揃えてから行う（ここでは実行していない）。
+
+1. 承認するmain SHA、非公開管理先の所有/共有/作成/更新権限、native stateと運用JSONの
+   binding/digest/ready状態を確認。旧日常起動を止め、進行中/待機中のwrite runがないことを確認する。
+   `KAKEIBO_SCHEDULE_ENABLED`は無効のまま、承認済みmainの親previewを許可する。
+2. `mode=preview, scope=all, bank_apply=false`で全stageのread-only結果を確認する。
+   source別の件数と確認待ちを記録し、state/Sheets/原本に変更がないことを確認する。
+3. 移送済みAmazon stateのローカル使い捨てコピーと同じauthorityを使う既存
+   `amazon-gmail-recurring --dry-run`で、対象の`amazon-order:<16hex>` referenceを私的に確認する。
+   対象注文・金額・日付・新規イベント1行・ヘッダ1行・取込1行・支出1行を確認し、
+   その対象reference、承認SHA、state digest、4表の予定を承認記録に残す。
+   明細を含む元preview出力はGit/Actions log/artifactへ載せない。
+4. `mode=apply, scope=amazon_canary, confirm=APPLY, bank_apply=false,
+   amazon_target=<承認reference>`で実行する。
+   親は既存CLIへ`--apply-limit 1 --approved-target ... --expected-event-rows 1 --expected-header-rows 1`
+   を渡す。対象が一意でない・件数が変わった場合は停止する。銀行applyとの併用は拒否する。
+   native/運用JSONのpending→write→read-back→readyを通し、限定実行なので処理窓checkpointは進めない。
+5. summaryの4表のwrite件数が各1、write requestsが4、確認待ちfalseであることを確認。
+   既存Amazon read-backは4表のID存在確認であるため、操作者が実4表の重複数・金額・日付・関連IDを
+   承認記録と照合する。referenceは注文ID由来で、全セル値を固定する承認hashではない。
+   Drive側の更新digest/readyとAmazon以外のstate・原本・表が不変であることも確認する。
+6. `mode=preview, scope=amazon_canary, bank_apply=false`（amazon_target空欄）で読み取り専用replay。
+   対象の新規購入/event/headerが0であることを確認し、state/Sheets write 0を記録する。
+   これはread-only replayであり、本番apply再実行の確認とは区別する。合成統合テストでは通常apply再実行も検証済み。
+   新着が入った場合は0件判定をせず、新しい私的previewを確認する。
+
+canary不一致/不明結果ならscheduleを有効化せず、pendingを人が照合する復旧手順へ進む。
+初回canaryの成功だけで他sourceの本番確認済みとはしない。続く`scope=all` applyは、
+各既存authorityの件数/期間、新着と過去未反映行、共通後処理・原本archiveの変更予定を別途承認し、
+sourceごとの実read-back/replayを確認してからscheduleを有効化する。
 
 切替時は **旧起動停止 → 実行中run終了確認 → state移送 → 新入口preview →
 限定canary/read-back/replay → 新schedule有効化**。新旧write並走は禁止。
@@ -313,17 +358,35 @@ Windows直接writeはActionsロックの対象外。移行後はlocalテスト/p
   これは移行後の保存許可ではない。既存Windows給与write branchは本Goalで変更せず、
   将来移行時に金銭項目だけの保存projectionで禁止項目を除外することを条件とする。
 - 現在のGitHub visibilityは**public**（09-15 API確認）。private化は提案のみ。
-  private Actionsの利用枠・契約・残量は公開repo metadataから確認できず未確認。
-  private化前に月間runner分数/保存量/利用枠を確認し、超過課金・外部閲覧・連携への影響を承認する。
+  09-15にログイン済みBilling Overview / Budgetsをread-onlyで確認し、契約・残枠・支出停止設定を照合した。
+  アカウントの具体的な利用額・残量はGit除外の私的確認記録に保持し、公開用文書には転載しない。
   今回visibility/課金/Secrets/OAuthは未変更。
+
+private化の提案:
+
+- 標準runnerのpublic無料とprivateのアカウント枠を区別する。公式のGitHub Free枠は
+  2,000分/月、artifact 500 MB、cache 10 GB/repo。artifactとPackagesの保存枠は共用し、cacheは別枠。
+  原本/stateはDriveへ保存し、Actionsには依存物cacheだけを置く。
+  [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+- 2回/日×30日=60回。平均10分なら600分/月、30分なら1,800分/月という推計になり、
+  synthetic CI・保守・手動再実行・他repoの利用は別途加算する。親の実測前なので無料枠内と断定しない。
+  既存の支出停止設定を維持し、枠不足で起動が止まる場合はcheckpoint回復と合わせて判断する。
+- 既存public fork/取得済みコピーはprivate化で回収されない。GitHub Freeではprivate化後に
+  一部機能が使えず、公開Pagesは非公開化、code scanning等も契約により利用不可となる。
+  共有相手・連携アプリのprivate repo access、Pages/保護ルール利用の有無を変更前に確認する。
+  [公開範囲変更の影響](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility)
+  privateでのprotected branches/必須PR reviewer等はProの機能として案内されているため、
+  現状の保護設定を維持できると仮定しない。[プラン別機能](https://docs.github.com/en/get-started/learning-about-github/githubs-plans)
+- 推奨順序は「利用枠と必要機能確認→private変更の明示承認→設定変更→既存接続のread-only確認」。
+  本Goalでは設定変更・権限追加・有料プラン契約を行わない。
 
 #### 要件別の準備監査（Goalは未完了）
 
 | 要件 | 現在の証拠 | 判定 / 残件 |
 |---|---|---|
-| 最新main・入口・Windows・文書の照合 | 本節の25 Workflow表、Task+log、前後fetch `73ff2ff` | 調査実施。個別runのwrite件数、他ツール直接write、契約利用枠は未確認 |
+| 最新main・入口・Windows・文書の照合 | 本節の25 Workflow表、Task+log、前後fetch `73ff2ff`、Billing画面 | 調査実施。契約利用枠/支出停止設定も確認済み。個別runのwrite件数、他ツール直接writeは未確認 |
 | 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | branch準備済み。main未統合・未起動 |
-| 直列/失敗伝播/依存skip | `production_run.py`, `test_production_run.py`, `test_production_flow.py` | 合成検証済み。全source実装を通した一続きのfixture検証は残る |
+| 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 sourceの新規取込/支出反映/通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
 | 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
 | native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay | 合成検証済み。実state移送/実Drive所有/共有/作成/更新確認は未実施 |
 | stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
@@ -332,7 +395,7 @@ Windows直接writeはActionsロックの対象外。移行後はlocalテスト/p
 | Linux互換 | `synthetic-tests.yml`でPython3.12、一般/機微fixture別job | Workflow準備のみ。Linux実行は未確認（local WSL/Dockerなし、push拒否） |
 | テスト・compile・diff | PROJECT_STATUS最新検証欄 | Windows合成検証済み。GitHubネイティブ検証は未確認 |
 | 運用summary・ホーム | count-only JSON、source別last_success/確認待ち/error/duration | 実装/合成検証済み。ホーム反映は未実施・別承認 |
-| 切替・canary・復帰 | 本節の順序、既存authority/dedupe/read-backを再利用 | 手順準備。限定canary対象・承認内容の具体化と最終通し照合が残る。実切替未実施 |
+| 切替・canary・復帰 | 本節の順序・具体入力・承認記録、親のAmazon限定scope、既存authority/dedupe/read-backを再利用 | 合成canaryで4表各1行と他source非起動、read-only replay、対象不一致時のwrite0を確認。実対象reference/承認/切替/他source本番read-backは未実施 |
 
 公開repoへの通常pushはcheckpoint `20452dc` 時点で自動承認レビューが拒否した。
 理由は新規コード/運用文書のpublic公開先とpayloadへの明示承認不足。迂回・再試行はしていない。

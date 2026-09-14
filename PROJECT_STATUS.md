@@ -56,8 +56,25 @@
   最終読込/銀行preview成功時刻の調整も含めた結果。ネットワーク禁止下で実行。
   ローカルテスト依存PyYAML 6.0.3をGit除外領域へ追加（`PYTHONPATH=.private/test-deps`）、
   再現用は`pip install -r requirements-test.txt`。要件別監査はREADMEの末尾表に記録。
-- **未完了:** 全sourceを通した合成統合/限定canaryの運用照合、
-  Linux合成実行、外部state権限/所有/作成可否、利用枠確認、要件別完了監査。Goalは継続中。
+- 第3検証: 共通fake Sheets/Drive/Gmailに既存CLI/parser/SheetsDB/後処理を接続し、
+  Amazon・一般receipt・カード・残高・PayPayの新規取込と支出反映、通常apply再実行の会計append0を確認。
+  銀行は現行どおり空folder preview。state破損/receipt commit後の応答消失では依存後処理を停止。
+  ローカルOCR/AI応答のみfixtureとしprivacy判断は既存gateを通した。実通信・削除なし。
+- 通し検証でcanonicalカードの`auto_expense`取込行が共通計上されない不整合を発見・修正。
+  canonical ID/hash/取込日時あり・統合先空欄だけを対象にし、既存stable支出ID/dedupe/照合を維持。
+  過去の未反映行も初回previewで確認する。実データの修復は未実施。
+  共通preview 5種をread-only Sheets接続へ変更。
+- 親manualへ`scope=amazon_canary`を追加。既存exact reference/1購入/event1/header1条件を使い、
+  他source/共通後処理は起動しない。合成canaryの4表各1行、read-only replay write0、
+  対象不一致時の会計write0を確認。具体入力/実read-back/復旧順序はREADMEへ集約。
+  checkoutはmain tracking refを取得し、承認SHA/イベントSHAから進んでいれば実行前に拒否する。
+- 最新全体検証: **1231 passed**（22.71秒）、既存DeprecationWarning 1件。
+  compileall / diff-check成功。Windows Python 3.14.7、全テストでネットワーク禁止。
+- GitHub Billing Overview / Budgetsで契約・含まれる枠・残量・支出停止設定をread-only確認。
+  具体的なアカウント利用額等はGit除外の私的確認記録に保持。READMEには公開仕様に基づく
+  private化の影響と推計のみを追記。公開設定/契約/予算の変更なし。
+- **未完了:** Linux合成実行（公開push承認待ち）、外部state権限/所有/作成可否の確認、
+  実対象canaryの承認・state移送・実read-back。実切替は未実施。Goalは継続中、L4へ昇格しない。
 - checkpoint `20452dc` の通常pushは自動承認レビューがpublic repoへの新コード/運用情報公開として
   拒否。pushは未実行、upstream未設定。公開先と最終payloadへの明示承認なしに再試行しない。
 - **外部未実施:** main統合・Workflow起動/変更・Google write/move/delete・state upload・

@@ -15,6 +15,16 @@ on:
         description: Type APPLY only after approving this production run
         type: string
         required: false
+      scope:
+        description: All stages or isolated one-purchase Amazon canary
+        type: choice
+        options: [all, amazon_canary]
+        default: all
+        required: true
+      amazon_target:
+        description: Approved amazon-order reference; only for canary apply
+        type: string
+        required: false
       bank_apply:
         description: Separate approved bank apply (schedule always previews bank)
         type: boolean
@@ -69,7 +79,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          # Fetch main's tracking ref for the existing bank branch/upstream guard.
+          # The next step rejects any movement away from the approved event SHA.
+          ref: main
           persist-credentials: false
       - name: Bind verified checkout for existing bank main guard
         shell: bash
@@ -99,6 +111,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           MANUAL_MODE: ${{ inputs.mode || 'preview' }}
+          MANUAL_SCOPE: ${{ inputs.scope || 'all' }}
+          AMAZON_TARGET: ${{ inputs.amazon_target }}
           CONFIRM: ${{ inputs.confirm }}
           BANK_APPLY: ${{ inputs.bank_apply || false }}
         run: |
@@ -107,12 +121,16 @@ jobs:
           args=()
           if [[ "$EVENT_NAME" == schedule ]]; then
             mode=apply
-          elif [[ "$MANUAL_MODE" == apply ]]; then
-            test "$CONFIRM" = APPLY || { echo 'Apply confirmation required'; exit 1; }
-            mode=apply
-            if [[ "$BANK_APPLY" == true ]]; then args+=(--bank-apply); fi
-          elif [[ "$BANK_APPLY" == true ]]; then
-            echo 'Bank apply requires approved apply mode'
-            exit 1
+          else
+            args+=(--scope "$MANUAL_SCOPE")
+            if [[ -n "$AMAZON_TARGET" ]]; then args+=(--amazon-target "$AMAZON_TARGET"); fi
+            if [[ "$MANUAL_MODE" == apply ]]; then
+              test "$CONFIRM" = APPLY || { echo 'Apply confirmation required'; exit 1; }
+              mode=apply
+              if [[ "$BANK_APPLY" == true ]]; then args+=(--bank-apply); fi
+            elif [[ "$BANK_APPLY" == true ]]; then
+              echo 'Bank apply requires approved apply mode'
+              exit 1
+            fi
           fi
           python -m app.production_flow --mode "$mode" "${args[@]}"

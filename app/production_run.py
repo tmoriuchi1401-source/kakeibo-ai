@@ -36,6 +36,8 @@ COUNT_KEYS = frozenset({
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
     "files_seen", "files_new", "files_processed", "write_requests",
     "expenses_created", "expenses_updated", "updated", "unchanged",
+    "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written",
+    "eligible_purchases", "new_event_rows", "new_header_rows",
 })
 
 
@@ -70,7 +72,7 @@ def run_durable_source(store: DurableState, directory: Path,
 
 
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
-                   preview: bool = False) -> dict:
+                   preview: bool = False, amazon_canary: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -79,6 +81,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
     """
     outcomes = {}
     for source, dependencies in DEPENDENCIES.items():
+        if amazon_canary and source != "amazon":
+            continue
         started = monotonic()
         previous = (history or {}).get(source, {})
         outcome = {"status": "skipped", "error": "dependency_failed", "counts": {},

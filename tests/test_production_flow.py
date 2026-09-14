@@ -65,3 +65,23 @@ def test_amazon_daily_policy_keeps_existing_bounds(tmp_path):
     policy = json.loads(Path(result["AMAZON_RECURRING_AUTHORITY_FILE"]).read_text())
     assert (policy["max_messages"], policy["max_purchases"], policy["max_window_seconds"]) == (100, 3, 259200)
     assert policy["overlap_seconds"] == 7200
+
+
+@pytest.mark.parametrize("mode,scope,target,bank", [
+    ("apply", "amazon_canary", "", False),
+    ("apply", "amazon_canary", "invalid", False),
+    ("apply", "amazon_canary", "amazon-order:" + "a" * 16, True),
+    ("apply", "all", "amazon-order:" + "a" * 16, False),
+    ("preview", "amazon_canary", "amazon-order:" + "a" * 16, False),
+])
+def test_canary_scope_rejects_missing_or_misplaced_approval(mode, scope, target, bank):
+    with pytest.raises(StateError):
+        flow.validate_scope(SimpleNamespace(mode=mode, scope=scope, amazon_target=target, bank_apply=bank))
+
+
+def test_canary_uses_existing_exact_target_and_one_purchase_bounds():
+    target = "amazon-order:" + "a" * 16
+    args = flow.command("amazon", apply=True, canary_target=target)
+    assert args[-8:] == ["--apply-limit", "1", "--approved-target", target,
+                         "--expected-event-rows", "1", "--expected-header-rows", "1"]
+    flow.validate_scope(SimpleNamespace(mode="preview", scope="amazon_canary", amazon_target="", bank_apply=False))

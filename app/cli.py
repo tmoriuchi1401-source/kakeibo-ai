@@ -133,9 +133,9 @@ def load_categories(path="config/categories.tsv"):
     with open(path,encoding="utf-8") as f:
         rd=csv.reader(f,delimiter="\t"); next(rd,None); return [(r[0],r[1]) for r in rd if len(r)>=2]
 
-def make(require_gemini=True):
+def make(require_gemini=True, *, read_only=False):
     s=Settings(); s.validate(need_gemini=require_gemini,need_sheet=True)
-    db=SheetsDB(s.spreadsheet_id)
+    db=SheetsDB(s.spreadsheet_id, service=read_only_sheets_service() if read_only else None)
     ai=GeminiAI(s.gemini_api_key,s.gemini_model) if require_gemini else None
     return s,db,ai
 
@@ -1000,15 +1000,15 @@ def main():
         authorize_gmail(args.client_json,args.token_output)
         print(f"Gmail読み取り用トークンを保存しました: {args.token_output}")
     elif args.cmd=="reconcile-preview":
-        s,db,_=make(False); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).preview())
+        s,db,_=make(False,read_only=True); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).preview())
     elif args.cmd=="reconcile":
         s,db,_=make(False); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).apply())
     elif args.cmd=="review-preview":
-        s,db,_=make(False); print(ReviewPipeline(db).preview())
+        s,db,_=make(False,read_only=True); print(ReviewPipeline(db).preview())
     elif args.cmd=="review-refresh":
         s,db,_=make(False); print(ReviewPipeline(db).refresh())
     elif args.cmd=="review-apply-preview":
-        s,db,_=make(False); print(ReviewApprovalPipeline(db).preview())
+        s,db,_=make(False,read_only=True); print(ReviewApprovalPipeline(db).preview())
     elif args.cmd=="review-apply":
         s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
     elif args.cmd=="medical-review":
@@ -1025,11 +1025,11 @@ def main():
                 raise RuntimeError("指定されたreview itemが見つかりません")
             print(json.dumps(found.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
     elif args.cmd=="expenses-preview":
-        s,db,_=make(False); print(ExpenseViewPipeline(db).preview())
+        s,db,_=make(False,read_only=True); print(ExpenseViewPipeline(db).preview())
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
     elif args.cmd=="auto-expense-preview":
-        s,db,_=make(False); print(AutoExpensePipeline(db).preview())
+        s,db,_=make(False,read_only=True); print(AutoExpensePipeline(db).preview())
     elif args.cmd=="auto-expense":
         s,db,_=make(False); print(AutoExpensePipeline(db).apply())
     elif args.cmd=="bank-finalization-preview":

@@ -5,6 +5,7 @@ import argparse
 import ast
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -36,12 +37,19 @@ def verify_execution_boundary(env: dict, head: str) -> None:
         raise StateError("production_main_boundary_required")
 
 
-def command(source: str, *, apply: bool) -> list[str]:
+def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
+    if canary_target and (source != "amazon" or not apply or
+                          not re.fullmatch(r"amazon-order:[0-9a-f]{16}", canary_target)):
+        raise StateError("amazon_canary_target_invalid")
     if source in {"receipts", "paypay"}:
         return [sys.executable, "-m", "app.production_source", source, "apply" if apply else "preview"]
     cli = [sys.executable, "-m", "app.cli"]
     if source == "amazon":
-        return cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
+        args = cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
+        if canary_target:
+            args += ["--apply-limit", "1", "--approved-target", canary_target,
+                     "--expected-event-rows", "1", "--expected-header-rows", "1"]
+        return args
     if source == "aupay_card":
         return cli + ["card-gmail-recurring"] + ([] if apply else ["--dry-run"])
     if source == "bank":
@@ -51,14 +59,14 @@ def command(source: str, *, apply: bool) -> list[str]:
     return cli + [(COMMON_COMMANDS if apply else COMMON_PREVIEWS)[source]]
 
 
-def invoke(source: str, *, apply: bool, env: dict) -> dict:
+def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
     # Child stdout/stderr can contain legacy filenames, totals and API errors.
     # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
     child_env = dict(env)
     child_env.pop("GITHUB_STEP_SUMMARY", None)
     if source != "receipts" or not apply:
         child_env.pop("GEMINI_API_KEY", None)
-    result = subprocess.run(command(source, apply=apply), cwd=REPO, env=child_env,
+    result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
                             capture_output=True, text=True, encoding="utf-8", timeout=900)
     if result.returncode != 0:
         raise StateError("source_command_failed")
@@ -106,7 +114,11 @@ def source_environment(source: str, directory: Path, env: dict) -> dict:
 
 
 def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
-             ledger: ProductionLedger | None = None) -> dict:
+             ledger: ProductionLedger | None = None, canary_target: str = "") -> dict:
+    if canary_target:
+        command("amazon", apply=apply, canary_target=canary_target)
+        if bank_apply:
+            raise StateError("canary_bank_apply_forbidden")
     def execute(source):
         effective_apply = apply and (source != "bank" or bank_apply)
         if source not in STATE_SOURCES:
@@ -122,7 +134,8 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
         local = private / "state"
         state_env = {"amazon": "AMAZON_STATE_DIR", "aupay_card": "AUPAY_CARD_STATE_DIR", "bank": "BANK_PDF_STATE_DIR"}[source]
         prepared[state_env] = str(local)
-        return run_durable_source(store, local, lambda _path: invoke(source, apply=effective_apply, env=prepared), apply=effective_apply)
+        extra = {"canary_target": canary_target} if source == "amazon" and canary_target else {}
+        return run_durable_source(store, local, lambda _path: invoke(source, apply=effective_apply, env=prepared, **extra), apply=effective_apply)
     def run(source):
         if not apply:
             return execute(source)
@@ -140,12 +153,29 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
     return {source: lambda source=source: run(source) for source in DEPENDENCIES}
 
 
+def validate_scope(args) -> None:
+    if args.scope == "amazon_canary":
+        if args.bank_apply:
+            raise StateError("canary_bank_apply_forbidden")
+        if args.mode == "apply":
+            if not args.amazon_target:
+                raise StateError("amazon_canary_target_required")
+            command("amazon", apply=True, canary_target=args.amazon_target)
+        elif args.amazon_target:
+            raise StateError("preview_has_no_approved_write_target")
+    elif args.amazon_target:
+        raise StateError("amazon_target_requires_canary_scope")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
+    parser.add_argument("--scope", choices=("all", "amazon_canary"), default="all")
+    parser.add_argument("--amazon-target", default="")
     args = parser.parse_args()
     try:
+        validate_scope(args)
         if args.bank_apply and args.mode != "apply":
             raise StateError("bank_apply_requires_approved_apply")
         env = dict(os.environ)
@@ -158,8 +188,10 @@ def main():
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
         with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
-            runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply, ledger=ledger)
-            report = execute_serial(runners, history=history, preview=args.mode == "preview")
+            runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
+                               ledger=ledger, canary_target=args.amazon_target)
+            report = execute_serial(runners, history=history, preview=args.mode == "preview",
+                                    amazon_canary=args.scope == "amazon_canary")
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True
@@ -175,7 +207,8 @@ def main():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         report["mode"] = args.mode
-        report["bank_mode"] = "apply" if args.bank_apply else "preview"
+        report["scope"] = args.scope
+        report["bank_mode"] = "not_run" if args.scope == "amazon_canary" else "apply" if args.bank_apply else "preview"
     except Exception:
         report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
     rendered = json.dumps(report, ensure_ascii=True, sort_keys=True)

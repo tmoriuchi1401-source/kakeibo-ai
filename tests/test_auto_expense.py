@@ -1,3 +1,5 @@
+import pytest
+
 from app.auto_expense import AutoExpensePipeline, expense_id
 from app.bank_pdf_pipeline import DOCOMO_SMTB_SOURCE
 from app.bank_reconciliation import ASSET_FORMATION_IMPORT_STATUS
@@ -158,3 +160,42 @@ def test_docomo_asset_formation_status_rejects_non_expense_sign():
     assert result["needs_review"] == 1
     assert posted_expenses(db) == []
     assert db.updated["取込データ"][0][1][8] == "needs_review_asset_formation_sign"
+
+
+def canonical_card_row(**kwargs):
+    row = import_row("aupaycard-mail:" + "a" * 24 + ":001", "au PAYカード",
+                     status="auto_expense", **kwargs)
+    row[1], row[10] = "2026-09-14 12:00:00", "b" * 64
+    return row
+
+
+def test_canonical_card_pending_post_uses_existing_stable_id_and_partial_write_dedupe():
+    row = canonical_card_row()
+    db = FakeDB([row])
+    assert AutoExpensePipeline(db).apply()["expenses_created"] == 1
+    expense = posted_expenses(db)[0]
+    assert expense[0] == expense_id(row[0])
+    # Simulate expense append success before the import target update failed.
+    recovery = FakeDB([row], [expense])
+    result = AutoExpensePipeline(recovery).apply()
+    assert result["expenses_created"] == 0 and result["expenses_updated"] == 1
+    completed = recovery.updated["取込データ"][0][1]
+    assert completed[9] == expense[0]
+    assert AutoExpensePipeline(FakeDB([completed], [expense])).preview()["candidates"] == 0
+
+
+@pytest.mark.parametrize("column,value", [(0, "legacy-card"), (1, ""), (2, "PayPay"),
+    (8, "matched_receipt"), (8, "matched_amazon"), (8, "transfer_aupay_charge"),
+    (8, "needs_review_duplicate"), (9, "existing-target"), (10, "invalid-hash")])
+def test_canonical_card_posting_does_not_promote_other_states(column, value):
+    row = canonical_card_row()
+    row[column] = value
+    db = FakeDB([row])
+    assert AutoExpensePipeline(db).apply()["expenses_created"] == 0
+    assert posted_expenses(db) == []
+
+
+def test_canonical_card_still_waits_for_receipt_reconciliation():
+    db = FakeDB([canonical_card_row(), import_row("receipt:r", "receipt", status="解析済")])
+    result = AutoExpensePipeline(db).apply()
+    assert result["skipped"] == 1 and result["expenses_created"] == 0
