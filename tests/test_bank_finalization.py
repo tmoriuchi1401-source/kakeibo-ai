@@ -7,6 +7,9 @@ from app.bank_finalization import (
     validate_bank_finalization_canary,
 )
 from app.bank_pdf_pipeline import CHIBA_BANK_SOURCE, DOCOMO_SMTB_SOURCE, SOURCE
+from app.bank_reconciliation import normalize_bank_description
+
+import pytest
 
 
 def import_row(import_id, source, merchant, amount, status, target=""):
@@ -123,6 +126,82 @@ def test_apply_routes_nonexpense_and_review_without_expense_rows():
     assert statuses == {
         "settlement": BANK_NON_EXPENSE_STATUS,
         "review": BANK_REVIEW_STATUS,
+    }
+
+
+@pytest.mark.parametrize(("source", "alias", "merchant"), [
+    (SOURCE, "jibun-primary", "口座振替 SMBC( ドコモSMTB"),
+    (SOURCE, "jibun-primary", "口座振替 SMBC( スミシンSBI ネツ"),
+    (DOCOMO_SMTB_SOURCE, "docomo-smtb-primary", "口座振替 DF AUジブン"),
+])
+def test_exact_operator_rule_routes_legacy_bank_expense_to_nonexpense(
+    source, alias, merchant,
+):
+    import_id = f"bankpdf:test:{alias}:abc123"
+    rules = frozenset({(
+        normalize_bank_description(merchant), "outgoing", alias,
+    )})
+    db = FakeDB([
+        import_row(import_id, source, merchant, -1000, "bank_expense"),
+    ])
+
+    preview = BankFinalizationPipeline(
+        db, confirmed_internal_transfers=rules,
+    ).preview()
+    result = BankFinalizationPipeline(
+        db, confirmed_internal_transfers=rules,
+    ).apply((import_id,))
+
+    assert preview["non_expense"] == 1
+    assert preview["review"] == preview["new_expense"] == 0
+    assert preview["reasons"] == {"confirmed_internal_transfer": 1}
+    assert result["expenses_created"] == 0
+    assert result["imports_updated"] == 1
+    assert result["read_back_verified"] is True
+    assert db.imports[0][8] == BANK_NON_EXPENSE_STATUS
+    assert db.expenses == []
+
+
+def test_operator_rule_is_exact_and_preserves_other_finalization_paths():
+    confirmed_id = "bankpdf:au-jibun:jibun-primary:confirmed"
+    unconfirmed_id = "bankpdf:au-jibun:jibun-primary:unconfirmed"
+    done_id = "bankpdf:chiba:chiba-primary:done"
+    rules = frozenset({(
+        normalize_bank_description("口座振替 SMBC( ドコモSMTB"),
+        "outgoing", "jibun-primary",
+    )})
+    db = FakeDB([
+        import_row(confirmed_id, SOURCE, "口座振替 SMBC( ドコモSMTB",
+                   -1000, "bank_expense"),
+        import_row(unconfirmed_id, SOURCE, "口座振替 SMBC( スミシンSBI ネツ",
+                   -2000, "bank_expense"),
+        import_row("ordinary", SOURCE, "公共サービス", -3000, "bank_expense"),
+        import_row("settlement", SOURCE, "口座振替 dカード", -4000,
+                   "bank_expense"),
+        import_row("nonexpense", SOURCE, "振替済み", -4500,
+                   BANK_NON_EXPENSE_STATUS),
+        import_row("income", SOURCE, "給与", 5000, "bank_income"),
+        import_row(done_id, CHIBA_BANK_SOURCE, "給食費", -6000,
+                   "auto_expense", expense_id(done_id)),
+    ], [expense_row(expense_id(done_id), done_id, "給食費", 6000)])
+
+    result = BankFinalizationPipeline(
+        db, confirmed_internal_transfers=rules,
+    ).preview()
+
+    assert result["non_expense"] == 3
+    assert result["review"] == 1
+    assert result["new_expense"] == 1
+    assert result["new_income"] == 1
+    assert result["duplicate"] == 1
+    assert result["reasons"] == {
+        "already_finalized": 1,
+        "already_non_expense": 1,
+        "ambiguous_financial_counterparty": 1,
+        "bank_expense_authority": 1,
+        "bank_income_preserved": 1,
+        "confirmed_internal_transfer": 1,
+        "known_card_settlement": 1,
     }
 
 

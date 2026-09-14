@@ -976,7 +976,10 @@ def main():
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
         repo_root=Path(__file__).resolve().parents[1]
-        result=BankFinalizationPipeline(db).preview(
+        result=BankFinalizationPipeline(
+            db,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+        ).preview(
             tuple(args.source_identity),
         )
         result.update({
@@ -1008,7 +1011,10 @@ def main():
             expected_head=args.expected_head,
         )
         db=SheetsDB(s.spreadsheet_id)
-        print(json.dumps(BankFinalizationPipeline(db).apply(
+        print(json.dumps(BankFinalizationPipeline(
+            db,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+        ).apply(
             tuple(args.source_identity),
         ),ensure_ascii=False,sort_keys=True))
     elif args.cmd=="amazon-installment-preview":

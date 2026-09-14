@@ -9,8 +9,10 @@ from .bank_canary import LOAN_EXPENSE_CATEGORY
 from .bank_pdf_pipeline import CHIBA_BANK_SOURCE, DOCOMO_SMTB_SOURCE, SOURCE
 from .bank_reconciliation import (
     CARD_STATEMENT_AUTHORITY_STATUS,
+    ConfirmedInternalTransfers,
     is_ambiguous_financial_counterparty,
     is_known_card_settlement_description,
+    normalize_bank_description,
 )
 from .reconciliation import ImportTransaction, merchants_match, parse_import_rows
 from .sheets import SheetsDB
@@ -109,9 +111,31 @@ def _statement_authority_candidates(
     ]
 
 
+def _bank_account_alias(import_id: str) -> str:
+    """Read the exact non-sensitive account alias from a stable bank identity."""
+    parts = str(import_id or "").split(":", 3)
+    if len(parts) != 4 or parts[0] != "bankpdf":
+        return ""
+    return parts[2]
+
+
+def _is_confirmed_internal_transfer(
+    transaction: ImportTransaction,
+    confirmed_internal_transfers: ConfirmedInternalTransfers,
+) -> bool:
+    direction = "incoming" if transaction.amount > 0 else "outgoing"
+    return (
+        normalize_bank_description(transaction.merchant),
+        direction,
+        _bank_account_alias(transaction.import_id),
+    ) in confirmed_internal_transfers
+
+
 def bank_finalization_decisions(
     imports: list[ImportTransaction],
     expenses: list[ExistingExpense],
+    *,
+    confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
 ) -> list[BankFinalizationDecision]:
     """Classify imported bank rows without broad description-only posting.
 
@@ -208,6 +232,15 @@ def bank_finalization_decisions(
                 ))
             continue
 
+        if _is_confirmed_internal_transfer(
+            transaction, confirmed_internal_transfers,
+        ):
+            decisions.append(BankFinalizationDecision(
+                transaction, "non_expense", "non_expense",
+                "confirmed_internal_transfer",
+            ))
+            continue
+
         if is_ambiguous_financial_counterparty(transaction.merchant):
             decisions.append(BankFinalizationDecision(
                 transaction, "review", "review",
@@ -254,13 +287,23 @@ def validate_bank_finalization_canary(
 class BankFinalizationPipeline:
     """Preview by default; apply only an explicit stable-identity selection."""
 
-    def __init__(self, db: SheetsDB):
+    def __init__(
+        self,
+        db: SheetsDB,
+        *,
+        confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
+    ):
         self.db = db
+        self.confirmed_internal_transfers = confirmed_internal_transfers
 
     def _context(self):
         imports = parse_import_rows(self.db.get("取込データ!A2:L"))
         expenses = parse_expense_rows(self.db.get("支出明細!A2:M"))
-        return imports, expenses, bank_finalization_decisions(imports, expenses)
+        return imports, expenses, bank_finalization_decisions(
+            imports,
+            expenses,
+            confirmed_internal_transfers=self.confirmed_internal_transfers,
+        )
 
     def preview(self, selected_import_ids: tuple[str, ...] = ()) -> dict:
         _, _, decisions = self._context()
