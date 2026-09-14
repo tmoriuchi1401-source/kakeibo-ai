@@ -9,10 +9,10 @@ from app.expense_view import ExpenseViewPipeline
 from app.review_pipeline import ReviewPipeline, is_reviewable_status
 from app.sheets import HEADERS, SheetsDB
 from app.sheets_ui import (
-    CAP, CHART_ID, DAILY, HIDDEN, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
-    build_plan, home_cells, installed, plan_digest, refresh_layout_requests,
+    AUTO_MONTH, CAP, CHART_ID, DAILY, HIDDEN, HOME_COLUMNS, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
+    build_plan, home_cells, initial_month_selection, installed, plan_digest, refresh_layout_requests,
 )
-from app.sheets_ui_cli import capture_restore, execute_plan, private_path
+from app.sheets_ui_cli import capture_restore, execute_plan, private_path, read_metadata
 from test_amazon_manual_review import MemoryDB, review_row
 
 
@@ -45,7 +45,16 @@ class FixtureService:
         for rng in ranges:
             title = rng.split("!")[0].strip("'")
             s = next(s for s in self.meta["sheets"] if s["properties"]["title"] == title)
-            if title == "ホーム": assert rng.endswith("A1:H1")
+            if title == "ホーム" and rng.endswith("B3:B4"):
+                assert kwargs["valueRenderOption"] == "FORMULA"
+                values.append({"values": [[next(iter(self.cells.get((HOME_ID, i, 1), {}).get("userEnteredValue", {}).values()), "")] for i in [2, 3]]})
+                continue
+            if title == "ホーム":
+                assert rng.endswith(("A1:H1", "A1:I1"))
+                width = s["properties"]["gridProperties"]["columnCount"]
+                header = [next(iter(self.cells.get((HOME_ID, 0, j), {}).get("userEnteredValue", {}).values()), "") for j in range(width)]
+                values.append({"values": [header]})
+                continue
             values.append({"values": [s["header"]] if s["header"] else []})
         return Call({"valueRanges": values})
 
@@ -53,6 +62,20 @@ class FixtureService:
         if kwargs.get("ranges"):
             title = kwargs["ranges"][0].split("!")[0].strip("'")
             s = next(s for s in self.meta["sheets"] if s["properties"]["title"] == title)
+            if title == "ホーム":
+                width = s["properties"]["gridProperties"]["columnCount"]
+                rows = []
+                for i in range(35):
+                    row = []
+                    for j in range(width):
+                        c = deepcopy(self.cells.get((HOME_ID, i, j), {}))
+                        if self.validations.get((HOME_ID, i, j)):
+                            c["dataValidation"] = deepcopy(self.validations[HOME_ID, i, j])
+                        row.append(c)
+                    rows.append({"values": row})
+                return Call({"sheets": [dict(s, data=[{"rowData": rows,
+                    "columnMetadata": [self.dimensions.get((HOME_ID, "COLUMNS", j), {}) for j in range(width)],
+                    "rowMetadata": [self.dimensions.get((HOME_ID, "ROWS", i), {}) for i in range(70)]}])]})
             return Call({"sheets": [dict(properties=s["properties"], data=[{
                 "rowData": [{"values": [{"userEnteredFormat": {"textFormat": {"bold": True}}}]}],
                 "columnMetadata": [{"pixelSize": 113}], "rowMetadata": [{"pixelSize": 29}],
@@ -99,7 +122,10 @@ class FixtureService:
                 r = v["range"]
                 for i, row in enumerate(v["rows"], r["startRowIndex"]):
                     for j, c in enumerate(row["values"], r["startColumnIndex"]):
-                        self.cells[r["sheetId"], i, j] = deepcopy(c)
+                        target = self.cells.setdefault((r["sheetId"], i, j), {})
+                        for field in v["fields"].split(","):
+                            if field in c: target[field] = deepcopy(c[field])
+                            else: target.pop(field, None)
             elif kind in {"repeatCell", "setDataValidation"}:
                 r = v["range"]
                 target = self.validations if kind == "setDataValidation" else self.cells
@@ -144,18 +170,23 @@ def test_ui_mutation_scope_and_legacy_headers_are_preserved():
     assert str(IDS["取込データ"]) in home_cells()[23, 2]
 
 
-def test_replay_keeps_one_home_chart_merges_and_month():
+@pytest.mark.parametrize("selected", [AUTO_MONTH, "2026-07"])
+def test_replay_keeps_one_home_chart_merges_and_month(selected):
     svc = FixtureService(metadata())
     svc.batchUpdate(body=build_plan(svc.meta))
     assert installed(svc.meta)
-    svc.cells[HOME_ID, 2, 1] = {"userEnteredValue": {"numberValue": 46200}}
+    svc.cells[HOME_ID, 3, 1]["userEnteredValue"] = {"stringValue": selected}
     names = [s["properties"]["title"] for s in svc.meta["sheets"]]
     assert names == ["ホーム"] + DAILY + RIGHT + HIDDEN
     before_merges = deepcopy(next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)["merges"])
-    replay = build_plan(svc.meta)
+    replay = build_plan(read_metadata(svc))
     assert not any("addSheet" in r or "addChart" in r or "mergeCells" in r or "createDeveloperMetadata" in r for r in replay["requests"])
     svc.batchUpdate(body=replay)
-    assert svc.cells[HOME_ID, 2, 1]["userEnteredValue"] == {"numberValue": 46200}
+    assert svc.cells[HOME_ID, 3, 1]["userEnteredValue"] == {"stringValue": selected}
+    assert svc.cells[HOME_ID, 2, 1]["userEnteredValue"] == {"formulaValue": home_cells()[3, 2]}
+    assert not any(r.get("updateCells", {}).get("range") == {
+        "sheetId": HOME_ID, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 1, "endColumnIndex": 2}
+        and "userEnteredValue" in r["updateCells"]["fields"] for r in replay["requests"])
     home = next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)
     assert home["merges"] == before_merges
     assert len(home["charts"]) == 1
@@ -286,7 +317,7 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     assert not installed(svc.meta)
     assert not any(s["properties"].get("hidden", False) for s in svc.meta["sheets"] if s["properties"]["sheetId"] != HOME_ID)
     assert [s["properties"]["title"] for s in svc.meta["sheets"]][:-1] == list(IDS)
-    assert not any("addSheet" in r for r in build_plan(svc.meta)["requests"])
+    assert not any("addSheet" in r for r in build_plan(read_metadata(svc))["requests"])
 
 
 def test_approval_digest_changes_when_another_work_changes_metadata():
@@ -344,7 +375,7 @@ def test_requests_match_bundled_official_sheets_api_schema():
     svc = FixtureService(metadata())
     initial = build_plan(svc.meta)
     svc.batchUpdate(body=initial)
-    for plan in [initial, build_plan(svc.meta)]:
+    for plan in [initial, build_plan(read_metadata(svc))]:
         for request in plan["requests"]:
             check(request, schemas["Request"])
             kind, body = next(iter(request.items()))
@@ -376,3 +407,80 @@ def test_apply_stops_before_write_if_another_work_changes_target(monkeypatch):
     with pytest.raises(ValueError, match="state changed"):
         cli.execute_plan(svc, plan, apply=True, approved_digest=plan_digest(plan), backup=".private/test.json")
     assert not svc.requests
+
+
+def test_month_dropdown_initialization_and_legacy_date_migration():
+    from datetime import date
+    svc = FixtureService(metadata())
+    svc.batchUpdate(body=build_plan(svc.meta))
+    home = next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)
+    assert home["properties"]["gridProperties"]["columnCount"] == HOME_COLUMNS
+    assert home["properties"]["gridProperties"]["frozenRowCount"] == 4
+    assert svc.cells[HOME_ID, 3, 1]["userEnteredValue"] == {"stringValue": AUTO_MONTH}
+    assert svc.validations[HOME_ID, 2, 1] == {}
+    assert svc.validations[HOME_ID, 3, 1]["condition"] == {
+        "type": "ONE_OF_RANGE", "values": [{"userEnteredValue": "='ホーム'!$I$2:$I$5001"}]}
+    assert svc.dimensions[HOME_ID, "COLUMNS", 8]["hiddenByUser"]
+    # A legacy eight-column Home can gain the UI helper without deleting columns.
+    home["properties"]["gridProperties"]["columnCount"] = 8
+    svc.cells[HOME_ID, 3, 1].pop("userEnteredValue")
+    svc.cells[HOME_ID, 2, 1]["userEnteredValue"] = {"numberValue": (date(2025, 7, 1)-date(1899, 12, 30)).days}
+    plan = build_plan(read_metadata(svc))
+    svc.batchUpdate(body=plan)
+    assert svc.cells[HOME_ID, 3, 1]["userEnteredValue"] == {"stringValue": "2025-07"}
+    assert home["properties"]["gridProperties"]["columnCount"] == 9
+    assert not any("deleteDimension" in r for r in plan["requests"])
+
+
+def test_month_selection_requires_a_fresh_read_and_guards_concurrent_change(monkeypatch):
+    import app.sheets_ui_cli as cli
+    svc = FixtureService(metadata())
+    svc.batchUpdate(body=build_plan(svc.meta))
+    home = next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)
+    with pytest.raises(ValueError, match="not read"):
+        initial_month_selection(home)
+    plan = build_plan(read_metadata(svc))
+    svc.cells[HOME_ID, 3, 1]["userEnteredValue"] = {"stringValue": "2026-07"}
+    svc.requests.clear()
+    with pytest.raises(ValueError, match="state changed"):
+        cli.execute_plan(svc, plan, apply=True, approved_digest=plan_digest(plan), backup=".private/test.json")
+    assert not svc.requests
+    assert plan_digest(build_plan(read_metadata(svc))) != plan_digest(plan)
+    home["monthState"] = {"B4": "2026-13"}
+    with pytest.raises(ValueError, match="Unexpected Home"):
+        initial_month_selection(home)
+
+
+def test_monthly_unclassified_and_all_period_reviews_remain_separate():
+    from app.sheets_ui_verify import source_summary
+    rows = [["2026-07-01", "fixture", "fixture", 100, "未分類", "", "", "", "", str(i)] for i in range(53)]
+    rows += [["2026-09-01", "fixture", "fixture", 200, "食費", "食料品", "", "", "", "current"]]
+    summaries = [source_summary(rows, [], [], m) for m in ["2026-09", "2026-07", "2026-09", "2020-01"]]
+    assert [s["unclassified_count"] for s in summaries] == [0, 53, 0, 0]
+    assert [s["total"] for s in summaries] == [200, 5300, 200, 0]
+    assert all(s["regular"] == s["amazon"] == 0 for s in summaries)
+    regular = [["review-id", "", "", "", "", "", "", "", "needs_review"]]
+    amazon = [["pending", "未確認"], ["held", "保留"], ["done", "反映済み"]]
+    for month in ["2026-09", "2026-07", "2020-01"]:
+        with_reviews = source_summary(rows, regular, amazon, month)
+        assert with_reviews["regular"] == 1 and with_reviews["amazon"] == 2
+    formulas = home_cells()
+    assert formulas[7, 1] == "要対応" and formulas[8, 1] == "カテゴリ未分類"
+    assert "計上済み" in formulas[10, 1] and "全期間" in formulas[11, 1]
+    assert all("$B$3" in formulas[pos] for pos in [(5, 1), (6, 1), (8, 2), (9, 2), (34, 1)])
+    assert all("$B$3" not in formulas[pos] and "$B$4" not in formulas[pos] for pos in [(12, 2), (13, 2)])
+    assert "TODAY()" in formulas[3, 2] and AUTO_MONTH in formulas[3, 2]
+    assert "$B$4" in formulas[3, 9]  # Keep a chosen month even outside the rolling 36-month list.
+
+
+def test_restore_keeps_dropdown_helper_notes_and_frozen_rows():
+    svc = FixtureService(metadata())
+    svc.batchUpdate(body=build_plan(svc.meta))
+    meta = read_metadata(svc)
+    backup = capture_restore(svc, meta, build_plan(meta))
+    block = next(r["updateCells"] for r in backup["requests"] if "updateCells" in r)
+    assert block["range"]["endColumnIndex"] == 9 and "note" in block["fields"]
+    assert block["rows"][2]["values"][8]["userEnteredValue"] == {"formulaValue": home_cells()[3, 9]}
+    assert block["rows"][3]["values"][1]["dataValidation"] == svc.validations[HOME_ID, 3, 1]
+    assert block["rows"][3]["values"][1]["note"]
+    assert any(r.get("updateSheetProperties", {}).get("properties", {}).get("gridProperties", {}).get("frozenRowCount") == 4 for r in backup["requests"])

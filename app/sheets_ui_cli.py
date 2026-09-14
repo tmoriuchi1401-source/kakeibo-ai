@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .sheets_ui import (
-    CAP, CHART_ID, DAILY, FORMAT_KEYS, FORMAT_MASK, HOME_ID, IDS, MARKER, TEXT_KEYS, VERSION,
+    CAP, CHART_ID, DAILY, FORMAT_KEYS, FORMAT_MASK, HOME_COLUMNS, HOME_ID, IDS, MARKER, TEXT_KEYS, VERSION,
     SPREADSHEET_ID, build_plan, dimension, grid, plan_digest,
 )
 
@@ -28,6 +28,15 @@ def read_metadata(service):
         raise ValueError("UI header read incomplete")
     for sheet, values in zip(grid_sheets, result["valueRanges"]):
         sheet["header"] = (values.get("values") or [[]])[0]
+    home = next((s for s in grid_sheets if s["properties"]["sheetId"] == HOME_ID), None)
+    if home:
+        inputs = service.spreadsheets().values().batchGet(
+            spreadsheetId=SPREADSHEET_ID, ranges=["'ホーム'!B3:B4"], valueRenderOption="FORMULA",
+        ).execute().get("valueRanges", [])
+        if len(inputs) != 1:
+            raise ValueError("Home month selection read incomplete")
+        rows = inputs[0].get("values", [])
+        home["monthState"] = {f"B{i+3}": rows[i][0] if i < len(rows) and rows[i] else "" for i in range(2)}
     return meta
 
 
@@ -113,31 +122,36 @@ def capture_restore(service, meta, plan):
     else:
         # For later runs, capture the existing home including its month, chart,
         # merges, and formatting. It is the sole UI-owned content surface.
+        old_home = next(s for s in meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)
+        width = min(HOME_COLUMNS, old_home["properties"]["gridProperties"]["columnCount"])
         home = service.spreadsheets().get(
-            spreadsheetId=SPREADSHEET_ID, ranges=[f"'ホーム'!A1:H{CAP+1}"],
-            includeGridData=True,
+            spreadsheetId=SPREADSHEET_ID, ranges=[f"'ホーム'!A1:{chr(64+width)}{CAP+1}"],
+            fields="sheets(properties,merges,charts,data(startRow,startColumn,rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
         ).execute()["sheets"][0]
-        restore.append({"unmergeCells": {"range": grid(HOME_ID, 0, CAP+1, 0, 8)}})
+        restore.append({"unmergeCells": {"range": grid(HOME_ID, 0, CAP+1, 0, HOME_COLUMNS)}})
         home_data = home.get("data", [{}])[0]
         source_rows = home_data.get("rowData", [])
-        rows = [{"values": [{k: c[k] for k in ("userEnteredValue", "userEnteredFormat", "dataValidation") if k in c}
+        rows = [{"values": [{k: c[k] for k in ("userEnteredValue", "userEnteredFormat", "dataValidation", "note") if k in c}
                             for c in (source_rows[i].get("values", []) if i < len(source_rows) else [])]}
                 for i in range(CAP+1)]
         for row in rows:
-            row["values"] += [{} for _ in range(8-len(row["values"]))]
-        restore.append({"updateCells": {"range": grid(HOME_ID, 0, CAP+1, 0, 8),
+            row["values"] += [{} for _ in range(HOME_COLUMNS-len(row["values"]))]
+        restore.append({"updateCells": {"range": grid(HOME_ID, 0, CAP+1, 0, HOME_COLUMNS),
             "rows": rows,
-            "fields": "userEnteredValue,userEnteredFormat,dataValidation"}})
-        for i in range(8):
+            "fields": "userEnteredValue,userEnteredFormat,dataValidation,note"}})
+        for i in range(HOME_COLUMNS):
             old = home_data.get("columnMetadata", [])
             prior = old[i] if i < len(old) else {}
             restore.append(dimension(HOME_ID, "COLUMNS", i, i+1,
-                pixelSize=prior.get("pixelSize", 100), hiddenByUser=prior.get("hiddenByUser", False)))
+                pixelSize=prior.get("pixelSize", 100), hiddenByUser=prior.get("hiddenByUser", i >= width)))
         for i in range(70):
             old = home_data.get("rowMetadata", [])
             prior = old[i] if i < len(old) else {}
             restore.append(dimension(HOME_ID, "ROWS", i, i+1, pixelSize=prior.get("pixelSize", 21)))
         restore += [{"mergeCells": {"range": r, "mergeType": "MERGE_ALL"}} for r in home.get("merges", [])]
+        restore.append({"updateSheetProperties": {"properties": {"sheetId": HOME_ID,
+            "gridProperties": {"frozenRowCount": old_home["properties"]["gridProperties"].get("frozenRowCount", 0)}},
+            "fields": "gridProperties.frozenRowCount"}})
         for chart in home.get("charts", []):
             if chart["chartId"] == CHART_ID:
                 restore += [{"updateChartSpec": {"chartId": CHART_ID, "spec": chart["spec"]}},
@@ -171,7 +185,8 @@ def execute_plan(service, plan, *, apply=False, approved_digest=None, backup=Non
     after = read_metadata(service)
     for s in current["sheets"]:
         new = next((v for v in after["sheets"] if v["properties"]["sheetId"] == s["properties"]["sheetId"]), None)
-        if new is None or new["properties"]["title"] != s["properties"]["title"] or new["header"] != s["header"]:
+        if new is None or new["properties"]["title"] != s["properties"]["title"] or (
+                s["properties"]["sheetId"] != HOME_ID and new["header"] != s["header"]):
             raise ValueError("UI readback requires investigation; do not rerun business pipelines")
     from .sheets_ui_verify import verify_home
     return {"mode": "applied", "request_count": len(fresh["requests"]),
@@ -210,7 +225,8 @@ def main(argv=None):
             raise ValueError("Restore target mismatch")
         for title, header in plan["headers"].items():
             live = next((s for s in meta["sheets"] if s["properties"]["title"] == title), None)
-            if live is None or live["header"] != header or live["properties"]["sheetId"] != plan["sheetIds"][title]:
+            if live is None or live["properties"]["sheetId"] != plan["sheetIds"][title] or (
+                    live["properties"]["sheetId"] != HOME_ID and live["header"] != header):
                 raise ValueError("Restore schema changed; inspect before restoring UI")
         if args.apply:
             if args.approve_plan != plan_digest(plan):

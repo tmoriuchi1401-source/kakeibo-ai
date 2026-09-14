@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from datetime import date, timedelta
 import json
+import re
 
 from .amazon_review import AMAZON_REVIEW_HEADERS
 from .sheets import HEADERS
@@ -12,6 +14,8 @@ HOME_ID = 1909140001
 CHART_ID = 1909140002
 MARKER = "kakeibo_daily_ui"
 VERSION = "1"
+HOME_COLUMNS = 9
+AUTO_MONTH = "当月（自動）"
 CAP = 5000  # Data rows; overflow is visible, never silently omitted.
 IDS = {
     "支出明細": 0, "レシート": 620056485, "カテゴリ": 1571056330,
@@ -138,6 +142,32 @@ def source_range(title, cols):
     return f'INDIRECT("\'{title}\'!{start}2:{end}"&MIN(ROWS(\'{title}\'!A:A),{CAP+1}))'
 
 
+def initial_month_selection(home):
+    """Preserve an existing selector, or migrate the former date input safely."""
+    if home is None:
+        return AUTO_MONTH
+    if "monthState" not in home:
+        raise ValueError("Home month selection was not read; refresh metadata")
+    state = home["monthState"]
+    selected = state.get("B4", "")
+    if selected:
+        if selected == AUTO_MONTH or isinstance(selected, str) and re.fullmatch(r"[1-9][0-9]{3}-(0[1-9]|1[0-2])", selected):
+            return selected
+        raise ValueError("Unexpected Home month selection; inspect before applying UI")
+    legacy = state.get("B3", "")
+    if legacy == "" or isinstance(legacy, str) and legacy.startswith("=") and "TODAY()" in legacy:
+        return AUTO_MONTH
+    try:
+        if isinstance(legacy, (int, float)) and not isinstance(legacy, bool):
+            chosen = date(1899, 12, 30) + timedelta(days=legacy)
+        else:
+            parts = str(legacy).strip().replace("/", "-").split("-")
+            chosen = date(int(parts[0]), int(parts[1]), int(parts[2]) if len(parts)>2 else 1)
+        return chosen.strftime("%Y-%m")
+    except (ValueError, TypeError, OverflowError, IndexError) as exc:
+        raise ValueError("Unexpected legacy Home month; inspect before applying UI") from exc
+
+
 def home_cells():
     src = source_range("支出一覧", "A:J")
     money = 'VALUE(REGEXREPLACE(TO_TEXT(raw_amount),"[,¥￥円\\s]",""))'
@@ -164,19 +194,21 @@ def home_cells():
     month = 'TEXT($B$3,"yyyy-mm")'
     end = CAP+1
     return {
-        (1, 1): "家計簿AI", (2, 1): "支出と確認待ちを、ひと目で。",
-        (3, 1): "対象月（変更可）", (3, 2): '=DATE(YEAR(TODAY()),MONTH(TODAY()),1)',
-        (5, 1): "当月の計上済み支出",
+        (1, 1): "家計簿AI", (2, 1): "支出と要対応を、ひと目で。",
+        (3, 1): "対象月", (3, 2): f'=IF(OR($B$4="",$B$4="{AUTO_MONTH}"),DATE(YEAR(TODAY()),MONTH(TODAY()),1),DATE(VALUE(LEFT($B$4,4)),VALUE(RIGHT($B$4,2)),1))',
+        (4, 1): "月を選ぶ ▼", (4, 2): AUTO_MONTH,
+        (5, 1): '=TEXT($B$3,"yyyy年m月")&"の計上済み支出"',
         (6, 1): f'=IF($B$17>0,"要データ確認",SUMIF(D2:D{end},{month},E2:E{end}))',
-        (7, 1): "支出一覧に反映された支出を集計",
-        (8, 1): "未分類の件数", (8, 2): f'=COUNTIFS(D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
+        (7, 1): "要対応",
+        (8, 1): "カテゴリ未分類", (8, 2): f'=COUNTIFS(D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
         (9, 1): "未分類の金額", (9, 2): f'=SUMIFS(E2:E{end},D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
-        (11, 1): "確認待ち（全期間）",
+        (10, 1): "計上済みで、カテゴリだけ未確定の支出。",
+        (11, 1): "取込内容の確認（全期間）",
         (12, 1): link("要確認", "通常review →", "J1"), (12, 2): review,
         (13, 1): link("Amazon要確認", "Amazon review →", "H1"),
         (13, 2): f'=COUNTIFS({amz_ids},"<>",{amz_states},"<>反映済み")',
-        (14, 1): "保留・判断後の反映待ちも含みます。",
-        (15, 1): "0件でも、未取込・未対応まで完了した意味ではありません。",
+        (14, 1): "保留・反映待ちを含みます。",
+        (15, 1): "未取込のデータは含みません。",
         (17, 1): "集計データの確認", (17, 2): f'=SUM(H2:H{end})+{overflow}',
         (18, 1): '=IF(B17=0,"支出一覧の更新に合わせて集計します。","日付・金額または参照上限を確認してください。")',
         (20, 1): link("支出一覧", "支出一覧を開く →"),
@@ -189,44 +221,67 @@ def home_cells():
                   'label F \'カテゴリ\',sum(E) \'金額\'",0),{"カテゴリ","金額";"該当なし",0})'),
         (1, 4): "対象月", (1, 5): "金額", (1, 6): "集計カテゴリ", (1, 7): "支出ID", (1, 8): "入力確認",
         (2, 4): normalized,
+        (1, 9): "対象月候補", (2, 9): AUTO_MONTH,
+        (3, 9): (f'=LET(months,{{ARRAYFORMULA(TEXT(EDATE(TODAY(),SEQUENCE(36,1,0,-1)),"yyyy-mm"));'
+                 f'IFERROR(FILTER($D$2:$D${end},$D$2:$D${end}<>""),TEXT(TODAY(),"yyyy-mm"));'
+                 'IF(REGEXMATCH(TO_TEXT($B$4),"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$"),$B$4,TEXT(TODAY(),"yyyy-mm"))},'
+                 'SORT(UNIQUE(months),1,FALSE))'),
     }
 
 
 def home_requests(home):
     req = []
     cells = home_cells()
-    # Preserve the user's month selection on every subsequent run.
-    if home is not None:
-        cells.pop((3, 2))
+    selected = initial_month_selection(home)
+    if home is not None and home["monthState"].get("B4"):
+        cells.pop((4, 2))  # Never rewrite a user's existing selector.
+    else:
+        cells[4, 2] = selected
     req += [cell(r, c, value) for (r, c), value in cells.items()]
-    req += [style(grid(HOME_ID, 0, CAP+1, 0, 2),
+    req += [{"updateSheetProperties": {"properties": {"sheetId": HOME_ID,
+                  "gridProperties": {"frozenRowCount": 4}}, "fields": "gridProperties.frozenRowCount"}},
+            style(grid(HOME_ID, 0, CAP+1, 0, 2),
                   textFormat={"fontFamily": "Arial", "fontSize": 11, "foregroundColorStyle": color("28343B")},
                   verticalAlignment="MIDDLE", wrapStrategy="WRAP", backgroundColorStyle=color("FFFFFF")),
             dimension(HOME_ID, "COLUMNS", 0, 1, pixelSize=170),
             dimension(HOME_ID, "COLUMNS", 1, 2, pixelSize=150),
-            dimension(HOME_ID, "COLUMNS", 2, 8, hiddenByUser=True),
+            dimension(HOME_ID, "COLUMNS", 2, HOME_COLUMNS, hiddenByUser=True),
             dimension(HOME_ID, "ROWS", 0, 70, pixelSize=32),
             dimension(HOME_ID, "ROWS", 5, 6, pixelSize=55),
-            dimension(HOME_ID, "ROWS", 14, 15, pixelSize=54),
+            dimension(HOME_ID, "ROWS", 14, 15, pixelSize=32),
             dimension(HOME_ID, "ROWS", 17, 18, pixelSize=48),
             style(grid(HOME_ID, 0, 1, 0, 2), textFormat={"fontSize": 18, "bold": True}),
             style(grid(HOME_ID, 5, 6, 0, 2), textFormat={"fontSize": 26, "bold": True,
                   "foregroundColorStyle": color("226C60")}, numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}),
-            style(grid(HOME_ID, 2, 3, 1, 2), backgroundColorStyle=color("FFF4D8"),
+            style(grid(HOME_ID, 2, 3, 1, 2), backgroundColorStyle=color("FFFFFF"), textFormat={"bold": True},
                   numberFormat={"type": "DATE", "pattern": "yyyy年m月"}),
+            style(grid(HOME_ID, 3, 4, 1, 2), backgroundColorStyle=color("FFF4D8"), textFormat={"bold": True},
+                  horizontalAlignment="LEFT", numberFormat={"type": "TEXT", "pattern": "@"}),
             style(grid(HOME_ID, 33, CAP+1, 1, 2), numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}),
             {"setDataValidation": {"range": grid(HOME_ID, 2, 3, 1, 2),
-                "rule": {"condition": {"type": "DATE_IS_VALID"}, "strict": True,
-                         "inputMessage": "表示する月の日付を入力（例: 2026/9/1）"}}},
+                }},  # B3 is now the calculated month, not an input.
+            {"setDataValidation": {"range": grid(HOME_ID, 3, 4, 1, 2),
+                "rule": {"condition": {"type": "ONE_OF_RANGE", "values": [
+                    {"userEnteredValue": f"='ホーム'!$I$2:$I${CAP+1}"}]}, "strict": True, "showCustomUi": True,
+                    "inputMessage": f"表示したい月を選択。「{AUTO_MONTH}」で当月表示に戻せます。"}}},
     ]
-    for row in [5, 11, 34]:
+    for row, note in [(3, "表示中の月です。変更は下のB4から行ってください。"),
+                      (4, f"過去月の選択を保持します。「{AUTO_MONTH}」へ戻すと当月に追従します。")]:
+        req.append({"updateCells": {"range": grid(HOME_ID, row-1, row, 1, 2),
+                    "rows": [{"values": [{"note": note}]}], "fields": "note"}})
+    for row in [5, 7, 34]:
         req.append(style(grid(HOME_ID, row-1, row, 0, 2), backgroundColorStyle=color("E9EEF0")))
-    for row in [8, 12, 13, 17]:
+    req.append(style(grid(HOME_ID, 6, 7, 0, 2), textFormat={"bold": True, "fontSize": 12}))
+    for row in [10, 11, 14, 15]:
+        req.append(style(grid(HOME_ID, row-1, row, 0, 2), backgroundColorStyle=color("FFFFFF"),
+                         textFormat={"fontSize": 10, "foregroundColorStyle": color("53646D")}))
+    req.append(style(grid(HOME_ID, 7, 8, 1, 2), numberFormat={"type": "NUMBER", "pattern": '0"件（対象月）"'}))
+    for row in [12, 13, 17]:
         req.append(style(grid(HOME_ID, row-1, row, 1, 2),
                          numberFormat={"type": "NUMBER", "pattern": '0"件"'}))
     req.append(style(grid(HOME_ID, 8, 9, 1, 2), numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}))
     existing_merges = home.get("merges", []) if home else []
-    for row in [1, 2, 5, 6, 7, 11, 14, 15, 18, 20, 21, 22]:
+    for row in [1, 2, 5, 6, 7, 10, 11, 14, 15, 18, 20, 21, 22]:
         rng = grid(HOME_ID, row-1, row, 0, 2)
         if rng not in existing_merges:
             req.append({"mergeCells": {"range": rng, "mergeType": "MERGE_ALL"}})
@@ -275,8 +330,8 @@ def build_plan(meta):
     req, skipped = [], []
     if not home:
         req += [{"addSheet": {"properties": {"sheetId": HOME_ID, "title": "ホーム",
-                    "gridProperties": {"rowCount": CAP+1, "columnCount": 8,
-                                       "frozenRowCount": 3, "hideGridlines": True}}}},
+                    "gridProperties": {"rowCount": CAP+1, "columnCount": HOME_COLUMNS,
+                                       "frozenRowCount": 4, "hideGridlines": True}}}},
                 {"createDeveloperMetadata": {"developerMetadata": {
                     "metadataKey": MARKER, "metadataValue": VERSION,
                     "visibility": "DOCUMENT", "location": {"sheetId": HOME_ID}}}}]
@@ -284,6 +339,9 @@ def build_plan(meta):
         req.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
             "metadataKey": MARKER, "metadataLocation": {"sheetId": HOME_ID}}}],
             "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
+    if home and home["properties"]["gridProperties"]["columnCount"] < HOME_COLUMNS:
+        req.append({"updateSheetProperties": {"properties": {"sheetId": HOME_ID,
+            "gridProperties": {"columnCount": HOME_COLUMNS}}, "fields": "gridProperties.columnCount"}})
     # Move known tabs to the front in reverse order: index semantics stay correct
     # for both initial layout and arbitrary user rearrangements on subsequent runs.
     ordered = ["ホーム"] + DAILY + RIGHT + HIDDEN
@@ -309,7 +367,7 @@ def build_plan(meta):
         "rows": s["properties"].get("gridProperties", {}).get("rowCount", 0),
         "columns": s["properties"].get("gridProperties", {}).get("columnCount", 0),
         "frozenRows": s["properties"].get("gridProperties", {}).get("frozenRowCount", 0),
-        "header": s.get("header", [])} for s in sheets]
+        "header": s.get("header", []), "monthState": s.get("monthState")} for s in sheets]
     return {"spreadsheetId": SPREADSHEET_ID, "version": VERSION, "requests": req,
             "preconditions": preconditions,
             "skipped": skipped, "new_conditional_formats": 0,
