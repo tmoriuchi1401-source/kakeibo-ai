@@ -50,8 +50,7 @@ KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に
 | **au PAYカード** | **L4** | Gmail incremental recurring production。実write確認済み | review項目の意味と最終処理状況 | **reviewだけ確認** |
 | **au PAY残高** | **L4相当** | Gmail通知取込・既存dedupe・共通後続処理 | 大きなblockingなし | **保守** |
 | **一般レシート** | **L4** | `receipt_inbox` → privacy gate → normalのみGemini → structured明細 → Sheets → processed。実シートに解析済み24件。scan PDF 3件のproduction canary / read-back / replay確認済み | blockingなし。低頻度例外は既存review運用 | **保守。offline OCR方式へ置換しない** |
-| **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L3 支出backfill完了** | 住宅ローンcanary 1件、3銀行代表10件、backfill 87件の合計98件で本番write / 各件read-back / replayを確認 | 保護対象31件（non-expense 12 / review 19）は未変更。収入48件も支出化せず維持 | **別承認なしでは保護対象31件へ触れない** |
-| **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L3 支出backfill・transfer整理完了** | 住宅ローンcanary 1件、3銀行代表10件、backfill 87件の合計98件で本番支出write。人間確認済みtransfer 19件を`bank_non_expense`へ反映。各件read-back / replayを確認 | exact card settlement 12件は未反映。収入48件も支出化せず維持。recurring production未有効 | **別承認なしでは残る12件へ触れず、recurringを有効化しない** |
+| **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L4 recurring production** | 住宅ローンcanary 1件、3銀行代表10件、backfill 87件の合計98件で本番支出write。transfer 19件とcard settlement 12件は`bank_non_expense`、収入48件は支出化せず維持。manual recurring canary / replayは新着0件・追加write 0で成功 | 毎日06:47 JST、最大20 PDF / 100 rows、expense-onlyのstanding authority。review / income / unsupported bankは自動writeしない | **保守。authority scopeを拡張しない** |
 | **Payroll** | **L3 / 定期scanはread-only** | 実シートに給与明細ヘッダ1件・項目18件・勤務先マスタ1件。Windows scheduled read-only scanあり | 最新scheduled runと新規明細時の運用確認 | **Task Scheduler実績を1回確認。新規明細がなければ開発しない** |
 | **Medical** | **L1〜L2 / privacy運用中心** | Medicalを外部AIへ送らない本番境界、local OCR / review / shadow実装 | local review永続運用と未見帳票評価は別課題 | **既存review運用を確定。新データなしにtaxonomyを増やさない** |
 | **共通 reconcile / auto-expense / review / 支出一覧** | **L4** | 本番経路と定期実行実績あり | sourceごとの未反映・例外を可視化 | **作り直さない** |

@@ -1,6 +1,8 @@
 name: Bank PDF recurring production
 
 on:
+  schedule:
+    - cron: '47 21 * * *'
   workflow_dispatch:
     inputs:
       apply:
@@ -9,8 +11,7 @@ on:
         type: boolean
         default: false
 
-# Candidate daily time after explicit enablement: 06:47 JST (21:47 UTC).
-# No schedule trigger is enabled in this checkpoint.
+# Daily at 06:47 JST (21:47 UTC on the preceding UTC date).
 permissions:
   contents: read
 

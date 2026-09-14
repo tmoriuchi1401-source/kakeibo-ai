@@ -353,4 +353,6 @@ def test_bank_recurring_workflow_uses_standing_authority_not_static_approval():
     assert "--approval-file" not in workflow
     assert "actions/cache/restore@v4" in workflow
     assert "actions/cache/save@v4" in workflow
-    assert "schedule:" not in workflow
+    assert "schedule:" in workflow
+    assert "cron: '47 21 * * *'" in workflow
+    assert "workflow_dispatch:" in workflow

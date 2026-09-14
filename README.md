@@ -432,7 +432,7 @@ python -m app.cli bank-pdf-recurring --state-dir "$BANK_PDF_STATE_DIR" \
 
 1回あたりの上限はauthorityの `max_files`（最大20）と `max_rows`（最大100）。新着0件はsafe
 no-opで、review / transfer / card settlement / incomeは支出writeしない。workflowはmanual
-dispatchのみで、候補scheduleは06:47 JST。scheduleとrecurring authorityは別承認まで有効化しない。
+dispatchを維持しつつ、毎日06:47 JST（21:47 UTC）のproduction scheduleで実行する。
 
 Amazon baseline注文とカードのAmazon分割払いは、次の専用previewで照合できる:
 

@@ -21,10 +21,9 @@ then issues an in-memory, short-lived capability for the exact expense batch
 produced by the existing finalization gates. Processed-file markers are written
 only after a successful apply.
 
-The candidate schedule is 06:47 JST (21:47 UTC), separate from the existing
-Amazon/au PAY 05:23 JST jobs and the three-hour receipt workflow. The
-workflow currently exposes manual dispatch only; enabling the schedule and
-standing authority requires a separate final approval.
+The production schedule runs daily at 06:47 JST (21:47 UTC), separate from
+the existing Amazon/au PAY 05:23 JST jobs and the three-hour receipt workflow.
+Manual dispatch remains available for bounded preview and apply checks.
 
 The external authority JSON fixes `source=bank_pdf_drive`, the exact Drive
 folder and spreadsheet, the `取込データ` sheet and binding/schema versions,
