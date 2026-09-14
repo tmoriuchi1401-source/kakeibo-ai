@@ -69,7 +69,8 @@ def run_durable_source(store: DurableState, directory: Path,
     return result
 
 
-def execute_serial(runners: Mapping[str, Callable[[], Mapping]]) -> dict:
+def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
+                   preview: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -79,8 +80,9 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]]) -> dict:
     outcomes = {}
     for source, dependencies in DEPENDENCIES.items():
         started = monotonic()
+        previous = (history or {}).get(source, {})
         outcome = {"status": "skipped", "error": "dependency_failed", "counts": {},
-                   "last_success": None, "duration_seconds": 0.0}
+                   "last_success": previous.get("last_success"), "duration_seconds": 0.0}
         if all(outcomes[name]["status"] == "success" for name in dependencies):
             try:
                 if source not in runners:
@@ -89,8 +91,9 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]]) -> dict:
                 require_success(result)
                 counts = {key: value for key, value in result.items()
                           if key in COUNT_KEYS and type(value) is int and value >= 0}
-                outcome.update(status="success", error="", counts=counts,
-                               last_success=datetime.now(timezone.utc).isoformat())
+                outcome.update(status="success", error="", counts=counts)
+                if not preview:
+                    outcome["last_success"] = datetime.now(timezone.utc).isoformat()
             except Exception:
                 # Exception text may contain a document name, account ID or API
                 # response. The safe parent summary deliberately never includes it.

@@ -201,6 +201,7 @@ def main():
     pi=sub.add_parser("paypay-import"); pi.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
     ag=sub.add_parser("aupay-gmail"); ag.add_argument("--max-results",type=int,default=100)
+    ag.add_argument("--dry-run", action="store_true")
     cgp=sub.add_parser("card-gmail-preview"); cgp.add_argument("--max-results",type=int,default=100)
     cgi=sub.add_parser("card-gmail-import"); cgi.add_argument("--max-results",type=int,default=100)
     cgpw=sub.add_parser("card-gmail-write-plan-preview"); cgpw.add_argument("--max-results",type=int,default=100)
@@ -919,8 +920,11 @@ def main():
     elif args.cmd=="aupay-eml":
         s,db,_=make(False); print(AuPayMailPipeline(db).import_notice(parse_eml(args.eml)))
     elif args.cmd=="aupay-gmail":
-        s,db,_=make(False); s.validate(need_gmail=True)
-        print(AuPayMailPipeline(db).import_gmail(s.gmail_token_json,s.aupay_gmail_query,args.max_results))
+        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service() if args.dry_run else None)
+        print(AuPayMailPipeline(db).import_gmail(
+            s.gmail_token_json,s.aupay_gmail_query,args.max_results,dry_run=args.dry_run,
+        ))
     elif args.cmd=="card-gmail-preview":
         s=Settings(); s.validate(need_gmail=True)
         print(AuPayCardMailPipeline().preview_gmail(

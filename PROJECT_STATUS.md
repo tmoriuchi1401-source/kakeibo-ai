@@ -44,9 +44,22 @@
   `tests/conftest.py`で全テストの実ネットワーク接続を禁止して成功。
   compileall / diff-check成功。google-genai由来の既存DeprecationWarning 1件。
   Linux/Actionsの実行成功を意味しない。checkpoint前fetchでもorigin/mainは同SHA。
-- **未完了:** 親Workflow/本番CLI assembly、全入口共通concurrency/main guard、
-  初期移送CLI、一般系previewの接続、retention機微原本除外、Linux合成検証、
-  全Workflow構文/依存/trigger検証、要件別完了監査。Goalは継続中。
+- 第2checkpoint準備: 親Workflow/既存CLI assembly、全25既存入口の共通concurrency/main guard、
+  offline state移送CLI、au PAY残高dry-runと取得上限の事前検査、receipt/PayPay inboxの
+  pagination超過検出、retentionのnormal provenance限定をbranchに追加。
+  manual previewとschedule有効化を別Variableに分離。銀行scheduleはpreview維持。
+  SecretsなしのLinux合成Workflow（一般 / Payroll・Medical別job）を追加、未実行。
+- レシート/PayPay/共通writeも`production_ledger.py`の非公開運用JSONでpendingと最終成功を保存。
+  不明結果の自動再実行を禁止し、旧成功時刻を保持。初期bundle準備はoffline専用CLI。
+- 第2検証: Workflow YAML/trigger/guard/lock/依存、親CLIの本番境界、既存関連処理を含む
+  最終全体pytest **1209 passed**（20.60秒）、compileall / diff-check成功。
+  最終読込/銀行preview成功時刻の調整も含めた結果。ネットワーク禁止下で実行。
+  ローカルテスト依存PyYAML 6.0.3をGit除外領域へ追加（`PYTHONPATH=.private/test-deps`）、
+  再現用は`pip install -r requirements-test.txt`。要件別監査はREADMEの末尾表に記録。
+- **未完了:** 全sourceを通した合成統合/限定canaryの運用照合、
+  Linux合成実行、外部state権限/所有/作成可否、利用枠確認、要件別完了監査。Goalは継続中。
+- checkpoint `20452dc` の通常pushは自動承認レビューがpublic repoへの新コード/運用情報公開として
+  拒否。pushは未実行、upstream未設定。公開先と最終payloadへの明示承認なしに再試行しない。
 - **外部未実施:** main統合・Workflow起動/変更・Google write/move/delete・state upload・
   Task停止・Secrets/OAuth変更・visibility/課金変更。本番L4への昇格なし。
 - 現在repoはpublic。private化/利用枠/変更影響は確認・提案段階。契約枠は未確認。

@@ -88,8 +88,8 @@ GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、�
 ### 統合・切替準備（2026-09-15、実切替未実施）
 
 この節をWindows開発 / Actions本番 / Drive状態保存の切替手順の集約先とする。
-現状のscheduleと実績を下表で分離する。新しい親Workflowはまだ未接続であり、
-ここに書かれた移行目標を現行運用と解釈しない。
+現状のscheduleと実績を下表で分離する。新しい親Workflowと既存CLIの接続は
+専用branchに準備済み・既定無効であり、main未統合。本節の移行目標は現行運用ではない。
 
 #### 開始時のGit・Windows確認
 
@@ -123,7 +123,7 @@ Actionsの時刻はcron設定であり、実際の起動保証時刻ではない
 全25 WorkflowはGitHub API上active。下のrunメタデータは2026-09-15確認、
 successは処理件数や実write成功の証明と区別する。Secret/Variableの値は未取得。
 
-| source/責任 | 現行入口・設定JST | 現行コマンド / 書込み先 / authority | state | 直近run実績 | 移行後の責任（未接続） |
+| source/責任 | 現行入口・設定JST | 現行コマンド / 書込み先 / authority | state | 直近run実績 | 移行後の責任（branch準備） |
 |---|---|---|---|---|---|
 | Amazon通常購入 | `amazon-daily-import.yml`、05:23 / manual | `amazon-gmail-recurring --apply`はschedule。manual既定preview、canaryはexact条件。Amazonイベント/ヘッダ・取込・支出、最大100メール/3購入/3日、2h overlap | cache `recurring.sqlite3` | [#133](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34786888299)、schedule success、09-14 07:28 JST | 親のAmazon段階、既存runner + Drive adapter |
 | au PAYカード | `aupay-card-recurring-production.yml`、05:23 / manual | `card-gmail-recurring`、取込データ、既存protected policy・一回限りcapability・exact read-back。manual既定dry-run | cache checkpoint/manifests/capabilities/journal/leases SQLite | [#9](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34786937936)、schedule success、09-14 07:29 JST | 親のカード段階、Amazon/receipt成功後 |
@@ -134,7 +134,7 @@ successは処理件数や実write成功の証明と区別する。Secret/Variabl
 | review判断反映 | 共通入口 + `amazon-manual-review-apply.yml` | `review-apply`、既存判断・取込/支出更新。専用手動入口は8件固定の古い検証条件あり | Sheets | 共通#205 / 専用manual #1 success 08-21 | 日常は親に一意化、修復手動は共通ロック内 |
 | reconcile / auto-expense | 共通入口 | `reconcile` → `auto-expense`、取込/支出。現行always()で前段失敗後も起動し得る | Sheets | 共通#205 | 全依存取込成功後に一度。書込み結果不明ならskipしrun failure |
 | review/表示更新 | 共通 + `amazon-manual-review-refresh.yml` | `review-refresh` / `expenses-refresh`。ホーム変更は含めない | Sheets | 共通#205 / 専用manual #3 success 08-21 | 親の後処理。失敗をrun successへ変換しない |
-| 月次backup/retention | `monthly-maintenance.yml`、毎月2日03:37 JST / manual | `backup`はDriveコピー、`receipts-cleanup`は恒久削除。既存OAuth/SA。現在は画像/PDFと時刻で候補抽出 | Drive backup/processed metadata | [#1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/33545494331)、schedule success 09-02 03:45 JST。個別write/delete数未確認 | 日常親とは別の最上位保守入口で同一ロック。機微原本除外は切替前の未完了課題 |
+| 月次backup/retention | `monthly-maintenance.yml`、毎月2日03:37 JST / manual | `backup`はDriveコピー、`receipts-cleanup`は恒久削除。既存OAuth/SA。現在は画像/PDFと時刻で候補抽出 | Drive backup/processed metadata | [#1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/33545494331)、schedule success 09-02 03:45 JST。個別write/delete数未確認 | 日常親とは別の最上位保守入口で同一ロック。branchではnormal provenanceのある原本だけ候補化 |
 | Payroll | 上記Windows Task | read-only scan、Sheets/Drive読取、local非公開log/state | 既存JSON/journal/HMAC（今回移送しない） | 本日終了0 + log read-only/write0 | 実データは現状維持。将来AI鍵なし独立job、別承認 |
 | Medical | 共通inbox privacy分岐、local opt-in shadow | 外部AI禁止、Sheets/Drive移動authorityなし。`medical-review list/show` read-only | user-local versioned shadow JSON、key別管理 | local shadow有効状態・最新store未確認 | 一般inbox共用維持。実データ移行とwrite拡大は対象外 |
 
@@ -142,7 +142,8 @@ successは処理件数や実write成功の証明と区別する。Secret/Variabl
 commit subject「Enable daily bank PDF recurring production」に対し、最新mainの
 schedule分岐はdry-run。Amazon文書のmanual-onlyやカード文書のcache欠落時fallbackも
 古い説明を含む。移行では実コードを起点にし、missing stateのfallbackは使用しない。
-au PAY残高の相対30日検索・100件到達時の扱いも、親へ接続する前に確認が必要。
+branchではau PAY残高の100件超過をwrite前に検出する。相対30日検索そのものは維持し、
+30日超の起動欠落では自動的に検索期間を広げず、期間を確定した別の復旧承認が必要。
 
 追加のmanual入口（全てActions/現行mainのworkflow_dispatch、個別時刻設定なし）:
 
@@ -169,7 +170,7 @@ au PAY残高の相対30日検索・100件到達時の扱いも、親へ接続す
 
 上表のmanual系は全てSheets/Drive/Gmailと既存Secretを必要に応じて使用し、
 独立durable stateは持たない。現行にはmain限定job guardがない入口がある。
-本番write入口は日常/保守/手動を含め共通concurrencyへ統一する予定:
+branchでは日常/保守/手動を含む全25既存入口と新親を共通concurrencyへ統一:
 
 ```yaml
 concurrency:
@@ -184,18 +185,32 @@ concurrency:
 authorityで停止し、checkpointをnowへ飛ばさず、承認された期間分割復旧を行う。
 親だけがロックを取得し、子に同じロックを重ねない。
 
-#### 実装済みstate adapterと未接続部分
+#### 実装済みstate adapterと親接続
 
 `app/drive_run_state.py` は既存SQLite/manifestをsource単位で保存する薄いadapter。
 `app/production_run.py` は固定の段階順序・依存失敗skip・安全な件数summaryを担当する。
-Google接続・既存CLIとの本番assembly、親Workflow、全入口ロックはまだ未接続。
-現行のcacheをこのcheckpointだけで置き換えることはできない。
+`app/production_flow.py` が既存CLIを子プロセスとして起動し、従来のstdout/stderrは
+メモリ内で受け取って件数だけに絞る。レシート/PayPayだけは既存pipelineの小さな
+`production_source.py` adapterを使う。非レシートapply/全previewの子からAI鍵を除く。
+原本名/金額/旧CLIの例外全文をlog/artifactへ出さない。親はWindows直接起動を拒否する。
+`kakeibo-production.yml`はmain SHA、旧入口停止、新入口許可、schedule許可を別々に検査する。
+本番への統合・外部state設定なしでは現行cacheを置き換えない。
+
+さらに`production_ledger.py`の小さな運用JSONを一つ置く。transaction原本や新規DBではなく、
+11段階それぞれのpending/最終成功/件数/所要時間/固定error codeだけを持つ。
+レシート・PayPay・共通後処理もwrite前にpendingを保存し、結果不明の段階は次回自動再実行しない。
+独立段階は続行できるが、ledger自身の保存結果が不明なら後続writeも止める。
+同じ本番ロック下でのみ使用し、分散ロックとしては使わない。
+最後に再読込し、読取不明を`confirmation_pending=null`としてrun failureで報告する。
+手動previewはledger/native stateともremote更新0。通常親applyの銀行previewは取引write0のまま、
+親所有の運用JSONには成功したscanの時刻を記録する。新規write0のno-opと新規取込試験を分ける。
 
 | source binding | 移送対象（元の形式を維持） | 移送しないもの |
 |---|---|---|
 | `amazon_gmail` | `recurring.sqlite3` | authority/Gmail token/原メール |
 | `au_pay_card_gmail` | `recurring.sqlite3`, `manifests.sqlite3`, `capabilities.sqlite3`, `journal.sqlite3`, `leases.sqlite3` | audit key/authority/OAuth |
 | `bank_pdf_drive` | `bank-recurring.sqlite3`, `bank-pdf-batch-<hash>/bank-steady-state.sqlite3`, `exact-steady-state-manifest.json` | PDF/authority/audit key |
+| `production_run` | source別の運用JSONを固定file IDへ保存。既存native stateと別 | 原本・金額・source IDs・例外全文 |
 
 状態は家族inboxとは別の非公開Drive管理フォルダに、固定file IDでsourceごとに保存する。
 envelopeはsource/Spreadsheet/フォルダ/file/schemaをhashで束縛し、file allowlist・checksum・
@@ -217,7 +232,9 @@ API writeは自動retryなし。途中中断・source failure・保存結果不�
    **実Driveフォルダ作成・state upload・初期state読取は今回未実施**。
 2. 新規source初期化: 履歴のあるsourceのstate欠落とは別。
    承認された`initial_start`と空の既存形式stateを明示的に作る必要がある。
-   初期化CLI/承認条件のassemblyは未完了。missing stateを理由に自動実行しない。
+   空の既存形式stateの作成はoperatorが明示的に実施する。移送CLIの`--bootstrap`は
+   checkpoint未設定のbundle作成を明示許可するだけで、空stateを自動作成しない。
+   missing stateを理由に使用しない。
 3. 障害復旧: pending envelopeのdigestを取得し、旧checkpointからの候補について
    Sheetsのstable ID・全行read-back・Drive processed markerを確認する。
    確認証拠を非公開で保持し、digestに束縛した承認後のみ
@@ -232,11 +249,43 @@ API writeは自動retryなし。途中中断・source failure・保存結果不�
 adapterは既存fileの親/種別/更新可否を検査するが、private共有範囲や作成権限の実確認は未実施。
 権限不足は外部確認の未達として分け、実装・fake Driveテストを止めない。
 
+offline移送CLI（すべて実Googleへの通信なし、絶対パスかつrepository外を要求）:
+
+```text
+python -m app.state_transfer export --binding-file C:/PRIVATE/binding.json --state-dir C:/PRIVATE/native-state --bundle C:/PRIVATE/state-bundle.json
+python -m app.state_transfer inspect --binding-file C:/PRIVATE/binding.json --bundle C:/PRIVATE/state-bundle.json
+python -m app.state_transfer restore --binding-file C:/PRIVATE/binding.json --bundle C:/PRIVATE/state-bundle.json --state-dir C:/PRIVATE/new-restore-directory
+```
+
+bindingファイルのexact fieldsは`source, spreadsheet_id, folder_id, file_id, schema=1`。
+export先の既存ファイルは上書きしない。inspectはsource/phase/generation/件数/最終成功窓/digestだけ表示。
+`--bootstrap`は初回境界の明示承認後に限る。pendingをrestoreで解除する機能はない。
+新しい運用JSONの初回準備は、`source=production_run`のbindingを使った
+`python -m app.state_transfer ledger-init --binding-file C:/PRIVATE/ledger-binding.json --bundle C:/PRIVATE/ledger.json --bootstrap`。
+これはlocalだけのexclusive createであり、Drive uploadではない。
+障害時は運用JSONと該当native stateの**両方**を整合確認する。
+`ProductionLedger.release_after_reconciliation`も対象source・観測digest・証拠SHAへ束縛したoperator専用API。
+
 #### 切替順序・承認境界
 
 目標: 親入口一つ、06:17/18:17 JST（`17 9,21 * * *`）、manual既定preview、新入口既定無効。
 既存CLIを再利用し、独立sourceは継続、依存元失敗・write不明時は後続計上をskipしrun failure。
 本番Secretsは検証済みmainのみに渡し、branch/PR合成テストへ渡さない。
+
+親の制御Variable（すべて未設定で無効）:
+
+| Variable | 用途 |
+|---|---|
+| `KAKEIBO_LEGACY_DISABLED=true` | 旧日常4入口を停止し、新親への前提とする。月次/手動保守は共通ロック内に残る |
+| `KAKEIBO_PRODUCTION_ENABLED=true` | 新親の手動preview/applyを許可。これだけではscheduleを許可しない |
+| `KAKEIBO_SCHEDULE_ENABLED=true` | canary/read-back/replay確認後に限り定期実行を許可 |
+| `KAKEIBO_VALIDATED_MAIN_SHA` | その時点で検証・承認されたmainの完全SHA。main更新後の無審査実行を拒否 |
+| `KAKEIBO_STATE_FOLDER_ID` + `AMAZON_STATE_FILE_ID` / `AUPAY_CARD_STATE_FILE_ID` / `BANK_STATE_FILE_ID` | 承認・作成・移送済みの非公開管理先。名前検索で代替しない |
+| `KAKEIBO_RUN_LEDGER_FILE_ID` | source別pending/最終成功を保持する運用JSONの固定ID |
+
+manual既定`mode=preview`、applyには`mode=apply, confirm=APPLY`が必要。
+銀行はさらに`bank_apply=true`を明示したmanualだけapply可。scheduleでは常に銀行preview。
+レシートpreviewは既存IDとlocal privacy gateの確認までで、AI解析・支出write予定件数の証明とは区別する。
 
 切替時は **旧起動停止 → 実行中run終了確認 → state移送 → 新入口preview →
 限定canary/read-back/replay → 新schedule有効化**。新旧write並走は禁止。
@@ -251,17 +300,44 @@ Windows直接writeはActionsロックの対象外。移行後はlocalテスト/p
 
 #### 次段階・公開設定
 
-- Payroll/Medical実データはActionsへ移さない。Linuxは合成データで確認する予定で未実施。
+- Payroll/Medical実データはActionsへ移さない。Linux合成テストWorkflowを準備したが未実行。
+  ローカルWSLは未インストール、Dockerなし。新しいOS環境は導入していない。
   「外部AIへ送らない」と「GitHub計算機内で処理する」は別の承認事項。
   将来の機微jobはAI鍵なしで分離し、原本/OCR本文をartifact/cache/logへ出さない。
 - Payroll保存対象は金銭項目のみ。出勤日数・時間外労働時間・有休日数・出勤時間・有休残・
   差引不足額は保存しない。現在のWindows scanは維持し、追加帳票/税区分開発はしない。
-- 一般/Medical共通inboxと既存privacy分岐を維持。医療/給与原本を一律retention削除に入れない。
-  現行cleanupの種別保護には未完了課題があり、削除を伴う試験は行わない。
+- 一般/Medical共通inboxと既存privacy分岐を維持。branchではnormal gateを通った新規結果にだけ
+  `kakeiboReceiptClass=normal`を付け、retentionはそのpropertyと処理日時の両方を要求する。
+  Medical/Payroll/分類不明/legacy markerのみの原本は候補にしない。削除を伴う試験は行わない。
+- mainのPayroll preview parserには勤怠候補と`差引不足額→net_pay`の旧対応が残る。
+  これは移行後の保存許可ではない。既存Windows給与write branchは本Goalで変更せず、
+  将来移行時に金銭項目だけの保存projectionで禁止項目を除外することを条件とする。
 - 現在のGitHub visibilityは**public**（09-15 API確認）。private化は提案のみ。
   private Actionsの利用枠・契約・残量は公開repo metadataから確認できず未確認。
   private化前に月間runner分数/保存量/利用枠を確認し、超過課金・外部閲覧・連携への影響を承認する。
   今回visibility/課金/Secrets/OAuthは未変更。
+
+#### 要件別の準備監査（Goalは未完了）
+
+| 要件 | 現在の証拠 | 判定 / 残件 |
+|---|---|---|
+| 最新main・入口・Windows・文書の照合 | 本節の25 Workflow表、Task+log、前後fetch `73ff2ff` | 調査実施。個別runのwrite件数、他ツール直接write、契約利用枠は未確認 |
+| 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | branch準備済み。main未統合・未起動 |
+| 直列/失敗伝播/依存skip | `production_run.py`, `test_production_run.py`, `test_production_flow.py` | 合成検証済み。全source実装を通した一続きのfixture検証は残る |
+| 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
+| native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay | 合成検証済み。実state移送/実Drive所有/共有/作成/更新確認は未実施 |
+| stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
+| 上限/欠落/破損/長期未実行/部分失敗 | state/production/Amazon/card/bankの既存・追加pytest | native windowを飛ばさず停止。残高30日超の回復は別の期間承認が必要 |
+| 機微境界/retention | 既存privacy gate維持、normal provenance selector、削除0のpreviewテスト | branch準備済み。Payroll/Medical実データ移行なし、保存禁止項目は次段階条件に明記 |
+| Linux互換 | `synthetic-tests.yml`でPython3.12、一般/機微fixture別job | Workflow準備のみ。Linux実行は未確認（local WSL/Dockerなし、push拒否） |
+| テスト・compile・diff | PROJECT_STATUS最新検証欄 | Windows合成検証済み。GitHubネイティブ検証は未確認 |
+| 運用summary・ホーム | count-only JSON、source別last_success/確認待ち/error/duration | 実装/合成検証済み。ホーム反映は未実施・別承認 |
+| 切替・canary・復帰 | 本節の順序、既存authority/dedupe/read-backを再利用 | 手順準備。限定canary対象・承認内容の具体化と最終通し照合が残る。実切替未実施 |
+
+公開repoへの通常pushはcheckpoint `20452dc` 時点で自動承認レビューが拒否した。
+理由は新規コード/運用文書のpublic公開先とpayloadへの明示承認不足。迂回・再試行はしていない。
+追加のローカル実装を続けた。branch upload承認後にSecretsなしLinux合成CIを実行できるが、
+その承認にmain統合・本番起動・実データ移送は含めない。
 
 Secretsに以下を登録:
 - GEMINI_API_KEY

@@ -43,13 +43,17 @@ class DrivePayPayPipeline:
 
     def _files(self) -> list[dict]:
         query = f"'{self.folder_id}' in parents and trashed=false"
-        return self.service.files().list(
+        response = self.service.files().list(
             q=query,
-            fields="files(id,name,mimeType,webViewLink,parents,appProperties)",
+            fields="nextPageToken,files(id,name,mimeType,webViewLink,parents,appProperties)",
+            pageSize=100,
             orderBy="createdTime",
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
-        ).execute().get("files", [])
+        ).execute()
+        if response.get("nextPageToken"):
+            raise RuntimeError("paypay_inbox_collection_incomplete")
+        return response.get("files", [])
 
     @staticmethod
     def _processed(file: dict) -> bool:

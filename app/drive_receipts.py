@@ -33,10 +33,13 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
     processed_folder_id=normalize_folder_id(processed_folder_id) if processed_folder_id else ""
     svc=drive_service()
     q=f"'{folder_id}' in parents and trashed=false"
-    files=svc.files().list(
-        q=q,fields="files(id,name,mimeType,webViewLink,parents,appProperties)",orderBy="createdTime",
+    response=svc.files().list(
+        q=q,fields="nextPageToken,files(id,name,mimeType,webViewLink,parents,appProperties)",orderBy="createdTime",pageSize=100,
         supportsAllDrives=True,includeItemsFromAllDrives=True,
-    ).execute().get("files",[])
+    ).execute()
+    if response.get("nextPageToken"):
+        raise RuntimeError("receipt_inbox_collection_incomplete")
+    files=response.get("files",[])
     results=[]
     for f in files:
         if not is_supported_receipt_mime(f["mimeType"]): continue
@@ -47,12 +50,17 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
         results.append((f["name"],res))
         if processed_folder_id and should_archive_result(res):
             prev=",".join(f.get("parents",[]))
+            properties = dict(f.get("appProperties", {}))
+            # Only a fresh result passed through the normal privacy gate proves
+            # provenance. A legacy already-imported marker alone cannot do so.
+            if res.get("status") in {"imported", "needs_review"}:
+                properties["kakeiboReceiptClass"] = "normal"
             svc.files().update(
                 fileId=f["id"],
                 addParents=processed_folder_id,
                 removeParents=prev,
                 body={"appProperties":{
-                    **f.get("appProperties", {}),
+                    **properties,
                     "kakeiboProcessedAt":datetime.now(timezone.utc).isoformat(),
                 }},
                 fields="id,parents",

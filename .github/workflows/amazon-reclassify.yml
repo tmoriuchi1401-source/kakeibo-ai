@@ -3,8 +3,14 @@ name: Reclassify Amazon card transactions
 on:
   workflow_dispatch:
 
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   reclassify:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:

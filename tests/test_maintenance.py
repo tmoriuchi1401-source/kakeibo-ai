@@ -54,10 +54,11 @@ def test_monthly_backup_is_idempotent():
     assert existing.resource.copies == []
 
 
-def test_cleanup_only_deletes_supported_files_older_than_retention():
+def test_cleanup_preview_selects_only_proven_normal_receipts_older_than_retention():
     drive = FakeDrive([{"files": [
         {"id": "old-image", "name": "old.jpg", "mimeType": "image/jpeg",
-         "createdTime": "2020-01-01T00:00:00Z", "modifiedTime": "2025-08-17T00:00:00Z"},
+         "createdTime": "2020-01-01T00:00:00Z", "modifiedTime": "2025-08-17T00:00:00Z",
+         "appProperties": {"kakeiboReceiptClass": "normal", "kakeiboProcessedAt": "2025-08-17T00:00:00Z"}},
         {"id": "new-pdf", "name": "new.pdf", "mimeType": "application/pdf",
          "createdTime": "2020-01-01T00:00:00Z",
          "appProperties": {"kakeiboProcessedAt": "2026-01-01T00:00:00+00:00"}},
@@ -66,10 +67,10 @@ def test_cleanup_only_deletes_supported_files_older_than_retention():
     ]}])
     now = datetime(2026, 8, 18, tzinfo=timezone.utc)
     result = cleanup_processed_receipts(
-        FOLDER_ID, apply=True, now=now, service=drive,
+        FOLDER_ID, now=now, service=drive,
     )
-    assert result == {"mode": "apply", "retention_days": 365, "expired": 1, "deleted": 1}
-    assert drive.resource.deletes == [{"fileId": "old-image", "supportsAllDrives": True}]
+    assert result == {"mode": "preview", "retention_days": 365, "expired": 1, "deleted": 0}
+    assert drive.resource.deletes == []
 
 
 def test_cleanup_preview_never_deletes():
@@ -80,6 +81,16 @@ def test_cleanup_preview_never_deletes():
     result = cleanup_processed_receipts(
         FOLDER_ID, now=datetime(2026, 8, 18, tzinfo=timezone.utc), service=drive,
     )
-    assert result["expired"] == 1
+    assert result["expired"] == 0  # Legacy provenance is not sufficient.
     assert result["deleted"] == 0
+    assert drive.resource.deletes == []
+
+
+def test_sensitive_and_unclassified_originals_are_never_retention_candidates():
+    files = [{"id": kind, "mimeType": "application/pdf", "appProperties": {
+        "kakeiboReceiptClass": kind, "kakeiboProcessedAt": "2020-01-01T00:00:00Z",
+    }} for kind in ("medical", "payroll", "sensitive_unknown", "")]
+    drive = FakeDrive([{"files": files}])
+    result = cleanup_processed_receipts(FOLDER_ID, service=drive)
+    assert result["expired"] == result["deleted"] == 0
     assert drive.resource.deletes == []

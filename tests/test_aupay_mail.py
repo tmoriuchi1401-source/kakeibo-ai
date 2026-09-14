@@ -61,6 +61,36 @@ def test_slip_number_makes_import_idempotent():
     assert db.rows[0][2:5] == ["au PAY", "123456789012", "2026-08-15"]
 
 
+def test_gmail_preview_and_overflow_never_write(monkeypatch):
+    import base64
+    from app import aupay_mail_pipeline as module
+    class Request:
+        def __init__(self, value): self.value = value
+        def execute(self): return self.value
+    class Gmail:
+        truncated = False
+        def users(self): return self
+        def messages(self): return self
+        def list(self, **kwargs):
+            result = {"messages": [{"id": "synthetic-message"}]}
+            if self.truncated: result["nextPageToken"] = "more"
+            return Request(result)
+        def get(self, **kwargs):
+            return Request({"payload": {"mimeType": "text/plain", "body": {
+                "data": base64.urlsafe_b64encode(NOTICE.encode()).decode(),
+            }}})
+    gmail = Gmail()
+    monkeypatch.setattr(module, "gmail_service", lambda _: gmail)
+    db = FakeDB()
+    pipeline = AuPayMailPipeline(db)
+    result = pipeline.import_gmail("synthetic-token", "synthetic-query", 1, dry_run=True)
+    assert result["new"] == 1 and db.rows == []
+    gmail.truncated = True
+    with pytest.raises(RuntimeError, match="collection_incomplete"):
+        pipeline.import_gmail("synthetic-token", "synthetic-query", 1)
+    assert db.rows == []
+
+
 def test_parse_multi_transaction_aupay_card_email(tmp_path):
     message = EmailMessage()
     message["Subject"] = "【ご利用詳細】au PAY カード"

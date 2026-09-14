@@ -1,0 +1,191 @@
+"""Actions-only parent assembly; reuse the existing source CLIs and policies."""
+from __future__ import annotations
+
+import argparse
+import ast
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from time import monotonic
+from uuid import uuid4
+
+from .drive_run_state import DriveStateTransport, DurableState, StateBinding, StateError
+from .production_run import DEPENDENCIES, execute_serial, require_success, run_durable_source
+from .production_ledger import ProductionLedger
+
+
+REPO = Path(__file__).resolve().parents[1]
+STATE_SOURCES = {"amazon": "amazon_gmail", "aupay_card": "au_pay_card_gmail", "bank": "bank_pdf_drive"}
+STATE_ID_ENV = {"amazon": "AMAZON_STATE_FILE_ID", "aupay_card": "AUPAY_CARD_STATE_FILE_ID", "bank": "BANK_STATE_FILE_ID"}
+COMMON_COMMANDS = {"review_apply": "review-apply", "reconcile": "reconcile", "auto_expense": "auto-expense",
+                   "review_refresh": "review-refresh", "expenses_refresh": "expenses-refresh"}
+COMMON_PREVIEWS = {"review_apply": "review-apply-preview", "reconcile": "reconcile-preview",
+                  "auto_expense": "auto-expense-preview", "review_refresh": "review-preview",
+                  "expenses_refresh": "expenses-preview"}
+
+
+def verify_execution_boundary(env: dict, head: str) -> None:
+    if (env.get("GITHUB_ACTIONS") != "true" or env.get("GITHUB_REF") != "refs/heads/main"
+            or env.get("GITHUB_REPOSITORY") != "tmoriuchi1401-source/kakeibo-ai"
+            or env.get("KAKEIBO_PRODUCTION_ENABLED") != "true"
+            or env.get("KAKEIBO_VALIDATED_MAIN_SHA") != head
+            or env.get("GITHUB_SHA") != head):
+        raise StateError("production_main_boundary_required")
+
+
+def command(source: str, *, apply: bool) -> list[str]:
+    if source in {"receipts", "paypay"}:
+        return [sys.executable, "-m", "app.production_source", source, "apply" if apply else "preview"]
+    cli = [sys.executable, "-m", "app.cli"]
+    if source == "amazon":
+        return cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
+    if source == "aupay_card":
+        return cli + ["card-gmail-recurring"] + ([] if apply else ["--dry-run"])
+    if source == "bank":
+        return cli + ["bank-pdf-recurring", "--apply" if apply else "--dry-run"]
+    if source == "aupay_balance":
+        return cli + ["aupay-gmail"] + ([] if apply else ["--dry-run"])
+    return cli + [(COMMON_COMMANDS if apply else COMMON_PREVIEWS)[source]]
+
+
+def invoke(source: str, *, apply: bool, env: dict) -> dict:
+    # Child stdout/stderr can contain legacy filenames, totals and API errors.
+    # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
+    child_env = dict(env)
+    child_env.pop("GITHUB_STEP_SUMMARY", None)
+    if source != "receipts" or not apply:
+        child_env.pop("GEMINI_API_KEY", None)
+    result = subprocess.run(command(source, apply=apply), cwd=REPO, env=child_env,
+                            capture_output=True, text=True, encoding="utf-8", timeout=900)
+    if result.returncode != 0:
+        raise StateError("source_command_failed")
+    try:
+        try:
+            value = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            value = ast.literal_eval(result.stdout.strip())
+    except Exception:
+        raise StateError("source_result_invalid") from None
+    require_success(value)
+    return value
+
+
+def _secret_file(directory: Path, name: str, payload: str) -> str:
+    if not payload:
+        raise StateError("source_configuration_missing")
+    path = directory / name
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(payload)
+    path.chmod(0o600)
+    return str(path)
+
+
+def source_environment(source: str, directory: Path, env: dict) -> dict:
+    result = dict(env)
+    if source == "amazon":
+        # Exact current daily policy from amazon-daily-import.yml; no widening.
+        authority = {
+            "policy_id": "amazon-daily-v1", "source": "amazon_gmail",
+            "expected_spreadsheet_id": env.get("SPREADSHEET_ID", ""), "max_messages": 100,
+            "max_purchases": 3, "overlap_seconds": 7200, "max_window_seconds": 259200,
+            "initial_start": "2026-09-12T12:26:44+09:00",
+            "valid_from": "2026-08-01T00:00:00+09:00", "expires_at": "2027-09-13T00:00:00+09:00",
+        }
+        result["AMAZON_RECURRING_AUTHORITY_FILE"] = _secret_file(directory, "authority.json", json.dumps(authority))
+    elif source == "aupay_card":
+        result["AUPAY_CARD_RECURRING_AUTHORITY_FILE"] = _secret_file(directory, "authority.json", env.get("AUPAY_CARD_RECURRING_AUTHORITY_JSON", ""))
+        result["AUPAY_CARD_AUDIT_KEY_FILE"] = _secret_file(directory, "audit-key.json", env.get("AUPAY_CARD_AUDIT_KEY_JSON", ""))
+    elif source == "bank":
+        result["BANK_PDF_RECURRING_AUTHORITY_FILE"] = _secret_file(directory, "authority.json", env.get("BANK_PDF_RECURRING_AUTHORITY_JSON", ""))
+        if env.get("BANK_AUDIT_KEY_JSON"):
+            result["BANK_AUDIT_KEY_FILE"] = _secret_file(directory, "audit-key.json", env["BANK_AUDIT_KEY_JSON"])
+    return result
+
+
+def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
+             ledger: ProductionLedger | None = None) -> dict:
+    def execute(source):
+        effective_apply = apply and (source != "bank" or bank_apply)
+        if source not in STATE_SOURCES:
+            return invoke(source, apply=effective_apply, env=env)
+        private = directory / source
+        private.mkdir()
+        prepared = source_environment(source, private, env)
+        binding = StateBinding(STATE_SOURCES[source], env.get("SPREADSHEET_ID", ""),
+                               env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
+        from .google_clients import drive_service, read_only_drive_service
+        service = drive_service() if effective_apply else read_only_drive_service()
+        store = DurableState(DriveStateTransport(service, binding), binding)
+        local = private / "state"
+        state_env = {"amazon": "AMAZON_STATE_DIR", "aupay_card": "AUPAY_CARD_STATE_DIR", "bank": "BANK_PDF_STATE_DIR"}[source]
+        prepared[state_env] = str(local)
+        return run_durable_source(store, local, lambda _path: invoke(source, apply=effective_apply, env=prepared), apply=effective_apply)
+    def run(source):
+        if not apply:
+            return execute(source)
+        if ledger is None:
+            raise StateError("production_ledger_required")
+        ledger.begin(source, uuid4().hex)
+        started = monotonic()
+        try:
+            result = execute(source)
+            ledger.complete(source, result, monotonic() - started)
+            return result
+        except Exception:
+            ledger.fail(source)
+            raise
+    return {source: lambda source=source: run(source) for source in DEPENDENCIES}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
+    parser.add_argument("--bank-apply", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.bank_apply and args.mode != "apply":
+            raise StateError("bank_apply_requires_approved_apply")
+        env = dict(os.environ)
+        head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
+        verify_execution_boundary(env, head)
+        from .google_clients import drive_service, read_only_drive_service
+        ledger_binding = StateBinding("production_run", env.get("SPREADSHEET_ID", ""),
+                                       env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get("KAKEIBO_RUN_LEDGER_FILE_ID", ""))
+        ledger_service = drive_service() if args.mode == "apply" else read_only_drive_service()
+        ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
+        history = ledger.value["sources"]
+        with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
+            runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply, ledger=ledger)
+            report = execute_serial(runners, history=history, preview=args.mode == "preview")
+        # Re-read after ambiguous responses instead of reporting stale in-memory
+        # markers. This is inspection only, never a retry of a source/write.
+        ledger_confirmed = True
+        try:
+            ledger = ProductionLedger(ledger.transport, ledger_binding)
+        except Exception:
+            ledger_confirmed = False
+            report["success"] = False
+            report["error"] = "ledger_final_read_failed"
+        # Success means a completed source operation, including bank preview.
+        # bank_mode and written counts distinguish preview/no-op/new writes.
+        for source, outcome in report["sources"].items():
+            outcome["last_success"] = ledger.value["sources"][source]["last_success"]
+            outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
+        report["mode"] = args.mode
+        report["bank_mode"] = "apply" if args.bank_apply else "preview"
+    except Exception:
+        report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
+    rendered = json.dumps(report, ensure_ascii=True, sort_keys=True)
+    print(rendered)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+            stream.write("## Kakeibo production\n\n```json\n" + rendered + "\n```\n")
+    if not report["success"]:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

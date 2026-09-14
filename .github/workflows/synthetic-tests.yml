@@ -1,0 +1,49 @@
+name: Synthetic integration checks
+
+on:
+  push:
+    branches: [integration/production-orchestration-20260915]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakeibo-synthetic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: general
+            selection: not payroll and not medical
+          - suite: sensitive-synthetic
+            selection: payroll or medical
+    # Both jobs receive only synthetic fixtures and no production/AI Secrets.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements-test.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+      - name: Run isolated synthetic suite
+        env:
+          TEST_SELECTION: ${{ matrix.selection }}
+        run: python -m pytest -q --tb=short -k "$TEST_SELECTION"
+      - name: Compile and check whitespace
+        run: |
+          python -m compileall -q app tests
+          git diff --check

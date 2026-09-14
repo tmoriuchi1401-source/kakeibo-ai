@@ -91,8 +91,12 @@ def list_expired_receipts(folder_id: str, *, retention_days: int = 365,
         if not is_supported_receipt_mime(item.get("mimeType", "")):
             continue
         properties = item.get("appProperties", {})
+        # Positive provenance only. Legacy/unclassified/Medical/Payroll originals
+        # stay untouched, even if someone placed them in the processed folder.
+        if properties.get("kakeiboReceiptClass") != "normal":
+            continue
         archived_at = properties.get("kakeiboProcessedAt")
-        reference = archived_at or item.get("modifiedTime") or item.get("createdTime")
+        reference = archived_at
         if reference and _drive_time(reference) <= cutoff:
             expired.append(item)
     return expired

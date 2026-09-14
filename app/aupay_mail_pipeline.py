@@ -651,9 +651,12 @@ class AuPayMailPipeline:
         ]])
         return "new"
 
-    def import_gmail(self, token_json: str, query: str, max_results: int = 100) -> dict:
+    def import_gmail(self, token_json: str, query: str, max_results: int = 100, *, dry_run: bool = False) -> dict:
+        if not 1 <= max_results <= 100:
+            raise ValueError("aupay_notice_message_limit_invalid")
         service = gmail_service(token_json)
         stats = {"found": 0, "new": 0, "unchanged": 0, "needs_review": 0}
+        notices = []
         page_token = None
         while stats["found"] < max_results:
             response = service.users().messages().list(
@@ -662,7 +665,11 @@ class AuPayMailPipeline:
             ).execute()
             messages = response.get("messages", [])
             if not messages:
+                if response.get("nextPageToken"):
+                    raise RuntimeError("aupay_notice_collection_incomplete")
                 break
+            if stats["found"] + len(messages) > max_results:
+                raise RuntimeError("aupay_notice_collection_incomplete")
             for item in messages:
                 stats["found"] += 1
                 message = service.users().messages().get(userId="me", id=item["id"], format="full").execute()
@@ -671,11 +678,22 @@ class AuPayMailPipeline:
                 except ValueError:
                     stats["needs_review"] += 1
                     continue
-                result = self.import_notice(notice, item["id"])
-                stats[result] += 1
+                notices.append((notice, item["id"]))
             page_token = response.get("nextPageToken")
             if not page_token:
                 break
+            if stats["found"] >= max_results:
+                raise RuntimeError("aupay_notice_collection_incomplete")
+        # Freeze the complete bounded collection before any write. Preview uses
+        # the same parser/identities and never calls the existing writer.
+        seen = set(self.db.import_ids())
+        for notice, message_id in notices:
+            if dry_run:
+                result = "unchanged" if notice.import_id in seen else "new"
+                seen.add(notice.import_id)
+            else:
+                result = self.import_notice(notice, message_id)
+            stats[result] += 1
         return stats
 
 

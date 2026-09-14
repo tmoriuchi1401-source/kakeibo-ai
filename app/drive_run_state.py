@@ -90,7 +90,7 @@ class StateBinding:
     schema: int = 1
 
     def __post_init__(self):
-        if (self.source not in {"amazon_gmail", "au_pay_card_gmail", "bank_pdf_drive"}
+        if (self.source not in {"amazon_gmail", "au_pay_card_gmail", "bank_pdf_drive", "production_run"}
                 or not all((self.spreadsheet_id, self.folder_id, self.file_id))
                 or self.schema != 1):
             raise StateError("state_binding_invalid")
@@ -101,6 +101,8 @@ class StateBinding:
 
     @property
     def checkpoint_name(self) -> str:
+        if self.source == "production_run":
+            raise StateError("run_ledger_has_no_sqlite_checkpoint")
         return "bank-recurring.sqlite3" if self.source == "bank_pdf_drive" else "recurring.sqlite3"
 
 

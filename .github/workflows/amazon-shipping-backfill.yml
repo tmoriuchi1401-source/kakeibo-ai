@@ -11,9 +11,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   apply:
-    if: ${{ inputs.confirm == 'APPLY' }}
+    if: ${{ github.ref == 'refs/heads/main' && (inputs.confirm == 'APPLY') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:

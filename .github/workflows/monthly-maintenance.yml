@@ -4,8 +4,14 @@ on:
   schedule:
     - cron: '37 18 1 * *'
 
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   maintain:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

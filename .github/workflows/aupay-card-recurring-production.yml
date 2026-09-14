@@ -15,11 +15,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: aupay-card-recurring-production
+  group: kakeibo-production
   cancel-in-progress: false
+  queue: max
 
 jobs:
   ingest:
+    if: ${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
