@@ -187,7 +187,7 @@ fixtureで、requestの対象範囲、API schema/field masks、再実行、ホ�
 - 送信対象はUI所有セルと既存シートの表示/書式だけ。業務値・業務数式・判断・入力規則の書込みは0。作業中断前後の全業務値の完全一致は未確認であり、前段の月UI適用時の全20シート一致とは区別する。
 - pytest **1120 passed**（関連UI **32 passed**）、compileall・diff-check成功。fixtureで対象月・0件、元ID欠落/重複・無効/分類済み行、候補の一意性、誤った/古い修正リンクの検出、再生成・選択保持・所有権・復元を確認した。
 - 限定UIの復元は`.private/route-complete-restore.json`（18 requests）。数値を含まない最終照合結果は`.private/route-final-verification.json`。実データと実画面画像はGitへ追加しない。
-- main統合は保留。再開時のmain `cbb7c8e`には別作業の銀行定期処理・本番書込み権限変更があり、取込みが自動承認レビューで拒否された。UIだけのローカルcommit `3645f66`を作成したが、既存`tmoriuchi1401-source/kakeibo-ai`へのpushも送信先の明示承認不足という理由で拒否され、未送信。UIコード・テスト・文書8ファイルの送信と、このmainを基点に統合する明示承認を待つ。未承認の送信・統合や銀行処理の実行は行わない。
+- コード統合は[PR #4](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/4)。利用者が2026-09-15に既存`tmoriuchi1401-source/kakeibo-ai`へのUIコード送信と、銀行変更を含む現行mainへの統合を明示承認した。main `cbb7c8e`を競合なく取り込んだcheckpoint `59895bf`で全体pytest **1141 passed**、compileall・diff-check成功。mainとの差分はUIコード・テスト・文書8ファイルのみで、既存の銀行authority・workflowに追加変更はない。
 
 API仕様確認: [Sheets requests](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/request)、
 [LET](https://support.google.com/docs/answer/13190535?hl=en)、[QUERY](https://support.google.com/docs/answer/3093343?hl=en)。
