@@ -28,14 +28,14 @@
 - **確認したもの:** GitHub main / 銀行3adapter統合 / 銀行実PDF smoke / 一般レシートActions #203（attempt 1 / replay attempt 2）/ Google Sheets「家計簿AI」read-only
 - **銀行統合時検証:** full pytest `1056 passed`、compileall成功、diff-check成功
 - **origin/main（今回の再統合基点）:** `bbee3679d2ff2b53e36922640603ef7c03df4b5a`
-- **銀行最終反映checkpoint:** `agent/bank-final-reflection`。full pytest `1084 passed`、compileall成功、diff-check成功。最終反映経路で合計98件の本番支出を反映し、write-eligible支出backfillを完了
+- **銀行最終反映checkpoint:** `agent/bank-final-reflection`、transfer判定コードcheckpoint `622b58cabc23f538dbda3f98ed50301a405e239d`。full pytest `1088 passed`、関連test `63 passed`、compileall成功、diff-check成功。最終反映経路で合計98件の本番支出を反映し、write-eligible支出backfillを完了。さらに人間確認済みの自己口座間transfer 19件を`bank_non_expense`へ反映
 - **今回未確認:** Task Scheduler最新履歴、ローカルMedical review store
 
 ### 現在の最重要判断
 
 KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に取り込めているデータを最終的な家計簿表示までつなぎ、既存production経路を安定運用する段階**に入っている。
 
-**次の主作業:** 銀行の保護対象31件（non-expense 12 / review 19）は、別の明示承認があるまで現状維持
+**次の主作業:** 銀行の残るexact card settlement 12件は別の明示承認まで現状維持。recurring productionはまだ有効化しない
 
 **並行する小作業:** 一般レシートはproduction保守完了。以後は通常運用監視のみ
 
@@ -51,13 +51,14 @@ KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に
 | **au PAY残高** | **L4相当** | Gmail通知取込・既存dedupe・共通後続処理 | 大きなblockingなし | **保守** |
 | **一般レシート** | **L4** | `receipt_inbox` → privacy gate → normalのみGemini → structured明細 → Sheets → processed。実シートに解析済み24件。scan PDF 3件のproduction canary / read-back / replay確認済み | blockingなし。低頻度例外は既存review運用 | **保守。offline OCR方式へ置換しない** |
 | **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L3 支出backfill完了** | 住宅ローンcanary 1件、3銀行代表10件、backfill 87件の合計98件で本番write / 各件read-back / replayを確認 | 保護対象31件（non-expense 12 / review 19）は未変更。収入48件も支出化せず維持 | **別承認なしでは保護対象31件へ触れない** |
+| **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L3 支出backfill・transfer整理完了** | 住宅ローンcanary 1件、3銀行代表10件、backfill 87件の合計98件で本番支出write。人間確認済みtransfer 19件を`bank_non_expense`へ反映。各件read-back / replayを確認 | exact card settlement 12件は未反映。収入48件も支出化せず維持。recurring production未有効 | **別承認なしでは残る12件へ触れず、recurringを有効化しない** |
 | **Payroll** | **L3 / 定期scanはread-only** | 実シートに給与明細ヘッダ1件・項目18件・勤務先マスタ1件。Windows scheduled read-only scanあり | 最新scheduled runと新規明細時の運用確認 | **Task Scheduler実績を1回確認。新規明細がなければ開発しない** |
 | **Medical** | **L1〜L2 / privacy運用中心** | Medicalを外部AIへ送らない本番境界、local OCR / review / shadow実装 | local review永続運用と未見帳票評価は別課題 | **既存review運用を確定。新データなしにtaxonomyを増やさない** |
 | **共通 reconcile / auto-expense / review / 支出一覧** | **L4** | 本番経路と定期実行実績あり | sourceごとの未反映・例外を可視化 | **作り直さない** |
 
 ---
 
-## 3. 銀行PDFの入力基盤は3銀行対応済み。write-eligible支出backfillも完了
+## 3. 銀行PDFの入力基盤は3銀行対応済み。支出backfillと確認済みtransfer整理も完了
 
 ### 2026-09-14 銀行統合の進捗
 
@@ -82,11 +83,12 @@ KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に
 
 Sheets read-only再確認では、既取込identityはduplicateとして吸収され、新規候補がないケースはsafe no-opになることを確認。少なくともauじぶん銀行はduplicate 61 / candidate 0、ドコモSMTBはduplicate 90 / candidate 0で、再処理による既存行の再writeは発生させない。
 
-### 既存シートで確認済みの銀行行（2026-09-14支出backfill完了時点）
+### 既存シートで確認済みの銀行行（2026-09-14 transfer整理完了時点）
 
 | status | 件数 | 現在の意味 |
 |---|---:|---|
-| `bank_expense` | **31** | 支出backfill対象は0件。残る12件はnon-expense、19件はreviewとして保護 |
+| `bank_expense` | **12** | exactなcard settlement。今回のtransfer 19件とは分離し、未反映のまま保護 |
+| `bank_non_expense` | **19** | 人間確認済みのG1/G2/G3自己口座間transfer。支出を作らず確定済み |
 | `bank_loan_repayment` | **0** | 住宅ローン返済4件はすべて支出反映済み |
 | `bank_income` | **48** | 銀行収入として取込済み。支出にしないことをpreviewで確認 |
 | `auto_expense` | **106** | 既反映8件と、銀行最終反映経路で追加した98件 |
@@ -103,21 +105,23 @@ Sheets read-only再確認では、既取込identityはduplicateとして吸収�
 | 新規支出 | **0** | 承認済み87件backfillを完了。追加予定writeなし |
 | 新規収入 | **48** | `bank_income`を維持し、支出明細へ書かない |
 | excluded / link | **0** | 現在の実データに一意な既存支出link候補なし |
-| non-expense | **12** | exactなcard settlement。支出を作らない |
-| review | **19** | 所有・用途が曖昧な金融機関相手の振替。自動支出化しない |
+| non-expense | **31** | 確定済み自己口座間transfer 19件と、未反映のexact card settlement 12件。支出を作らない |
+| review | **0** | G1/G2/G3の19件は人間確認済みexact ruleで解消 |
 | duplicate | **106** | 既存`auto_expense`と本番反映済み98件のstable targetを確認。再追加しない |
 
-production入口は通常workflowへ未接続。applyはexact 1 identity、承認済みSpreadsheet ID、expected Git HEADの完全一致を要求し、`取込データ`と`支出明細`をread-backする。2026-09-14に住宅ローンcanary 1件、auじぶん4件 / ドコモSMTB 3件 / 千葉3件のbounded batch 10件、続くbackfill 87件を同じ1件単位経路で反映した。87件は全件read-back一致し、同一identityのreplayはduplicate 87 / 予定支出write 0 / 予定取込更新0。最終全体previewは新規支出0 / 収入48 / non-expense 12 / review 19 / duplicate 106 / link 0、予定支出write 0 / 予定取込更新31。
+production入口は通常workflowへ未接続。applyはexact 1 identity、承認済みSpreadsheet ID、expected Git HEADの完全一致を要求し、`取込データ`と`支出明細`をread-backする。2026-09-14に住宅ローンcanary 1件、auじぶん4件 / ドコモSMTB 3件 / 千葉3件のbounded batch 10件、続くbackfill 87件を同じ1件単位経路で反映した。87件は全件read-back一致し、同一identityのreplayはduplicate 87 / 予定支出write 0 / 予定取込更新0。
+
+続いて、人間確認済みの自己口座間transfer 19件を、既存operator rule機構のexact条件だけで`bank_non_expense`へ反映した。条件は正規化摘要・方向・account aliasの完全一致で、G1 `口座振替SMBCドコモSMTB` / outgoing / `jibun-primary`、G2 `口座振替SMBCスミシンSBIネツ` / outgoing / `jibun-primary`、G3 `口座振替DFAUジブン` / outgoing / `docomo-smtb-primary`。19件すべて取込更新1 / 支出作成0 / 支出更新0 / read-back一致。同一19 identitiesのreplayは`already_non_expense` 19 / 予定取込更新0 / 予定支出write 0。最終全体previewは新規支出0 / 収入48 / non-expense 31 / review 0 / duplicate 106 / link 0、予定支出write 0 / 予定取込更新12。残る12件は今回対象外のexact card settlementであり未変更。
 
 ### 次のGoal
 
-write-eligible支出backfillは完了。残るnon-expense 12件とreview 19件は今回の承認範囲外として変更せず、別Goal・別承認まで保護する。4つ目の銀行adapter追加は引き続き優先しない。
+write-eligible支出backfillと確認済みtransfer 19件の整理は完了。残るexact card settlement 12件は今回の承認範囲外として変更せず、別Goal・別承認まで保護する。4つ目の銀行adapter追加とrecurring production有効化はまだ行わない。
 
 ### 銀行Workの終了条件
 
 - 3銀行とも同じ日常preview / apply経路を再利用できる → **達成済み**
 - 既存identityの再処理がsafe no-opになる → **確認済み**
-- 129件の未反映出金行（`bank_expense` 125 + `bank_loan_repayment` 4）を、支出98 / non-expense 12 / review 19に分離し、支出98件をすべて反映済み。残りは保護対象non-expense 12 / review 19の31件
+- 129件の未反映出金行（`bank_expense` 125 + `bank_loan_repayment` 4）を、支出98 / non-expense 31に分離。支出98件と確認済みtransfer 19件を反映済み。残りは保護対象のexact card settlement 12件
 - 48件の`bank_income`を支出と混同しない → **preview確認済み**
 - 既存決済sourceとの二重計上を作らない → exact link候補0、card settlement 12を非支出、支出backfill完了後は既反映106をduplicateとして確認
 - 必要なコード変更は最小限
@@ -127,7 +131,7 @@ write-eligible支出backfillは完了。残るnon-expense 12件とreview 19件�
 
 - 4つ目以降の銀行adapterを、既存3銀行の最終反映より先に追加する
 - 全銀行を共通化するための大規模framework再設計
-- 保護対象31件（non-expense / review）を支出として追加
+- non-expense対象31件を支出として追加
 - 銀行の摘要だけを頼りに危険な自動分類を増やす
 
 ---
@@ -264,9 +268,9 @@ GitHub-hosted runner上でlocal storeを永続化できない問題と、帳票�
 
 ## 9. 優先順位
 
-### Priority 1 — 銀行3行の保護対象運用
+### Priority 1 — 銀行3行の残るnon-expense運用
 
-3銀行parser・adapter統合とwrite-eligible支出backfillは完了済み。残る**non-expense 12件 / review 19件は、別承認があるまで変更しない**。
+3銀行parser・adapter統合、write-eligible支出backfill、確認済みtransfer 19件の整理は完了済み。残る**exact card settlement 12件は、別承認があるまで変更しない**。recurring productionの有効化にも進まない。
 
 ### Priority 2 — 一般レシートproduction保守（完了 / 保守）
 
@@ -373,7 +377,7 @@ Evidence:
 
 - 一般レシート: 解析済み24件。Actions #203 attempt 1でscan PDF 3件 / 支出明細5件をproduction反映しprocessed移動、attempt 2でreceipt結果0件のsafe replay
 - PayPay: 取込52行 / 支出明細52行
-- 銀行PDF（支出backfill完了後の最終preview）: 取込185行 / 新規支出0 / 収入48 / non-expense 12 / review 19 / duplicate 106 / link 0。予定支出write 0 / 予定取込更新31
+- 銀行PDF（transfer整理完了後の最終preview）: 取込185行 / 新規支出0 / 収入48 / non-expense 31 / review 0 / duplicate 106 / link 0。予定支出write 0 / 予定取込更新12。今回の19件replayは`already_non_expense` 19 / 予定取込更新0
 - 銀行3adapter統合後の実PDF smoke: auじぶん92 / ドコモSMTB150 / 千葉53
 - 銀行統合main: `30b277ac7f2f8e9807053bf9c0a769a0737e055e`、full pytest `1056 passed`
 - Payroll: header1 / item18 / employer1
@@ -451,3 +455,14 @@ Evidence:
 - 62件すべてで支出1件作成 / 取込1件更新 / read-back一致。同一62 identitiesのreplayはduplicate 62 / 予定支出write 0 / 予定取込更新0
 - 最終全体previewは新規支出0 / 収入48 / non-expense 12 / review 19 / duplicate 106 / link 0。保護対象31件と収入48件は未変更
 - `支出明細`は62行増加し、`取込データ`の行数は不変。先頭・末尾identityと対応支出IDは各シートで一意、Google Sheets API再読込と画面表示で反映を確認
+
+### 2026-09-14 確認済み自己口座間transfer整理
+
+- checkpoint `69106432fef990649912103a4ef99bf6147bcf2b`を基点に、review 19件が人間確認済みG1/G2/G3固定集合と完全一致することを再確認
+- 既存exact operator rule機構を再利用し、正規化摘要・方向・account aliasの完全一致3条件だけを追加。金融機関名、金額、近接日だけでは判定しないfail-closed境界を維持
+- G1 5件、G2 8件、G3 6件以外へのrule一致は0件。production previewは対象19 / 新規支出0 / transfer・non-expense更新19 / その他変更0
+- code checkpoint `622b58cabc23f538dbda3f98ed50301a405e239d`で19件をexact 1 identityずつapply。全件で取込更新1 / 支出作成0 / 支出更新0 / read-back一致
+- apply後のGoogle Sheets API再読込で19件すべて`bank_non_expense`、統合先空欄、`confirmed_internal_transfer`注記あり。`取込データ`2916行 / `支出明細`1439行で行数不変。G1/G2/G3代表行を画面でも確認し、表示崩れなし
+- 同一19 identitiesのreplayはnon-expense 19 / `already_non_expense` 19 / review 0 / 新規支出0 / 予定取込更新0 / 予定支出write 0
+- 最終全体previewは取込185 / 新規支出0 / 収入48 / non-expense 31 / review 0 / duplicate 106 / link 0。予定支出write 0 / 予定取込更新12。残る12件は今回対象外のexact card settlementで未変更
+- 関連test `63 passed`、full pytest `1088 passed`、compileall / diff-check成功。recurring productionは有効化していない
