@@ -24,10 +24,10 @@
 
 - **確認日:** 2026-09-14 JST
 - **Repository:** `tmoriuchi1401-source/kakeibo-ai`
-- **main:** `30b277ac7f2f8e9807053bf9c0a769a0737e055e`
-- **確認したもの:** GitHub main / 銀行3adapter統合 / 銀行実PDF smoke / 直近Actions / Google Sheets「家計簿AI」read-only
+- **main（一般レシート機能checkpoint）:** `a01f7c3453a90e7214438ea073d43d3115c1e169`
+- **確認したもの:** GitHub main / 銀行3adapter統合 / 銀行実PDF smoke / 一般レシートActions #203（attempt 1 / replay attempt 2）/ Google Sheets「家計簿AI」read-only
 - **銀行統合時検証:** full pytest `1056 passed`、compileall成功、diff-check成功
-- **今回未確認:** Windowsの現在worktree、未コミット差分、Task Scheduler最新履歴、ローカルMedical review store
+- **今回未確認:** Task Scheduler最新履歴、ローカルMedical review store
 
 ### 現在の最重要判断
 
@@ -35,7 +35,7 @@ KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に
 
 **次の主作業:** 銀行の「取込済み → 収支反映」
 
-**並行する小作業:** 一般レシートproductionのPDF前処理 / AI呼出し契約の保守
+**並行する小作業:** 一般レシートはproduction保守完了。以後は通常運用監視のみ
 
 ---
 
@@ -47,7 +47,7 @@ KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に
 | **Amazon通常購入** | **L4** | Gmail新着通常購入のbounded recurring production | 返品・返金・取消、CSV商品明細は別経路 | **保守。対象範囲を混同しない** |
 | **au PAYカード** | **L4** | Gmail incremental recurring production。実write確認済み | review項目の意味と最終処理状況 | **reviewだけ確認** |
 | **au PAY残高** | **L4相当** | Gmail通知取込・既存dedupe・共通後続処理 | 大きなblockingなし | **保守** |
-| **一般レシート** | **L4相当 / 保守課題あり** | `receipt_inbox` → privacy gate → normalのみGemini → structured明細 → Sheets → processed。実シートに解析済み21件 | 直近PDF 2件がAI前の`pdf_ocr_failed`で保留。`analyze` CLIと`GeminiAI.analyze_receipt`の引数契約不整合 | **production前処理とAI接続を最小修正** |
+| **一般レシート** | **L4** | `receipt_inbox` → privacy gate → normalのみGemini → structured明細 → Sheets → processed。実シートに解析済み24件。scan PDF 3件のproduction canary / read-back / replay確認済み | blockingなし。低頻度例外は既存review運用 | **保守。offline OCR方式へ置換しない** |
 | **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L2〜L3途中** | 3銀行のnative-text parser・自動adapter判別・stable identity・bounded production経路をmainへ統合。実PDF smoke済み | 取込・分類までは成立。一般`bank_expense` / `bank_income` / `bank_loan_repayment`の最終家計簿反映が残る | **3銀行共通の最終反映を仕上げる** |
 | **Payroll** | **L3 / 定期scanはread-only** | 実シートに給与明細ヘッダ1件・項目18件・勤務先マスタ1件。Windows scheduled read-only scanあり | 最新scheduled runと新規明細時の運用確認 | **Task Scheduler実績を1回確認。新規明細がなければ開発しない** |
 | **Medical** | **L1〜L2 / privacy運用中心** | Medicalを外部AIへ送らない本番境界、local OCR / review / shadow実装 | local review永続運用と未見帳票評価は別課題 | **既存review運用を確定。新データなしにtaxonomyを増やさない** |
@@ -133,20 +133,22 @@ Sheets read-only再確認では、既取込identityはduplicateとして吸収�
 
 ### 実績
 
-- 実シートに**解析済み21件**
-- これはproduction利用実績であり、「21/21を人手照合して完全正解」という意味ではない
+- 実シートに**解析済み24件**
+- これはproduction利用実績であり、「24/24を人手照合して完全正解」という意味ではない
 
-### 現在の保守課題
+### 2026-09-14 production保守結果
 
-2026-09-14の保守worktreeで、以下の最小修正を準備済み。**production canaryは未実施。**
+blocking issueに限定した最小修正を `a01f7c3453a90e7214438ea073d43d3115c1e169` としてmainへdeploy済み。
 
 1. 最新の定期run #202（HEAD `7d0e60d`）ではPDF 3件が `pdf_ocr_failed` → `sensitive_unknown` → Gemini禁止で保留。PDFはembedded textが空でOCR fallbackへ進んでおり、runner workflowにTesseract本体と日本語言語データのsetupがなかった
-2. workflowで `tesseract-ocr` / `tesseract-ocr-jpn` を導入し、`jpn` / `eng` availabilityを実行前に検査する修正を準備
+2. workflowで `tesseract-ocr` / `tesseract-ocr-jpn` を導入し、`jpn` / `eng` availabilityを実行前に検査
 3. mergeで脱落していた `GeminiAI.analyze_receipt(..., known_source_classification=...)` とadapter直前のprivacy再検査を復元
 4. `取込データ`をreceipt materializationのcommit markerとして最後にwriteし、レシートID / 支出IDでpartial retry時の重複を抑止
 5. synthetic通常画像 / scan PDFの実Tesseract smoke成功、OCR runtime欠落時のfail-closed再現成功。full pytest **1067 passed**、compileall / diff-check成功
 
-残課題は、明示承認後に通常PDF canaryを行い、read-back / Drive move / replayをproductionで確認すること。
+明示承認後のActions #203 attempt 1で保留scan PDF 3件をすべて `imported` とし、支出明細5件を生成してprocessedへ移動。Sheets read-onlyではレシート24/24が`解析済`、receipt import marker 24件が全件一意、今回の支出ID 5件も全件一意だった。attempt 2のreplayではreceipt inbox結果0件・追加write 0で成功した。
+
+一般レシートのblocking残課題はない。以後は既存定期workflowを保守し、低頻度例外だけreviewへ送る。
 
 ### 終了条件
 
@@ -255,9 +257,9 @@ GitHub-hosted runner上でlocal storeを永続化できない問題と、帳票�
 
 3銀行parser・adapter統合は完了済み。次は**新しい銀行を増やさず、既取込銀行行を支出・収入・除外・reviewへ閉じる**ことを主Workとする。
 
-### Priority 2 — 一般レシートproduction保守
+### Priority 2 — 一般レシートproduction保守（完了 / 保守）
 
-PDF前処理とAI呼出し契約だけを最小修正する。
+PDF前処理とAI呼出し契約の最小修正、production canary、read-back、replay確認まで完了。新しい解析方式は追加しない。
 
 ### Priority 3 — 運用確認
 
@@ -358,13 +360,13 @@ Evidence:
 
 ### 2026-09-14にread-only確認したproduction evidence
 
-- 一般レシート: 解析済み21件
+- 一般レシート: 解析済み24件。Actions #203 attempt 1でscan PDF 3件 / 支出明細5件をproduction反映しprocessed移動、attempt 2でreceipt結果0件のsafe replay
 - PayPay: 取込52行 / 支出明細52行
 - 銀行PDF（棚卸し時点）: 取込152行 / 銀行由来支出明細8行
 - 銀行3adapter統合後の実PDF smoke: auじぶん92 / ドコモSMTB150 / 千葉53
 - 銀行統合main: `30b277ac7f2f8e9807053bf9c0a769a0737e055e`、full pytest `1056 passed`
 - Payroll: header1 / item18 / employer1
-- 直近共通workflow: PDF前処理保留2件、reconcile updated0、auto-expense candidates0
+- 直近共通workflow: 一般レシート #203成功（機能checkpoint `a01f7c3`）。OCR `jpn` / `eng`検査成功、保留PDF 3件解消
 - au PAYカード recurring: 新規3件write成功
 - Amazon recurring: 正常no-op
 
@@ -391,3 +393,13 @@ Evidence:
 - full pytest `1056 passed`、compileall / diff-check成功
 - 千葉銀行を「専用branchの残件」から「main正式対応」へ変更
 - 銀行の次Goalをadapter追加ではなく、既取込行の最終家計簿反映に限定
+
+### 2026-09-14 一般レシートproduction保守
+
+- runnerへTesseract本体 / 日本語言語データと`jpn` / `eng` availability検査を追加
+- AI adapterの`known_source_classification`契約と送信直前privacy再検査を復元
+- receipt / expenseのstable IDと`取込データ`commit-marker-lastでpartial retry / replay重複を抑止
+- full pytest `1067 passed`、compileall / diff-check成功
+- main `a01f7c3`のActions #203 attempt 1で保留scan PDF 3件をimport、支出明細5件、processed移動を確認
+- Sheets read-onlyでレシート24/24解析済、receipt marker 24/24一意、今回支出ID 5/5一意を確認
+- attempt 2はreceipt結果0件で成功し、再解析・再writeなし
