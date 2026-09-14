@@ -394,7 +394,6 @@ def main():
     bank_recurring.add_argument("--state-dir",default=os.getenv("BANK_PDF_STATE_DIR", ""))
     bank_recurring.add_argument("--authority-file",default=os.getenv("BANK_PDF_RECURRING_AUTHORITY_FILE", ""))
     bank_recurring.add_argument("--audit-key-file",default=os.getenv("BANK_AUDIT_KEY_FILE", ""))
-    bank_recurring.add_argument("--approval-file",default=os.getenv("BANK_APPROVAL_FILE", ""))
     bank_recurring.add_argument("--now")
     bank_recurring_mode=bank_recurring.add_mutually_exclusive_group(required=True)
     bank_recurring_mode.add_argument("--dry-run",action="store_true")
@@ -836,7 +835,6 @@ def main():
             now=now,
             dry_run=args.dry_run,
             audit_key_file=args.audit_key_file or None,
-            approval_file=args.approval_file or None,
             confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
             confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
         )

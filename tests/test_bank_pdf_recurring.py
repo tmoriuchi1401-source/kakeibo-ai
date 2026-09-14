@@ -15,6 +15,15 @@ from app.bank_pdf_recurring import (
     list_bounded_bank_pdfs,
     run_bank_pdf_recurring,
 )
+from app.bank_pdf_pipeline import CHIBA_BANK_SOURCE, DOCOMO_SMTB_SOURCE, SOURCE
+
+
+@pytest.fixture(autouse=True)
+def _fixed_git_head(monkeypatch):
+    monkeypatch.setattr(
+        "app.bank_pdf_recurring.subprocess.check_output",
+        lambda *args, **kwargs: "a" * 40,
+    )
 
 
 class _Request:
@@ -59,10 +68,16 @@ class _DB:
 
 def _authority_file(tmp_path: Path, **overrides) -> Path:
     values = {
+        "schema_version": 1,
         "policy_id": "bank-daily-v1",
         "source": BANK_RECURRING_SOURCE,
         "expected_spreadsheet_id": "sheet",
         "expected_drive_folder_id": "A" * 20,
+        "expected_worksheet": "取込データ",
+        "target_binding_version": 1,
+        "canonical_schema_version": 1,
+        "supported_bank_sources": [SOURCE, DOCOMO_SMTB_SOURCE, CHIBA_BANK_SOURCE],
+        "allowed_classifications": ["expense"],
         "max_files": 10,
         "max_rows": 100,
         "overlap_seconds": 3600,
@@ -153,9 +168,11 @@ def test_synthetic_new_eligible_run_is_preview_only(tmp_path, monkeypatch):
 
     class _Daily:
         candidate_identities = ("bankpdf:au-jibun:jibun-primary:new",)
+        expense_candidate_identities = candidate_identities
         summary = {
-            "parsed": 4, "existing_duplicate": 1, "true_unknown": 1,
+            "parsed": 4, "existing_duplicate": 1, "true_unknown": 0,
             "withheld_by_classification": 2, "collision": 0,
+            "new_income": 0,
         }
 
     monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: _Daily())
@@ -171,6 +188,131 @@ def test_synthetic_new_eligible_run_is_preview_only(tmp_path, monkeypatch):
     )
     assert result["status"] == "dry_run_ready"
     assert result["new_eligible"] == 1
-    assert result["review"] == 1
+    assert result["review"] == 0
     assert result["withheld"] == 2
     assert result["write_attempted"] == 0
+
+
+def test_review_file_is_withheld_from_recurring_write(tmp_path, monkeypatch):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path), repo_root=Path.cwd(),
+    )
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    file = {
+        "id": "pdf-review", "name": "review.pdf", "mimeType": "application/pdf",
+        "modifiedTime": "2026-09-14T02:00:00Z", "appProperties": {},
+    }
+
+    class _Daily:
+        candidate_identities = ("bankpdf:au-jibun:jibun-primary:expense",)
+        expense_candidate_identities = candidate_identities
+        summary = {
+            "parsed": 2, "existing_duplicate": 0, "true_unknown": 1,
+            "withheld_by_classification": 1, "collision": 0, "new_income": 0,
+        }
+
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: _Daily())
+    result = run_bank_pdf_recurring(
+        drive_service=_Drive({"files": [file]}),
+        db=_DB(),
+        state=state,
+        authority_provider=provider,
+        repo_root=Path.cwd(),
+        now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"),
+        dry_run=True,
+        download=lambda _id: b"synthetic",
+    )
+
+    assert result["status"] == "dry_run_noop"
+    assert result["new_eligible"] == 0
+    assert result["review"] == 1
+    assert result["write_attempted"] == 0
+
+
+def test_income_candidate_is_not_an_expense_write(tmp_path, monkeypatch):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path), repo_root=Path.cwd(),
+    )
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    file = {
+        "id": "pdf-income", "name": "income.pdf", "mimeType": "application/pdf",
+        "modifiedTime": "2026-09-14T02:00:00Z", "appProperties": {},
+    }
+
+    class _Daily:
+        candidate_identities = ("bankpdf:au-jibun:jibun-primary:income",)
+        expense_candidate_identities = ()
+        summary = {
+            "parsed": 1, "existing_duplicate": 0, "true_unknown": 0,
+            "withheld_by_classification": 0, "collision": 0, "new_income": 1,
+        }
+
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: _Daily())
+    result = run_bank_pdf_recurring(
+        drive_service=_Drive({"files": [file]}),
+        db=_DB(),
+        state=state,
+        authority_provider=provider,
+        repo_root=Path.cwd(),
+        now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"),
+        dry_run=True,
+        download=lambda _id: b"synthetic",
+    )
+
+    assert result["status"] == "dry_run_noop"
+    assert result["income"] == 1
+    assert result["planned_expense_writes"] == 0
+
+
+def test_synthetic_recurring_apply_uses_standing_authority_without_manual_approval(
+    tmp_path, monkeypatch,
+):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path), repo_root=Path.cwd(),
+    )
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    drive = _Drive({"files": [{
+        "id": "pdf-expense", "name": "expense.pdf", "mimeType": "application/pdf",
+        "modifiedTime": "2026-09-14T02:00:00Z", "appProperties": {},
+    }]})
+    identity = "bankpdf:au-jibun:jibun-primary:expense"
+
+    class _Daily:
+        candidate_identities = (identity,)
+        expense_candidate_identities = candidate_identities
+        summary = {
+            "parsed": 1, "existing_duplicate": 0, "true_unknown": 0,
+            "withheld_by_classification": 0, "collision": 0, "new_income": 0,
+        }
+
+    observed = {}
+
+    def _apply(*args, **kwargs):
+        observed.update(kwargs)
+        return {
+            "confirmed_count": 1,
+            "write_request_count": 1,
+            "recurring_authority_ref": kwargs["recurring_context"].authority_ref,
+        }
+
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: _Daily())
+    monkeypatch.setattr("app.bank_pdf_recurring.run_bank_recurring_production_batch", _apply)
+    result = run_bank_pdf_recurring(
+        drive_service=drive,
+        db=_DB(),
+        state=state,
+        authority_provider=provider,
+        repo_root=Path.cwd(),
+        now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"),
+        dry_run=False,
+        audit_key_file=tmp_path / "audit.json",
+        download=lambda _id: b"synthetic",
+        sleeper=lambda _delay: None,
+    )
+
+    assert result["status"] == "complete"
+    assert result["written"] == 1
+    assert result["write_requests"] == 1
+    assert observed["selected_source_identities"] == (identity,)
+    assert "approval_file" not in observed
+    assert len(drive._files.updated) == 1

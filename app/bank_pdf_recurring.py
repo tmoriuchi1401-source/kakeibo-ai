@@ -7,9 +7,9 @@ classification or writer implementation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import json
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,91 +18,27 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .aupay_card_recurring import SqliteRecurringRunState
-from .bank_canary_production import run_bank_production_batch
+from .bank_canary_production import (
+    _run_bank_recurring_production_batch as run_bank_recurring_production_batch,
+)
+from .bank_recurring_authority import (
+    BANK_RECURRING_SOURCE,
+    MAX_AUTHORITY_FILES,
+    MAX_AUTHORITY_ROWS,
+    MAX_OVERLAP_SECONDS,
+    MAX_WINDOW_SECONDS,
+    MIN_OVERLAP_SECONDS,
+    BankRecurringAuthority,
+    ProtectedBankRecurringAuthorityProvider,
+    create_bank_recurring_run_context,
+)
 from .bank_steady_state import build_bank_daily_preview
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file
 
 
 JST = ZoneInfo("Asia/Tokyo")
-BANK_RECURRING_SOURCE = "bank_pdf_drive"
 BANK_PROCESSED_PROPERTY = "kakeiboBankPdfProcessedAt"
-MAX_AUTHORITY_FILES = 20
-MAX_AUTHORITY_ROWS = 100
-MIN_OVERLAP_SECONDS = 3600
-MAX_OVERLAP_SECONDS = 7 * 86400
-MAX_WINDOW_SECONDS = 31 * 86400
-
-
-@dataclass(frozen=True)
-class BankRecurringAuthority:
-    policy_id: str
-    source: str
-    expected_spreadsheet_id: str = field(repr=False)
-    expected_drive_folder_id: str
-    max_files: int
-    max_rows: int
-    overlap_seconds: int
-    max_window_seconds: int
-    initial_start: datetime
-    valid_from: datetime
-    expires_at: datetime
-    account_alias: str = ""
-    expected_branch: str = "main"
-
-    def validate(self) -> None:
-        aware = (self.initial_start, self.valid_from, self.expires_at)
-        if any(value.tzinfo is None or value.utcoffset() is None for value in aware):
-            raise ValueError("bank_recurring_authority_timezone_required")
-        if (
-            not self.policy_id
-            or self.source != BANK_RECURRING_SOURCE
-            or not self.expected_spreadsheet_id
-            or not self.expected_drive_folder_id
-            or not (1 <= self.max_files <= MAX_AUTHORITY_FILES)
-            or not (1 <= self.max_rows <= MAX_AUTHORITY_ROWS)
-            or not (MIN_OVERLAP_SECONDS <= self.overlap_seconds <= MAX_OVERLAP_SECONDS)
-            or not (self.overlap_seconds < self.max_window_seconds <= MAX_WINDOW_SECONDS)
-            or self.initial_start >= self.expires_at
-            or self.valid_from >= self.expires_at
-            or not self.expected_branch
-        ):
-            raise ValueError("bank_recurring_authority_invalid")
-        normalize_folder_id(self.expected_drive_folder_id)
-
-
-class ProtectedBankRecurringAuthorityProvider:
-    """Load the standing authority from outside the repository."""
-
-    def __init__(self, path: str | Path, *, repo_root: str | Path):
-        self.path = Path(path).expanduser().resolve()
-        root = Path(repo_root).resolve()
-        try:
-            self.path.relative_to(root)
-        except ValueError:
-            pass
-        else:
-            raise RuntimeError("bank_recurring_authority_must_be_outside_repository")
-
-    def load(self) -> BankRecurringAuthority:
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
-        policy = BankRecurringAuthority(
-            policy_id=str(raw["policy_id"]),
-            source=str(raw["source"]),
-            expected_spreadsheet_id=str(raw["expected_spreadsheet_id"]),
-            expected_drive_folder_id=str(raw["expected_drive_folder_id"]),
-            max_files=int(raw["max_files"]),
-            max_rows=int(raw["max_rows"]),
-            overlap_seconds=int(raw["overlap_seconds"]),
-            max_window_seconds=int(raw["max_window_seconds"]),
-            initial_start=datetime.fromisoformat(str(raw["initial_start"])),
-            valid_from=datetime.fromisoformat(str(raw["valid_from"])),
-            expires_at=datetime.fromisoformat(str(raw["expires_at"])),
-            account_alias=str(raw.get("account_alias", "")),
-            expected_branch=str(raw.get("expected_branch", "main")),
-        )
-        policy.validate()
-        return policy
 
 
 @dataclass(frozen=True)
@@ -210,6 +146,8 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "new_eligible": 0,
         "duplicate": 0,
         "review": 0,
+        "income": 0,
+        "non_expense": 0,
         "withheld": 0,
         "written": 0,
         "write_requests": 0,
@@ -231,7 +169,6 @@ def run_bank_pdf_recurring(
     now: datetime,
     dry_run: bool = True,
     audit_key_file: str | Path | None = None,
-    approval_file: str | Path | None = None,
     download: Callable[[str], bytes] | None = None,
     sleeper: Callable[[float], None] | None = None,
     confirmed_internal_transfers=frozenset(),
@@ -281,9 +218,27 @@ def run_bank_pdf_recurring(
             details = daily.summary
             summary["parsed"] = int(summary["parsed"]) + int(details.get("parsed", 0))
             summary["duplicate"] = int(summary["duplicate"]) + int(details.get("existing_duplicate", 0))
-            summary["review"] = int(summary["review"]) + int(details.get("true_unknown", 0)) + int(details.get("operator_confirmed_non_own_review", 0))
+            file_review = int(details.get("true_unknown", 0)) + int(
+                details.get("operator_confirmed_non_own_review", 0)
+            )
+            summary["review"] = int(summary["review"]) + file_review
+            summary["income"] = int(summary["income"]) + int(details.get("new_income", 0))
+            summary["non_expense"] = int(summary["non_expense"]) + sum(
+                int(details.get(name, 0))
+                for name in (
+                    "card_settlement_suppressed",
+                    "own_transfer_suppressed",
+                    "cash_withdrawal_suppressed",
+                    "reimbursement_suppressed",
+                )
+            )
             summary["withheld"] = int(summary["withheld"]) + int(details.get("withheld_by_classification", 0))
-            new_ids = tuple(identity for identity in daily.candidate_identities if identity not in existing_ids)
+            if file_review or int(details.get("collision", 0)):
+                summary["files_withheld"] = int(summary["files_withheld"]) + 1
+                path.unlink(missing_ok=True)
+                continue
+            expense_identities = tuple(daily.expense_candidate_identities)
+            new_ids = tuple(identity for identity in expense_identities if identity not in existing_ids)
             existing_ids.update(new_ids)
             summary["new_eligible"] = int(summary["new_eligible"]) + len(new_ids)
             summary["planned_expense_writes"] = int(summary["planned_expense_writes"]) + len(new_ids)
@@ -293,6 +248,8 @@ def run_bank_pdf_recurring(
                 path.unlink(missing_ok=True)
                 if not details.get("true_unknown") and not details.get("collision"):
                     summary["files_processed"] = int(summary["files_processed"]) + 1
+                    if not dry_run:
+                        _mark_processed(drive_service, file)
                 else:
                     summary["files_withheld"] = int(summary["files_withheld"]) + 1
         if int(summary["new_eligible"]) > policy.max_rows:
@@ -305,22 +262,34 @@ def run_bank_pdf_recurring(
             summary["status"] = "dry_run_ready"
             state.record(summary, advance_checkpoint=False)
             return summary
-        if not audit_key_file or not approval_file:
-            raise RuntimeError("bank_recurring_authority_files_required")
+        if not audit_key_file:
+            raise RuntimeError("bank_recurring_audit_key_required")
+        recurring_context = create_bank_recurring_run_context(
+            authority_provider=authority_provider,
+            run_id=run_id,
+            now=now,
+            spreadsheet_id=str(db.sid),
+            drive_folder_id=policy.expected_drive_folder_id,
+            files_seen=int(summary["files_seen"]),
+            candidate_batches=(identities for _, _, identities, _ in candidates),
+        )
         for file, path, identities, details in candidates:
             try:
-                result = run_bank_production_batch(
+                batch_state_dir = state.path.parent / (
+                    "bank-pdf-batch-" + hashlib.sha256(str(file["id"]).encode("utf-8")).hexdigest()[:16]
+                )
+                batch_state_dir.mkdir(parents=True, exist_ok=True)
+                result = run_bank_recurring_production_batch(
                     db,
                     path,
                     selected_source_identities=identities,
-                    phase6_canary_identity=None,
                     approved_target_spreadsheet_id=policy.expected_spreadsheet_id,
                     expected_git_head=expected_head,
                     expected_branch=policy.expected_branch,
                     repo_root=repo_root,
-                    state_dir=Path(audit_key_file).resolve().parent,
+                    state_dir=batch_state_dir,
                     audit_key_file=audit_key_file,
-                    approval_file=approval_file,
+                    recurring_context=recurring_context,
                     account_alias=policy.account_alias or None,
                     confirmed_internal_transfers=confirmed_internal_transfers,
                     confirmed_non_own_classifications=confirmed_non_own_classifications,
@@ -331,6 +300,7 @@ def run_bank_pdf_recurring(
                 )
                 summary["written"] = int(summary["written"]) + int(result.get("confirmed_count", 0))
                 summary["write_requests"] = int(summary["write_requests"]) + int(result.get("write_request_count", 0))
+                summary["recurring_authority_ref"] = result.get("recurring_authority_ref", "")
                 summary["files_processed"] = int(summary["files_processed"]) + 1
                 _mark_processed(drive_service, file)
             finally:
