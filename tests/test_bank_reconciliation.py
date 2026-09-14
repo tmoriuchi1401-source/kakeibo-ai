@@ -75,6 +75,32 @@ def test_card_settlement_identified_but_unlinked_from_individual_purchases():
     assert not decision.matched_identity
 
 
+@pytest.mark.parametrize("description", [
+    "口座振替 dカード",
+    "口座振替 イオンフィナンシャルサービス",
+    "口座振替 イオンフイナンシヤルサ-ビス",
+])
+def test_other_known_card_settlements_are_not_expenses(description):
+    decision = reconcile(bank(description))
+
+    assert decision.classification.classification == "card_settlement"
+    assert decision.classification.reason == "known_card_settlement"
+    assert decision.reconciliation_status == "identified_unlinked"
+
+
+@pytest.mark.parametrize("description", [
+    "口座振替 SMBC( スミシンSBI ネツ",
+    "口座振替 SMBC( ドコモSMTB",
+    "口座振替 DF AUジブン",
+])
+def test_ambiguous_financial_counterparties_fail_to_review(description):
+    decision = reconcile(bank(description))
+
+    assert decision.classification.classification == "needs_review"
+    assert decision.classification.reason == "ambiguous_financial_counterparty"
+    assert decision.write_eligibility == "withheld"
+
+
 def statement(identity="statement:1", *, date="2026-09-01", amount=1000):
     return AuPayCardStatementAuthority(
         statement_identity=identity,
