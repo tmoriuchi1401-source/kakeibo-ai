@@ -1,0 +1,320 @@
+"""Opt-in presentation only. No schema, transaction, or review writers here."""
+from __future__ import annotations
+
+from hashlib import sha256
+import json
+
+from .amazon_review import AMAZON_REVIEW_HEADERS
+from .sheets import HEADERS
+
+SPREADSHEET_ID = "1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow"
+HOME_ID = 1909140001
+CHART_ID = 1909140002
+MARKER = "kakeibo_daily_ui"
+VERSION = "1"
+CAP = 5000  # Data rows; overflow is visible, never silently omitted.
+IDS = {
+    "支出明細": 0, "レシート": 620056485, "カテゴリ": 1571056330,
+    "店舗": 987268279, "Amazon注文": 847076207, "商品マスタ": 1674154424,
+    "取込データ": 1833120072, "要確認": 1682462052, "支出一覧": 1889438451,
+    "_要確認カテゴリ候補": 754328221, "Amazon照合候補": 1149502063,
+    "Amazonイベント": 312392508, "Amazon注文ヘッダ": 1878689512,
+    "給与明細ヘッダ": 1356414173, "給与明細項目": 467192626,
+    "給与標準項目": 59038810, "給与項目別名": 1059447273,
+    "勤務先マスタ": 166495142, "Amazon要確認": 1248165085, "Coverage確認": 81236831,
+}
+DAILY = ["支出一覧", "要確認", "Amazon要確認"]
+RIGHT = ["カテゴリ", "商品マスタ", "店舗", "給与明細ヘッダ", "給与明細項目",
+         "給与標準項目", "給与項目別名", "勤務先マスタ", "Coverage確認", "レシート", "取込データ"]
+HIDDEN = ["支出明細", "Amazon注文", "Amazon照合候補",
+          "Amazonイベント", "Amazon注文ヘッダ", "_要確認カテゴリ候補"]
+FORMAT_KEYS = ["backgroundColorStyle", "textFormat", "verticalAlignment",
+               "wrapStrategy", "numberFormat", "horizontalAlignment"]
+TEXT_KEYS = ["fontFamily", "fontSize", "bold", "foregroundColorStyle"]
+FORMAT_MASK = ",".join("userEnteredFormat." + key for key in FORMAT_KEYS if key != "textFormat") + "," + ",".join(
+    "userEnteredFormat.textFormat." + key for key in TEXT_KEYS)
+
+
+def color(hex_value):
+    return {"rgbColor": {k: int(hex_value[i:i+2], 16) / 255
+                         for k, i in zip(("red", "green", "blue"), (0, 2, 4))}}
+
+
+def grid(sid, r0, r1, c0, c1):
+    return dict(sheetId=sid, startRowIndex=r0, endRowIndex=r1,
+                startColumnIndex=c0, endColumnIndex=c1)
+
+
+def dimension(sid, kind, start, end, **properties):
+    return {"updateDimensionProperties": {
+        "range": dict(sheetId=sid, dimension=kind, startIndex=start, endIndex=end),
+        "properties": properties, "fields": ",".join(properties)}}
+
+
+def style(rng, **fmt):
+    fields = []
+    for key, value in fmt.items():
+        fields.extend("userEnteredFormat.textFormat." + k for k in value) if key == "textFormat" else fields.append("userEnteredFormat." + key)
+    return {"repeatCell": {"range": rng, "cell": {"userEnteredFormat": fmt},
+                           "fields": ",".join(fields)}}
+
+
+def cell(row, col, value, sid=HOME_ID):
+    key = "formulaValue" if isinstance(value, str) and value.startswith("=") else "stringValue"
+    if isinstance(value, (float, int)):
+        key = "numberValue"
+    return {"updateCells": {"range": grid(sid, row-1, row, col-1, col),
+                            "rows": [{"values": [{"userEnteredValue": {key: value}}]}],
+                            "fields": "userEnteredValue"}}
+
+
+def installed(meta):
+    return any(s["properties"].get("sheetId") == HOME_ID and any(
+        m.get("metadataKey") == MARKER and m.get("metadataValue") == VERSION
+        for m in s.get("developerMetadata", [])) for s in meta.get("sheets", []))
+
+
+def owned(home):
+    return home["properties"]["sheetId"] == HOME_ID and any(
+        m.get("metadataKey") == MARKER and m.get("metadataValue") in {VERSION, "restored:" + VERSION}
+        for m in home.get("developerMetadata", []))
+
+
+def layout_requests(sheet):
+    """No values, validations, notes, filters, or physical column order changes."""
+    p = sheet["properties"]
+    title, sid = p["title"], p["sheetId"]
+    if title not in DAILY or IDS[title] != sid:
+        return []
+    n = min(p["gridProperties"]["rowCount"], CAP+1)
+    count = 10 if title == "支出一覧" else 20 if title == "要確認" else 14
+    req = [
+        {"updateSheetProperties": {"properties": {"sheetId": sid,
+            "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}},
+        style(grid(sid, 0, n, 0, count),
+              textFormat={"fontFamily": "Arial", "fontSize": 10, "bold": False,
+                          "foregroundColorStyle": color("28343B")},
+              backgroundColorStyle=color("FFFFFF"), verticalAlignment="MIDDLE", wrapStrategy="WRAP"),
+        style(grid(sid, 0, 1, 0, count), backgroundColorStyle=color("E9EEF0"),
+              textFormat={"fontFamily": "Arial", "fontSize": 10, "bold": True,
+                          "foregroundColorStyle": color("28343B")}),
+        dimension(sid, "ROWS", 0, 1, pixelSize=48),
+        dimension(sid, "ROWS", 1, n, pixelSize=56),
+    ]
+    if title == "支出一覧":
+        widths = [70, 90, 100, 85, 105, 105, 100, 90, 180, 150]
+        date_col, money_col, inputs = 0, 3, []
+        req.append(dimension(sid, "COLUMNS", 9, 10, hiddenByUser=True))
+    elif title == "要確認":
+        widths = [145, 48, 78, 85, 110, 90, 120, 180, 180, 150,
+                  160, 165, 120, 180, 170, 220, 75, 220, 160, 180]
+        date_col, money_col, inputs = 2, 5, [(9, 14), (17, 18)]
+    else:
+        widths = [145, 90, 100, 78, 170, 110, 100, 200, 160, 140, 160, 160, 130, 130]
+        date_col, money_col, inputs = 3, None, [(7, 8)]
+    req += [dimension(sid, "COLUMNS", i, i+1, pixelSize=width) for i, width in enumerate(widths)]
+    req.append(style(grid(sid, 1, n, date_col, date_col+1),
+                     numberFormat={"type": "DATE", "pattern": "yyyy/mm/dd"}))
+    if money_col is not None:
+        req.append(style(grid(sid, 1, n, money_col, money_col+1), horizontalAlignment="RIGHT",
+                         numberFormat={"type": "NUMBER", "pattern": '#,##0"円";[Red]-#,##0"円";0"円"'}))
+    for start, end in inputs:
+        req.append(style(grid(sid, 1, n, start, end), backgroundColorStyle=color("FFF4D8")))
+        req.append(style(grid(sid, 0, 1, start, end), backgroundColorStyle=color("F7DFA2")))
+    return req
+
+
+def refresh_layout_requests(meta, title):
+    if not installed(meta):
+        return []
+    return [r for s in meta["sheets"] if s["properties"]["title"] == title
+            for r in layout_requests(s)]
+
+
+def source_range(title, cols):
+    """INDIRECT avoids spill growth when existing writers INSERT_ROWS on append."""
+    start, end = cols.split(":")
+    return f'INDIRECT("\'{title}\'!{start}2:{end}"&MIN(ROWS(\'{title}\'!A:A),{CAP+1}))'
+
+
+def home_cells():
+    src = source_range("支出一覧", "A:J")
+    money = 'VALUE(REGEXREPLACE(TO_TEXT(raw_amount),"[,¥￥円\\s]",""))'
+    normalized = (
+        f'=ARRAYFORMULA(LET(src,{src},dates,INDEX(src,,1),raw_amount,INDEX(src,,4),'
+        'major,TRIM(INDEX(src,,5)),minor,TRIM(INDEX(src,,6)),ids,INDEX(src,,10),'
+        'month_key,IF(dates="","",IFERROR(TEXT(IF(ISNUMBER(dates),dates,'
+        'DATEVALUE(LEFT(SUBSTITUTE(TRIM(dates),"-","/"),10))),"yyyy-mm"),"")),'
+        f'amount,IFERROR({money},0),'
+        'category,IF((major="")+(minor="")+(major="未分類")+(minor="未分類"),"未分類",major),'
+        f'problems,IF(ids="",0,IF((month_key="")+(raw_amount="")+(IFERROR({money},"")=""),1,0)),'
+        '{IF(ids="","",month_key),amount,category,ids,problems}))'
+    )
+    ids = source_range("取込データ", "A:A")
+    states = source_range("取込データ", "I:I")
+    review = (f'=SUMPRODUCT(({ids}<>"")*REGEXMATCH({states},'
+              '"^(要確認|needs_review.*|.*_needs_review|amazon_unmatched)$"))')
+    amz_ids = source_range("Amazon要確認", "A:A")
+    amz_states = source_range("Amazon要確認", "B:B")
+    overflow = '+'.join(
+        f'MAX(0,COUNTIF(\'{title}\'!{col}2:{col},"<>")-COUNTIF({source_range(title, col+":"+col)},"<>"))'
+        for title, col in [("支出一覧", "J"), ("取込データ", "A"), ("Amazon要確認", "A")])
+    link = lambda title, label, target="A1": f'=HYPERLINK("#gid={IDS[title]}&range={target}","{label}")'
+    month = 'TEXT($B$3,"yyyy-mm")'
+    end = CAP+1
+    return {
+        (1, 1): "家計簿AI", (2, 1): "支出と確認待ちを、ひと目で。",
+        (3, 1): "対象月（変更可）", (3, 2): '=DATE(YEAR(TODAY()),MONTH(TODAY()),1)',
+        (5, 1): "当月の計上済み支出",
+        (6, 1): f'=IF($B$17>0,"要データ確認",SUMIF(D2:D{end},{month},E2:E{end}))',
+        (7, 1): "支出一覧に反映された支出を集計",
+        (8, 1): "未分類の件数", (8, 2): f'=COUNTIFS(D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
+        (9, 1): "未分類の金額", (9, 2): f'=SUMIFS(E2:E{end},D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
+        (11, 1): "確認待ち（全期間）",
+        (12, 1): link("要確認", "通常review →", "J1"), (12, 2): review,
+        (13, 1): link("Amazon要確認", "Amazon review →", "H1"),
+        (13, 2): f'=COUNTIFS({amz_ids},"<>",{amz_states},"<>反映済み")',
+        (14, 1): "保留・判断後の反映待ちも含みます。",
+        (15, 1): "0件でも、未取込・未対応まで完了した意味ではありません。",
+        (17, 1): "集計データの確認", (17, 2): f'=SUM(H2:H{end})+{overflow}',
+        (18, 1): '=IF(B17=0,"支出一覧の更新に合わせて集計します。","日付・金額または参照上限を確認してください。")',
+        (20, 1): link("支出一覧", "支出一覧を開く →"),
+        (21, 1): link("要確認", "要確認の取引情報を開く →", "C1"),
+        (22, 1): link("Amazon要確認", "Amazon要確認を開く →"),
+        (23, 1): link("レシート", "元画像 →", "F1"),
+        (23, 2): link("取込データ", "統合先ID →", "A1"),
+        (34, 1): (f'=IFERROR(QUERY(D2:G{end},"select F,sum(E) where D = \'"&{month}&'
+                  '"\' and G is not null group by F order by sum(E) desc '
+                  'label F \'カテゴリ\',sum(E) \'金額\'",0),{"カテゴリ","金額";"該当なし",0})'),
+        (1, 4): "対象月", (1, 5): "金額", (1, 6): "集計カテゴリ", (1, 7): "支出ID", (1, 8): "入力確認",
+        (2, 4): normalized,
+    }
+
+
+def home_requests(home):
+    req = []
+    cells = home_cells()
+    # Preserve the user's month selection on every subsequent run.
+    if home is not None:
+        cells.pop((3, 2))
+    req += [cell(r, c, value) for (r, c), value in cells.items()]
+    req += [style(grid(HOME_ID, 0, CAP+1, 0, 2),
+                  textFormat={"fontFamily": "Arial", "fontSize": 11, "foregroundColorStyle": color("28343B")},
+                  verticalAlignment="MIDDLE", wrapStrategy="WRAP", backgroundColorStyle=color("FFFFFF")),
+            dimension(HOME_ID, "COLUMNS", 0, 1, pixelSize=170),
+            dimension(HOME_ID, "COLUMNS", 1, 2, pixelSize=150),
+            dimension(HOME_ID, "COLUMNS", 2, 8, hiddenByUser=True),
+            dimension(HOME_ID, "ROWS", 0, 70, pixelSize=32),
+            dimension(HOME_ID, "ROWS", 5, 6, pixelSize=55),
+            dimension(HOME_ID, "ROWS", 14, 15, pixelSize=54),
+            dimension(HOME_ID, "ROWS", 17, 18, pixelSize=48),
+            style(grid(HOME_ID, 0, 1, 0, 2), textFormat={"fontSize": 18, "bold": True}),
+            style(grid(HOME_ID, 5, 6, 0, 2), textFormat={"fontSize": 26, "bold": True,
+                  "foregroundColorStyle": color("226C60")}, numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}),
+            style(grid(HOME_ID, 2, 3, 1, 2), backgroundColorStyle=color("FFF4D8"),
+                  numberFormat={"type": "DATE", "pattern": "yyyy年m月"}),
+            style(grid(HOME_ID, 33, CAP+1, 1, 2), numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}),
+            {"setDataValidation": {"range": grid(HOME_ID, 2, 3, 1, 2),
+                "rule": {"condition": {"type": "DATE_IS_VALID"}, "strict": True,
+                         "inputMessage": "表示する月の日付を入力（例: 2026/9/1）"}}},
+    ]
+    for row in [5, 11, 34]:
+        req.append(style(grid(HOME_ID, row-1, row, 0, 2), backgroundColorStyle=color("E9EEF0")))
+    for row in [8, 12, 13, 17]:
+        req.append(style(grid(HOME_ID, row-1, row, 1, 2),
+                         numberFormat={"type": "NUMBER", "pattern": '0"件"'}))
+    req.append(style(grid(HOME_ID, 8, 9, 1, 2), numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}))
+    existing_merges = home.get("merges", []) if home else []
+    for row in [1, 2, 5, 6, 7, 11, 14, 15, 18, 20, 21, 22]:
+        rng = grid(HOME_ID, row-1, row, 0, 2)
+        if rng not in existing_merges:
+            req.append({"mergeCells": {"range": rng, "mergeType": "MERGE_ALL"}})
+    spec = {
+        "title": "カテゴリ別支出（上位12）", "fontName": "Arial",
+        "titleTextFormat": {"fontSize": 12}, "backgroundColorStyle": color("FFFFFF"),
+        "basicChart": {"chartType": "BAR", "legendPosition": "NO_LEGEND", "headerCount": 1,
+            "axis": [{"position": "BOTTOM_AXIS", "title": "円"}],
+            "domains": [{"domain": {"sourceRange": {"sources": [grid(HOME_ID, 33, 46, 0, 1)]}}}],
+            "series": [{"series": {"sourceRange": {"sources": [grid(HOME_ID, 33, 46, 1, 2)]}},
+                        "targetAxis": "BOTTOM_AXIS", "colorStyle": color("4B897C")}]},
+    }
+    position = {"overlayPosition": {"anchorCell": {"sheetId": HOME_ID, "rowIndex": 23, "columnIndex": 0},
+                "offsetXPixels": 0, "offsetYPixels": 0, "widthPixels": 320, "heightPixels": 300}}
+    existing_charts = home.get("charts", []) if home else []
+    if any(c["chartId"] == CHART_ID for c in existing_charts):
+        req += [{"updateChartSpec": {"chartId": CHART_ID, "spec": spec}},
+                {"updateEmbeddedObjectPosition": {"objectId": CHART_ID, "newPosition": position,
+                                                   "fields": "anchorCell,offsetXPixels,offsetYPixels,widthPixels,heightPixels"}}]
+    else:
+        req.append({"addChart": {"chart": {"chartId": CHART_ID, "spec": spec, "position": position}}})
+    return req
+
+
+def build_plan(meta):
+    if meta.get("spreadsheetId") != SPREADSHEET_ID:
+        raise ValueError("UI target spreadsheet mismatch")
+    sheets = sorted(meta["sheets"], key=lambda s: s["properties"]["index"])
+    by_title = {s["properties"]["title"]: s for s in sheets}
+    # Formula source contracts. Never call ensure_schema to repair a mismatch.
+    for title, headers in [("支出一覧", HEADERS["支出一覧"]), ("取込データ", HEADERS["取込データ"]),
+                           ("Amazon要確認", AMAZON_REVIEW_HEADERS)]:
+        s = by_title.get(title)
+        if not s or s["properties"]["sheetId"] != IDS[title] or s.get("header") != headers:
+            raise ValueError(f"UI source contract mismatch: {title}")
+    home = by_title.get("ホーム")
+    if home and not owned(home):
+        raise ValueError("Existing ホーム is not owned by this UI configuration")
+    if home and (home["properties"]["gridProperties"]["rowCount"] < CAP+1 or
+                 home["properties"]["gridProperties"]["columnCount"] < 8):
+        raise ValueError("Home grid changed; inspect before resizing the UI")
+    if not home and any(s["properties"]["sheetId"] == HOME_ID for s in sheets):
+        raise ValueError("Home sheet ID collision")
+    if any(c["chartId"] == CHART_ID for s in sheets if s != home for c in s.get("charts", [])):
+        raise ValueError("Home chart ID collision")
+    req, skipped = [], []
+    if not home:
+        req += [{"addSheet": {"properties": {"sheetId": HOME_ID, "title": "ホーム",
+                    "gridProperties": {"rowCount": CAP+1, "columnCount": 8,
+                                       "frozenRowCount": 3, "hideGridlines": True}}}},
+                {"createDeveloperMetadata": {"developerMetadata": {
+                    "metadataKey": MARKER, "metadataValue": VERSION,
+                    "visibility": "DOCUMENT", "location": {"sheetId": HOME_ID}}}}]
+    elif not installed(meta):
+        req.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
+            "metadataKey": MARKER, "metadataLocation": {"sheetId": HOME_ID}}}],
+            "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
+    # Move known tabs to the front in reverse order: index semantics stay correct
+    # for both initial layout and arbitrary user rearrangements on subsequent runs.
+    ordered = ["ホーム"] + DAILY + RIGHT + HIDDEN
+    for title in reversed(ordered):
+        sid = HOME_ID if title == "ホーム" else IDS[title]
+        if title != "ホーム" and (title not in by_title or by_title[title]["properties"]["sheetId"] != sid):
+            skipped.append(title)
+            continue
+        req.append({"updateSheetProperties": {"properties": {
+            "sheetId": sid, "index": 0, "hidden": title in HIDDEN}, "fields": "index,hidden"}})
+    for title in DAILY:
+        s = by_title.get(title)
+        if not s or s["properties"]["sheetId"] != IDS[title]:
+            continue
+        expected = AMAZON_REVIEW_HEADERS if title == "Amazon要確認" else HEADERS[title]
+        if s.get("header") != expected:
+            skipped.append(title + " formatting: header differs")
+            continue
+        req.extend(layout_requests(s))
+    req.extend(home_requests(home))
+    preconditions = [{"sheetId": s["properties"]["sheetId"], "title": s["properties"]["title"],
+        "index": s["properties"]["index"], "hidden": s["properties"].get("hidden", False),
+        "rows": s["properties"].get("gridProperties", {}).get("rowCount", 0),
+        "columns": s["properties"].get("gridProperties", {}).get("columnCount", 0),
+        "frozenRows": s["properties"].get("gridProperties", {}).get("frozenRowCount", 0),
+        "header": s.get("header", [])} for s in sheets]
+    return {"spreadsheetId": SPREADSHEET_ID, "version": VERSION, "requests": req,
+            "preconditions": preconditions,
+            "skipped": skipped, "new_conditional_formats": 0,
+            "visible_order": ["ホーム"] + DAILY + RIGHT, "hide": HIDDEN,
+            "source_row_limit": CAP}
+
+
+def plan_digest(plan):
+    return sha256(json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

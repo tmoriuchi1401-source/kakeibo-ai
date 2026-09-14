@@ -103,6 +103,9 @@ class SheetsDB:
                     "rule":{"condition":{"type":"ONE_OF_LIST","values":[
                         {"userEnteredValue":value} for value in options
                     ]},"strict":True,"showCustomUi":True}}})
+        # Presentation is opt-in; preserve the existing validation/apply contract.
+        from .sheets_ui import refresh_layout_requests
+        requests.extend(refresh_layout_requests(meta,"要確認"))
         self.svc.spreadsheets().batchUpdate(
             spreadsheetId=self.sid,body={"requests":requests}
         ).execute()
@@ -110,12 +113,15 @@ class SheetsDB:
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]==sheet_title)
-        self.svc.spreadsheets().batchUpdate(
-            spreadsheetId=self.sid,body={"requests":[{"repeatCell":{"range":{
+        requests=[{"repeatCell":{"range":{
                 "sheetId":sheet_id,"startRowIndex":1,
                 "startColumnIndex":column_index,"endColumnIndex":column_index+1},
                 "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
-                "fields":"userEnteredFormat.numberFormat"}}]}
+                "fields":"userEnteredFormat.numberFormat"}}]
+        from .sheets_ui import refresh_layout_requests
+        requests.extend(refresh_layout_requests(meta,sheet_title))
+        self.svc.spreadsheets().batchUpdate(
+            spreadsheetId=self.sid,body={"requests":requests}
         ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
