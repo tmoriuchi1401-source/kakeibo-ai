@@ -16,6 +16,7 @@ class Settings:
     receipt_drive_folder_id: str = os.getenv("RECEIPT_DRIVE_FOLDER_ID", "")
     paypay_drive_folder_id: str = os.getenv("PAYPAY_DRIVE_FOLDER_ID", "")
     payroll_drive_folder_id: str = os.getenv("PAYROLL_DRIVE_FOLDER_ID", "")
+    bank_pdf_drive_folder_id: str = os.getenv("BANK_PDF_DRIVE_FOLDER_ID", "")
     amazon_order_history_folder_id: str = os.getenv("AMAZON_ORDER_HISTORY_FOLDER_ID", "")
     processed_drive_folder_id: str = os.getenv("PROCESSED_DRIVE_FOLDER_ID", "")
     backup_drive_folder_id: str = os.getenv("BACKUP_DRIVE_FOLDER_ID", "")
@@ -57,13 +58,15 @@ class Settings:
     ))
     def validate(self, *, need_gemini=False, need_sheet=False, need_drive=False,
                  need_gmail=False, need_backup=False, need_processed=False,
-                 need_paypay_drive=False, need_payroll_drive=False):
+                 need_paypay_drive=False, need_payroll_drive=False,
+                 need_bank_pdf_drive=False):
         missing=[]
         if need_gemini and not self.gemini_api_key: missing.append("GEMINI_API_KEY")
         if need_sheet and not self.spreadsheet_id: missing.append("SPREADSHEET_ID")
         if need_drive and not self.receipt_drive_folder_id: missing.append("RECEIPT_DRIVE_FOLDER_ID")
         if need_paypay_drive and not self.paypay_drive_folder_id: missing.append("PAYPAY_DRIVE_FOLDER_ID")
         if need_payroll_drive and not self.payroll_drive_folder_id: missing.append("PAYROLL_DRIVE_FOLDER_ID")
+        if need_bank_pdf_drive and not self.bank_pdf_drive_folder_id: missing.append("BANK_PDF_DRIVE_FOLDER_ID")
         if need_processed and not self.processed_drive_folder_id: missing.append("PROCESSED_DRIVE_FOLDER_ID")
         if need_backup and not self.backup_drive_folder_id: missing.append("BACKUP_DRIVE_FOLDER_ID")
         if need_backup and not self.drive_backup_token(): missing.append("GOOGLE_DRIVE_BACKUP_TOKEN_JSON")

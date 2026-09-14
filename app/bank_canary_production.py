@@ -37,6 +37,10 @@ from .bank_reconciliation import (
     ConfirmedInternalTransfers,
     ConfirmedNonOwnClassifications,
 )
+from .bank_recurring_authority import (
+    BankRecurringRunContext,
+    issue_bank_recurring_batch_capability,
+)
 from .canonical_one_row_production import (
     GitCheckpointGuard,
     SealedCanonicalOneRowTransport,
@@ -53,6 +57,9 @@ from .canonical_one_row_production import (
     project_bank_bounded_batch,
     project_bank_canary_candidate,
 )
+
+
+_BANK_RECURRING_LAUNCHER_AUTHORITY = object()
 
 
 def _loan_manifest_digest(path: str | Path) -> str:
@@ -211,7 +218,7 @@ def run_bank_production_batch(
     repo_root: str | Path,
     state_dir: str | Path,
     audit_key_file: str | Path,
-    approval_file: str | Path,
+    approval_file: str | Path | None,
     account_alias: str,
     confirmed_internal_transfers: ConfirmedInternalTransfers,
     clock: Callable[[], datetime],
@@ -221,8 +228,17 @@ def run_bank_production_batch(
     loan_identity_manifest_path: str | Path | None = None,
     steady_state: bool = False,
     expected_categories: tuple[tuple[str, str], ...] | None = None,
+    _recurring_context: BankRecurringRunContext | None = None,
+    _recurring_launcher_authority: object | None = None,
 ) -> dict:
     """Execute one exact supported batch append without fallback or retry."""
+    recurring_mode = _recurring_context is not None
+    if recurring_mode and _recurring_launcher_authority is not _BANK_RECURRING_LAUNCHER_AUTHORITY:
+        raise RuntimeError("bank_recurring_launcher_required")
+    if not recurring_mode and _recurring_launcher_authority is not None:
+        raise RuntimeError("bank_recurring_launcher_required")
+    if not recurring_mode and approval_file is None:
+        raise RuntimeError("protected_canary_approval_required")
     repo = Path(repo_root).resolve()
     selected = tuple(selected_source_identities)
     selected_count = len(selected)
@@ -464,20 +480,33 @@ def run_bank_production_batch(
     capability_store = SqliteCapabilityStore(state_path, repo_root=repo)
     leases = SqliteLeaseManager(state_path, repo_root=repo, clock=clock)
     inspector = ReadOnlySheetsTargetInspector(db)
-    approval_provider = ProtectedCanaryApprovalProvider(
-        approval_file, repo_root=repo,
-    )
-    capability = issue_canonical_five_row_capability(
-        batch,
-        manifest,
-        binding=binding,
-        inspector=inspector,
-        key_provider=key_provider,
-        journal=journal,
-        capability_store=capability_store,
-        approval_provider=approval_provider,
-        clock=clock,
-    )
+    if recurring_mode:
+        capability = issue_bank_recurring_batch_capability(
+            batch,
+            manifest,
+            context=_recurring_context,
+            binding=binding,
+            inspector=inspector,
+            key_provider=key_provider,
+            journal=journal,
+            capability_store=capability_store,
+            clock=clock,
+        )
+    else:
+        approval_provider = ProtectedCanaryApprovalProvider(
+            approval_file, repo_root=repo,
+        )
+        capability = issue_canonical_five_row_capability(
+            batch,
+            manifest,
+            binding=binding,
+            inspector=inspector,
+            key_provider=key_provider,
+            journal=journal,
+            capability_store=capability_store,
+            approval_provider=approval_provider,
+            clock=clock,
+        )
     transport = SealedCanonicalOneRowTransport(
         db,
         binding=binding,
@@ -545,8 +574,58 @@ def run_bank_production_batch(
             {"major": LOAN_EXPENSE_CATEGORY[0], "minor": LOAN_EXPENSE_CATEGORY[1]}
             if is_loan_batch else None
         ),
+        "recurring_authority_ref": (
+            _recurring_context.authority_ref if recurring_mode else None
+        ),
     })
     return summary
+
+
+def _run_bank_recurring_production_batch(
+    db,
+    pdf_path: str | Path,
+    *,
+    selected_source_identities: tuple[str, ...],
+    approved_target_spreadsheet_id: str,
+    expected_git_head: str,
+    expected_branch: str,
+    repo_root: str | Path,
+    state_dir: str | Path,
+    audit_key_file: str | Path,
+    recurring_context: BankRecurringRunContext,
+    account_alias: str,
+    confirmed_internal_transfers: ConfirmedInternalTransfers,
+    clock: Callable[[], datetime],
+    sleeper: Callable[[float], None],
+    confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
+    card_statement_authorities: tuple = (),
+    steady_state: bool = True,
+) -> dict:
+    """Recurring-launcher-only entry point; manual approval behavior stays separate."""
+    if type(recurring_context) is not BankRecurringRunContext or not steady_state:
+        raise RuntimeError("bank_recurring_launcher_required")
+    return run_bank_production_batch(
+        db,
+        pdf_path,
+        selected_source_identities=selected_source_identities,
+        phase6_canary_identity=None,
+        approved_target_spreadsheet_id=approved_target_spreadsheet_id,
+        expected_git_head=expected_git_head,
+        expected_branch=expected_branch,
+        repo_root=repo_root,
+        state_dir=state_dir,
+        audit_key_file=audit_key_file,
+        approval_file=None,
+        account_alias=account_alias,
+        confirmed_internal_transfers=confirmed_internal_transfers,
+        clock=clock,
+        sleeper=sleeper,
+        confirmed_non_own_classifications=confirmed_non_own_classifications,
+        card_statement_authorities=card_statement_authorities,
+        steady_state=True,
+        _recurring_context=recurring_context,
+        _recurring_launcher_authority=_BANK_RECURRING_LAUNCHER_AUTHORITY,
+    )
 
 
 def run_bank_production_loan_batch(

@@ -37,6 +37,7 @@ class BankDailyPreview:
     pdf_sha256: str
     target_spreadsheet_id: str
     expected_git_head: str
+    expense_candidate_identities: tuple[str, ...] = ()
 
 
 def _daily_summary(
@@ -115,6 +116,16 @@ def build_bank_daily_preview(
     plan = build_bank_preview_plan(shadow, existing)
     if len(plan.candidate_identities) > STEADY_STATE_MAX_ROWS:
         raise RuntimeError("bank_steady_state_candidate_upper_bound_exceeded")
+    expense_candidate_identities = tuple(sorted(
+        decision.classification.transaction.source_row_identity
+        for decision in shadow.decisions
+        if (
+            decision.classification.transaction.source_row_identity
+            in plan.candidate_identities
+            and decision.classification.classification == "expense"
+            and decision.write_eligibility == "preview_candidate"
+        )
+    ))
     return BankDailyPreview(
         summary=_daily_summary(
             shadow,
@@ -127,6 +138,7 @@ def build_bank_daily_preview(
         pdf_sha256=pdf_digest(path),
         target_spreadsheet_id=target_spreadsheet_id,
         expected_git_head=expected_git_head,
+        expense_candidate_identities=expense_candidate_identities,
     )
 
 

@@ -1,0 +1,99 @@
+name: Bank PDF recurring production
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Apply newly eligible bank rows (off is a read-only preview)
+        required: true
+        type: boolean
+        default: false
+
+# Candidate daily time after explicit enablement: 06:47 JST (21:47 UTC).
+# No schedule trigger is enabled in this checkpoint.
+permissions:
+  contents: read
+
+concurrency:
+  group: bank-pdf-recurring-production
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      BANK_PDF_DRIVE_FOLDER_ID: ${{ secrets.BANK_PDF_DRIVE_FOLDER_ID }}
+      BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
+      BANK_AUDIT_KEY_JSON: ${{ secrets.BANK_AUDIT_KEY_JSON }}
+      BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
+      BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
+      BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bind checkout to main for the Git checkpoint guard
+        run: |
+          git switch -C main "$GITHUB_SHA"
+          git branch --set-upstream-to=origin/main main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Restore latest durable run state
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bank-pdf-recurring-state
+          key: bank-pdf-recurring-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            bank-pdf-recurring-state-
+      - run: pip install -r requirements.txt
+      - name: Materialize protected recurring inputs
+        shell: bash
+        env:
+          MANUAL_APPLY: ${{ inputs.apply || false }}
+        run: |
+          set -euo pipefail
+          for name in SPREADSHEET_ID GOOGLE_SERVICE_ACCOUNT_JSON BANK_PDF_DRIVE_FOLDER_ID BANK_PDF_RECURRING_AUTHORITY_JSON; do
+            test -n "${!name}" || { echo "Required secret is not configured: $name"; exit 1; }
+          done
+          state_dir="$RUNNER_TEMP/bank-pdf-recurring-state"
+          authority_file="$RUNNER_TEMP/bank-pdf-recurring-authority.json"
+          audit_key_file="$RUNNER_TEMP/bank-audit-key.json"
+          mkdir -p "$state_dir"
+          umask 077
+          printf '%s' "$BANK_PDF_RECURRING_AUTHORITY_JSON" > "$authority_file"
+          if [[ "$MANUAL_APPLY" == "true" ]]; then
+            test -n "$BANK_AUDIT_KEY_JSON" || { echo "Required secret is not configured: BANK_AUDIT_KEY_JSON"; exit 1; }
+            printf '%s' "$BANK_AUDIT_KEY_JSON" > "$audit_key_file"
+          fi
+          {
+            echo "BANK_PDF_STATE_DIR=$state_dir"
+            echo "BANK_PDF_RECURRING_AUTHORITY_FILE=$authority_file"
+            echo "BANK_AUDIT_KEY_FILE=$audit_key_file"
+          } >> "$GITHUB_ENV"
+      - name: Run bounded bank PDF recurring preview
+        shell: bash
+        env:
+          MANUAL_APPLY: ${{ inputs.apply || false }}
+        run: |
+          set -euo pipefail
+          if [[ "$MANUAL_APPLY" == "true" ]]; then
+            python -m app.cli bank-pdf-recurring \
+              --state-dir "$BANK_PDF_STATE_DIR" \
+              --authority-file "$BANK_PDF_RECURRING_AUTHORITY_FILE" \
+              --audit-key-file "$BANK_AUDIT_KEY_FILE" \
+              --apply
+          else
+            python -m app.cli bank-pdf-recurring \
+              --state-dir "$BANK_PDF_STATE_DIR" \
+              --authority-file "$BANK_PDF_RECURRING_AUTHORITY_FILE" \
+              --dry-run
+          fi
+      - name: Save post-run durable state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bank-pdf-recurring-state
+          key: bank-pdf-recurring-state-${{ github.run_id }}-${{ github.run_attempt }}

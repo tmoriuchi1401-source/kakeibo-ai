@@ -10,6 +10,7 @@ from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
 from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
+from .drive_receipts import normalize_folder_id
 from .drive_paypay import DrivePayPayPipeline
 from .aupay_card_pipeline import AuPayCardPipeline
 from .paypay_pipeline import PayPayPipeline
@@ -81,6 +82,7 @@ from .amazon_schema_install import install_amazon_schema
 from .amazon_shipping import AmazonShippingBackfillPipeline
 from .drive_amazon_shipping import DriveAmazonShippingPipeline
 from .google_clients import (
+    drive_service,
     read_only_drive_service,
     read_only_sheets_service,
     shipping_backfill_drive_service,
@@ -121,6 +123,10 @@ from .bank_steady_state import (
     load_manifest,
     manifest_path,
     pdf_digest,
+)
+from .bank_pdf_recurring import (
+    ProtectedBankRecurringAuthorityProvider,
+    run_bank_pdf_recurring,
 )
 
 def load_categories(path="config/categories.tsv"):
@@ -384,6 +390,14 @@ def main():
     bank_backfill.add_argument("--audit-key-file",required=True)
     bank_backfill.add_argument("--approval-file",required=True)
     bank_backfill.add_argument("--apply",action="store_true")
+    bank_recurring=sub.add_parser("bank-pdf-recurring")
+    bank_recurring.add_argument("--state-dir",default=os.getenv("BANK_PDF_STATE_DIR", ""))
+    bank_recurring.add_argument("--authority-file",default=os.getenv("BANK_PDF_RECURRING_AUTHORITY_FILE", ""))
+    bank_recurring.add_argument("--audit-key-file",default=os.getenv("BANK_AUDIT_KEY_FILE", ""))
+    bank_recurring.add_argument("--now")
+    bank_recurring_mode=bank_recurring.add_mutually_exclusive_group(required=True)
+    bank_recurring_mode.add_argument("--dry-run",action="store_true")
+    bank_recurring_mode.add_argument("--apply",action="store_true")
     args=p.parse_args()
     if args.cmd=="doctor":
         import importlib.util
@@ -783,6 +797,48 @@ def main():
             ),
             ensure_ascii=False,sort_keys=True,
         ))
+    elif args.cmd=="bank-pdf-recurring":
+        if not args.state_dir:
+            raise RuntimeError("bank_recurring_state_dir_required")
+        if not args.authority_file:
+            raise RuntimeError("bank_recurring_authority_file_required")
+        repo_root=Path(__file__).resolve().parents[1]
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(
+            s.spreadsheet_id,
+            service=read_only_sheets_service() if args.dry_run else None,
+        )
+        provider=ProtectedBankRecurringAuthorityProvider(
+            args.authority_file, repo_root=repo_root,
+        )
+        authority=provider.load()
+        if s.bank_pdf_drive_folder_id and normalize_folder_id(
+            s.bank_pdf_drive_folder_id
+        ) != normalize_folder_id(authority.expected_drive_folder_id):
+            raise RuntimeError("bank_recurring_drive_folder_mismatch")
+        state=SqliteRecurringRunState(
+            Path(args.state_dir).expanduser().resolve() / "bank-recurring.sqlite3",
+            repo_root=repo_root,
+        )
+        now=(
+            datetime.fromisoformat(args.now)
+            if args.now else datetime.now(ZoneInfo("UTC"))
+        )
+        result=run_bank_pdf_recurring(
+            drive_service=(
+                read_only_drive_service() if args.dry_run else drive_service()
+            ),
+            db=db,
+            state=state,
+            authority_provider=provider,
+            repo_root=repo_root,
+            now=now,
+            dry_run=args.dry_run,
+            audit_key_file=args.audit_key_file or None,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+        )
+        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="general-receipt-preview":

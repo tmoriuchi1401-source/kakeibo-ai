@@ -421,6 +421,19 @@ identity 1件だけを `bank-finalization-apply --apply` へ渡す。previewが�
 `M-...` IDで `支出明細` へupsertし、`取込データ` のstatus/targetをread-backする。
 途中失敗後のreplayでは同じ支出を再追加せず、未反映の取込statusだけを修復する。
 
+新着銀行PDFのrecurring launcherは、既存の3銀行parserとsteady-state batch経路を再利用する。
+`BANK_PDF_DRIVE_FOLDER_ID` のDriveフォルダをoverlap付きでbounded列挙し、source-row identityで
+dedupeする。read-only確認は次で実行する:
+
+```bash
+python -m app.cli bank-pdf-recurring --state-dir "$BANK_PDF_STATE_DIR" \
+  --authority-file "$BANK_PDF_RECURRING_AUTHORITY_FILE" --dry-run
+```
+
+1回あたりの上限はauthorityの `max_files`（最大20）と `max_rows`（最大100）。新着0件はsafe
+no-opで、review / transfer / card settlement / incomeは支出writeしない。workflowはmanual
+dispatchのみで、候補scheduleは06:47 JST。scheduleとrecurring authorityは別承認まで有効化しない。
+
 Amazon baseline注文とカードのAmazon分割払いは、次の専用previewで照合できる:
 
 ```bash
