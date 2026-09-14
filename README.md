@@ -249,6 +249,16 @@ API writeは自動retryなし。途中中断・source failure・保存結果不�
 adapterは既存fileの親/種別/更新可否を検査するが、private共有範囲や作成権限の実確認は未実施。
 権限不足は外部確認の未達として分け、実装・fake Driveテストを止めない。
 
+09-15の追加read-only確認: 現在設定されているSAでDrive `about.get`に成功。
+`storageQuota.limit=0`、`canCreateDrives=false`だった。新しいstate folder/file IDは未設定。
+Google公式もSAは保存容量を持たずファイル所有者になれないとしている。
+[Driveの所有・保存容量の制約](https://developers.google.com/workspace/drive/api/guides/about-shareddrives)
+したがって初期配置は、切替承認後に既存の所有者が非公開管理フォルダと4個の固定JSONファイルを作成し、
+その所有権を維持する方式とする。必要なSAへの共有は別途明示承認し、公開リンクは作らない。
+日常runnerは現在のSAでその固定file IDを更新し、所有者のOAuthへ自動切替しない。
+実ファイルの所有者/共有範囲/`canEdit`/更新read-backは、対象IDが確定した後の未実施確認として残す。
+`canCreateDrives=false`は共有ドライブ作成の値であり、既存ファイル更新可否の証明には使わない。
+
 offline移送CLI（すべて実Googleへの通信なし、絶対パスかつrepository外を要求）:
 
 ```text
@@ -388,7 +398,7 @@ private化の提案:
 | 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | branch準備済み。main未統合・未起動 |
 | 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 sourceの新規取込/支出反映/通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
 | 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
-| native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay | 合成検証済み。実state移送/実Drive所有/共有/作成/更新確認は未実施 |
+| native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay、既存SAのDrive about読取 | 合成検証済み。SA容量0/共有ドライブ作成不可を実確認し、所有者による初期配置を手順化。対象ID未設定のため実state移送/実file所有/共有/更新確認は未実施 |
 | stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
 | 上限/欠落/破損/長期未実行/部分失敗 | state/production/Amazon/card/bankの既存・追加pytest | native windowを飛ばさず停止。残高30日超の回復は別の期間承認が必要 |
 | 機微境界/retention | 既存privacy gate維持、normal provenance selector、削除0のpreviewテスト | branch準備済み。Payroll/Medical実データ移行なし、保存禁止項目は次段階条件に明記 |

@@ -39,7 +39,7 @@
   新規DB・外部lock基盤は作成していない。
 - 合成テスト: fake Driveの欠落/破損/binding違い/WAL/保存不明/復旧を検証。
   既存Amazon runnerの実write経路をfake Sheets/Gmailで実行し、state保存失敗→
-  確認待ち→明示的復旧→replay write0を確認。実Googleには未接続。
+  確認待ち→明示的復旧→replay write0を確認。合成テストは実Googleへ接続しない。
 - 最新検証: Windows Python 3.14.7、全体pytest **1183 passed**（19.37秒）。
   `tests/conftest.py`で全テストの実ネットワーク接続を禁止して成功。
   compileall / diff-check成功。google-genai由来の既存DeprecationWarning 1件。
@@ -73,13 +73,17 @@
 - GitHub Billing Overview / Budgetsで契約・含まれる枠・残量・支出停止設定をread-only確認。
   具体的なアカウント利用額等はGit除外の私的確認記録に保持。READMEには公開仕様に基づく
   private化の影響と推計のみを追記。公開設定/契約/予算の変更なし。
+- 追加外部確認: 現在設定済みのSAでDrive `about.get`だけをread-only実行して成功。
+  SAの容量上限0/共有ドライブ作成不可を確認。新state folder/file IDは未設定のため、
+  実ファイルの所有/共有/更新は未確認。既存所有者による初期配置と現在SAでの固定file更新を
+  READMEへ明記し、認証切替・所有権移転・Google外部writeは行っていない。
 - **未完了:** Linux合成実行（公開push承認待ち）、外部state権限/所有/作成可否の確認、
   実対象canaryの承認・state移送・実read-back。実切替は未実施。Goalは継続中、L4へ昇格しない。
 - checkpoint `20452dc` の通常pushは自動承認レビューがpublic repoへの新コード/運用情報公開として
   拒否。pushは未実行、upstream未設定。公開先と最終payloadへの明示承認なしに再試行しない。
 - **外部未実施:** main統合・Workflow起動/変更・Google write/move/delete・state upload・
   Task停止・Secrets/OAuth変更・visibility/課金変更。本番L4への昇格なし。
-- 現在repoはpublic。private化/利用枠/変更影響は確認・提案段階。契約枠は未確認。
+- 現在repoはpublic。契約枠/支出停止設定は確認済み。private化は提案段階で未実施。
 
 - **確認日:** 2026-09-14 JST
 - **Repository:** `tmoriuchi1401-source/kakeibo-ai`
