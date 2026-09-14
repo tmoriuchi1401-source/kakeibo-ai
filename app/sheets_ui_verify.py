@@ -8,7 +8,7 @@ import math
 import re
 
 from .review_pipeline import is_reviewable_status
-from .sheets_ui import AUTO_MONTH, CAP, SPREADSHEET_ID, home_cells
+from .sheets_ui import AUTO_MONTH, CAP, CATEGORY_UI_ID, CATEGORY_UI_ROWS, IDS, SPREADSHEET_ID, home_cells
 
 
 def month_key(value):
@@ -53,6 +53,71 @@ def source_summary(view, imports, amazon, month):
     }
 
 
+def category_queue_expected(view, ledger, products, categories, month):
+    """Independent readback oracle. Never persists suggestions or changes categories."""
+    def pair(row, a, b):
+        return tuple(str(row[i]).strip() if len(row)>i else "" for i in (a, b))
+    def known(p): return all(v and v != "未分類" for v in p)
+    allowed = {tuple(map(str, r[:2])) for r in categories if len(r)>=2 and known(r[:2])}
+    index = defaultdict(list)
+    for i, r in enumerate(ledger, 2):
+        if r and r[0]: index[str(r[0]).casefold()].append((i, list(r)+[""]*max(0, 13-len(r))))
+    output = []
+    for r in view:
+        if len(r)<10 or not r[9] or month_key(r[0]) != month or known(pair(r, 4, 5)): continue
+        matches = index.get(str(r[9]).casefold(), [])
+        source_row, source = matches[0] if len(matches)==1 else (0, None)
+        state, current = "元データ確認", "元データ確認"
+        if source:
+            current = "｜".join(pair(source, 5, 6))
+            state = ("一覧更新待ち" if source[12] not in {"", "active"} or month_key(source[1]) != month
+                     else "分類済・更新待ち" if known(pair(source, 5, 6)) else "修正可")
+        product_pairs = {pair(p, 2, 3) for p in products if len(p)>=4 and str(p[1]).casefold()==str(r[2]).casefold() and known(pair(p, 2, 3))}
+        past_pairs = {pair(p, 4, 5) for p in view if len(p)>=10 and p[9] and str(p[1]).casefold()==str(r[1]).casefold() and known(pair(p, 4, 5))}
+        suggestion = "候補なし"
+        if r[2] not in {"", "自動計上", "手動計上"} and len(product_pairs)==1 and product_pairs <= allowed:
+            suggestion = "｜".join(next(iter(product_pairs)))+"\n（商品マスタ）"
+        elif r[1] and len(past_pairs)==1 and past_pairs <= allowed:
+            suggestion = "｜".join(next(iter(past_pairs)))+"\n（同じ店舗）"
+        output.append({"id": str(r[9]), "row": source_row, "state": state, "current": current,
+                       "suggestion": suggestion})
+    return output
+
+
+def verify_category_ui(service, meta, view):
+    def values(rng):
+        return service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=rng,
+            valueRenderOption="UNFORMATTED_VALUE").execute().get("values", [])
+    sources = {}
+    for title, cols in [("支出明細", "M"), ("商品マスタ", "F"), ("カテゴリ", "B")]:
+        sheet = next(s for s in meta["sheets"] if s["properties"]["title"] == title)
+        sources[title] = values(f"'{title}'!A2:{cols}{min(CAP+1, sheet['properties']['gridProperties']['rowCount'])}")
+    month = month_key((values("'ホーム'!B3") or [[""]])[0][0])
+    expected = category_queue_expected(view, sources["支出明細"], sources["商品マスタ"], sources["カテゴリ"], month)
+    actual = values(f"'カテゴリ対応'!M2:Q{CAP+1}")
+    seen = {str(r[0]): {"row": r[1], "current": r[2], "state": r[3], "suggestion": r[4]}
+            for r in actual if len(r)>=5 and r[0]}
+    raw = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID,
+        ranges=[f"'カテゴリ対応'!A1:Q{CATEGORY_UI_ROWS}"],
+        fields="sheets(data(startRow,startColumn,rowData(values(hyperlink,effectiveValue(errorValue)))))").execute()
+    errors = sum("errorValue" in c.get("effectiveValue", {}) for s in raw.get("sheets", [])
+                 for b in s.get("data", []) for r in b.get("rowData", []) for c in r.get("values", []))
+    links = {(b.get("startRow", 0)+i, b.get("startColumn", 0)+j): c["hyperlink"]
+             for s in raw.get("sheets", []) for b in s.get("data", [])
+             for i, r in enumerate(b.get("rowData", [])) for j, c in enumerate(r.get("values", []))
+             if b.get("startColumn", 0)+j == 2 and c.get("hyperlink")}
+    by_id = {e["id"]: e for e in expected}
+    expected_links = {}
+    for i, row in enumerate(actual):
+        entry = by_id.get(str(row[0])) if row else None
+        if entry and entry["state"] == "修正可":
+            source_row = entry["row"]
+            expected_links[i+5, 2] = f"#gid={IDS['支出明細']}&range=F{source_row}:G{source_row}"
+    return {"category_ui_formula_errors": errors,
+        "category_edit_links_match": links == expected_links,
+        "category_queue_matches": len(seen)==len(expected) and all(seen.get(e["id"])=={k:v for k,v in e.items() if k != "id"} for e in expected)}
+
+
 def verify_home(service, meta):
     def values(rng):
         return service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID, range=rng,
@@ -81,7 +146,7 @@ def verify_home(service, meta):
     automatic = selected in {"", AUTO_MONTH}
     selector_matches = month is not None and (
         home_meta.get("monthState", {}).get("B3") == home_cells()[3, 2] if automatic else month == selected)
-    return {
+    result = {
         "formula_errors": errors,
         "month_valid": month is not None,
         "month_selector_matches": selector_matches,
@@ -93,3 +158,6 @@ def verify_home(service, meta):
         "data_check_matches": amount_value(value(17, 2)) == expected["invalid"]+overflow,
         "source_invalid_rows": expected["invalid"], "overflow_rows": overflow,
     }
+    if any(s["properties"]["sheetId"] == CATEGORY_UI_ID for s in meta["sheets"]):
+        result.update(verify_category_ui(service, meta, rows["支出一覧"]))
+    return result

@@ -12,6 +12,11 @@ from .sheets import HEADERS
 SPREADSHEET_ID = "1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow"
 HOME_ID = 1909140001
 CHART_ID = 1909140002
+CATEGORY_UI_ID = 1909140003
+CATEGORY_UI_TITLE = "カテゴリ対応"
+CATEGORY_UI_MARKER = "kakeibo_category_ui"
+CATEGORY_UI_ROWS = 5005
+CATEGORY_UI_COLUMNS = 17
 MARKER = "kakeibo_daily_ui"
 VERSION = "1"
 HOME_COLUMNS = 9
@@ -28,9 +33,9 @@ IDS = {
     "勤務先マスタ": 166495142, "Amazon要確認": 1248165085, "Coverage確認": 81236831,
 }
 DAILY = ["支出一覧", "要確認", "Amazon要確認"]
-RIGHT = ["カテゴリ", "商品マスタ", "店舗", "給与明細ヘッダ", "給与明細項目",
-         "給与標準項目", "給与項目別名", "勤務先マスタ", "Coverage確認", "レシート", "取込データ"]
-HIDDEN = ["支出明細", "Amazon注文", "Amazon照合候補",
+RIGHT = [CATEGORY_UI_TITLE, "カテゴリ", "商品マスタ", "店舗", "給与明細ヘッダ", "給与明細項目",
+         "給与標準項目", "給与項目別名", "勤務先マスタ", "Coverage確認", "レシート", "取込データ", "支出明細"]
+HIDDEN = ["Amazon注文", "Amazon照合候補",
           "Amazonイベント", "Amazon注文ヘッダ", "_要確認カテゴリ候補"]
 FORMAT_KEYS = ["backgroundColorStyle", "textFormat", "verticalAlignment",
                "wrapStrategy", "numberFormat", "horizontalAlignment"]
@@ -190,18 +195,18 @@ def home_cells():
     overflow = '+'.join(
         f'MAX(0,COUNTIF(\'{title}\'!{col}2:{col},"<>")-COUNTIF({source_range(title, col+":"+col)},"<>"))'
         for title, col in [("支出一覧", "J"), ("取込データ", "A"), ("Amazon要確認", "A")])
-    link = lambda title, label, target="A1": f'=HYPERLINK("#gid={IDS[title]}&range={target}","{label}")'
+    link = lambda title, label, target="A1": f'=HYPERLINK("#gid={CATEGORY_UI_ID if title == CATEGORY_UI_TITLE else IDS[title]}&range={target}","{label}")'
     month = 'TEXT($B$3,"yyyy-mm")'
     end = CAP+1
-    return {
+    cells = {
         (1, 1): "家計簿AI", (2, 1): "支出と要対応を、ひと目で。",
         (3, 1): "対象月", (3, 2): f'=IF(OR($B$4="",$B$4="{AUTO_MONTH}"),DATE(YEAR(TODAY()),MONTH(TODAY()),1),DATE(VALUE(LEFT($B$4,4)),VALUE(RIGHT($B$4,2)),1))',
         (4, 1): "月を選ぶ ▼", (4, 2): AUTO_MONTH,
         (5, 1): '=TEXT($B$3,"yyyy年m月")&"の計上済み支出"',
         (6, 1): f'=IF($B$17>0,"要データ確認",SUMIF(D2:D{end},{month},E2:E{end}))',
         (7, 1): "要対応",
-        (8, 1): "カテゴリ未分類", (8, 2): f'=COUNTIFS(D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
-        (9, 1): "未分類の金額", (9, 2): f'=SUMIFS(E2:E{end},D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
+        (8, 1): link(CATEGORY_UI_TITLE, "カテゴリ未分類"), (8, 2): f'=COUNTIFS(D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
+        (9, 1): "未分類の金額（対象月）", (9, 2): f'=SUMIFS(E2:E{end},D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
         (10, 1): "計上済みで、カテゴリだけ未確定の支出。",
         (11, 1): "取込内容の確認（全期間）",
         (12, 1): link("要確認", "通常review →", "J1"), (12, 2): review,
@@ -227,6 +232,11 @@ def home_cells():
                  'IF(REGEXMATCH(TO_TEXT($B$4),"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$"),$B$4,TEXT(TODAY(),"yyyy-mm"))},'
                  'SORT(UNIQUE(months),1,FALSE))'),
     }
+    # A numeric HYPERLINK label retains the count and its number format. A
+    # TextFormat link alone is ignored on formula cells by the native UI.
+    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "J1"), (13, IDS["Amazon要確認"], "H1")]:
+        cells[row, 2] = f'=HYPERLINK("#gid={sid}&range={target}",{cells[row, 2][1:]})'
+    return cells
 
 
 def home_requests(home):
@@ -275,8 +285,15 @@ def home_requests(home):
     for row in [10, 11, 14, 15]:
         req.append(style(grid(HOME_ID, row-1, row, 0, 2), backgroundColorStyle=color("FFFFFF"),
                          textFormat={"fontSize": 10, "foregroundColorStyle": color("53646D")}))
-    req.append(style(grid(HOME_ID, 7, 8, 1, 2), numberFormat={"type": "NUMBER", "pattern": '0"件（対象月）"'}))
-    for row in [12, 13, 17]:
+    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "J1"), (13, IDS["Amazon要確認"], "H1")]:
+        req.append(dimension(HOME_ID, "ROWS", row-1, row, pixelSize=44))
+        action_style = style(grid(HOME_ID, row-1, row, 1, 2),
+            numberFormat={"type": "NUMBER", "pattern": '0"件　対応する →"'},
+            backgroundColorStyle=color("FFF4D8"),
+            textFormat={"foregroundColorStyle": color("226C60"), "underline": True})
+        action_style["repeatCell"]["fields"] += ",userEnteredFormat.textFormat.link"
+        req.append(action_style)
+    for row in [17]:
         req.append(style(grid(HOME_ID, row-1, row, 1, 2),
                          numberFormat={"type": "NUMBER", "pattern": '0"件"'}))
     req.append(style(grid(HOME_ID, 8, 9, 1, 2), numberFormat={"type": "NUMBER", "pattern": '#,##0"円"'}))
@@ -313,7 +330,8 @@ def build_plan(meta):
     by_title = {s["properties"]["title"]: s for s in sheets}
     # Formula source contracts. Never call ensure_schema to repair a mismatch.
     for title, headers in [("支出一覧", HEADERS["支出一覧"]), ("取込データ", HEADERS["取込データ"]),
-                           ("Amazon要確認", AMAZON_REVIEW_HEADERS)]:
+                           ("Amazon要確認", AMAZON_REVIEW_HEADERS), ("支出明細", HEADERS["支出明細"]),
+                           ("商品マスタ", HEADERS["商品マスタ"]), ("カテゴリ", HEADERS["カテゴリ"])]:
         s = by_title.get(title)
         if not s or s["properties"]["sheetId"] != IDS[title] or s.get("header") != headers:
             raise ValueError(f"UI source contract mismatch: {title}")
@@ -328,6 +346,29 @@ def build_plan(meta):
     if any(c["chartId"] == CHART_ID for s in sheets if s != home for c in s.get("charts", [])):
         raise ValueError("Home chart ID collision")
     req, skipped = [], []
+    from .sheets_ui_actions import category_ui_requests, ledger_input_requests
+    category_ui = by_title.get(CATEGORY_UI_TITLE)
+    if category_ui:
+        if category_ui["properties"]["sheetId"] != CATEGORY_UI_ID or not any(
+            m.get("metadataKey") == CATEGORY_UI_MARKER and m.get("metadataValue") in {VERSION, "restored:"+VERSION}
+            for m in category_ui.get("developerMetadata", [])):
+            raise ValueError("Existing category UI is not owned by this configuration")
+        gp = category_ui["properties"]["gridProperties"]
+        if gp["rowCount"] < CATEGORY_UI_ROWS or gp["columnCount"] < CATEGORY_UI_COLUMNS:
+            raise ValueError("Category UI grid changed; inspect before applying")
+        if not any(m.get("metadataKey") == CATEGORY_UI_MARKER and m.get("metadataValue") == VERSION
+                   for m in category_ui.get("developerMetadata", [])):
+            req.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
+                "metadataKey": CATEGORY_UI_MARKER, "metadataLocation": {"sheetId": CATEGORY_UI_ID}}}],
+                "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
+    elif any(s["properties"]["sheetId"] == CATEGORY_UI_ID for s in sheets):
+        raise ValueError("Category UI sheet ID collision")
+    else:
+        req += [{"addSheet": {"properties": {"sheetId": CATEGORY_UI_ID, "title": CATEGORY_UI_TITLE,
+            "gridProperties": {"rowCount": CATEGORY_UI_ROWS, "columnCount": CATEGORY_UI_COLUMNS,
+                               "frozenRowCount": 5, "hideGridlines": True}}}},
+            {"createDeveloperMetadata": {"developerMetadata": {"metadataKey": CATEGORY_UI_MARKER,
+                "metadataValue": VERSION, "visibility": "DOCUMENT", "location": {"sheetId": CATEGORY_UI_ID}}}}]
     if not home:
         req += [{"addSheet": {"properties": {"sheetId": HOME_ID, "title": "ホーム",
                     "gridProperties": {"rowCount": CAP+1, "columnCount": HOME_COLUMNS,
@@ -346,8 +387,8 @@ def build_plan(meta):
     # for both initial layout and arbitrary user rearrangements on subsequent runs.
     ordered = ["ホーム"] + DAILY + RIGHT + HIDDEN
     for title in reversed(ordered):
-        sid = HOME_ID if title == "ホーム" else IDS[title]
-        if title != "ホーム" and (title not in by_title or by_title[title]["properties"]["sheetId"] != sid):
+        sid = HOME_ID if title == "ホーム" else CATEGORY_UI_ID if title == CATEGORY_UI_TITLE else IDS[title]
+        if title not in {"ホーム", CATEGORY_UI_TITLE} and (title not in by_title or by_title[title]["properties"]["sheetId"] != sid):
             skipped.append(title)
             continue
         req.append({"updateSheetProperties": {"properties": {
@@ -362,6 +403,8 @@ def build_plan(meta):
             continue
         req.extend(layout_requests(s))
     req.extend(home_requests(home))
+    req.extend(category_ui_requests(category_ui))
+    req.extend(ledger_input_requests(by_title["支出明細"]))
     preconditions = [{"sheetId": s["properties"]["sheetId"], "title": s["properties"]["title"],
         "index": s["properties"]["index"], "hidden": s["properties"].get("hidden", False),
         "rows": s["properties"].get("gridProperties", {}).get("rowCount", 0),

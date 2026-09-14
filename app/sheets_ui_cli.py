@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from .sheets_ui import (
+    CATEGORY_UI_COLUMNS, CATEGORY_UI_ID, CATEGORY_UI_MARKER, CATEGORY_UI_ROWS,
     CAP, CHART_ID, DAILY, FORMAT_KEYS, FORMAT_MASK, HOME_COLUMNS, HOME_ID, IDS, MARKER, TEXT_KEYS, VERSION,
     SPREADSHEET_ID, build_plan, dimension, grid, plan_digest,
 )
@@ -61,19 +62,20 @@ def capture_restore(service, meta, plan):
     restore = []
     for s in sorted(meta["sheets"], key=lambda s: s["properties"]["index"], reverse=True):
         p = s["properties"]
-        if p["sheetId"] not in set(IDS.values()) | {HOME_ID}:
+        if p["sheetId"] not in set(IDS.values()) | {HOME_ID, CATEGORY_UI_ID}:
             continue
         restore.append({"updateSheetProperties": {"properties": {
             "sheetId": p["sheetId"], "index": 0, "hidden": p.get("hidden", False)},
             "fields": "index,hidden"}})
-    targets = [s for s in meta["sheets"] if s["properties"]["title"] in DAILY and
+    targets = [s for s in meta["sheets"] if s["properties"]["title"] in DAILY + ["支出明細"] and
                s["properties"]["title"] + " formatting: header differs" not in plan.get("skipped", [])]
     for s in targets:
         p = s["properties"]
         title, sid, n = p["title"], p["sheetId"], min(p["gridProperties"]["rowCount"], CAP+1)
         if sid != IDS[title]:
             continue
-        width = {"支出一覧": 10, "要確認": 20, "Amazon要確認": 14}[title]
+        width = {"支出一覧": 10, "要確認": 20, "Amazon要確認": 14, "支出明細": 7}[title]
+        first_col = 5 if title == "支出明細" else 0
         raw = service.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID, ranges=[f"'{title}'!A1:{chr(64+width)}{n}"],
             fields="sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredFormat)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
@@ -90,7 +92,7 @@ def capture_restore(service, meta, plan):
             row_sizes.update({i: v.get("pixelSize", 21) for i, v in enumerate(block.get("rowMetadata", []), r0)})
             column_sizes.update({i: v for i, v in enumerate(block.get("columnMetadata", []), c0)})
         # Consecutive identical formatting is restored as one request per run.
-        for col in range(width):
+        for col in range(first_col, width):
             start, prior = 0, formats.get((0, col), {})
             for row in range(1, n+1):
                 current = formats.get((row, col), {}) if row < n else None
@@ -104,7 +106,7 @@ def capture_restore(service, meta, plan):
             if current != prior:
                 restore.append(dimension(sid, "ROWS", start, row, pixelSize=prior))
                 start, prior = row, current
-        for col in range(width):
+        for col in range(first_col, width):
             props = {"pixelSize": column_sizes.get(col, {}).get("pixelSize", 100)}
             if title == "支出一覧" and col == 9:
                 props["hiddenByUser"] = column_sizes.get(col, {}).get("hiddenByUser", False)
@@ -160,10 +162,53 @@ def capture_restore(service, meta, plan):
                                 "fields": "anchorCell,offsetXPixels,offsetYPixels,widthPixels,heightPixels"}}]
         if not any(c["chartId"] == CHART_ID for c in home.get("charts", [])):
             restore.append({"deleteEmbeddedObject": {"objectId": CHART_ID}})
+    category_ui = next((s for s in meta["sheets"] if s["properties"]["sheetId"] == CATEGORY_UI_ID), None)
+    if category_ui is None:
+        restore += [{"updateSheetProperties": {"properties": {"sheetId": CATEGORY_UI_ID,
+            "hidden": True, "index": len(meta["sheets"])+(0 if any(s["properties"]["sheetId"] == HOME_ID for s in meta["sheets"]) else 1)},
+            "fields": "hidden,index"}},
+            {"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
+                "metadataKey": CATEGORY_UI_MARKER, "metadataLocation": {"sheetId": CATEGORY_UI_ID}}}],
+                "developerMetadata": {"metadataValue": "restored:"+VERSION}, "fields": "metadataValue"}}]
+    else:
+        restore.extend(capture_category_ui_restore(service, category_ui))
     return {"spreadsheetId": SPREADSHEET_ID, "created_at": datetime.now(timezone.utc).isoformat(),
             "applied_plan_sha256": plan_digest(plan), "requests": restore,
             "sheetIds": {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]},
             "headers": {s["properties"]["title"]: s.get("header", []) for s in meta["sheets"]}}
+
+
+def capture_category_ui_restore(service, sheet):
+    """Snapshot the read-only UI projection; business rows are never copied here."""
+    sid, n, width = CATEGORY_UI_ID, CATEGORY_UI_ROWS, CATEGORY_UI_COLUMNS
+    raw = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID,
+        ranges=[f"'カテゴリ対応'!A1:Q{n}"],
+        fields="sheets(merges,data(rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
+    ).execute()["sheets"][0]
+    data = raw.get("data", [{}])[0]
+    observed = data.get("rowData", [])
+    keys = ("userEnteredValue", "userEnteredFormat", "dataValidation", "note")
+    rows = [{"values": [{k: c[k] for k in keys if k in c}
+        for c in observed[i].get("values", [])[:width]] if i < len(observed) else []} for i in range(n)]
+    for row in rows: row["values"] += [{} for _ in range(width-len(row["values"]))]
+    req = [{"unmergeCells": {"range": grid(sid, 0, n, 0, width)}},
+        {"updateCells": {"range": grid(sid, 0, n, 0, width), "rows": rows, "fields": ",".join(keys)}}]
+    for i in range(width):
+        prior = (data.get("columnMetadata", []) + [{}]*width)[i]
+        req.append(dimension(sid, "COLUMNS", i, i+1, pixelSize=prior.get("pixelSize", 100), hiddenByUser=prior.get("hiddenByUser", False)))
+    sizes = [r.get("pixelSize", 21) for r in data.get("rowMetadata", [])]
+    sizes += [21]*(n-len(sizes))
+    start = 0
+    for i in range(1, n+1):
+        if i == n or sizes[i] != sizes[start]:
+            req.append(dimension(sid, "ROWS", start, i, pixelSize=sizes[start]))
+            start = i
+    req.extend({"mergeCells": {"range": r, "mergeType": "MERGE_ALL"}} for r in raw.get("merges", []))
+    gp = sheet["properties"]["gridProperties"]
+    req.append({"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {
+        "frozenRowCount": gp.get("frozenRowCount", 0), "hideGridlines": gp.get("hideGridlines", False)}},
+        "fields": "gridProperties.frozenRowCount,gridProperties.hideGridlines"}})
+    return req
 
 
 def execute_plan(service, plan, *, apply=False, approved_digest=None, backup=None):
@@ -186,7 +231,7 @@ def execute_plan(service, plan, *, apply=False, approved_digest=None, backup=Non
     for s in current["sheets"]:
         new = next((v for v in after["sheets"] if v["properties"]["sheetId"] == s["properties"]["sheetId"]), None)
         if new is None or new["properties"]["title"] != s["properties"]["title"] or (
-                s["properties"]["sheetId"] != HOME_ID and new["header"] != s["header"]):
+                s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID} and new["header"] != s["header"]):
             raise ValueError("UI readback requires investigation; do not rerun business pipelines")
     from .sheets_ui_verify import verify_home
     return {"mode": "applied", "request_count": len(fresh["requests"]),
@@ -226,7 +271,7 @@ def main(argv=None):
         for title, header in plan["headers"].items():
             live = next((s for s in meta["sheets"] if s["properties"]["title"] == title), None)
             if live is None or live["properties"]["sheetId"] != plan["sheetIds"][title] or (
-                    live["properties"]["sheetId"] != HOME_ID and live["header"] != header):
+                    live["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID} and live["header"] != header):
                 raise ValueError("Restore schema changed; inspect before restoring UI")
         if args.apply:
             if args.approve_plan != plan_digest(plan):
