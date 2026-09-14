@@ -1,0 +1,388 @@
+# KakeiboAI PROJECT STATUS
+
+> **役割:** KakeiboAI開発の「現在地の正本」。新しいCodex / Work / Goalを開始するときは、過去チャットや古いbranchより先にこのファイルを読む。
+>
+> **重要:** このファイルは状況整理であり、本番write・apply・権限拡張・外部データ変更の承認ではない。
+
+## 0. このファイルの使い方
+
+- 大きなPhaseが終わったときだけ更新する。細かな診断ごとには更新しない。
+- 各機能を **L0〜L4** で管理する。
+  - **L0 未着手**: 本番用途の実装なし
+  - **L1 解析可能**: 入力を安全に読み、previewできる
+  - **L2 取込可能**: stable identity / dedupe付きで取込データへ登録できる
+  - **L3 家計簿反映可能**: 支出・収入・除外・要確認まで到達できる
+  - **L4 定期運用確認済み**: 実データで自動運用・再実行安全性を確認済み
+- `A/B/C` 判定だけを書かない。「何についてAか」を必ず書く。
+- `main SHA` や実行件数は **Last verified** として扱い、再開時に必要なら確認する。
+- 過去の実験branchの成績で、本番機能を未完成へ戻さない。
+- 個人開発方針として、完全性・網羅性・過剰な安全証明より **実用性・開発時間・保守負担・削減作業量** を優先する。重大事故を防ぐ安全境界は維持し、低頻度・低影響は人間確認を許容する。
+
+---
+
+## 1. Last verified
+
+- **確認日:** 2026-09-14 JST
+- **Repository:** `tmoriuchi1401-source/kakeibo-ai`
+- **main:** `30b277ac7f2f8e9807053bf9c0a769a0737e055e`
+- **確認したもの:** GitHub main / 銀行3adapter統合 / 銀行実PDF smoke / 直近Actions / Google Sheets「家計簿AI」read-only
+- **銀行統合時検証:** full pytest `1056 passed`、compileall成功、diff-check成功
+- **今回未確認:** Windowsの現在worktree、未コミット差分、Task Scheduler最新履歴、ローカルMedical review store
+
+### 現在の最重要判断
+
+KakeiboAIは、主要な入力sourceを新しく増やす段階より、**既に取り込めているデータを最終的な家計簿表示までつなぎ、既存production経路を安定運用する段階**に入っている。
+
+**次の主作業:** 銀行の「取込済み → 収支反映」
+
+**並行する小作業:** 一般レシートproductionのPDF前処理 / AI呼出し契約の保守
+
+---
+
+## 2. 全体ステータス
+
+| 機能 | Level | 完成範囲 | 現在の残課題 | 次の1作業 |
+|---|---:|---|---|---|
+| **PayPay** | **L4** | 通常`支払い`CSV → Drive → dedupe → 取込 → 支出計上 → processed → replay安全性 | 返金などparser対象外の例外は別扱い | **保守。通常支払いの再開発をしない** |
+| **Amazon通常購入** | **L4** | Gmail新着通常購入のbounded recurring production | 返品・返金・取消、CSV商品明細は別経路 | **保守。対象範囲を混同しない** |
+| **au PAYカード** | **L4** | Gmail incremental recurring production。実write確認済み | review項目の意味と最終処理状況 | **reviewだけ確認** |
+| **au PAY残高** | **L4相当** | Gmail通知取込・既存dedupe・共通後続処理 | 大きなblockingなし | **保守** |
+| **一般レシート** | **L4相当 / 保守課題あり** | `receipt_inbox` → privacy gate → normalのみGemini → structured明細 → Sheets → processed。実シートに解析済み21件 | 直近PDF 2件がAI前の`pdf_ocr_failed`で保留。`analyze` CLIと`GeminiAI.analyze_receipt`の引数契約不整合 | **production前処理とAI接続を最小修正** |
+| **銀行PDF（auじぶん / ドコモSMTB / 千葉）** | **L2〜L3途中** | 3銀行のnative-text parser・自動adapter判別・stable identity・bounded production経路をmainへ統合。実PDF smoke済み | 取込・分類までは成立。一般`bank_expense` / `bank_income` / `bank_loan_repayment`の最終家計簿反映が残る | **3銀行共通の最終反映を仕上げる** |
+| **Payroll** | **L3 / 定期scanはread-only** | 実シートに給与明細ヘッダ1件・項目18件・勤務先マスタ1件。Windows scheduled read-only scanあり | 最新scheduled runと新規明細時の運用確認 | **Task Scheduler実績を1回確認。新規明細がなければ開発しない** |
+| **Medical** | **L1〜L2 / privacy運用中心** | Medicalを外部AIへ送らない本番境界、local OCR / review / shadow実装 | local review永続運用と未見帳票評価は別課題 | **既存review運用を確定。新データなしにtaxonomyを増やさない** |
+| **共通 reconcile / auto-expense / review / 支出一覧** | **L4** | 本番経路と定期実行実績あり | sourceごとの未反映・例外を可視化 | **作り直さない** |
+
+---
+
+## 3. 今の主課題: 銀行PDFの入力基盤は3銀行対応まで完了。残りは「家計簿への最終反映」
+
+### 2026-09-14 銀行統合の進捗
+
+3銀行のPDF対応をmainへ統合済み。現在のmainは `30b277ac7f2f8e9807053bf9c0a769a0737e055e`。
+
+- 対応銀行: **auじぶん銀行 / ドコモSMTBネット銀行 / 千葉銀行**
+- 発行元marker・header・geometryからadapterを自動判別
+- 未知形式はfail-closed
+- 通常運用は `bank-pdf` preview → 明示承認時のみ `--apply`
+- stable source identity / duplicate / collision / bounded authority / read-back安全境界を維持
+- 千葉銀行の専用branch成果もmainへ統合され、3銀行が同じ日常運用経路になった
+
+実PDF parser smoke:
+
+| 銀行 | parser結果 |
+|---|---:|
+| auじぶん銀行 | **92件** |
+| ドコモSMTBネット銀行 | **150件** |
+| 千葉銀行 | **53件** |
+
+統合時検証: full pytest **1056 passed**、compileall成功、diff-check成功。
+
+Sheets read-only再確認では、既取込identityはduplicateとして吸収され、新規候補がないケースはsafe no-opになることを確認。少なくともauじぶん銀行はduplicate 61 / candidate 0、ドコモSMTBはduplicate 90 / candidate 0で、再処理による既存行の再writeは発生させない。
+
+### 既存シートで確認済みの銀行行（2026-09-14棚卸し時点）
+
+| status | 件数 | 現在の意味 |
+|---|---:|---|
+| `bank_expense` | **94** | 銀行支出として取込済み。最終支出へのbindingは未接続 |
+| `bank_loan_repayment` | **4** | 住宅ローン返済として取込済み。最終支出へのbindingは未接続 |
+| `bank_income` | **46** | 銀行収入として取込済み。支出にしてはいけない |
+| `auto_expense` | **8** | ドコモSMTB由来で支出明細へ反映済み |
+| **合計** | **152** | 当時のproduction sheet観測値。後続統合のparser smoke件数とは別物 |
+
+**重要:** parser smokeの 92 / 150 / 53 はPDFを解析できた件数であり、Sheetsへ新規writeした件数ではない。既存152行の棚卸し値と混同しない。
+
+### 次のGoal
+
+**4つ目の銀行adapterを増やさず、既取込銀行行を以下のどれかに確定し、家計簿表示まで閉じる。**
+
+1. 新規支出として計上
+2. 新規収入として表示
+3. カード・PayPay・レシート等ですでに計上済みなので除外 / link
+4. transfer / card settlement / ATM等として非支出
+5. 人間確認
+
+### 銀行Workの終了条件
+
+- 3銀行とも同じ日常preview / apply経路を再利用できる → **達成済み**
+- 既存identityの再処理がsafe no-opになる → **確認済み**
+- 98件の出金関連行（`bank_expense` + `bank_loan_repayment`）について、最終扱いが説明できる
+- 46件の`bank_income`を支出と混同しない
+- 既存決済sourceとの二重計上を作らない
+- 必要なコード変更は最小限
+- 最終反映についてcanary → read-back → replay安全性を確認
+
+### やらないこと
+
+- 4つ目以降の銀行adapterを、既存3銀行の最終反映より先に追加する
+- 全銀行を共通化するための大規模framework再設計
+- 98件を一括で無条件に支出追加
+- 銀行の摘要だけを頼りに危険な自動分類を増やす
+
+---
+
+## 4. 一般レシート: 本流はAI解析。offline MVPではない
+
+### Production authority
+
+`receipt_inbox` → `ReceiptPipeline` → local privacy判定 → **normalのみGemini** → structured output → category / total / date検査 → Sheets → `receipt_processed`
+
+- Medical / payroll / `sensitive_unknown` は外部AIへ送らない
+- `agent/general-receipt-import` のoffline OCR previewは診断用であり、本番parserではない
+- 本番の一般レシートは**全体画像/PDFをAI解析に回す方式**
+
+### 実績
+
+- 実シートに**解析済み21件**
+- これはproduction利用実績であり、「21/21を人手照合して完全正解」という意味ではない
+
+### 現在の保守課題
+
+1. 直近の定期runでPDF 2件が `pdf_ocr_failed` → `sensitive_unknown` → Gemini禁止で保留
+2. 本番runnerでTesseract `jpn+eng` を実際に使える前提を確認する
+3. `app.cli analyze` が `known_source_classification` を渡す一方、`GeminiAI.analyze_receipt()`側の引数契約が一致していない
+4. 複数シートへの順次write途中で失敗した場合の再実行を、少数の障害テストで確認する
+
+### 終了条件
+
+- 通常レシート画像/PDFがproductionで処理できる
+- Medical / sensitiveをGeminiへ送らない
+- PDF前処理失敗を認識できる
+- AI解析成功後のSheets反映と再実行が安全
+- 追加のoffline OCR研究へ戻らない
+
+---
+
+## 5. 完成済み / 保守モード
+
+### PayPay
+
+**完成範囲:** 通常`支払い`。
+
+2026-09-14までのproduction acceptanceで、46支払いについて既存1 / 新規45、append45、46/46 read-back、processed move、auto-expense45、duplicate 0、replay 0を確認済み。
+
+**保守ルール:**
+- 通常支払いparser / Drive取込 / dedupeを再設計しない
+- 返金・送金・チャージ等を「通常支払い完成」のblockingにしない
+- 例外は実際に必要になった時だけ個別対応
+
+### Amazon通常購入
+
+**完成範囲:** Gmailの新着通常購入の注文合計をbounded recurring productionで取り込む。
+
+**対象外 / 別経路:** 取消・返品・返金、Order History CSVの商品明細。
+
+「Amazon全イベント完全自動」と表現しない。
+
+### au PAYカード
+
+recurring productionは実writeまで確認済み。直近確認runでは新規3件を書込み、failure 0。
+
+`review=4` は要確認対象だが、取込本体を未完成へ戻す理由にはしない。何を示すかだけ確認する。
+
+### au PAY残高
+
+共通workflowで継続運用。保守扱い。
+
+---
+
+## 6. Payroll
+
+### 現在地
+
+- 実シート: 給与明細ヘッダ **1件 success / 要確認FALSE**
+- 給与明細項目 **18件 / 要確認FALSE / not_required**
+- 勤務先マスタ **1件**
+- `integration/payroll-materialization-adoption` にWindows scheduled **read-only** scanあり
+
+### 次の1作業
+
+Windows Task Schedulerについて以下だけ確認する。
+
+- LastRunTime
+- LastTaskResult
+- scheduled scan log
+- 新規明細の有無
+
+**新しい明細がなければ、追加実装をしない。**
+
+---
+
+## 7. Medical
+
+### 維持する絶対境界
+
+- 実Medicalデータを外部AIへ送らない
+- privacy判定でMedical / sensitiveはfail-closed
+- local OCR / review / shadowは外部AI authorityとは分離
+
+### 現在の課題を2つに分離
+
+**A. 帳票解析精度**
+- 未見の実帳票が来た時に評価
+- 新データなしにLevel / taxonomy / diagnosticを増やさない
+
+**B. 本番review運用**
+- Windows local review store
+- 人間が確認する手順
+- shadowの永続性
+
+GitHub-hosted runner上でlocal storeを永続化できない問題と、帳票解析ロジックの問題を混同しない。
+
+---
+
+## 8. 共通運用
+
+共通production workflowには、レシート、au PAY通知、PayPay、reconcile、auto-expense、review refresh、支出一覧refreshが存在する。
+
+### 状態解釈ルール
+
+- workflow green = 全データが処理済み、ではない
+- `privacy_blocked` = workflow failureではなく、安全な保留になり得る
+- `0 candidates` = 正常no-opになり得る
+- `needs_review=0` = parser対象外イベントまで全て処理済み、ではない
+
+---
+
+## 9. 優先順位
+
+### Priority 1 — 銀行3行の最終収支反映
+
+3銀行parser・adapter統合は完了済み。次は**新しい銀行を増やさず、既取込銀行行を支出・収入・除外・reviewへ閉じる**ことを主Workとする。
+
+### Priority 2 — 一般レシートproduction保守
+
+PDF前処理とAI呼出し契約だけを最小修正する。
+
+### Priority 3 — 運用確認
+
+- Payroll scheduled run
+- au PAYカード review
+- PayPay返金等の例外（必要なら）
+- Medical local review運用
+
+### Priority 4 — その後にCoverage実測
+
+新しいsourceを増やす前に、1か月程度の実データについて以下を測る。
+
+- 自動計上率
+- 人間確認件数
+- 取込済み未計上件数
+- 二重計上候補
+- 未対応sourceの実際の件数
+
+この実測で、次の機能追加を決める。
+
+---
+
+## 10. Codex / Work / Goal 開始時ルール
+
+新しいKakeiboAIタスクを始める場合、実行者はまずこのファイルを読み、対象機能について次を確認する。
+
+1. 現在のLevel
+2. 完成済み範囲
+3. 次の1作業
+4. 「やらないこと」
+5. Last verified以降にmain / runtimeが変わっていないか
+
+### 基本方針
+
+- 既存production authorityをまず再利用する
+- 新規frameworkより既存経路の接続・修正を優先する
+- 重大事故を防ぐfail-closedは維持する
+- 低頻度・低影響はreviewへ落としてよい
+- 実データなしに証明用diagnosticsを増やさない
+- 本番write / apply / Drive move / permission expansionは明示的な承認境界を守る
+- コード変更前にread-onlyで実際のblocking issueを確認する
+
+### 作業終了時に更新する項目
+
+対象機能について以下だけ更新する。
+
+```text
+Level:
+完成範囲:
+Last verified:
+実データ実績:
+残課題:
+次の1作業:
+やらないこと:
+Evidence:
+```
+
+**一つのGoalの完了だけで、無関係な機能の状態を書き換えない。**
+
+---
+
+## 11. 今は行わないこと
+
+- 一般レシート本流をoffline OCRへ置換
+- PayPay通常支払いの再実装
+- 旧PayPay coverage branchの全面統合
+- 見つからなかった古いworktreeの復旧調査を継続
+- 新データなしのMedical diagnostics追加
+- 3銀行の最終反映を放置したまま、4つ目以降の銀行adapterを増やす
+- テスト数・workflow greenだけを根拠に「完成」とする
+- KakeiboAI Core完成前に販売インフラを優先する
+
+---
+
+## 12. Evidence / 参照先
+
+### Production / main
+
+- `RECEIPT_ROUTING.md`
+- `app/receipt_pipeline.py`
+- `app/gemini_ai.py`
+- `app/receipt_text_extraction.py`
+- `app/paypay_pipeline.py`
+- `app/bank_pdf_pipeline.py`
+- `app/bank_canary.py`
+- `app/bank_canary_production.py`
+- `app/auto_expense.py`
+- `docs/amazon_recurring_production.md`
+- `docs/aupay_card_recurring_production.md`
+- `.github/workflows/process-receipts.yml`
+
+### 専用branch / checkpoint
+
+- Payroll: `integration/payroll-materialization-adoption`
+- Medical: `integration/medical-structured-ocr-privacy`
+- 千葉銀行旧開発branch: `agent/bank-pdf-chiba`（成果はmainへ統合済み。通常運用はmainを正本とする）
+- 一般レシートoffline診断: `agent/general-receipt-import`（**production本流ではない**）
+
+### 2026-09-14にread-only確認したproduction evidence
+
+- 一般レシート: 解析済み21件
+- PayPay: 取込52行 / 支出明細52行
+- 銀行PDF（棚卸し時点）: 取込152行 / 銀行由来支出明細8行
+- 銀行3adapter統合後の実PDF smoke: auじぶん92 / ドコモSMTB150 / 千葉53
+- 銀行統合main: `30b277ac7f2f8e9807053bf9c0a769a0737e055e`、full pytest `1056 passed`
+- Payroll: header1 / item18 / employer1
+- 直近共通workflow: PDF前処理保留2件、reconcile updated0、auto-expense candidates0
+- au PAYカード recurring: 新規3件write成功
+- Amazon recurring: 正常no-op
+
+---
+
+## 13. 履歴
+
+### 2026-09-14
+
+初回の全体棚卸しから長期運用用ステータスへ整理。
+
+主な修正点:
+- 一般レシートはoffline MVPではなくGemini productionが本流と確定
+- PayPay通常支払いをL4 / 保守へ移行
+- 銀行の「取込」と「家計簿反映」を分離し、次の主Workに設定
+- Payrollは実登録済みであり、未着手扱いを撤回
+- Medicalの解析精度と本番review運用を別課題として管理
+
+### 2026-09-14 銀行更新
+
+- auじぶん銀行 / ドコモSMTBネット銀行 / 千葉銀行の3adapterをmainへ統合
+- mainを `30b277ac7f2f8e9807053bf9c0a769a0737e055e` へ更新
+- 実PDF smoke: 92 / 150 / 53件
+- full pytest `1056 passed`、compileall / diff-check成功
+- 千葉銀行を「専用branchの残件」から「main正式対応」へ変更
+- 銀行の次Goalをadapter追加ではなく、既取込行の最終家計簿反映に限定
