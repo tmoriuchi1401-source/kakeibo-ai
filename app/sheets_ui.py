@@ -102,7 +102,8 @@ def layout_requests(sheet):
         dimension(sid, "ROWS", 1, n, pixelSize=56),
     ]
     if title == "支出一覧":
-        widths = [70, 90, 100, 85, 105, 105, 100, 90, 180, 150]
+        # Keep A:D within 390px including Sheets' row header and scrollbar.
+        widths = [70, 86, 90, 85, 105, 105, 100, 90, 180, 150]
         date_col, money_col, inputs = 0, 3, []
         req.append(dimension(sid, "COLUMNS", 9, 10, hiddenByUser=True))
     elif title == "要確認":
