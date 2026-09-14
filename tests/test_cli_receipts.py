@@ -86,3 +86,30 @@ def test_drive_receipts_cli_defers_gemini_until_each_receipt_use(monkeypatch):
     process.assert_called_once_with(
         "folder-id-12345", pipeline, "", known_source_classification=None
     )
+
+
+def test_analyze_cli_and_adapter_share_source_classification_contract(
+    tmp_path, monkeypatch, capsys
+):
+    image = tmp_path / "normal-receipt.png"
+    image.write_bytes(b"synthetic normal bytes")
+    ai = Mock()
+    ai.analyze_receipt.return_value = SimpleNamespace(
+        model_dump=Mock(return_value={"total": 100})
+    )
+    db = SimpleNamespace(categories=Mock(return_value=[("食費", "食品")]))
+    monkeypatch.setattr(cli, "make", Mock(return_value=(object(), db, ai)))
+    monkeypatch.setattr(
+        "sys.argv",
+        ["kakeibo-ai", "analyze", str(image), "--source-classification", "medical"],
+    )
+
+    cli.main()
+
+    ai.analyze_receipt.assert_called_once_with(
+        b"synthetic normal bytes",
+        "image/png",
+        [("食費", "食品")],
+        known_source_classification="medical",
+    )
+    assert "100" in capsys.readouterr().out

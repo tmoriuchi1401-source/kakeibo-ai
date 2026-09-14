@@ -138,10 +138,15 @@ Sheets read-only再確認では、既取込identityはduplicateとして吸収�
 
 ### 現在の保守課題
 
-1. 直近の定期runでPDF 2件が `pdf_ocr_failed` → `sensitive_unknown` → Gemini禁止で保留
-2. 本番runnerでTesseract `jpn+eng` を実際に使える前提を確認する
-3. `app.cli analyze` が `known_source_classification` を渡す一方、`GeminiAI.analyze_receipt()`側の引数契約が一致していない
-4. 複数シートへの順次write途中で失敗した場合の再実行を、少数の障害テストで確認する
+2026-09-14の保守worktreeで、以下の最小修正を準備済み。**production canaryは未実施。**
+
+1. 最新の定期run #202（HEAD `7d0e60d`）ではPDF 3件が `pdf_ocr_failed` → `sensitive_unknown` → Gemini禁止で保留。PDFはembedded textが空でOCR fallbackへ進んでおり、runner workflowにTesseract本体と日本語言語データのsetupがなかった
+2. workflowで `tesseract-ocr` / `tesseract-ocr-jpn` を導入し、`jpn` / `eng` availabilityを実行前に検査する修正を準備
+3. mergeで脱落していた `GeminiAI.analyze_receipt(..., known_source_classification=...)` とadapter直前のprivacy再検査を復元
+4. `取込データ`をreceipt materializationのcommit markerとして最後にwriteし、レシートID / 支出IDでpartial retry時の重複を抑止
+5. synthetic通常画像 / scan PDFの実Tesseract smoke成功、OCR runtime欠落時のfail-closed再現成功。full pytest **1067 passed**、compileall / diff-check成功
+
+残課題は、明示承認後に通常PDF canaryを行い、read-back / Drive move / replayをproductionで確認すること。
 
 ### 終了条件
 

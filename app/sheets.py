@@ -204,6 +204,8 @@ class SheetsDB:
         ).execute()
     def import_ids(self)->set[str]:
         return {r[0] for r in self.get("取込データ!A2:A") if r}
+    def receipt_ids(self)->set[str]:
+        return {r[0] for r in self.get("レシート!A2:A") if r}
     def import_index(self)->dict[str,tuple[int,str]]:
         out={}
         for i,r in enumerate(self.get("取込データ!A2:L"),start=2):

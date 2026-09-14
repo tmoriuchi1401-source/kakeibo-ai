@@ -12,11 +12,15 @@ from app.receipt_privacy_gate import ReceiptPrivacyGateResult
 
 
 class FakeDB:
-    def __init__(self, import_ids=()):
+    def __init__(self, import_ids=(), *, fail_after_commit=None):
         self._import_ids = set(import_ids)
+        self._receipt_ids = set()
+        self._expense_ids = set()
         self.category_calls = 0
         self.append_calls = []
         self.ensure_expense_status_column_calls = 0
+        self.fail_after_commit = fail_after_commit
+        self._failure_raised = False
 
     def import_ids(self):
         return self._import_ids
@@ -26,7 +30,25 @@ class FakeDB:
         return [("食費", "食品")]
 
     def append(self, sheet, rows):
+        if not rows:
+            return
         self.append_calls.append((sheet, rows))
+        ids = {row[0] for row in rows}
+        if sheet == "レシート":
+            self._receipt_ids.update(ids)
+        elif sheet == "取込データ":
+            self._import_ids.update(ids)
+        elif sheet == "支出明細":
+            self._expense_ids.update(ids)
+        if self.fail_after_commit == sheet and not self._failure_raised:
+            self._failure_raised = True
+            raise RuntimeError(f"synthetic {sheet} response failure")
+
+    def receipt_ids(self):
+        return self._receipt_ids
+
+    def expense_index(self):
+        return {value: index for index, value in enumerate(self._expense_ids, 2)}
 
     def ensure_expense_status_column(self):
         self.ensure_expense_status_column_calls += 1
@@ -117,7 +139,7 @@ def test_normal_gate_runs_existing_receipt_pipeline_once(monkeypatch):
     ai.analyze_receipt.assert_called_once_with(
         b"normal receipt", "image/png", [("食費", "食品")]
     )
-    assert [sheet for sheet, _ in db.append_calls] == ["レシート", "取込データ", "支出明細"]
+    assert [sheet for sheet, _ in db.append_calls] == ["レシート", "支出明細", "取込データ"]
     assert db.ensure_expense_status_column_calls == 1
     assert result == {"status": "imported", "items": 1, "total": 100}
 
@@ -314,3 +336,54 @@ def test_unexpected_gate_failure_stops_before_gemini_or_sheets(monkeypatch):
     ai.analyze_receipt.assert_not_called()
     assert db.category_calls == 0
     assert db.append_calls == []
+
+
+@pytest.mark.parametrize("failed_sheet", ["レシート", "支出明細", "取込データ"])
+def test_partial_multi_sheet_failure_replay_does_not_duplicate_rows(monkeypatch, failed_sheet):
+    db = FakeDB(fail_after_commit=failed_sheet)
+    ai = FakeAI(_normal_receipt_result())
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=_normal_gate())
+    )
+    pipeline = pipeline_module.ReceiptPipeline(db, ai)
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        pipeline.process_bytes(b"normal receipt", "image/png", "replay-source")
+
+    replay = pipeline.process_bytes(b"normal receipt", "image/png", "replay-source")
+
+    assert replay["status"] in {"imported", "skipped"}
+    assert db._receipt_ids == {"R-replay-source"}
+    assert db._expense_ids == {"R-replay-source-01"}
+    assert db._import_ids == {"receipt:replay-source"}
+    for sheet in ("レシート", "支出明細", "取込データ"):
+        stored_ids = [row[0] for called_sheet, rows in db.append_calls
+                      if called_sheet == sheet for row in rows]
+        assert len(stored_ids) == len(set(stored_ids)) == 1
+
+
+@pytest.mark.parametrize("failed_sheet", ["レシート", "取込データ"])
+def test_needs_review_partial_failure_replay_is_also_idempotent(monkeypatch, failed_sheet):
+    result = _normal_receipt_result().model_copy(update={"date": ""})
+    db = FakeDB(fail_after_commit=failed_sheet)
+    ai = FakeAI(result)
+    monkeypatch.setattr(
+        pipeline_module, "evaluate_receipt_privacy", Mock(return_value=_normal_gate())
+    )
+    pipeline = pipeline_module.ReceiptPipeline(db, ai)
+
+    with pytest.raises(RuntimeError, match="synthetic"):
+        pipeline.process_bytes(b"normal receipt", "image/png", "review-replay-source")
+
+    replay = pipeline.process_bytes(
+        b"normal receipt", "image/png", "review-replay-source"
+    )
+
+    assert replay["status"] in {"needs_review", "skipped"}
+    assert db._receipt_ids == {"R-review-replay-source"}
+    assert db._expense_ids == set()
+    assert db._import_ids == {"receipt:review-replay-source"}
+    for sheet in ("レシート", "取込データ"):
+        stored_ids = [row[0] for called_sheet, rows in db.append_calls
+                      if called_sheet == sheet for row in rows]
+        assert len(stored_ids) == len(set(stored_ids)) == 1

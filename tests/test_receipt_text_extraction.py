@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import logging
+from pathlib import Path
 import sys
 import threading
 
@@ -10,6 +11,14 @@ from pypdf import PdfWriter
 import pytest
 
 from app import receipt_text_extraction as extraction
+
+
+def test_production_workflow_provisions_japanese_and_english_ocr():
+    workflow = Path(".github/workflows/process-receipts.yml").read_text(encoding="utf-8")
+
+    assert "tesseract-ocr tesseract-ocr-jpn" in workflow
+    assert "tesseract --list-langs | grep -qx jpn" in workflow
+    assert "tesseract --list-langs | grep -qx eng" in workflow
 
 
 def _synthetic_png() -> bytes:

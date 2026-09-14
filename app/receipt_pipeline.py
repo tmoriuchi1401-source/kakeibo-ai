@@ -68,14 +68,22 @@ class ReceiptPipeline:
         if invalid: notes.append("カテゴリ不正")
         if abs(item_sum-result.total)>tolerance: notes.append(f"明細合計{item_sum}≠レシート合計{result.total}")
         if not result.date: notes.append("日付不明")
-        self.db.append("レシート",[[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]])
+        receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]
         raw_hash=canonical_hash(result.model_dump())
-        self.db.append("取込データ",[[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]])
-        if not ok: return {"status":"needs_review","receipt":result.model_dump(),"issues":notes}
-        self.db.ensure_expense_status_column()
+        import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
+        if receipt_id not in self.db.receipt_ids():
+            self.db.append("レシート",[receipt_row])
+        if not ok:
+            # The import row is the commit marker and must be written last.
+            self.db.append("取込データ",[import_row])
+            return {"status":"needs_review","receipt":result.model_dump(),"issues":notes}
         rows=[]
         for idx,item in enumerate(result.items,1):
             spend_id=f"{receipt_id}-{idx:02d}"
             rows.append([spend_id,result.date,result.merchant,item.name,item.amount,item.major_category,item.minor_category,result.payment_method,"receipt",receipt_id,import_id,item.note,"active"])
-        self.db.append("支出明細",rows)
+        self.db.ensure_expense_status_column()
+        existing_expense_ids=set(self.db.expense_index())
+        self.db.append("支出明細",[row for row in rows if row[0] not in existing_expense_ids])
+        # A present import ID means all earlier receipt materialization completed.
+        self.db.append("取込データ",[import_row])
         return {"status":"imported","items":len(rows),"total":result.total}

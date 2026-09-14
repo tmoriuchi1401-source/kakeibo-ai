@@ -21,6 +21,12 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'pip'
+      - name: Install receipt OCR runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+          tesseract --list-langs | grep -qx jpn
+          tesseract --list-langs | grep -qx eng
       - run: pip install -r requirements.txt
       - name: Show configured integrations
         run: |
