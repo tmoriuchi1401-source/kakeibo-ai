@@ -8,7 +8,7 @@ import math
 import re
 
 from .review_pipeline import is_reviewable_status
-from .sheets_ui import CAP, SPREADSHEET_ID
+from .sheets_ui import AUTO_MONTH, CAP, SPREADSHEET_ID, home_cells
 
 
 def month_key(value):
@@ -71,14 +71,21 @@ def verify_home(service, meta):
             overflow += sum(bool(r and r[0]) for r in tail)
     expected = source_summary(rows["支出一覧"], rows["取込データ"], rows["Amazon要確認"], month)
     cells = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID,
-        ranges=[f"'ホーム'!A1:H{CAP+1}"], fields="sheets(data(rowData(values(effectiveValue(errorValue)))))").execute()
+        ranges=[f"'ホーム'!A1:I{CAP+1}"], fields="sheets(data(rowData(values(effectiveValue(errorValue)))))").execute()
     errors = sum("errorValue" in c.get("effectiveValue", {}) for s in cells.get("sheets", [])
                  for b in s.get("data", []) for r in b.get("rowData", []) for c in r.get("values", []))
     category_rows = values(f"'ホーム'!A35:B{CAP+1}")
     category_total = sum((amount_value(r[1]) or Decimal(0) for r in category_rows if len(r)>1), Decimal(0))
+    selected = value(4, 2)
+    home_meta = next(s for s in meta["sheets"] if s["properties"]["title"] == "ホーム")
+    automatic = selected in {"", AUTO_MONTH}
+    selector_matches = month is not None and (
+        home_meta.get("monthState", {}).get("B3") == home_cells()[3, 2] if automatic else month == selected)
     return {
         "formula_errors": errors,
         "month_valid": month is not None,
+        "month_selector_matches": selector_matches,
+        "automatic_month": automatic,
         "total_matches_view": amount_value(value(6, 1)) == expected["total"] if expected["invalid"]+overflow == 0 else value(6, 1) == "要データ確認",
         "unclassified_matches": amount_value(value(8, 2)) == expected["unclassified_count"] and amount_value(value(9, 2)) == expected["unclassified_amount"],
         "review_counts_match": amount_value(value(12, 2)) == expected["regular"] and amount_value(value(13, 2)) == expected["amazon"],
