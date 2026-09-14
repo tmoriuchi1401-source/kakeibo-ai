@@ -9,6 +9,7 @@ from app.expense_view import ExpenseViewPipeline
 from app.review_pipeline import ReviewPipeline, is_reviewable_status
 from app.sheets import HEADERS, SheetsDB
 from app.sheets_ui import (
+    CATEGORY_UI_ID, CATEGORY_UI_TITLE,
     AUTO_MONTH, CAP, CHART_ID, DAILY, HIDDEN, HOME_COLUMNS, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
     build_plan, home_cells, initial_month_selection, installed, plan_digest, refresh_layout_requests,
 )
@@ -49,10 +50,9 @@ class FixtureService:
                 assert kwargs["valueRenderOption"] == "FORMULA"
                 values.append({"values": [[next(iter(self.cells.get((HOME_ID, i, 1), {}).get("userEnteredValue", {}).values()), "")] for i in [2, 3]]})
                 continue
-            if title == "ホーム":
-                assert rng.endswith(("A1:H1", "A1:I1"))
+            if s["properties"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID}:
                 width = s["properties"]["gridProperties"]["columnCount"]
-                header = [next(iter(self.cells.get((HOME_ID, 0, j), {}).get("userEnteredValue", {}).values()), "") for j in range(width)]
+                header = [next(iter(self.cells.get((s["properties"]["sheetId"], 0, j), {}).get("userEnteredValue", {}).values()), "") for j in range(width)]
                 values.append({"values": [header]})
                 continue
             values.append({"values": [s["header"]] if s["header"] else []})
@@ -62,20 +62,21 @@ class FixtureService:
         if kwargs.get("ranges"):
             title = kwargs["ranges"][0].split("!")[0].strip("'")
             s = next(s for s in self.meta["sheets"] if s["properties"]["title"] == title)
-            if title == "ホーム":
+            if s["properties"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID}:
+                sid = s["properties"]["sheetId"]
                 width = s["properties"]["gridProperties"]["columnCount"]
                 rows = []
                 for i in range(35):
                     row = []
                     for j in range(width):
-                        c = deepcopy(self.cells.get((HOME_ID, i, j), {}))
-                        if self.validations.get((HOME_ID, i, j)):
-                            c["dataValidation"] = deepcopy(self.validations[HOME_ID, i, j])
+                        c = deepcopy(self.cells.get((sid, i, j), {}))
+                        if self.validations.get((sid, i, j)):
+                            c["dataValidation"] = deepcopy(self.validations[sid, i, j])
                         row.append(c)
                     rows.append({"values": row})
                 return Call({"sheets": [dict(s, data=[{"rowData": rows,
-                    "columnMetadata": [self.dimensions.get((HOME_ID, "COLUMNS", j), {}) for j in range(width)],
-                    "rowMetadata": [self.dimensions.get((HOME_ID, "ROWS", i), {}) for i in range(70)]}])]})
+                    "columnMetadata": [self.dimensions.get((sid, "COLUMNS", j), {}) for j in range(width)],
+                    "rowMetadata": [self.dimensions.get((sid, "ROWS", i), {}) for i in range(70)]}])]})
             return Call({"sheets": [dict(properties=s["properties"], data=[{
                 "rowData": [{"values": [{"userEnteredFormat": {"textFormat": {"bold": True}}}]}],
                 "columnMetadata": [{"pixelSize": 113}], "rowMetadata": [{"pixelSize": 29}],
@@ -96,7 +97,7 @@ class FixtureService:
             elif kind == "updateDeveloperMetadata":
                 for s in self.meta["sheets"]:
                     for m in s.get("developerMetadata", []):
-                        if m.get("metadataKey") == MARKER:
+                        if m.get("metadataKey") == v["dataFilters"][0]["developerMetadataLookup"]["metadataKey"]:
                             m.update(v["developerMetadata"])
             elif kind == "updateSheetProperties":
                 p = v["properties"]
@@ -150,13 +151,13 @@ def test_ui_mutation_scope_and_legacy_headers_are_preserved():
     before = deepcopy(meta)
     plan = build_plan(meta)
     assert meta == before
-    assert len([r for r in plan["requests"] if "addSheet" in r]) == 1
+    assert len([r for r in plan["requests"] if "addSheet" in r]) == 2
     for r in plan["requests"]:
         assert len(r) == 1
         kind, v = next(iter(r.items()))
         assert kind not in {"deleteSheet", "deleteDimension", "moveDimension", "sortRange", "addProtectedRange", "setBasicFilter"}
         if kind in {"updateCells", "setDataValidation", "mergeCells"}:
-            assert v["range"]["sheetId"] == HOME_ID
+            assert v["range"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID}
         if kind == "repeatCell":
             assert "userEnteredValue" not in v["fields"] and "dataValidation" not in v["fields"]
         if kind == "updateCells":
@@ -315,8 +316,8 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     svc.batchUpdate(body=plan)
     svc.batchUpdate(body=backup)
     assert not installed(svc.meta)
-    assert not any(s["properties"].get("hidden", False) for s in svc.meta["sheets"] if s["properties"]["sheetId"] != HOME_ID)
-    assert [s["properties"]["title"] for s in svc.meta["sheets"]][:-1] == list(IDS)
+    assert not any(s["properties"].get("hidden", False) for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID})
+    assert [s["properties"]["title"] for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID}] == list(IDS)
     assert not any("addSheet" in r for r in build_plan(read_metadata(svc))["requests"])
 
 
@@ -465,7 +466,7 @@ def test_monthly_unclassified_and_all_period_reviews_remain_separate():
         with_reviews = source_summary(rows, regular, amazon, month)
         assert with_reviews["regular"] == 1 and with_reviews["amazon"] == 2
     formulas = home_cells()
-    assert formulas[7, 1] == "要対応" and formulas[8, 1] == "カテゴリ未分類"
+    assert formulas[7, 1] == "要対応" and "カテゴリ未分類" in formulas[8, 1]
     assert "計上済み" in formulas[10, 1] and "全期間" in formulas[11, 1]
     assert all("$B$3" in formulas[pos] for pos in [(5, 1), (6, 1), (8, 2), (9, 2), (34, 1)])
     assert all("$B$3" not in formulas[pos] and "$B$4" not in formulas[pos] for pos in [(12, 2), (13, 2)])
