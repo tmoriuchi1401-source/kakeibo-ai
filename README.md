@@ -84,6 +84,185 @@ GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、�
 参考: [Google: iPhoneで書類をスキャンする](https://support.google.com/drive/answer/3145835?co=GENIE.Platform%3DiOS&hl=ja)
 
 ## 8. GitHub Actions
+
+### 統合・切替準備（2026-09-15、実切替未実施）
+
+この節をWindows開発 / Actions本番 / Drive状態保存の切替手順の集約先とする。
+現状のscheduleと実績を下表で分離する。新しい親Workflowはまだ未接続であり、
+ここに書かれた移行目標を現行運用と解釈しない。
+
+#### 開始時のGit・Windows確認
+
+- 対象: `tmoriuchi1401-source/kakeibo-ai`。取得した最新main:
+  `73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`。
+- 今回の作業先は `Documents/Codex/2026-09-15/goal-kakeiboai-windows-github-actions-google`。
+  開始時は空・Git管理外。独立clone後に
+  `integration/production-orchestration-20260915` を作成。開始時dirty/stashなし。
+  専用branchのupstreamは未設定。mainへの変更なし。
+- 既存Windows mainは `2026-08-31/kakeiboai-github-codespaces-kakeiboai-windows-pc/work/kakeibo-ai`、
+  HEAD `af1ff3a`、`main...origin/main`、dirty/stashなし。既存worktreeは保持した。
+  他のworktreeのdirty差分は未調査・未変更。
+- `PROJECT_STATUS.md` / `RECEIPT_ROUTING.md` / 実コード / 全25 Workflowを読んだ。
+  最新mainのtracked tree、今回の作業先と親ディレクトリ、既存mainに
+  `AGENTS.md` は見つからなかった。古いチャットを実行authorityにはしていない。
+- Task Schedulerをread-only照合。関連Taskは `KakeiboAI Payroll Scheduled Scan` 1件。
+  毎日06:00 JST、Ready、最終実行2026-09-15 06:00:01 JST、結果0、次回09-16 06:00。
+  launcherは `2026-09-04/kakeibo-ai-payroll-materialization-adoption/scripts/run-payroll-scheduled.ps1`、
+  同worktreeを作業先に `python -m app.cli payroll-production-scheduled --config-file ...`。
+  config/state/logはユーザーの非公開ローカル領域。06:00:20の最新logで
+  `scheduled_read_only_scan / read_only=true / writer_invocation_count=0` を確認。
+  原本・金額・認証内容は出力していない。新規明細件数は未確認。
+- Documents/Codex内の `.ps1/.cmd/.bat` を探索し、関連launcherは上記1件。
+  依存環境のactivate類はlauncherから除外。一部過去pytest領域はアクセス不可。
+  ユーザーStartupはOllamaのみ、Desktopにkakeibo名のファイルなし。
+  全マシン・他ユーザー・他ツールの直接起動まで確認したという意味ではない。
+
+#### 現行 → 移行後の実行責任
+
+Actionsの時刻はcron設定であり、実際の起動保証時刻ではない。
+全25 WorkflowはGitHub API上active。下のrunメタデータは2026-09-15確認、
+successは処理件数や実write成功の証明と区別する。Secret/Variableの値は未取得。
+
+| source/責任 | 現行入口・設定JST | 現行コマンド / 書込み先 / authority | state | 直近run実績 | 移行後の責任（未接続） |
+|---|---|---|---|---|---|
+| Amazon通常購入 | `amazon-daily-import.yml`、05:23 / manual | `amazon-gmail-recurring --apply`はschedule。manual既定preview、canaryはexact条件。Amazonイベント/ヘッダ・取込・支出、最大100メール/3購入/3日、2h overlap | cache `recurring.sqlite3` | [#133](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34786888299)、schedule success、09-14 07:28 JST | 親のAmazon段階、既存runner + Drive adapter |
+| au PAYカード | `aupay-card-recurring-production.yml`、05:23 / manual | `card-gmail-recurring`、取込データ、既存protected policy・一回限りcapability・exact read-back。manual既定dry-run | cache checkpoint/manifests/capabilities/journal/leases SQLite | [#9](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34786937936)、schedule success、09-14 07:29 JST | 親のカード段階、Amazon/receipt成功後 |
+| au PAY残高 | `process-receipts.yml`、00/03/06/09/12/15/18/21:17 / manual | `aupay-gmail`、取込データ、wallet通知P1002、既定30日/100件・伝票ID dedupe | Sheets identity、独立local checkpointなし | 同共通[#205](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34889329589)、schedule success、09-15 04:50 JST | 親の残高段階。カードとは別sourceのまま |
+| 一般レシート | 同共通入口 | `drive-receipts`、privacy gate→normalのみGemini→レシート/取込/支出→processed、stable IDs | Sheets marker / Drive inbox・processed。Medical shadowは別 | 同#205。今回runメタデータのみ、個別件数未確認 | 親のreceipt段階。既存AI解析を再利用 |
+| PayPay通常支払い | 同共通入口 | `drive-paypay`、取込→processed、CSV stable identity dedupe | Sheets / Drive processed property | 同#205。今回個別件数未確認 | 親のPayPay段階 |
+| 銀行PDF | `bank-pdf-recurring.yml`、06:47 / manual | **schedule実コードは`--dry-run`**。manual applyのみprotected expense authority、20 PDF/100 rows上限、取込/支出/Drive processed marker | cache checkpoint + per-file manifest/journal/capability/lease | [#4](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34895047512)、manual success、09-15 05:47 JST。#1/#2 startup_failure、#3/#4 success。入力apply値・write数は今回未確認 | 親の銀行段階。scheduleのpreviewを勝手にapplyへ変更しない |
+| review判断反映 | 共通入口 + `amazon-manual-review-apply.yml` | `review-apply`、既存判断・取込/支出更新。専用手動入口は8件固定の古い検証条件あり | Sheets | 共通#205 / 専用manual #1 success 08-21 | 日常は親に一意化、修復手動は共通ロック内 |
+| reconcile / auto-expense | 共通入口 | `reconcile` → `auto-expense`、取込/支出。現行always()で前段失敗後も起動し得る | Sheets | 共通#205 | 全依存取込成功後に一度。書込み結果不明ならskipしrun failure |
+| review/表示更新 | 共通 + `amazon-manual-review-refresh.yml` | `review-refresh` / `expenses-refresh`。ホーム変更は含めない | Sheets | 共通#205 / 専用manual #3 success 08-21 | 親の後処理。失敗をrun successへ変換しない |
+| 月次backup/retention | `monthly-maintenance.yml`、毎月2日03:37 JST / manual | `backup`はDriveコピー、`receipts-cleanup`は恒久削除。既存OAuth/SA。現在は画像/PDFと時刻で候補抽出 | Drive backup/processed metadata | [#1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/33545494331)、schedule success 09-02 03:45 JST。個別write/delete数未確認 | 日常親とは別の最上位保守入口で同一ロック。機微原本除外は切替前の未完了課題 |
+| Payroll | 上記Windows Task | read-only scan、Sheets/Drive読取、local非公開log/state | 既存JSON/journal/HMAC（今回移送しない） | 本日終了0 + log read-only/write0 | 実データは現状維持。将来AI鍵なし独立job、別承認 |
+| Medical | 共通inbox privacy分岐、local opt-in shadow | 外部AI禁止、Sheets/Drive移動authorityなし。`medical-review list/show` read-only | user-local versioned shadow JSON、key別管理 | local shadow有効状態・最新store未確認 | 一般inbox共用維持。実データ移行とwrite拡大は対象外 |
+
+設定と文書の食い違い: `PROJECT_STATUS.md` の銀行L4 recurring記述と
+commit subject「Enable daily bank PDF recurring production」に対し、最新mainの
+schedule分岐はdry-run。Amazon文書のmanual-onlyやカード文書のcache欠落時fallbackも
+古い説明を含む。移行では実コードを起点にし、missing stateのfallbackは使用しない。
+au PAY残高の相対30日検索・100件到達時の扱いも、親へ接続する前に確認が必要。
+
+追加のmanual入口（全てActions/現行mainのworkflow_dispatch、個別時刻設定なし）:
+
+| Workflow (`.yml`) | 実CLI / source / 書込み | 直近実績（API） |
+|---|---|---|
+| amazon-cancellation-order-id-diagnose | `amazon-cancellation-order-id-diagnose`、Gmail/Sheets read-only | #3 success 08-27 |
+| amazon-cancellation-quantity-ambiguity-diagnose | 同名CLI、Gmail/Sheets read-only | #1 success 08-27 |
+| amazon-cancellation-quantity-preview | 同名CLI、Gmail/Sheets read-only | #3 success 08-27 |
+| amazon-cancellation-return-preview | 同名CLI、Gmail/Sheets read-only | #7 success 09-12 |
+| amazon-cancellation-scope-diagnose | 同名CLI、Gmail/Sheets read-only | #1 success 08-27 |
+| amazon-email-preview | `app.amazon_gmail_preview`、Gmail read-only | #7 success 09-12 |
+| amazon-event-reparse-apply | `amazon-event-reparse-apply --apply`、Amazonイベント再解析更新、manual authority | #1 success 08-24 |
+| amazon-event-reparse-preview | 同名CLI、Gmail/Sheets read-only | #4 success 08-24 |
+| amazon-gmail-search-preview | `app.amazon_gmail_search_preview`、Gmail read-only | #1 success 08-21 |
+| amazon-manual-review-preview | `review-apply-preview`、Sheets read-only | #1 success 08-21 |
+| amazon-reclassify | `card-amazon-reclassify` + preview群、取込分類更新、manual authority | #1 success 08-20 |
+| amazon-review-preview | 同名CLI、Gmail/Sheets read-only | #4 success 09-12 |
+| amazon-review-schema-install | 同名CLI、Sheets schema更新、manual authority | #3 success 08-27 |
+| amazon-shipping-backfill-preview | `amazon-shipping-backfill-drive-preview`、Drive/Sheets read-only | #3 success 08-21 |
+| amazon-shipping-backfill | `amazon-shipping-backfill-drive-apply`、注文出荷日/件数更新、confirm=APPLY | #1 success 08-21 |
+| amazon-status-sync-preview | 同名CLI、Sheets read-only | #2 success 08-27 |
+| amazon-unmatched-export | 同名CLI、匿名診断JSONをActions artifactへ保存（retention 1日）、取引writeなし | #1 success 08-20 |
+| amazon-unmatched-preview | 同名CLI、Sheets read-only | #5 success 08-21 |
+
+上表のmanual系は全てSheets/Drive/Gmailと既存Secretを必要に応じて使用し、
+独立durable stateは持たない。現行にはmain限定job guardがない入口がある。
+本番write入口は日常/保守/手動を含め共通concurrencyへ統一する予定:
+
+```yaml
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+```
+
+[GitHub公式仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+で`queue: max`を確認済み。最大100待機を超える起動は取消され得るため、
+キューだけで未処理全件の取得を保証しない。長期未実行や上限超過時は既存window
+authorityで停止し、checkpointをnowへ飛ばさず、承認された期間分割復旧を行う。
+親だけがロックを取得し、子に同じロックを重ねない。
+
+#### 実装済みstate adapterと未接続部分
+
+`app/drive_run_state.py` は既存SQLite/manifestをsource単位で保存する薄いadapter。
+`app/production_run.py` は固定の段階順序・依存失敗skip・安全な件数summaryを担当する。
+Google接続・既存CLIとの本番assembly、親Workflow、全入口ロックはまだ未接続。
+現行のcacheをこのcheckpointだけで置き換えることはできない。
+
+| source binding | 移送対象（元の形式を維持） | 移送しないもの |
+|---|---|---|
+| `amazon_gmail` | `recurring.sqlite3` | authority/Gmail token/原メール |
+| `au_pay_card_gmail` | `recurring.sqlite3`, `manifests.sqlite3`, `capabilities.sqlite3`, `journal.sqlite3`, `leases.sqlite3` | audit key/authority/OAuth |
+| `bank_pdf_drive` | `bank-recurring.sqlite3`, `bank-pdf-batch-<hash>/bank-steady-state.sqlite3`, `exact-steady-state-manifest.json` | PDF/authority/audit key |
+
+状態は家族inboxとは別の非公開Drive管理フォルダに、固定file IDでsourceごとに保存する。
+envelopeはsource/Spreadsheet/フォルダ/file/schemaをhashで束縛し、file allowlist・checksum・
+SQLite table/column schema・checkpoint日時を検査する。raw stateは機密扱いであり、
+base64は暗号化ではない。Git/log/artifact/cacheへ出さない。依存ライブラリのpip cacheとは別物。
+SQLite backupでcommitted WALも含め、既存形式へ復元する。秘密鍵の同梱は禁止。
+
+通常restoreは固定ファイルの欠落・破損・binding不一致・pendingで停止し、新規初期化しない。
+新しいlocal一時ディレクトリに全件検証後だけ配置する。previewはlocalコピーのみ使い、
+remote stateを書かない。apply前にpendingをremoteへ保存・read-backしてから既存runnerを呼ぶ。
+既存runnerの成功・既存read-backが成立した場合だけsource別の成功stateを保存・再読込する。
+API writeは自動retryなし。途中中断・source failure・保存結果不明は依存計上を止める。
+
+初回移送と障害復旧を分ける:
+
+1. 初回移送: 全旧write入口停止・run終了後、最後のcache/Windows stateの出所・source・target・
+   最終成功窓を照合し、秘密鍵を除いた閉じたstateだけを`snapshot`→`envelope`で梱包する。
+   `validate`で再検査し、承認済み非公開フォルダ/既存認証/固定file IDへ移送する。
+   **実Driveフォルダ作成・state upload・初期state読取は今回未実施**。
+2. 新規source初期化: 履歴のあるsourceのstate欠落とは別。
+   承認された`initial_start`と空の既存形式stateを明示的に作る必要がある。
+   初期化CLI/承認条件のassemblyは未完了。missing stateを理由に自動実行しない。
+3. 障害復旧: pending envelopeのdigestを取得し、旧checkpointからの候補について
+   Sheetsのstable ID・全行read-back・Drive processed markerを確認する。
+   確認証拠を非公開で保持し、digestに束縛した承認後のみ
+   `release_after_reconciliation(observed_digest=..., evidence_reference=<証拠SHA256>)`を使う。
+   このAPIは証拠の真偽を自動判定するものではなく、日常runnerから呼ばない。
+4. 旧checkpointを保持したまま既存runnerのpreview→限定replayを行う。
+   Sheets書込み済みなら既存IDでduplicate/repairを確認し、無条件append/rollbackをしない。
+   bankの中断manifestが再利用を拒否する場合も勝手に消さず、別途整合確認する。
+
+既存Google認証を再利用する。現在のSAと既存backup OAuthを勝手に交換しない。
+切替前に所有者・共有範囲・親フォルダ・`canEdit`・ファイル作成可否を同じ認証で確認する。
+adapterは既存fileの親/種別/更新可否を検査するが、private共有範囲や作成権限の実確認は未実施。
+権限不足は外部確認の未達として分け、実装・fake Driveテストを止めない。
+
+#### 切替順序・承認境界
+
+目標: 親入口一つ、06:17/18:17 JST（`17 9,21 * * *`）、manual既定preview、新入口既定無効。
+既存CLIを再利用し、独立sourceは継続、依存元失敗・write不明時は後続計上をskipしrun failure。
+本番Secretsは検証済みmainのみに渡し、branch/PR合成テストへ渡さない。
+
+切替時は **旧起動停止 → 実行中run終了確認 → state移送 → 新入口preview →
+限定canary/read-back/replay → 新schedule有効化**。新旧write並走は禁止。
+新入口停止とstate/Sheets整合性確認後にだけ復帰を検討し、無条件rollbackをしない。
+Windows直接writeはActionsロックの対象外。移行後はlocalテスト/previewに限定し、
+本番修復は定期運用を止めた保守手順で実施する。現在のTaskは停止していない。
+
+必要な承認は最後にまとめる: 検証済みbranchのmain統合、旧起動停止と新入口切替、
+既存認証での非公開Drive folder/file作成・初期state移送、対象を限定したcanary/replay。
+銀行scheduleのapply拡大、機微実データ移転、ホーム反映、公開設定/課金はこれに含めない。
+実装・テスト・文書・checkpoint commitは本Goalの許可内で継続する。
+
+#### 次段階・公開設定
+
+- Payroll/Medical実データはActionsへ移さない。Linuxは合成データで確認する予定で未実施。
+  「外部AIへ送らない」と「GitHub計算機内で処理する」は別の承認事項。
+  将来の機微jobはAI鍵なしで分離し、原本/OCR本文をartifact/cache/logへ出さない。
+- Payroll保存対象は金銭項目のみ。出勤日数・時間外労働時間・有休日数・出勤時間・有休残・
+  差引不足額は保存しない。現在のWindows scanは維持し、追加帳票/税区分開発はしない。
+- 一般/Medical共通inboxと既存privacy分岐を維持。医療/給与原本を一律retention削除に入れない。
+  現行cleanupの種別保護には未完了課題があり、削除を伴う試験は行わない。
+- 現在のGitHub visibilityは**public**（09-15 API確認）。private化は提案のみ。
+  private Actionsの利用枠・契約・残量は公開repo metadataから確認できず未確認。
+  private化前に月間runner分数/保存量/利用枠を確認し、超過課金・外部閲覧・連携への影響を承認する。
+  今回visibility/課金/Secrets/OAuthは未変更。
+
 Secretsに以下を登録:
 - GEMINI_API_KEY
 - SPREADSHEET_ID

@@ -22,6 +22,35 @@
 
 ## 1. Last verified
 
+### 2026-09-15 統合・切替準備（進行中、実切替未実施）
+
+- 最新main `73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2` を独立cloneし、
+  `integration/production-orchestration-20260915` で作業。開始時dirty/stashなし。
+  詳細な現行→移行後の責任表、全25 Workflow/Windows棚卸し、復旧・切替手順は
+  **README「8. GitHub Actions / 統合・切替準備」**へ集約。
+- 銀行の記述不一致を確認: latest mainはcron 06:47 JSTがあるが、schedule実コードは
+  `--dry-run`。直近#3/#4はmanual success（今回入力apply値・個別write数未確認）。
+  以下の過去L4 recurring記述は定期applyの現状証明に使わない。勝手にapplyへ変更しない。
+- Windows Payroll Taskは毎日06:00、09-15 06:00:01終了0。最新logはread-only true /
+  writer invocation 0。Task変更なし、新規帳票件数は未確認。
+- 実装: `drive_run_state.py`で既存SQLite/manifestのsource・target・schema検証、
+  source別Drive保存/read-back、pendingによる中断・不明結果の自動再開抑止を追加。
+  `production_run.py`で直列順序/依存失敗skip/件数だけのsummary/失敗伝播を追加。
+  新規DB・外部lock基盤は作成していない。
+- 合成テスト: fake Driveの欠落/破損/binding違い/WAL/保存不明/復旧を検証。
+  既存Amazon runnerの実write経路をfake Sheets/Gmailで実行し、state保存失敗→
+  確認待ち→明示的復旧→replay write0を確認。実Googleには未接続。
+- 最新検証: Windows Python 3.14.7、全体pytest **1183 passed**（19.37秒）。
+  `tests/conftest.py`で全テストの実ネットワーク接続を禁止して成功。
+  compileall / diff-check成功。google-genai由来の既存DeprecationWarning 1件。
+  Linux/Actionsの実行成功を意味しない。checkpoint前fetchでもorigin/mainは同SHA。
+- **未完了:** 親Workflow/本番CLI assembly、全入口共通concurrency/main guard、
+  初期移送CLI、一般系previewの接続、retention機微原本除外、Linux合成検証、
+  全Workflow構文/依存/trigger検証、要件別完了監査。Goalは継続中。
+- **外部未実施:** main統合・Workflow起動/変更・Google write/move/delete・state upload・
+  Task停止・Secrets/OAuth変更・visibility/課金変更。本番L4への昇格なし。
+- 現在repoはpublic。private化/利用枠/変更影響は確認・提案段階。契約枠は未確認。
+
 - **確認日:** 2026-09-14 JST
 - **Repository:** `tmoriuchi1401-source/kakeibo-ai`
 - **main（一般レシート機能checkpoint）:** `a01f7c3453a90e7214438ea073d43d3115c1e169`

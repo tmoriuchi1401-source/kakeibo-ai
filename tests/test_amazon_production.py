@@ -218,6 +218,52 @@ def authority_components(tmp_path, *, max_messages=10):
     return state, provider, DB()
 
 
+def test_real_recurring_writer_replays_after_remote_state_save_failure(tmp_path):
+    """Exercise the existing four-table writer/read-back, not a stand-in deduper."""
+    import hashlib
+    from app.drive_run_state import StateBinding, StateError, DurableState, envelope, snapshot
+    from app.production_run import run_durable_source
+
+    _, provider, db = authority_components(tmp_path)
+    initial = tmp_path / "initial-state"
+    SqliteRecurringRunState(initial / "recurring.sqlite3", repo_root=tmp_path / "repo")
+    binding = StateBinding("amazon_gmail", db.sid, "synthetic-private-folder", "synthetic-file")
+
+    class Drive:
+        payload = envelope(binding, snapshot(initial, binding))
+        writes = 0
+        def read(self): return self.payload
+        def write(self, data):
+            self.writes += 1
+            if self.writes == 2:  # Sheets succeeded; final state upload did not.
+                raise StateError("state_drive_write_unknown")
+            self.payload = data
+
+    drive = Drive()
+    def run(path):
+        return run_amazon_recurring(
+            gmail_service=Gmail(order_mail()), db=db,
+            state=SqliteRecurringRunState(path / "recurring.sqlite3", repo_root=tmp_path / "repo"),
+            authority_provider=provider, now=NOW,
+        )
+
+    with pytest.raises(StateError, match="write_unknown"):
+        run_durable_source(DurableState(drive, binding), tmp_path / "first", run, apply=True)
+    assert len(db.rows["取込データ"]) == len(db.rows["支出明細"]) == 1
+    writes_before_replay = list(db.write_calls)
+    recovery = DurableState(drive, binding)
+    with pytest.raises(StateError, match="reconciliation_required"):
+        recovery.restore(tmp_path / "blocked")
+    # Explicit synthetic operator evidence; daily execution cannot release this.
+    recovery.release_after_reconciliation(
+        observed_digest=hashlib.sha256(drive.payload).hexdigest(), evidence_reference="a" * 64,
+    )
+    replay = run_durable_source(recovery, tmp_path / "replay", run, apply=True)
+    assert replay["status"] == "noop"
+    assert replay["write_requests"] == 0
+    assert db.write_calls == writes_before_replay
+
+
 def test_absolute_window_overlap_collection_bound_and_checkpoint(tmp_path):
     state, provider, db = authority_components(tmp_path)
     window = build_incremental_amazon_window(provider.load(), state, NOW)
