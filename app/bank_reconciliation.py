@@ -47,6 +47,20 @@ PAYPAY_BANK_AUTHORITY_STATUS = "paypay_bank_transfer"
 ASSET_FORMATION_CATEGORY = ("資産形成", "")
 ASSET_FORMATION_IMPORT_STATUS = "bank_asset_formation_expense"
 
+# Exact normalized labels only.  These checks reduce expense automation; they
+# never create a new expense from merchant text.
+KNOWN_CARD_SETTLEMENT_DESCRIPTIONS = frozenset({
+    "口座振替AUPAYカード",
+    "口座振替Dカード",
+    "口座振替イオンフィナンシャルサービス",
+    "口座振替イオンフイナンシヤルサビス",
+})
+AMBIGUOUS_FINANCIAL_COUNTERPARTY_DESCRIPTIONS = frozenset({
+    "口座振替SMBCスミシンSBIネツ",
+    "口座振替SMBCドコモSMTB",
+    "口座振替DFAUジブン",
+})
+
 
 @dataclass(frozen=True)
 class BankClassification:
@@ -278,6 +292,17 @@ def normalize_bank_description(value: str) -> str:
     return re.sub(r"[^0-9A-Z\u3040-\u30ff\u3400-\u9fff]+", "", normalized)
 
 
+def is_known_card_settlement_description(value: str) -> bool:
+    return normalize_bank_description(value) in KNOWN_CARD_SETTLEMENT_DESCRIPTIONS
+
+
+def is_ambiguous_financial_counterparty(value: str) -> bool:
+    return (
+        normalize_bank_description(value)
+        in AMBIGUOUS_FINANCIAL_COUNTERPARTY_DESCRIPTIONS
+    )
+
+
 # Kept private-name compatible for the local diagnostic used in earlier phases.
 _compact = normalize_bank_description
 
@@ -298,8 +323,8 @@ def classify_bank_transaction(
         in confirmed_internal_transfers
     }
 
-    if transaction.signed_amount < 0 and "AUPAYカード" in description:
-        return BankClassification(transaction, "card_settlement", "au_pay_card_settlement")
+    if transaction.signed_amount < 0 and is_known_card_settlement_description(description):
+        return BankClassification(transaction, "card_settlement", "known_card_settlement")
 
     if (description, direction, transaction.account_alias) in confirmed:
         return BankClassification(transaction, "transfer", "confirmed_internal_transfer")
@@ -377,6 +402,10 @@ def classify_bank_transaction(
         return BankClassification(transaction, "needs_review", "paypay_candidate")
     if "ATM" in description:
         return BankClassification(transaction, "cash_withdrawal", "atm_cash_withdrawal")
+    if is_ambiguous_financial_counterparty(description):
+        return BankClassification(
+            transaction, "needs_review", "ambiguous_financial_counterparty",
+        )
     if "振込" in description or (
         "振替" in description and "口座振替" not in description
     ):

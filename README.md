@@ -393,6 +393,34 @@ Amazon分割払い、返金・取消、資金移動候補、既存レシート�
 後から一意に一致するレシートが取り込まれた場合は `reconcile` がレシートを
 正本とし、自動支出行を `duplicate_excluded` にする。
 
+## 取込済み銀行行の最終反映
+
+銀行PDFからすでに `取込データ` へ登録された3銀行共通の行は、まずread-onlyで
+最終分類を確認する:
+
+```bash
+python -m app.cli bank-finalization-preview
+```
+
+previewは `new_expense` / `new_income` / `excluded_link` / `non_expense` /
+`review` / `duplicate` と理由別件数を返す。`bank_income` は支出化しない。
+カード請求の口座振替は非支出、所有関係が不明な金融機関相手の振替はreviewとし、
+摘要だけで広く支出化しない。既存支出と日付・金額・店舗が一意に一致する場合だけ
+link候補にする。
+
+canary候補1件の投影もwriteなしで確認できる:
+
+```bash
+python -m app.cli bank-finalization-preview \
+  --source-identity '<stable-bank-import-id>'
+```
+
+production反映は自動workflowへ接続していない。明示承認後に限り、選択したstable
+identity 1件だけを `bank-finalization-apply --apply` へ渡す。previewが返す
+`target_spreadsheet_id` と `expected_git_head` もapply時に完全一致させる。支出は既存のstable
+`M-...` IDで `支出明細` へupsertし、`取込データ` のstatus/targetをread-backする。
+途中失敗後のreplayでは同じ支出を再追加せず、未反映の取込statusだけを修復する。
+
 Amazon baseline注文とカードのAmazon分割払いは、次の専用previewで照合できる:
 
 ```bash

@@ -32,6 +32,10 @@ from .maintenance import (
     cleanup_processed_receipts,
 )
 from .auto_expense import AutoExpensePipeline
+from .bank_finalization import (
+    BankFinalizationPipeline,
+    validate_bank_finalization_canary,
+)
 from .amazon_installment import AmazonInstallmentPipeline
 from .amazon_csv_diagnostics import diagnose_amazon_csv_amounts
 from .amazon_unmatched import (
@@ -219,6 +223,13 @@ def main():
     sub.add_parser("expenses-refresh")
     sub.add_parser("auto-expense-preview")
     sub.add_parser("auto-expense")
+    bank_finalize_preview=sub.add_parser("bank-finalization-preview")
+    bank_finalize_preview.add_argument("--source-identity",action="append",default=[])
+    bank_finalize=sub.add_parser("bank-finalization-apply")
+    bank_finalize.add_argument("--source-identity",action="append",required=True)
+    bank_finalize.add_argument("--approved-target",required=True)
+    bank_finalize.add_argument("--expected-head",required=True)
+    bank_finalize.add_argument("--apply",action="store_true")
     sub.add_parser("amazon-installment-preview")
     sub.add_parser("amazon-installment-apply")
     sub.add_parser("amazon-event-match")
@@ -961,6 +972,45 @@ def main():
         s,db,_=make(False); print(AutoExpensePipeline(db).preview())
     elif args.cmd=="auto-expense":
         s,db,_=make(False); print(AutoExpensePipeline(db).apply())
+    elif args.cmd=="bank-finalization-preview":
+        s=Settings(); s.validate(need_sheet=True)
+        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        repo_root=Path(__file__).resolve().parents[1]
+        result=BankFinalizationPipeline(db).preview(
+            tuple(args.source_identity),
+        )
+        result.update({
+            "target_spreadsheet_id":s.spreadsheet_id,
+            "target_sheets":["取込データ","支出明細"],
+            "expected_git_head":subprocess.check_output(
+                ["git","-c",f"safe.directory={repo_root.as_posix()}",
+                 "rev-parse","HEAD"],
+                cwd=repo_root,text=True,
+            ).strip(),
+            "production_apply_max_rows":1,
+        })
+        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
+    elif args.cmd=="bank-finalization-apply":
+        if not args.apply:
+            raise SystemExit("bank finalization production apply requires --apply")
+        s=Settings(); s.validate(need_sheet=True)
+        repo_root=Path(__file__).resolve().parents[1]
+        current_head=subprocess.check_output(
+            ["git","-c",f"safe.directory={repo_root.as_posix()}",
+             "rev-parse","HEAD"],
+            cwd=repo_root,text=True,
+        ).strip()
+        validate_bank_finalization_canary(
+            tuple(args.source_identity),
+            target_spreadsheet_id=s.spreadsheet_id,
+            approved_target=args.approved_target,
+            current_head=current_head,
+            expected_head=args.expected_head,
+        )
+        db=SheetsDB(s.spreadsheet_id)
+        print(json.dumps(BankFinalizationPipeline(db).apply(
+            tuple(args.source_identity),
+        ),ensure_ascii=False,sort_keys=True))
     elif args.cmd=="amazon-installment-preview":
         s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
     elif args.cmd=="amazon-installment-apply":
