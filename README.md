@@ -270,7 +270,7 @@ au PAY残高オートチャージとAmazon照合済みカードは対象外と�
 「店舗名」に取込データ上の表記、「標準店舗名」に統一後の名称を入力すると、
 照合時に両者を同じ店舗として扱う。店舗IDと備考は管理用の任意項目。
 
-## 銀行PDFをread-onlyで確認する（auじぶん銀行 / ドコモSMTBネット銀行）
+## 銀行PDFをread-onlyで確認する（auじぶん銀行 / ドコモSMTBネット銀行 / 千葉銀行）
 
 native text layerを持つ普通預金取引明細PDFを、Sheetsへ書き込まず確認する。
 発行元marker・header・geometryから対応adapterを自動選択し、未知形式はfail-closedする。
@@ -334,6 +334,8 @@ BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON=[]
 ```
 
 ### 日常運用（銀行PDF）
+
+対応銀行（auじぶん銀行、ドコモSMTBネット銀行、千葉銀行）はPDFから自動判別します。未知形式は安全に停止します。
 
 通常は次の2操作だけを使う。previewはSheets/Gmailをread-onlyで参照し、
 新しい `income` / `expense` / `loan_repayment` だけを外部manifestへ固定する。
