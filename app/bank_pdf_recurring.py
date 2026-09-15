@@ -147,6 +147,9 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "duplicate": 0,
         "review": 0,
         "income": 0,
+        "household_income_confirmed": 0,
+        "household_income_review": 0,
+        "income_write_enabled": False,
         "non_expense": 0,
         "withheld": 0,
         "written": 0,
@@ -223,6 +226,9 @@ def run_bank_pdf_recurring(
             )
             summary["review"] = int(summary["review"]) + file_review
             summary["income"] = int(summary["income"]) + int(details.get("new_income", 0))
+            household = details.get("household_income", {}).get("classification", {})
+            summary["household_income_confirmed"] += int(household.get("confirmed_income", {}).get("count", 0))
+            summary["household_income_review"] += int(household.get("needs_review", {}).get("count", 0))
             summary["non_expense"] = int(summary["non_expense"]) + sum(
                 int(details.get(name, 0))
                 for name in (

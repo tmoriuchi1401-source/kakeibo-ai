@@ -22,6 +22,29 @@
 
 ## 1. Last verified
 
+### 2026-09-15 銀行収入・Payroll分離（branch検証、本番未切替）
+
+- 最新main `af80174e6bb35e60a763f180858465b7cf075f16` を独立cloneし、
+  `feature/bank-income-payroll-separation`で実装。開始時dirty/stashなし。
+- 現行Payrollは給与専用2表だけへ保存、ホームは支出一覧参照でPayroll集計なし。
+  存在しない連携を切断する機構は追加しない。既存Payroll checkout/Task・保存対象を維持。
+- `bank_income.py`に既存確認済みルール＋銀行取引種別での収入判定、保存済み取込基点の
+  backfill preview、収入明細A:J schema案、既定OFFのwriter、bank限定月次集計を追加。
+  identity resolver / bank ID/hash / Settingsルール / SheetsDBを再利用。
+- `bank-income-preview`はread-only clientで動き、apply入口なし。
+  新着PDFのdaily/recurringにも同じ判定のpreviewを追加。既存expense-only authorityを維持。
+  共通schemaへの登録なし。収入シートや本番UIは未作成/未変更。
+- 指定Sheetのread-only snapshotを同じ本実装でpreview。
+  分類件数・実金額・摘要・取込ID・元行番号・月次案・確認事項と既存計上の切替判定は
+  Git除外の私的報告だけへ保存。実データの診断結果は公開Gitへ含めない。
+- 検証：関連93 passed、最終追加/recurring集中50 passed、full pytest **1276 passed**
+  （23.39秒、Windows Python 3.14、全テストの実ネットワーク禁止）。
+  別checkoutの既存Payroll writer合成テスト17 passed。
+  compileall / diff-check成功。既存google-genaiのDeprecationWarning 1件。
+- 方針・schema・backfill/recurring別の承認範囲・UI案は
+  [銀行収入とPayrollの分離](docs/bank_income_payroll_separation.md)。
+  main反映、Googleデータ変更、既存行削除、Secrets/authority変更、収入scheduled writeは行わない。
+
 ### 2026-09-15 新入口無効でmain統合済み
 
 - 新Goalの範囲は「新入口無効でmain統合」。本番切替・L4確認は含めない。

@@ -302,6 +302,7 @@ def main():
     payroll_preview=sub.add_parser("payroll-file-preview")
     payroll_preview.add_argument("file")
     sub.add_parser("payroll-drive-preview")
+    sub.add_parser("bank-income-preview")
     bank_pdf=sub.add_parser("bank-pdf-preview")
     bank_pdf.add_argument("pdf")
     bank_pdf.add_argument("--account-alias")
@@ -415,6 +416,16 @@ def main():
         print("開発環境チェック完了")
     elif args.cmd=="payroll-file-preview":
         print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
+    elif args.cmd=="bank-income-preview":
+        from .bank_income import BankIncomePipeline
+        s=Settings(); s.validate(need_sheet=True)
+        read_db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
+        result=BankIncomePipeline(
+            read_db,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+        ).preview()
+        print(json.dumps(result,ensure_ascii=False))
     elif args.cmd=="payroll-drive-preview":
         s=Settings(); s.validate(need_payroll_drive=True)
         print(json.dumps(DrivePayrollPreview(s.payroll_drive_folder_id).preview(),ensure_ascii=False))

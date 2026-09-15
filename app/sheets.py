@@ -55,6 +55,10 @@ class SheetsDB:
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+    def append_raw(self, sheet:str, rows:list[list]):
+        """Append literal ledger values; do not interpret bank descriptions as formulas."""
+        if not rows:return
+        self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="RAW",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
     def clear(self,rng:str):
         self.svc.spreadsheets().values().clear(
             spreadsheetId=self.sid,range=rng,body={}

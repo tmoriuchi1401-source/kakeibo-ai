@@ -245,6 +245,9 @@ def test_income_candidate_is_not_an_expense_write(tmp_path, monkeypatch):
         summary = {
             "parsed": 1, "existing_duplicate": 0, "true_unknown": 0,
             "withheld_by_classification": 0, "collision": 0, "new_income": 1,
+            "household_income": {"classification": {
+                "confirmed_income": {"count": 1}, "needs_review": {"count": 0},
+            }},
         }
 
     monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: _Daily())
@@ -261,6 +264,9 @@ def test_income_candidate_is_not_an_expense_write(tmp_path, monkeypatch):
 
     assert result["status"] == "dry_run_noop"
     assert result["income"] == 1
+    assert result["household_income_confirmed"] == 1
+    assert result["household_income_review"] == 0
+    assert result["income_write_enabled"] is False
     assert result["planned_expense_writes"] == 0
 
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .bank_pdf_pipeline import BankPdfPipeline
+from .bank_income import deposit_decisions, income_summary
 from .bank_reconciliation import (
     BankPreviewPlan,
     BankShadowResult,
@@ -126,14 +127,29 @@ def build_bank_daily_preview(
             and decision.write_eligibility == "preview_candidate"
         )
     ))
+    income_decisions, income_duplicates = deposit_decisions(
+        parsed.transactions,
+        confirmed_internal_transfers=confirmed_internal_transfers,
+        confirmed_non_own_classifications=confirmed_non_own_classifications,
+    )
+    summary = _daily_summary(
+        shadow,
+        plan,
+        pdf_sha256=pdf_digest(path),
+        target_spreadsheet_id=target_spreadsheet_id,
+        expected_git_head=expected_git_head,
+    )
+    # Independent, read-only household-income assessment of new PDF deposits.
+    # Existing import/expense eligibility, manifests and processed flags stay unchanged.
+    summary["household_income"] = income_summary(income_decisions, income_duplicates)
+    existing_import_ids = {row.import_id for row in existing}
+    summary["household_income"]["confirmed_import_candidates"] = sum(
+        decision.outcome == "confirmed_income"
+        and decision.transaction.source_row_identity not in existing_import_ids
+        for decision in income_decisions
+    )
     return BankDailyPreview(
-        summary=_daily_summary(
-            shadow,
-            plan,
-            pdf_sha256=pdf_digest(path),
-            target_spreadsheet_id=target_spreadsheet_id,
-            expected_git_head=expected_git_head,
-        ),
+        summary=summary,
         candidate_identities=plan.candidate_identities,
         pdf_sha256=pdf_digest(path),
         target_spreadsheet_id=target_spreadsheet_id,
