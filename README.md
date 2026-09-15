@@ -175,10 +175,17 @@ allowlistコピーを一時領域で検査。Google Secrets/実IDは渡さず、
 検証SHA `21112169ae62c99ac04e66c0b77fde4542fba60b`、
 [Linux CI 34960953834](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34960953834)は
 一般1304件＋Payroll/Medical合成55件成功。同じ完全SHAをmainへ通常fast-forward push済み。
-inspect起動は自動承認レビューが以前の「Workflow起動禁止」を適用して拒否し、未実行。
-未起動・Google認証/取引apply/cache保存/artifactなしを再確認しても拒否されたため、別経路で起動しない。
-実cache取得・正式移送・Actions親previewは未実施、旧運用を停止していない。
-この検査の成功は最終移送版の確定や、Driveの本番binding/接続確認を意味しない。
+inspect起動は初回レビュー拒否後、本人の1回限りの明示承認で実施。
+[run 34962727963](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34962727963)は
+上記main SHA・attempt 1で成功し、run総数1・artifact 0をAPIで確認した。
+Amazon `amazon-production-state-34907742177-1`、カード `aupay-card-production-state-34907806301-1`、
+銀行 `bank-pdf-recurring-state-34911236780-1` をexact hitで取得。許可nativeファイル数は1/5/1で、
+全sourceのcheckpoint検査・未確定記録/lease検査・一時領域への復元一致が成功した。
+checkpointは2026-09-15 JSTでAmazon 08:12:38、カード08:13:26、銀行05:48:11。
+最新native statusは`noop` / `complete` / `dry_run_noop`。銀行scheduleはpreview成功として扱う。
+Google認証を渡さず、cache保存/Google変更なし。旧運用は停止していない。
+この候補検査は最終移送版の確定やDriveの本番binding/接続確認ではない。正式移送・Actions親previewは未実施。
+次は固定4bundleの移送経路と、実IDをActions logへ出さない受渡しを準備・検証する。
 
 ##### state移送とActions previewだけを行う保守手順
 

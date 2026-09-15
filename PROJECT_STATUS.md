@@ -22,7 +22,7 @@
 
 ## 1. Last verified
 
-### 2026-09-15 state移送前のcache検査経路（main統合済み、inspect起動保留）
+### 2026-09-15 state移送前のcache検査（mainで1回実行、3source成功）
 
 - 旧運用を停止する前の検査として、`state-cache-inspect.yml`を追加。manual/main限定・inspectのみ。
   完全cacheキーと最新run/attempt成功を照合し、exact hit以外は停止。Google Secrets/実ID/本番bindingを渡さない。
@@ -36,17 +36,23 @@
   一般1304件＋Payroll/Medical合成55件。本番Secrets/実帳票なし。
 - main更新は初回レビュー拒否後、再提示された移送Goalの許可と検証証跡を確認して通常push成功。
   mainは`d9d1e57`から上記Linux検証済み`21112169`へfast-forward。remote SHAを確認。
-- inspectの送信操作は自動承認レビューが以前の「Workflow起動禁止」を適用して拒否。
-  起動0件・Google Secrets/apply/cache保存/artifactなしをread-only証明しても再度拒否された。
-  別経路で起動せず保留。cache実取得・旧入口停止・state移送・親previewは未実施。
+- inspectは初回の自動承認レビュー拒否後、本人の「mainでinspectとして1回起動」の明示承認で実行。
+  [run 34962727963](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34962727963)、attempt 1、
+  上記検証済みSHAで20:20:10〜20:20:22 JST、成功。run総数1・artifact 0をAPIで確認。
+- Amazon `34907742177-1` / カード `34907806301-1` / 銀行 `34911236780-1` の完全cacheキーで
+  exact hit、許可nativeファイル1/5/1、checkpoint・閉じた記録・一時復元一致を全source確認。
+  checkpointは同日JSTでAmazon 08:12:38、カード08:13:26、銀行05:48:11。
+  最新native statusは順に`noop` / `complete` / `dry_run_noop`。銀行scheduleはpreviewとして扱う。
+- 旧運用を動かしたままの候補検査であり、最終移送版ではない。旧入口停止・正式state移送・
+  ActionsからのDrive読取・親previewは未実施。Google認証を渡さず、今回のGoogle直接変更0。
 - 実Variables画面は未設定。既存28 Workflowはactive。元状態をrepository外の非公開
   `production-state-setup/migration-start-workflows.json`へ保存。設定を変更せず旧運用を継続。
 - 20:05 JSTに本番SAのread-only scopeで固定4ファイルを再読込。すべて未初期化の準備用JSONで
   前回試験から不変、本人所有・固定親・指定SAだけの共有を再確認。今回のGoogle直接変更は0。
   証跡は同じ非公開領域の`migration-preflight-destinations.json`。本番state/Actions接続の確認ではない。
-- 次はinspect起動の承認境界を解消し、候補cacheを実取得してcheckpointを確認する。
-  銀行scheduleはpreviewであり、cache存在だけで成功checkpointありとは扱わない。
-  取得/構造が未確定の間は旧運用を停止しない。本番切替・L4確認ではない。
+- 次は固定4bundleの正式移送経路と、実IDをActions logへ出さない受渡しを準備・検証する。
+  準備完了まで旧運用を停止しない。停止後は最新run/attempt/cacheを再確定する。
+  inspect成功をDrive本番接続・本番切替・L4確認とは扱わない。
 
 ### 2026-09-15 Drive保存先の準備・実接続確認済み
 
