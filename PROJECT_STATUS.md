@@ -22,6 +22,37 @@
 
 ## 1. Last verified
 
+### 2026-09-15 Drive保存先の準備・実接続確認済み
+
+- 今回の到達点は保存先準備とWindowsからの実接続確認。本番state移送・旧運用停止・新親有効化は未実施。
+- 開始HEADは`af80174e6bb35e60a763f180858465b7cf075f16`、専用branch/upstreamは
+  `integration/production-orchestration-20260915` / `origin/integration/production-orchestration-20260915`。
+  working tree clean/stashなし。他Workのmain進行を取得し、最新確認`b61965c970ea391a3177f25d7598f7f45cad123d`
+  までfast-forwardで保持。今回mainはpushしない。AGENTS.mdは作業先/親に見つからなかった。
+- 実際のGitHub Variables画面は未設定。新親のguardは不成立、旧日常4入口と既存保守入口はactive。
+  Variables/Secrets/Workflow設定は変更していない。
+- 本人Drive接続と既存Gmail認証の本人を照合。本番SAは既存設定とDrive認証応答を照合。
+  本人My Drive直下・家族共有フォルダ外に`KakeiboAI_system_state`を1個作成し、
+  本人所有のJSON 4個（Amazon・au PAYカード・銀行・共通運用記録）を配置した。
+- フォルダに指定本番SA 1つだけのwriterを付与。子4ファイルは継承し、本人owner+指定SAのみ。
+  anyone/domain/group/家族共有なし。親位置は本人認証で確認。既存フォルダ/原本の権限は変更なし。
+- 本番SAと既存`DriveStateTransport`で、各JSONの読取→試験値更新→同一IDの新規読戻しを実施。
+  **4/4で送信bytes一致、ID/本人所有/親/形式/共有範囲維持を確認**。本人認証でも最終権限を再確認。
+  内容は`UNINITIALIZED_NOT_PRODUCTION_STATE`のまま。現行native/ledger validatorが拒否することを確認。
+  ready/checkpoint/native stateの作成、履歴sourceの空bootstrap、削除/作り直しなし。
+- 実IDは作成ごとにrepository外`%LOCALAPPDATA%\KakeiboAI\production-state-setup\setup.json`へ保存。
+  同領域に4個の`*.binding.json`、読戻し/権限証跡、移送元cache metadataを保存。
+  ACLはWindows本人/SYSTEMのみ。実ID・認証情報・state本文は公開Gitへ含めない。
+- Amazon `34907742177` / カード `34907806301` / 銀行 `34911236780`の成功run、
+  state restore/save step成功、同じrun/attemptのmain cache存在をread-only確認。銀行はpreview。
+  cache本文やcheckpointは取得しておらず、稼働中の観測を最終移送版にはしない。
+- 次回の全write入口停止・run終了確認→最新確定state取得→正式移送/読戻し→親preview→canary→
+  定期切替はREADMEに集約。月次/手動/ローカルwriteの割込みも防ぐ保守境界を必要条件とした。
+  Actions上の接続確認、本番復元、本番切替、L4確認は未実施。
+- 今回の直接Google変更はfolder 1個/JSON 4個作成、SA writer付与1件、JSON内容更新4回。
+  Sheets write・原本move/delete・新規OAuth同意/scope/鍵・Task/課金変更なし。従来運用や他Workの操作とは区別する。
+  repository変更はREADME/PROJECT_STATUSだけ。補助コード/実行コードを変更していないため、新しいpytest/CIは実行しない。
+
 ### 2026-09-15 固定銀行収入backfill完了
 
 - 個別承認済み固定planだけを扱う `bank-income-backfill.yml` を追加。manualのみ、既定preview。

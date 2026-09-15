@@ -117,6 +117,57 @@ mainへ統合済み・新入口無効。本節の切替後の移行目標は現�
   Workflowの手動起動/enable-disable設定、公開設定/課金は変更していない。
   旧自動運用のGoogle操作とは区別する。本番切替完了・L4確認済みではない。
 
+#### Drive保存先の準備・実接続確認（2026-09-15）
+
+本人の既存Drive接続と既存Gmail認証の本人を照合し、本番SAは既存設定とDrive認証応答を照合した。
+本人My Drive直下（家族共有フォルダ外）へ`KakeiboAI_system_state`を1個作成。
+本人所有のまま、指定した既存本番SA 1つだけにフォルダのwriterを付与した。
+以下の4ファイルはその権限を継承する。anyone/domain/group/家族への共有はない。
+親のMy DriveはSAから見えないため、フォルダのroot直下配置は本人認証のmetadataで確認した。
+
+| 固定ファイルの用途 / 名前 | 本番SAの読取 | 同じfile IDへの更新・読戻し | 更新後の所有者・親・共有 |
+|---|---|---|---|
+| Amazon / `amazon_gmail.json` | 内容一致 | 成功・送信bytes一致 | 本人所有・専用folder・本人+指定SAのみ |
+| au PAYカード / `au_pay_card_gmail.json` | 内容一致 | 成功・送信bytes一致 | 同上 |
+| 銀行 / `bank_pdf_drive.json` | 内容一致 | 成功・送信bytes一致 | 同上 |
+| 共通運用記録 / `production_run.json` | 内容一致 | 成功・送信bytes一致 | 同上 |
+
+内容は個人情報を含まない接続試験JSONで、`status=UNINITIALIZED_NOT_PRODUCTION_STATE`。
+試験値だけを`owner_created`から`sa_update_verified`へ1回ずつ変更した。
+既存`DriveStateTransport`と本番SAを使用し、実ID/親/JSON形式/本人所有/canEdit/canDownloadと
+権限一覧を前後照合。本人認証でも更新後の4ファイルの共有範囲を再確認した。
+現行native/ledger validatorは準備用JSONを拒否する。validatorを緩めず、ready/checkpointを作っていない。
+試験済みファイルを削除・再作成せず、正式移送時に内容を置き換える固定先として残した。
+
+返却IDは作成ごとにrepository外の`%LOCALAPPDATA%\KakeiboAI\production-state-setup\setup.json`へ保存。
+同じ場所の`*.binding.json` 4個が既存adapter用binding、`*.probe.json`と
+`owner-final-permissions.json`が読戻し/権限証跡、`completion.json`が到達点の記録。
+この領域はWindows本人とSYSTEMだけのACL。実ID・認証情報・native stateを公開Gitへ含めない。
+再実行は保存済み固定IDの確認から始め、名前による上書きや無条件の追加作成をしない。
+
+今回の直接Google変更は新設folder 1個、準備用JSON 4個、folderのSA writer付与1件、
+各JSON内容更新1回だけ。新しいOAuth同意/scope/鍵、Sheets write、既存原本move/deleteはなし。
+本番state移送・Actionsからの接続試験・新親preview/canaryは未実施。旧運用は継続し、新親はOFF。
+この確認はWindowsからの保存先接続に限り、本番復元成功・切替完了・L4確認済みとはしない。
+
+##### 移送元stateのread-only棚卸し
+
+| source | 現在のActions上の場所 | cache key | 確認した成功run |
+|---|---|---|---|
+| Amazon | `$RUNNER_TEMP/amazon-production-state` | `amazon-production-state-<run_id>-<attempt>` | [34907742177](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34907742177)、schedule |
+| au PAYカード | `$RUNNER_TEMP/aupay-card-production-state` | `aupay-card-production-state-<run_id>-<attempt>` | [34907806301](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34907806301)、schedule |
+| 銀行 | `$RUNNER_TEMP/bank-pdf-recurring-state` | `bank-pdf-recurring-state-<run_id>-<attempt>` | [34911236780](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34911236780)、schedule preview |
+
+3 runのrestore/save step成功と、同じrun/attemptを持つmain cacheの存在をAPIで確認した。
+cache metadataは非公開`source-state-inventory.json`に保存。本文・SQLite checkpointは取得していない。
+稼働中の観測であり、これを最終移送版にはしない。銀行preview成功は取引apply成功の証明ではない。
+既存Workflowは`actions/cache/restore@v4`で取得し、`actions/cache/save@v4`でrunごとに保存している。
+最終移送時は停止後のrun/attemptに対応する完全キーを選び、cache miss時は停止する。
+通常運用のprefix fallbackや空state bootstrapで不足を埋めない。
+cacheには認証/authority等が混在し得るため、下記allowlistのnativeファイルだけを梱包する。
+取得から固定Driveへの正式移送までの保守実行経路・対象SHAは次回承認時に確定する。
+今回は取得用Workflowも起動せず、cache/stateをpublic log/artifactへ出していない。
+
 #### 開始時のGit・Windows確認
 
 - 対象: `tmoriuchi1401-source/kakeibo-ai`。取得した最新main:
@@ -255,7 +306,7 @@ API writeは自動retryなし。途中中断・source failure・保存結果不�
 1. 初回移送: 全旧write入口停止・run終了後、最後のcache/Windows stateの出所・source・target・
    最終成功窓を照合し、秘密鍵を除いた閉じたstateだけを`snapshot`→`envelope`で梱包する。
    `validate`で再検査し、承認済み非公開フォルダ/既存認証/固定file IDへ移送する。
-   **実Driveフォルダ作成・state upload・初期state読取は今回未実施**。
+   **保存先folder/未初期化4ファイルの作成・接続試験は完了。本番state upload/復元は未実施**。
 2. 新規source初期化: 履歴のあるsourceのstate欠落とは別。
    承認された`initial_start`と空の既存形式stateを明示的に作る必要がある。
    空の既存形式stateの作成はoperatorが明示的に実施する。移送CLIの`--bootstrap`は
@@ -271,18 +322,18 @@ API writeは自動retryなし。途中中断・source failure・保存結果不�
    bankの中断manifestが再利用を拒否する場合も勝手に消さず、別途整合確認する。
 
 既存Google認証を再利用する。現在のSAと既存backup OAuthを勝手に交換しない。
-切替前に所有者・共有範囲・親フォルダ・`canEdit`・ファイル作成可否を同じ認証で確認する。
-adapterは既存fileの親/種別/更新可否を検査するが、private共有範囲や作成権限の実確認は未実施。
-権限不足は外部確認の未達として分け、実装・fake Driveテストを止めない。
+保存先の作成は本人認証、日常更新は既存SAと役割を分ける。
+所有者・共有範囲・親フォルダ・`canEdit`と実読取/更新/読戻しは上記準備用ファイルで確認済み。
+切替前には固定IDで再確認する。Actions runnerからの接続と本番state復元は未確認のまま残す。
 
-09-15の追加read-only確認: 現在設定されているSAでDrive `about.get`に成功。
-`storageQuota.limit=0`、`canCreateDrives=false`だった。新しいstate folder/file IDは未設定。
+09-15の準備前read-only確認では、現在のSAでDrive `about.get`に成功し、
+`storageQuota.limit=0`、`canCreateDrives=false`だった。その後、本人認証で固定保存先を作成した。
 Google公式もSAは保存容量を持たずファイル所有者になれないとしている。
 [Driveの所有・保存容量の制約](https://developers.google.com/workspace/drive/api/guides/about-shareddrives)
-したがって初期配置は、切替承認後に既存の所有者が非公開管理フォルダと4個の固定JSONファイルを作成し、
-その所有権を維持する方式とする。必要なSAへの共有は別途明示承認し、公開リンクは作らない。
+今回の保存先準備Goalの明示承認により、既存の所有者が非公開管理フォルダと4個の固定JSONファイルを作成し、
+その所有権を維持した。指定SAへの編集者共有も同Goalの許可内で行い、公開リンクは作っていない。
 日常runnerは現在のSAでその固定file IDを更新し、所有者のOAuthへ自動切替しない。
-実ファイルの所有者/共有範囲/`canEdit`/更新read-backは、対象IDが確定した後の未実施確認として残す。
+実ファイルの所有者/共有範囲/`canEdit`/更新read-backは確認済み。本番stateへの置換は未実施。
 `canCreateDrives=false`は共有ドライブ作成の値であり、既存ファイル更新可否の証明には使わない。
 
 offline移送CLI（すべて実Googleへの通信なし、絶対パスかつrepository外を要求）:
@@ -383,16 +434,23 @@ canary不一致/不明結果ならscheduleを有効化せず、pendingを人が�
 各既存authorityの件数/期間、新着と過去未反映行、共通後処理・原本archiveの変更予定を別途承認し、
 sourceごとの実read-back/replayを確認してからscheduleを有効化する。
 
-切替時は **旧起動停止 → 実行中run終了確認 → state移送 → 新入口preview →
+切替時は **保存先準備完了 → 対象旧入口停止・実行中/待機中処理の終了確認 →
+最新の確定state取得 → 固定ファイルへの正式移送・読戻し → 新入口preview →
 限定canary/read-back/replay → 新schedule有効化**。新旧write並走は禁止。
+保存先準備前に旧運用を止めない。今回実行したのは保存先準備・接続確認まで。
+移送の保守時間には旧日常4入口だけでなく、月次backup/retention、全manual write入口
+（銀行収入backfillを含む）、ローカル/他Workのwriteも入れない。
+停止・終了確認後から移送/読戻しまで同じproduction concurrency内で作業し、
+Actions lock外のローカルwriteは操作者の保守手順で止める。待機runを残したまま移送しない。
+これらの停止・移送・新親起動は今回行っていない。
 新入口停止とstate/Sheets整合性確認後にだけ復帰を検討し、無条件rollbackをしない。
 Windows直接writeはActionsロックの対象外。移行後はlocalテスト/previewに限定し、
 本番修復は定期運用を止めた保守手順で実施する。現在のTaskは停止していない。
 
 09-15の新Goalで新入口OFF・旧運用継続を条件とするmain統合は承認済み。
-次の実作業はDrive固定stateファイルの準備・権限確認・移送。準備前に旧運用を止めない。
+保存先準備・権限確認は完了。次回は全write入口の保守境界を確定し、最新確定stateの取得・移送から進める。
 今後の外部操作承認は最後にまとめる: 旧起動停止と新入口切替、
-既存認証での非公開Drive folder/file作成・初期state移送、対象を限定したcanary/replay。
+固定ファイルへの正式state移送、対象を限定したcanary/replay。
 銀行scheduleのapply拡大、機微実データ移転、ホーム反映、公開設定/課金はこれに含めない。
 実装・テスト・文書・checkpoint commitは本Goalの許可内で継続する。
 
@@ -442,8 +500,8 @@ private化の提案:
 | 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | main統合済み。新親jobはVariable未設定で無効・本番未起動 |
 | 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 source新規取込、4 source支出反映、canonicalカード未反映の維持、通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
 | 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
-| native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay、既存SAのDrive about読取 | 合成検証済み。SA容量0/共有ドライブ作成不可を実確認し、所有者による初期配置を手順化。対象ID未設定のため実state移送/実file所有/共有/更新確認は未実施 |
-| stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
+| native state保存/復旧 | 合成pytest、本人による固定保存先作成、既存SAの準備用JSON読取/更新/読戻し | 固定ID/本人所有/指定SAだけの共有/実接続を確認。本番state移送・Actions接続・復元は未実施 |
+| stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py`、共通運用記録用固定JSONの接続試験 | 合成検証済み。準備用ファイルは未初期化のままで、正式運用ledgerは作成/移送していない |
 | 上限/欠落/破損/長期未実行/部分失敗 | state/production/Amazon/card/bankの既存・追加pytest | native windowを飛ばさず停止。残高30日超の回復は別の期間承認が必要 |
 | 機微境界/retention | 既存privacy gate維持、normal provenance selector、削除0のpreviewテスト | branch準備済み。Payroll/Medical実データ移行なし、保存禁止項目は次段階条件に明記 |
 | Linux互換 | `synthetic-tests.yml`、[修正後CI](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34925859316)、検証SHA `002a112` | Ubuntu 24.04.5 / Python 3.12.14、一般1183件/機微合成51件成功。本Goalで実データをLinuxへ移していない |
