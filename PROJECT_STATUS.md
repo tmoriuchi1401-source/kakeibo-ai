@@ -77,10 +77,16 @@
   SAの容量上限0/共有ドライブ作成不可を確認。新state folder/file IDは未設定のため、
   実ファイルの所有/共有/更新は未確認。既存所有者による初期配置と現在SAでの固定file更新を
   READMEへ明記し、認証切替・所有権移転・Google外部writeは行っていない。
-- **未完了:** Linux合成実行（公開push承認待ち）、外部state権限/所有/作成可否の確認、
+- Linux検証完了: 09-15のユーザー明示承認後、`943e4771abb8dbf4fdd1cb7fc17eee38c7b4004f`を
+  専用branchへpush。upstreamを設定し、[Synthetic integration checks #1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34921871563)
+  が成功。Ubuntu 24.04.5 / Python 3.12.14で一般系1180 passed（13.38秒）、
+  Payroll/Medical合成51 passed（4.05秒）、合計1231 passed。両jobのcompileall/diff-checkも成功。
+  本番/AI Secretsなし、実帳票なし、テストからのネットワーク接続禁止。mainは`73ff2ff`のまま。
+- **未完了:** 外部stateファイルの所有/共有/更新可否の確認、
   実対象canaryの承認・state移送・実read-back。実切替は未実施。Goalは継続中、L4へ昇格しない。
 - checkpoint `20452dc` の通常pushは自動承認レビューがpublic repoへの新コード/運用情報公開として
-  拒否。pushは未実行、upstream未設定。公開先と最終payloadへの明示承認なしに再試行しない。
+  拒否。その後、ユーザーが公開pushとSecretsなしLinux CIを明示承認し、上記push/CIを完了した。
+  この承認にmain統合・本番起動・Google外部write・公開設定変更は含まれない。
 - **外部未実施:** main統合・Workflow起動/変更・Google write/move/delete・state upload・
   Task停止・Secrets/OAuth変更・visibility/課金変更。本番L4への昇格なし。
 - 現在repoはpublic。契約枠/支出停止設定は確認済み。private化は提案段階で未実施。

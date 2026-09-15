@@ -355,7 +355,8 @@ Windows直接writeはActionsロックの対象外。移行後はlocalテスト/p
 
 #### 次段階・公開設定
 
-- Payroll/Medical実データはActionsへ移さない。Linux合成テストWorkflowを準備したが未実行。
+- Payroll/Medical実データはActionsへ移さない。承認済みbranchのLinux合成CIは09-15に成功。
+  一般系1180件とPayroll/Medical合成51件を別jobで実行した（合計1231件）。
   ローカルWSLは未インストール、Dockerなし。新しいOS環境は導入していない。
   「外部AIへ送らない」と「GitHub計算機内で処理する」は別の承認事項。
   将来の機微jobはAI鍵なしで分離し、原本/OCR本文をartifact/cache/logへ出さない。
@@ -402,15 +403,15 @@ private化の提案:
 | stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
 | 上限/欠落/破損/長期未実行/部分失敗 | state/production/Amazon/card/bankの既存・追加pytest | native windowを飛ばさず停止。残高30日超の回復は別の期間承認が必要 |
 | 機微境界/retention | 既存privacy gate維持、normal provenance selector、削除0のpreviewテスト | branch準備済み。Payroll/Medical実データ移行なし、保存禁止項目は次段階条件に明記 |
-| Linux互換 | `synthetic-tests.yml`でPython3.12、一般/機微fixture別job | Workflow準備のみ。Linux実行は未確認（local WSL/Dockerなし、push拒否） |
-| テスト・compile・diff | PROJECT_STATUS最新検証欄 | Windows合成検証済み。GitHubネイティブ検証は未確認 |
+| Linux互換 | `synthetic-tests.yml`、[CI #1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34921871563)、検証SHA `943e477` | Ubuntu 24.04.5 / Python 3.12.14、一般1180件/機微合成51件成功。本番実データのLinux処理は未実施 |
+| テスト・compile・diff | PROJECT_STATUS最新検証欄、上記CIの両job | Windows/Linuxとも合計1231件成功。両Linux jobのcompileall/diff-check成功。本番親Workflow実行は未実施 |
 | 運用summary・ホーム | count-only JSON、source別last_success/確認待ち/error/duration | 実装/合成検証済み。ホーム反映は未実施・別承認 |
 | 切替・canary・復帰 | 本節の順序・具体入力・承認記録、親のAmazon限定scope、既存authority/dedupe/read-backを再利用 | 合成canaryで4表各1行と他source非起動、read-only replay、対象不一致時のwrite0を確認。実対象reference/承認/切替/他source本番read-backは未実施 |
 
 公開repoへの通常pushはcheckpoint `20452dc` 時点で自動承認レビューが拒否した。
-理由は新規コード/運用文書のpublic公開先とpayloadへの明示承認不足。迂回・再試行はしていない。
-追加のローカル実装を続けた。branch upload承認後にSecretsなしLinux合成CIを実行できるが、
-その承認にmain統合・本番起動・実データ移送は含めない。
+理由は新規コード/運用文書のpublic公開先とpayloadへの明示承認不足だった。
+09-15にユーザーが公開pushとSecretsなしLinux合成CIを明示承認し、`943e477`のpushとCI #1が成功した。
+この承認にmain統合・本番起動・実データ移送・公開設定変更は含まれない。
 
 Secretsに以下を登録:
 - GEMINI_API_KEY
