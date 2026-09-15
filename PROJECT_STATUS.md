@@ -42,6 +42,21 @@
   本番停止/main反映は必要準備とCIが揃ってから行う。Medicalは従来の非AI境界を維持し、実検証未実施。
 - Windows全体合成 **1415 passed**、Node 6件、compileall/diff-check成功。
   実送信・台帳修復・全10件完了の証拠ではない。Linux CIは同じ専用branchのSecretsなしjobで検証する。
+- 実装SHA `d00044dd84030b9ad0d160355d2af367d9715ee1` のLinux CI `35034043311` 成功。
+  一般1358件＋機微合成57件＝1415件、Node/compileall/diff-check成功。本番Secrets・実帳票なし。
+
+#### Medicalの独立したWindows非AI検証
+
+- 最新inboxのPDF2件をID/版/hashで固定し、既存非AI gateでMedical1件とunknown1件を識別。
+  原本・OCR本文・患者情報を外部AIへ送信せず、Google writeも0。
+- 対象Medicalは`needs_review`。ラベル付き支払日・発行施設位置・実支払額の抽出候補はいずれも0で、
+  独立した確認根拠なし。欠損を仮日付/0円で埋めず、本人確認済みや自動確定として扱わない。
+- 専用の非公開Windows storeへ既存MedicalInboxHandoffShadowでpending1件を保存。
+  別プロセスで復元し同一入力は`duplicate_suppressed`、pending1件を維持。既存medical-review CLIで閲覧できる。
+  検証用gateのJSON出力が診断コードを省略していたため、元の固定判定記録から復元して再検証。
+  元reviewの判断を書き換えず、pending強制解除・原本移動・会計反映は行っていない。
+- 最小候補検査・保存・再起動抑止までの実績。利用者向けの会計確認UI/確定反映への接続は未完了であり、
+  shadow保存だけで「確認付き運用開始」やL4とはしない。非公開証跡は同領域の`medical-inbox`配下。
 
 ### 2026-09-16 一般再取込の固定・比較準備（実再解析は未実行）
 

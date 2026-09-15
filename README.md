@@ -283,7 +283,11 @@ Windowsの鍵設定は不要であり、ブロッカーとして扱わない。S
 承認対象は既存本人所有の非公開管理フォルダ内の専用JSON 1個（固定ID/版/hash/台帳ID等を含む）。
 既存の本人+指定SA共有を継承し、共有変更や4stateの流用はしない。拒否されたuploadの無断再試行はしない。
 コードはbranch準備段階でmain未反映。工程完了やL4として扱わず、本番反映時は以下の停止/再開手順に従う。
-続いてinboxのMedicalをWindows非AI処理で検証する。既存4stateと他sourceの条件は維持する。
+Medicalの非AI検証は一般の認証問題から切り離して実施した。inbox PDF2件はMedical1/unknown1。
+対象Medicalは`needs_review`で、支払日/発行施設/実支払額の確定根拠を得られず確認待ち。
+専用Windows storeへpending1件を保存し、別プロセス復元・重複抑止・既存medical-review CLIでの閲覧を確認。
+会計確認UI/確定反映の接続は未完了で、運用開始やL4とは扱わない。外部AI/Google writeは0。
+実原本・最小候補検査・queue証跡は上記非公開領域の`medical-inbox`配下。既存4stateと他sourceの条件は維持する。
 
 ##### 固定IDの非公開受渡しとmain更新
 
