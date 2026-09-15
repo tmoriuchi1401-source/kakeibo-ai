@@ -1,9 +1,11 @@
 # 家計簿AI — 無料運用を前提にした初期実装
 
-銀行入金だけを家計簿収入へ記録するbranch実装とPayroll分離については
+銀行入金だけを家計簿収入へ記録する実装とPayroll分離については
 [銀行収入・Payroll分離](docs/bank_income_payroll_separation.md)を参照してください。
 `python -m app.cli bank-income-preview`は保存済み取込行のread-only計画を表示します。
-収入writerは既定OFF。本番シート・UI・scheduled writeはまだ変更しません。
+固定backfillは反映済み。収入recurringは既定OFF、ホームUIは未変更です。
+既存銀行runnerへの接続・再開・有効化に必要な別承認は
+[銀行収入recurring接続](docs/bank_income_recurring.md)を参照してください。
 
 一般レシートのoffline read-only MVPは [GENERAL_RECEIPT_MVP.md](GENERAL_RECEIPT_MVP.md)
 を参照してください。画像/PDFから購入日・店舗名・支払総額を抽出し、既存transaction

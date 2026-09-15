@@ -38,6 +38,8 @@ COUNT_KEYS = frozenset({
     "expenses_created", "expenses_updated", "updated", "unchanged",
     "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written",
     "eligible_purchases", "new_event_rows", "new_header_rows",
+    "income_created", "deposit_imports_created", "planned_income_writes", "planned_deposit_imports",
+    "income_existing", "planned_deposit_reviews", "deposit_reviews_saved", "income_review_pending", "bounded_rows",
 })
 
 

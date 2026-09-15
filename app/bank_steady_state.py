@@ -39,6 +39,7 @@ class BankDailyPreview:
     target_spreadsheet_id: str
     expected_git_head: str
     expense_candidate_identities: tuple[str, ...] = ()
+    parsed_result: object = None
 
 
 def _daily_summary(
@@ -155,6 +156,7 @@ def build_bank_daily_preview(
         target_spreadsheet_id=target_spreadsheet_id,
         expected_git_head=expected_git_head,
         expense_candidate_identities=expense_candidate_identities,
+        parsed_result=parsed,
     )
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import hashlib
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .aupay_card_recurring import SqliteRecurringRunState
+from .aupay_card_production import ProtectedAuditKeyProvider
 from .bank_canary_production import (
     _run_bank_recurring_production_batch as run_bank_recurring_production_batch,
 )
@@ -33,6 +35,7 @@ from .bank_recurring_authority import (
     create_bank_recurring_run_context,
 )
 from .bank_steady_state import build_bank_daily_preview
+from .bank_income_recurring import BankRecurringIncome, require_income_actions
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file
 
@@ -177,6 +180,7 @@ def run_bank_pdf_recurring(
     confirmed_internal_transfers=frozenset(),
     confirmed_non_own_classifications=frozenset(),
     card_statement_authorities: Iterable = (),
+    income_write_enabled: bool = False,
 ) -> dict[str, object]:
     policy = authority_provider.load()
     if not (policy.valid_from <= now < policy.expires_at):
@@ -201,11 +205,26 @@ def run_bank_pdf_recurring(
     }
     candidates: list[tuple[dict, Path, tuple[str, ...], dict]] = []
     temp_paths: list[Path] = []
+    pending_processed = []
+    income = None
     try:
+        if income_write_enabled:
+            if income_write_enabled is not True:
+                raise RuntimeError("bank_income_recurring_flag_invalid")
+            if not dry_run:
+                require_income_actions(repo_root, expected_head)
+            income = BankRecurringIncome(db, policy, state, summary, now, dict(
+                confirmed_internal_transfers=confirmed_internal_transfers,
+                confirmed_non_own_classifications=confirmed_non_own_classifications))
+            if not dry_run:
+                income.evidence.require_existing_history()
+            income.evidence.reconcile(dry_run=dry_run)
+            summary["income_write_enabled"] = not dry_run
         for file in files:
-            if _processed(file):
+            already_processed = _processed(file)
+            if already_processed and not income:
                 continue
-            summary["files_new"] = int(summary["files_new"]) + 1
+            summary["files_new"] = int(summary["files_new"]) + int(not already_processed)
             path = _temporary_pdf(downloader(str(file["id"])))
             temp_paths.append(path)
             daily = build_bank_daily_preview(
@@ -239,6 +258,16 @@ def run_bank_pdf_recurring(
                 )
             )
             summary["withheld"] = int(summary["withheld"]) + int(details.get("withheld_by_classification", 0))
+            if income:
+                if int(details.get("collision", 0)):
+                    raise RuntimeError("bank_income_recurring_pdf_collision")
+                income.collect(daily, held=bool(file_review))
+                if already_processed:
+                    # Old expense-only runs could mark an income-only PDF.
+                    # Revisit deposits within this bounded window; never replay
+                    # expenses or rewrite the existing processed marker.
+                    path.unlink(missing_ok=True)
+                    continue
             if file_review or int(details.get("collision", 0)):
                 summary["files_withheld"] = int(summary["files_withheld"]) + 1
                 path.unlink(missing_ok=True)
@@ -255,11 +284,38 @@ def run_bank_pdf_recurring(
                 if not details.get("true_unknown") and not details.get("collision"):
                     summary["files_processed"] = int(summary["files_processed"]) + 1
                     if not dry_run:
-                        _mark_processed(drive_service, file)
+                        if income:
+                            pending_processed.append(file)
+                        else:
+                            _mark_processed(drive_service, file)
                 else:
                     summary["files_withheld"] = int(summary["files_withheld"]) + 1
         if int(summary["new_eligible"]) > policy.max_rows:
             raise RuntimeError("bank_recurring_row_bound_exceeded")
+        if income:
+            summary.update(income.plan(identity for _, _, ids, _ in candidates for identity in ids))
+            income_changes = summary["planned_income_writes"] + summary["planned_deposit_imports"]
+            if dry_run and (income_changes or candidates):
+                summary["status"] = "dry_run_ready"
+                state.record(summary, advance_checkpoint=False)
+                return summary
+            if not dry_run:
+                if (income_changes or candidates) and not audit_key_file:
+                    raise RuntimeError("bank_recurring_audit_key_required")
+                if (income_changes or candidates) and ProtectedAuditKeyProvider(
+                        audit_key_file, repo_root=repo_root).load() is None:
+                    raise RuntimeError("bank_recurring_audit_key_required")
+                # Persist deposits first. Every processed PDF then has a saved-row
+                # resume path even when the income append or expense stage fails.
+                summary.update(income.apply())
+                summary["write_requests"] += int(bool(summary["income_created"])) + int(bool(summary["deposit_imports_created"]))
+                for file in pending_processed:
+                    _mark_processed(drive_service, file)
+                if income_changes and not candidates:
+                    summary.update(status="complete", write_attempted=summary["income_created"],
+                                   written=summary["income_created"])
+                    state.record(summary, advance_checkpoint=True)
+                    return summary
         if not candidates:
             summary.update({"status": "dry_run_noop" if dry_run else "noop", "safe_noop": True})
             state.record(summary, advance_checkpoint=not dry_run)
@@ -311,12 +367,16 @@ def run_bank_pdf_recurring(
                 _mark_processed(drive_service, file)
             finally:
                 path.unlink(missing_ok=True)
+        summary["written"] = int(summary["written"]) + int(summary.get("income_created", 0))
         summary.update({"status": "complete", "write_attempted": int(summary["written"])})
         state.record(summary, advance_checkpoint=True)
         return summary
     except Exception as exc:
         for path in temp_paths:
             path.unlink(missing_ok=True)
-        summary.update({"status": "failed", "failure": 1, "failure_reason": str(exc)})
+        reason = str(exc)
+        if income_write_enabled and not re.fullmatch(r"(?:bank_|protected_audit_)[a-z_]+", reason):
+            reason = type(exc).__name__
+        summary.update({"status": "failed", "failure": 1, "failure_reason": reason})
         state.record(summary, advance_checkpoint=False)
         return summary
