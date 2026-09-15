@@ -338,6 +338,28 @@ def test_canary_is_bound_to_approved_target_and_counts_without_checkpoint(tmp_pa
     assert drift_db.write_calls == []
 
 
+def test_canary_excludes_unrelated_events_without_losing_them_from_normal_apply(tmp_path, monkeypatch):
+    state, provider, db = authority_components(tmp_path)
+    selected = order_mail()
+    unrelated = raw_mail("Amazon notice", "Unrecognized notice", gmail_id="other", message_id="<other@example.invalid>")
+    monkeypatch.setattr(production, "fetch_bounded_amazon_messages", lambda *_: ([selected, unrelated], True))
+    approved = plan(db=db).purchases[0].reference
+    result = run_amazon_recurring(
+        gmail_service=Gmail(), db=db, state=state, authority_provider=provider, now=NOW,
+        apply_limit=1, approved_reference=approved, expected_event_rows=1, expected_header_rows=1,
+    )
+    assert result["new_event_rows"] == result["event_rows_written"] == 1
+    assert all(row[6] == ORDER_ID for row in db.rows["Amazonイベント"])
+    assert state.successful_window_end() is None
+    assert len(db.rows["取込データ"]) == len(db.rows["支出明細"]) == 1
+    # The normal path retains its existing handling of unrelated/unknown events.
+    followup = run_amazon_recurring(gmail_service=Gmail(), db=db, state=state,
+                                   authority_provider=provider, now=NOW)
+    assert followup["written_purchases"] == 0 and followup["event_rows_written"] == 1
+    assert len(db.rows["Amazonイベント"]) == 2
+    assert len(db.rows["取込データ"]) == len(db.rows["支出明細"]) == 1
+
+
 def test_workflow_connects_daily_recurring_after_canary():
     text = open(".github/workflows/amazon-daily-import.yml", encoding="utf-8").read()
     assert "workflow_dispatch:" in text

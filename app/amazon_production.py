@@ -516,6 +516,9 @@ def run_amazon_recurring(
         plan = replace(
             plan,
             purchases=selected,
+            event_rows=tuple(
+                row for row in plan.event_rows if _text(list(row), 6) in selected_order_ids
+            ),
             header_rows=tuple(
                 row for row in plan.header_rows if _text(list(row), 0) in selected_order_ids
             ),
@@ -524,6 +527,8 @@ def run_amazon_recurring(
             raise RuntimeError("amazon_approved_event_row_count_changed")
         if expected_header_rows is None or len(plan.header_rows) != expected_header_rows:
             raise RuntimeError("amazon_approved_header_row_count_changed")
+        summary.update(eligible_purchases=len(plan.purchases), new_event_rows=len(plan.event_rows),
+                       new_header_rows=len(plan.header_rows))
     result = apply_amazon_write_plan(db, plan, max_purchases=limit)
     summary.update(result)
     fully_applied = (

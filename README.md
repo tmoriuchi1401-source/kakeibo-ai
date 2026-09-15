@@ -483,7 +483,8 @@ stable支出ID、返金・transfer・照合待ちの扱いを維持する。
 4. `mode=apply, scope=amazon_canary, confirm=APPLY, bank_apply=false,
    amazon_target=<承認referenceのRSA暗号文>`で実行する。
    親は既存CLIへ`--apply-limit 1 --approved-target ... --expected-event-rows 1 --expected-header-rows 1`
-   を渡す。対象が一意でない・件数が変わった場合は停止する。銀行applyとの併用は拒否する。
+   を渡す。canaryではイベントも選定Order IDに属する行だけに限定する。
+   対象が一意でない・限定後の件数が変わった場合は停止する。銀行applyとの併用は拒否する。
    native/運用JSONのpending→write→read-back→readyを通し、限定実行なので処理窓checkpointは進めない。
 5. summaryの4表のwrite件数が各1、write requestsが4、確認待ちfalseであることを確認。
    既存Amazon read-backは4表のID存在確認であるため、操作者が実4表の重複数・金額・日付・関連IDを
