@@ -167,15 +167,17 @@ cache metadataは非公開`source-state-inventory.json`に保存。本文・SQLi
 最終移送時は停止後のrun/attemptに対応する完全キーを選び、cache miss時は停止する。
 通常運用のprefix fallbackや空state bootstrapで不足を埋めない。
 cacheには認証/authority等が混在し得るため、下記allowlistのnativeファイルだけを梱包する。
-後続の移送準備では、取得・検査だけを行う`state-cache-inspect.yml`を専用branchへ追加した。
+後続の移送準備では、取得・検査だけを行う`state-cache-inspect.yml`を追加しmainへ統合した。
 manual/main限定、既定かつ唯一のoperationは`inspect`。Linux検証済みの完全SHAと
 3sourceの完全cacheキーを指定する。最新run/attemptが成功でない、cache miss、prefix一致だけ、
 成功checkpoint欠落、未確定記録/lease、復元不一致では停止する。元cacheを更新せず、WALを含む
 allowlistコピーを一時領域で検査。Google Secrets/実IDは渡さず、cache save/artifact uploadも行わない。
 検証SHA `21112169ae62c99ac04e66c0b77fde4542fba60b`、
 [Linux CI 34960953834](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34960953834)は
-一般1304件＋Payroll/Medical合成55件成功。main通常pushは自動承認レビューが許可範囲外として拒否。
-そのため実cache取得・正式移送・Actions親previewは未実施、旧運用を停止していない。
+一般1304件＋Payroll/Medical合成55件成功。同じ完全SHAをmainへ通常fast-forward push済み。
+inspect起動は自動承認レビューが以前の「Workflow起動禁止」を適用して拒否し、未実行。
+未起動・Google認証/取引apply/cache保存/artifactなしを再確認しても拒否されたため、別経路で起動しない。
+実cache取得・正式移送・Actions親previewは未実施、旧運用を停止していない。
 この検査の成功は最終移送版の確定や、Driveの本番binding/接続確認を意味しない。
 
 ##### state移送とActions previewだけを行う保守手順
