@@ -18,7 +18,7 @@ on:
       scope:
         description: All stages or isolated one-purchase Amazon canary
         type: choice
-        options: [all, amazon_canary]
+        options: [all, amazon_canary, receipt_reimport]
         default: all
         required: true
       amazon_target:
@@ -30,6 +30,24 @@ on:
         type: boolean
         default: false
         required: true
+      receipt_store:
+        description: RSA-wrapped separate private receipt result file ID
+        type: string
+        required: false
+      receipt_manifest:
+        description: SHA256 of the approved fixed normal receipt manifest
+        type: string
+        required: false
+      receipt_operation:
+        description: Reanalyze new fixed targets or compare saved results without AI
+        type: choice
+        options: [reanalyze, replay]
+        default: reanalyze
+      receipt_limit:
+        description: Maximum new fixed receipts per run; first run uses one
+        type: choice
+        options: ['1', '2', '3']
+        default: '1'
 
 permissions:
   contents: read
@@ -120,6 +138,10 @@ jobs:
           AMAZON_TARGET: ${{ inputs.amazon_target }}
           CONFIRM: ${{ inputs.confirm }}
           BANK_APPLY: ${{ inputs.bank_apply || false }}
+          RECEIPT_STORE: ${{ inputs.receipt_store }}
+          RECEIPT_MANIFEST: ${{ inputs.receipt_manifest }}
+          RECEIPT_OPERATION: ${{ inputs.receipt_operation || 'reanalyze' }}
+          RECEIPT_LIMIT: ${{ inputs.receipt_limit || '1' }}
         run: |
           set -euo pipefail
           mode=preview
@@ -128,6 +150,10 @@ jobs:
             mode=apply
           else
             args+=(--scope "$MANUAL_SCOPE")
+            if [[ "$MANUAL_SCOPE" == receipt_reimport ]]; then
+              args+=(--receipt-store "$RECEIPT_STORE" --receipt-manifest "$RECEIPT_MANIFEST")
+              args+=(--receipt-operation "$RECEIPT_OPERATION" --receipt-limit "$RECEIPT_LIMIT")
+            fi
             if [[ -n "$AMAZON_TARGET" ]]; then args+=(--amazon-target "$AMAZON_TARGET"); fi
             if [[ "$MANUAL_MODE" == apply ]]; then
               test "$CONFIRM" = APPLY || { echo 'Apply confirmation required'; exit 1; }

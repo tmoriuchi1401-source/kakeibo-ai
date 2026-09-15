@@ -43,6 +43,8 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
         raise StateError("amazon_canary_target_invalid")
     if source in {"receipts", "paypay"}:
         return [sys.executable, "-m", "app.production_source", source, "apply" if apply else "preview"]
+    if source == "receipt_reimport":
+        return [sys.executable, "-m", "app.receipt_reimport_production", "apply" if apply else "preview"]
     cli = [sys.executable, "-m", "app.cli"]
     if source == "amazon":
         args = cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
@@ -64,11 +66,29 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
     # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
     child_env = dict(env)
     child_env.pop("GITHUB_STEP_SUMMARY", None)
-    if source != "receipts" or not apply:
+    if source == "receipt_reimport":
+        for name in ("GOOGLE_GMAIL_TOKEN_JSON", "AUPAY_CARD_AUDIT_KEY_JSON",
+                     "AUPAY_CARD_RECURRING_AUTHORITY_JSON", "BANK_AUDIT_KEY_JSON",
+                     "BANK_PDF_RECURRING_AUTHORITY_JSON"):
+            child_env.pop(name,None)
+    if source not in {"receipts", "receipt_reimport"} or not apply or (
+            source == "receipt_reimport" and env.get("RECEIPT_REIMPORT_OPERATION") == "replay"):
         child_env.pop("GEMINI_API_KEY", None)
     result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
                             capture_output=True, text=True, encoding="utf-8", timeout=900)
     if result.returncode != 0:
+        if source == "receipt_reimport":
+            try:
+                code=json.loads(result.stdout).get("error")
+            except Exception:
+                code=None
+            if code in {"gemini_secret_not_injected", "gemini_auth_rejected", "gemini_quota_rejected",
+                        "gemini_api_or_model_rejected", "gemini_result_invalid", "gemini_transport_unknown",
+                        "gemini_request_failed_unknown", "receipt_analysis_reconciliation_required",
+                        "receipt_manifest_or_result_invalid", "receipt_source_version_changed",
+                        "receipt_source_content_changed", "receipt_result_permissions_mismatch",
+                        "receipt_result_write_unknown", "receipt_result_readback_mismatch"}:
+                raise StateError(code)
         raise StateError("source_command_failed")
     try:
         try:
@@ -154,6 +174,13 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    if args.scope == "receipt_reimport":
+        if args.bank_apply or args.amazon_target:
+            raise StateError("receipt_scope_other_source_forbidden")
+        if not getattr(args,"receipt_store","") or not re.fullmatch(r"[0-9a-f]{64}",getattr(args,"receipt_manifest","")):
+            raise StateError("receipt_fixed_manifest_required")
+    elif getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
+        raise StateError("receipt_inputs_require_reimport_scope")
     if args.scope == "amazon_canary":
         if args.bank_apply:
             raise StateError("canary_bank_apply_forbidden")
@@ -171,8 +198,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport"), default="all")
     parser.add_argument("--amazon-target", default="")
+    parser.add_argument("--receipt-store", default="")
+    parser.add_argument("--receipt-manifest", default="")
+    parser.add_argument("--receipt-operation", choices=("reanalyze","replay"), default="reanalyze")
+    parser.add_argument("--receipt-limit", type=int, choices=(1,2,3), default=1)
     args = parser.parse_args()
     try:
         env = dict(os.environ)
@@ -181,6 +212,18 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope == "receipt_reimport":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                raise StateError("receipt_reimport_manual_only")
+            # The new scope is isolated from all daily accounting stages and from
+            # the four native/ledger state files; the shared Workflow lock holds.
+            env.update(RECEIPT_REIMPORT_FILE=args.receipt_store,
+                       RECEIPT_REIMPORT_MANIFEST=args.receipt_manifest,
+                       RECEIPT_REIMPORT_OPERATION=args.receipt_operation,
+                       RECEIPT_REIMPORT_LIMIT=str(args.receipt_limit))
+            result=invoke("receipt_reimport",apply=args.mode=="apply",env=env)
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
         if args.bank_apply and args.mode != "apply":
             raise StateError("bank_apply_requires_approved_apply")
         from .google_clients import drive_service, read_only_drive_service

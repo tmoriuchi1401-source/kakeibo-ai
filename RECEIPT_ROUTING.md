@@ -91,6 +91,23 @@ with the safe operational marker `medical_shadow_status=handoff_failed`;
 normal receipts remain on their existing path. There is no Gemini fallback,
 automatic repair, archive change, or write authority in this mode.
 
+## Fixed reimport scope (branch preparation)
+
+The parent's manual `receipt_reimport` scope uses
+`ReceiptPipeline.reanalyze_bytes`, the existing lazy Gemini factory, and the same
+`validate_receipt_result` as normal ingestion. It bypasses only the ingestion
+marker's early return for the explicitly fixed manifest. It does not remove
+markers, change stable IDs, move originals, or change scheduled inbox processing.
+The exact bytes pass the existing Linux privacy gate and Gemini adapter gate;
+any non-normal result remains held, regardless of its earlier Windows result.
+
+The dedicated private result JSON records request intent and successful parsed
+responses. It is independent of all four production state files. Preview and
+saved-result replay receive no Gemini key. A result saved before restart is
+compared again without AI resubmission after checking the original file version.
+Reanalysis itself has no Sheets writer; differences require evidence before
+separate fixed-target repair. This scope is not Medical processing authority.
+
 ## Role of `general_receipt_preview.py`
 
 `app/general_receipt_preview.py` remains a local, read-only diagnostic preview.

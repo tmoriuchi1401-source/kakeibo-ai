@@ -22,6 +22,27 @@
 
 ## 1. Last verified
 
+### 2026-09-16 本番Gemini経路への固定再解析scope接続（branch準備）
+
+- 更新Goalはnormal10件の実原本を本番Actionsの既存GeminiAIからGoogle公式APIへ送信することを明示承認。
+  Windows鍵は不要。本番`GEMINI_API_KEY`/SA/SpreadsheetのSecret存在、Workflow env、
+  receipt apply子プロセスとSettings/lazy GeminiAIへの受渡しをread-only確認した。
+  previewは鍵除去を維持。実Gemini認証・送信・応答の成功は未確認であり、Secret存在とは区別する。
+- 新親manual `receipt_reimport` scopeを追加。固定manifest/専用結果IDを要求し、scheduleからの起動は拒否。
+  同じReceiptPipelineの解析・validationを共用し、通常のalready_importedスキップと新着scheduleは維持。
+  新しい解析器/認証/モデルは追加しない。最初1件、続く各run最大3件。Linux privacy差は保留。
+- 専用結果JSONで送信前intentと成功応答を保存し、同一版のreplayはAI鍵なしで保存結果を再利用。
+  ID/版/hash/宛先/modelを照合し、結果不明の再送と保存の盲目的retryを拒否。表示は件数/固定エラーコードのみ。
+  比較処理は既存行を読取専用で扱い、修復writerの接続は実結果評価後に残る。
+- 既存本人Drive接続と既存管理フォルダの本人owner/指定SA writerを確認。
+  専用JSON 1個のuploadは、具体的なpayload/保存先の承認不足として自動承認レビューが実行前に拒否した。
+  JSON原稿・固定10件manifest・upload意図を非公開Windows領域へ保存し、再uploadしていない。
+  この専用JSONは4本番stateとは別。新規Google資源・共有変更・実AI送信・台帳更新は0。
+- main/承認SHAは `1af88c5f3b617fe00d53a838ac49fe7a55352ac3`。新定期ON・旧入口OFFを維持。
+  本番停止/main反映は必要準備とCIが揃ってから行う。Medicalは従来の非AI境界を維持し、実検証未実施。
+- Windows全体合成 **1415 passed**、Node 6件、compileall/diff-check成功。
+  実送信・台帳修復・全10件完了の証拠ではない。Linux CIは同じ専用branchのSecretsなしjobで検証する。
+
 ### 2026-09-16 一般再取込の固定・比較準備（実再解析は未実行）
 
 - 最新remote mainと実承認SHAは `1af88c5f3b617fe00d53a838ac49fe7a55352ac3` で一致。

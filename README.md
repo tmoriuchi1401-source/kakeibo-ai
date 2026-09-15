@@ -260,10 +260,29 @@ Google認証を渡さず、cache保存/Google変更なし。旧運用は停止�
 実原本と比較元、normal10件の送信allowlistは
 `%LOCALAPPDATA%/KakeiboAI/production-state-setup/receipt-medical-20260916` に非公開保存する。
 再開時はこの固定ID/版/hashを照合し、既存スナップショットを無条件に作り直さない。
-再解析のGemini送信は自動承認レビューで拒否され、Windowsの既存鍵設定も未提供。
-AI送信・差分修復・Medical運用開始は未実施。工程完了やL4として扱わない。
-必要な送信承認/既存認証が利用可能になった後に一般再解析・比較を進め、
-根拠のある修復だけを共通排他の対象限定Actions経路で行う。ローカルから台帳へwriteしない。
+更新されたGoalにより、このnormal10件の店舗・日付・商品・金額を含む原本を、
+既存Google公式Gemini APIへ本番Actionsから送信することが明示承認された。
+本番Secret `GEMINI_API_KEY` の存在と、新親→receipt子プロセス→Settings→GeminiAIの受渡しを確認。
+Windowsの鍵設定は不要であり、ブロッカーとして扱わない。Secretの存在だけでは実認証成功とはしない。
+
+新親のmanual `scope=receipt_reimport` は、固定manifestの10件だけを扱う。
+`receipt_store`は既存SA鍵で包んだ独立結果ファイルID、`receipt_manifest`は承認manifestのSHA256。
+`mode=preview`はAI送信/保存なし。`mode=apply, confirm=APPLY, receipt_operation=reanalyze`で
+最初は`receipt_limit=1`、成功結果を読戻した後に残りを最大3件ずつ進める。
+通常と同じReceiptPipeline/GeminiAI/モデル/指示/結果検証を使い、Linux gateがnormal以外なら保留。
+通常の取込済みスキップと新着scheduleは変えない。銀行/他sourceの実行はこのscopeに含まない。
+
+独立した非公開Drive JSONへ送信意図・対象行の修復前snapshot・正常解析結果・比較結果を保存する。
+原本/OCR/結果全文をActions artifact/cache/logに出さず、4本番stateも置場にしない。
+`receipt_operation=replay`では鍵を子プロセスへ渡さず、同じ原本版を照合して保存済み結果だけを比較する。
+結果不明の送信は自動再試行せず、保存応答不明は同じfile IDをGETして照合する。
+比較差分は修復authorityではなく、根拠のある修復だけを別途対象限定で反映する。台帳writer接続は未完了。
+
+現時点では専用結果JSONの新規保存が、具体的な保存先/payloadの承認不足として
+実行環境の自動承認レビューに拒否された。新規ファイル作成・AI送信・台帳修復はまだ0。
+承認対象は既存本人所有の非公開管理フォルダ内の専用JSON 1個（固定ID/版/hash/台帳ID等を含む）。
+既存の本人+指定SA共有を継承し、共有変更や4stateの流用はしない。拒否されたuploadの無断再試行はしない。
+コードはbranch準備段階でmain未反映。工程完了やL4として扱わず、本番反映時は以下の停止/再開手順に従う。
 続いてinboxのMedicalをWindows非AI処理で検証する。既存4stateと他sourceの条件は維持する。
 
 ##### 固定IDの非公開受渡しとmain更新

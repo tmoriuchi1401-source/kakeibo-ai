@@ -7,6 +7,18 @@ from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 
+def validate_receipt_result(result, categories):
+    """The existing normal-receipt validation, also used for approved reanalysis."""
+    allowed=set(categories)
+    invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]
+    item_sum=sum(x.amount for x in result.items)
+    tolerance=max(10, round(abs(result.total)*0.01))
+    notes=[]
+    if invalid: notes.append("カテゴリ不正")
+    if abs(item_sum-result.total)>tolerance: notes.append(f"明細合計{item_sum}≠レシート合計{result.total}")
+    if not result.date: notes.append("日付不明")
+    return not notes, notes
+
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
                  gemini_factory:Callable[[], GeminiAI] | None=None):
@@ -16,6 +28,36 @@ class ReceiptPipeline:
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
+    def _require_ai(self):
+        if self.ai is None:
+            if self._gemini_factory is None:
+                raise RuntimeError("未設定: GEMINI_API_KEY")
+            self.ai=self._gemini_factory()
+    def _analyze(self, image_bytes, mime_type, categories, source_policy, *, destination=None):
+        self._require_ai()
+        if destination is not None:
+            from urllib.parse import urlsplit
+            actual=urlsplit(self.ai.client._api_client._http_options.base_url)
+            if (destination != "https://generativelanguage.googleapis.com"
+                    or actual.scheme != "https" or actual.hostname != "generativelanguage.googleapis.com"
+                    or actual.port not in (None,443) or actual.username or actual.password):
+                raise RuntimeError("receipt_destination_mismatch")
+        return self.ai.analyze_receipt(image_bytes,mime_type,categories,**source_policy)
+
+    def reanalyze_bytes(self, image_bytes, mime_type, source_id, *, destination):
+        """Explicit fixed-scope caller only; no dedupe mutation or Sheets write."""
+        known=self._source_privacy.get(source_id)
+        policy={"known_source_classification":known} if known else {}
+        gate=evaluate_receipt_privacy(image_bytes,mime_type,**policy)
+        if gate.classification != "normal" or not gate.gemini_allowed:
+            self._source_privacy[source_id]=gate.classification
+            return {"status":"privacy_blocked","classification":gate.classification}
+        self._require_ai()
+        categories=self.db.categories()
+        result=self._analyze(image_bytes,mime_type,categories,policy,destination=destination)
+        ok,notes=validate_receipt_result(result,categories)
+        return {"status":"analyzed" if ok else "needs_review", "parsed":result.model_dump(),"issues":notes}
+
     def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
                       known_source_classification: Classification | None = None):
         import_id=f"receipt:{source_id}"
@@ -52,22 +94,11 @@ class ReceiptPipeline:
             if medical_shadow_status is not None:
                 result["medical_shadow_status"] = medical_shadow_status
             return result
-        if self.ai is None:
-            if self._gemini_factory is None:
-                raise RuntimeError("未設定: GEMINI_API_KEY")
-            self.ai=self._gemini_factory()
-        cats=self.db.categories(); result=self.ai.analyze_receipt(image_bytes,mime_type,cats,**source_policy)
-        allowed=set(cats)
-        invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]
-        item_sum=sum(x.amount for x in result.items)
-        tolerance=max(10, round(abs(result.total)*0.01))
-        ok=(not invalid) and abs(item_sum-result.total)<=tolerance and bool(result.date)
+        self._require_ai()
+        cats=self.db.categories(); result=self._analyze(image_bytes,mime_type,cats,source_policy)
+        ok,notes=validate_receipt_result(result,cats)
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"
-        notes=[]
-        if invalid: notes.append("カテゴリ不正")
-        if abs(item_sum-result.total)>tolerance: notes.append(f"明細合計{item_sum}≠レシート合計{result.total}")
-        if not result.date: notes.append("日付不明")
         receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]
         raw_hash=canonical_hash(result.model_dump())
         import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
