@@ -89,7 +89,28 @@ GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、�
 
 この節をWindows開発 / Actions本番 / Drive状態保存の切替手順の集約先とする。
 現状のscheduleと実績を下表で分離する。新しい親Workflowと既存CLIの接続は
-専用branchに準備済み・既定無効であり、main未統合。本節の移行目標は現行運用ではない。
+mainへ統合済み・新入口無効。本節の切替後の移行目標は現行運用ではない。
+
+#### 現在地: 新入口無効でmain統合済み
+
+- 09-15、mainを`73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`から
+  `002a112bcbfba2fcee5b9b6abf2e63f0d28e7cca`へfast-forwardで通常pushした。
+  後続の完了記録commitは文書だけで、実行コード/Workflowはこの検証済みSHAと同一。
+- [修正後Linux CI](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34925859316)
+  は同SHAで成功。Ubuntu 24.04.5 / Python 3.12.14、一般1183 passed（13.47秒）、
+  Payroll/Medical合成51 passed（4.30秒）、合計1234。両jobのcompileall/diff-checkも成功。
+  本番/AI Secrets・実帳票なし。Windows全体1234 passed、集中回帰42 passed。
+- GitHub Actions Variables設定画面でRepository Variablesなしを統合直前に確認。
+  `KAKEIBO_PRODUCTION_ENABLED` / `KAKEIBO_SCHEDULE_ENABLED` / `KAKEIBO_LEGACY_DISABLED`
+  はすべて未設定。前後のAPIで旧25 Workflow activeを確認した。
+  統合後、新親のWorkflow登録状態はactiveだが、jobのVariable条件を満たさず本番処理は開始しない。
+  旧日常4入口はlegacy停止条件に該当せず、従来scheduleを継続できる。
+- 専用branchは`integration/production-orchestration-20260915`、upstreamは同名の`origin`。
+  通常pushのみ、force push/保護ルール迂回なし。他のworktreeを変更していない。
+- 今回の直接外部変更はbranch/mainへのコード・文書pushとSecretsなし合成CI。
+  Google write/move/delete、state作成・upload・移送、Variables/Secrets/OAuth、Task、
+  Workflowの手動起動/enable-disable設定、公開設定/課金は変更していない。
+  旧自動運用のGoogle操作とは区別する。本番切替完了・L4確認済みではない。
 
 #### 開始時のGit・Windows確認
 
@@ -372,8 +393,8 @@ Windows直接writeはActionsロックの対象外。移行後はlocalテスト/p
 
 #### 次段階・公開設定
 
-- Payroll/Medical実データはActionsへ移さない。承認済みbranchのLinux合成CIは09-15に成功。
-  一般系1180件とPayroll/Medical合成51件を別jobで実行した（合計1231件）。
+- Payroll/Medical実データはActionsへ移さない。修正後branchのLinux合成CIは09-15に成功。
+  一般系1183件とPayroll/Medical合成51件を別jobで実行した（合計1234件）。
   ローカルWSLは未インストール、Dockerなし。新しいOS環境は導入していない。
   「外部AIへ送らない」と「GitHub計算機内で処理する」は別の承認事項。
   将来の機微jobはAI鍵なしで分離し、原本/OCR本文をartifact/cache/logへ出さない。
@@ -413,15 +434,15 @@ private化の提案:
 | 要件 | 現在の証拠 | 判定 / 残件 |
 |---|---|---|
 | 最新main・入口・Windows・文書の照合 | 本節の25 Workflow表、Task+log、前後fetch `73ff2ff`、Billing画面 | 調査実施。契約利用枠/支出停止設定も確認済み。個別runのwrite件数、他ツール直接writeは未確認 |
-| 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | branch準備済み。main未統合・未起動 |
+| 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | main統合済み。新親jobはVariable未設定で無効・本番未起動 |
 | 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 source新規取込、4 source支出反映、canonicalカード未反映の維持、通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
 | 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
 | native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay、既存SAのDrive about読取 | 合成検証済み。SA容量0/共有ドライブ作成不可を実確認し、所有者による初期配置を手順化。対象ID未設定のため実state移送/実file所有/共有/更新確認は未実施 |
 | stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
 | 上限/欠落/破損/長期未実行/部分失敗 | state/production/Amazon/card/bankの既存・追加pytest | native windowを飛ばさず停止。残高30日超の回復は別の期間承認が必要 |
 | 機微境界/retention | 既存privacy gate維持、normal provenance selector、削除0のpreviewテスト | branch準備済み。Payroll/Medical実データ移行なし、保存禁止項目は次段階条件に明記 |
-| Linux互換 | `synthetic-tests.yml`、[CI #1](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34921871563)、検証SHA `943e477` | Ubuntu 24.04.5 / Python 3.12.14、一般1180件/機微合成51件成功。本番実データのLinux処理は未実施 |
-| テスト・compile・diff | PROJECT_STATUS最新検証欄、上記CIの両job | Windows/Linuxとも合計1231件成功。両Linux jobのcompileall/diff-check成功。本番親Workflow実行は未実施 |
+| Linux互換 | `synthetic-tests.yml`、[修正後CI](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34925859316)、検証SHA `002a112` | Ubuntu 24.04.5 / Python 3.12.14、一般1183件/機微合成51件成功。本Goalで実データをLinuxへ移していない |
+| テスト・compile・diff | PROJECT_STATUS最新検証欄、上記CIの両job | Windows/Linuxとも合計1234件成功。両Linux jobのcompileall/diff-check成功。本番親Workflowの手動起動なし |
 | 運用summary・ホーム | count-only JSON、source別last_success/確認待ち/error/duration | 実装/合成検証済み。ホーム反映は未実施・別承認 |
 | 切替・canary・復帰 | 本節の順序・具体入力・承認記録、親のAmazon限定scope、既存authority/dedupe/read-backを再利用 | 合成canaryで4表各1行と他source非起動、read-only replay、対象不一致時のwrite0を確認。実対象reference/承認/切替/他source本番read-backは未実施 |
 

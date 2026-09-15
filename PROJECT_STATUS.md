@@ -22,7 +22,7 @@
 
 ## 1. Last verified
 
-### 2026-09-15 新入口OFFでのmain統合（検証中）
+### 2026-09-15 新入口無効でmain統合済み
 
 - 新Goalの範囲は「新入口無効でmain統合」。本番切替・L4確認は含めない。
 - 最新remoteを再取得: main `73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`、
@@ -39,7 +39,21 @@
 - 修正後Windows検証: 集中回帰42 passed、全体1234 passed（24.74秒）、compileall/diff-check成功。
   ネットワーク禁止の合成テスト。旧CLIの親OFF、従来3決済source、除外状態、返品/transfer、
   部分write後と完了後の重複防止を確認。親合成経路も5取込/4支出とカード未反映維持を確認。
-  修正SHAのLinux CIは次のbranch pushで実施する。
+  修正SHA `002a112bcbfba2fcee5b9b6abf2e63f0d28e7cca`の
+  [Linux CI #34925859316](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34925859316)も成功。
+  Ubuntu 24.04.5 / Python 3.12.14、一般1183 passed（13.47秒）、Payroll/Medical合成51 passed
+  （4.30秒）、合計1234。両jobのcompileall/diff-check成功。本番/AI Secrets・実帳票なし。
+- mainを`73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`から上記`002a112`へfast-forwardし、
+  通常push/remote SHA一致を確認した。後続の完了記録commitは文書のみ。
+  実行コードとWorkflowはLinux検証済みSHAと同一。専用branch/upstreamは
+  `integration/production-orchestration-20260915` / `origin/integration/production-orchestration-20260915`。
+- 統合直前にもVariablesなしを再確認。統合後APIで旧25 Workflow activeと新親登録を確認。
+  新親は登録状態activeだがjob guardのVariable条件がfalseで、本番処理は開始しない。
+  旧入口は継続可能。親OFFを旧本番コードへの影響ゼロとは扱わない。
+- 今回の直接外部変更は専用branch/mainの通常pushと合成CIだけ。本番Workflowの手動起動、
+  enable-disable設定、Google操作、state作成/移送、Variables/Secrets/OAuth、Task、公開/課金変更なし。
+  従来の定期運用によるGoogle操作は継続するため環境全体のwrite=0とは断定しない。
+  到達点は新入口無効でmain統合済み。本番切替完了・L4確認済みとはしない。
 - 次の実作業はDrive固定stateファイルの準備・権限確認・移送。準備前に旧運用を止めない。
   本GoalではGoogle/state/Task/Variables/Secrets/OAuthに直接変更せず、本番Workflowを手動起動しない。
 
