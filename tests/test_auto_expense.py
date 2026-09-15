@@ -169,19 +169,18 @@ def canonical_card_row(**kwargs):
     return row
 
 
-def test_canonical_card_pending_post_uses_existing_stable_id_and_partial_write_dedupe():
+@pytest.mark.parametrize("imported_at", ["2026-01-01 12:00:00", "2026-09-15 12:00:00"])
+def test_canonical_card_pending_is_excluded_from_preview_and_apply(imported_at):
     row = canonical_card_row()
+    row[1] = imported_at
     db = FakeDB([row])
-    assert AutoExpensePipeline(db).apply()["expenses_created"] == 1
-    expense = posted_expenses(db)[0]
-    assert expense[0] == expense_id(row[0])
-    # Simulate expense append success before the import target update failed.
-    recovery = FakeDB([row], [expense])
-    result = AutoExpensePipeline(recovery).apply()
-    assert result["expenses_created"] == 0 and result["expenses_updated"] == 1
-    completed = recovery.updated["取込データ"][0][1]
-    assert completed[9] == expense[0]
-    assert AutoExpensePipeline(FakeDB([completed], [expense])).preview()["candidates"] == 0
+    pipeline = AutoExpensePipeline(db)
+    assert pipeline.preview()["candidates"] == 0
+    for _ in range(2):
+        result = pipeline.apply()
+        assert result["candidates"] == result["expenses_created"] == result["imports_updated"] == 0
+    assert db.appended == []
+    assert not any(db.updated.values())
 
 
 @pytest.mark.parametrize("column,value", [(0, "legacy-card"), (1, ""), (2, "PayPay"),
@@ -195,7 +194,62 @@ def test_canonical_card_posting_does_not_promote_other_states(column, value):
     assert posted_expenses(db) == []
 
 
-def test_canonical_card_still_waits_for_receipt_reconciliation():
+def test_canonical_card_with_receipt_is_still_outside_posting_scope():
     db = FakeDB([canonical_card_row(), import_row("receipt:r", "receipt", status="解析済")])
     result = AutoExpensePipeline(db).apply()
-    assert result["skipped"] == 1 and result["expenses_created"] == 0
+    assert result["candidates"] == 0 and result["expenses_created"] == 0
+
+
+@pytest.mark.parametrize("parent_enabled", [None, "false"])
+def test_legacy_cli_parent_off_preserves_posting_scope_and_replay(monkeypatch, parent_enabled):
+    import ast
+    import io
+    import sys
+    from contextlib import redirect_stdout
+    from app import cli
+
+    for variable in ("KAKEIBO_PRODUCTION_ENABLED", "KAKEIBO_SCHEDULE_ENABLED"):
+        if parent_enabled is None:
+            monkeypatch.delenv(variable, raising=False)
+        else:
+            monkeypatch.setenv(variable, parent_enabled)
+    monkeypatch.delenv("KAKEIBO_LEGACY_DISABLED", raising=False)
+    canonical = canonical_card_row()
+    excluded = []
+    for index, status in enumerate(("matched_receipt", "matched_amazon", "needs_review_duplicate",
+                                    "transfer_aupay_charge", "refund")):
+        row = canonical_card_row()
+        row[0] = "aupaycard-mail:" + "a" * 24 + f":{index + 2:03d}"
+        row[8] = status
+        excluded.append(row)
+    db = FakeDB([canonical, *excluded,
+                 import_row("paypay", "PayPay", status="unclassified_paypay"),
+                 import_row("balance", "au PAY", status="unclassified_aupay"),
+                 import_row("card", "au PAYカード", status="unclassified_card"),
+                 import_row("refund", "au PAYカード", "テスト店 返品", -100, "unclassified_card"),
+                 import_row("transfer", "au PAYカード", "AU PAY 残高チャージ", 100, "unclassified_card")])
+    monkeypatch.setattr(cli, "make", lambda *args, **kwargs: (None, db, None))
+
+    def run(command):
+        monkeypatch.setattr(sys, "argv", ["app.cli", command])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            cli.main()
+        return ast.literal_eval(output.getvalue())
+
+    preview = run("auto-expense-preview")
+    result = run("auto-expense")
+    assert all(result[key] == value for key, value in preview.items())
+    assert result["expenses_created"] == 3 and result["needs_review"] == 2
+    expenses = posted_expenses(db)
+    assert {(row[8], row[10], row[4]) for row in expenses} == {
+        ("PayPay", "paypay", 100), ("au PAY", "balance", 100), ("au PAYカード", "card", 100)}
+    assert not {row[0] for row in (canonical, *excluded)} & {row[1][0] for row in db.updated["取込データ"]}
+    # Simulate append success / import update loss, then completed rerun.
+    db = FakeDB(db.rows, expenses)
+    replay = run("auto-expense")
+    assert replay["expenses_created"] == 0 and replay["expenses_updated"] == 3
+    for number, updated in db.updated["取込データ"]:
+        db.rows[number - 2] = updated
+    assert run("auto-expense")["candidates"] == 0
+    assert posted_expenses(db) == []

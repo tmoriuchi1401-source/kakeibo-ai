@@ -334,7 +334,12 @@ def test_shared_transport_cli_preview_apply_and_replay(integrated):
     assert result["sources"]["bank"]["counts"]["files_seen"] == 0
     assert f.payloads["bank-state"] == original["bank-state"]
     assert len(f.rows["取込データ"]) == 6  # header + five distinct source imports
-    assert len(f.rows["支出明細"]) == len(f.rows["支出一覧"]) == 6, f.rows["取込データ"]
+    assert len(f.rows["支出明細"]) == len(f.rows["支出一覧"]) == 5, f.rows["取込データ"]
+    # Canonical card imports retain the legacy accounting boundary, even in the
+    # new parent. Enabling orchestration does not authorize backlog repair.
+    card = next(row for row in f.rows["取込データ"][1:] if row[2] == "au PAYカード")
+    assert card[8:10] == ["auto_expense", ""]
+    assert not any(row[10] == card[0] for row in f.rows["支出明細"][1:])
     assert f.metadata["receipt-fixture"]["appProperties"]["kakeiboReceiptClass"] == "normal"
     assert f.metadata["private-fixture"]["parents"] == [RECEIPTS]
     assert f.ai_calls == [b"synthetic-normal-receipt"]

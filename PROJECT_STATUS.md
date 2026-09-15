@@ -22,7 +22,28 @@
 
 ## 1. Last verified
 
-### 2026-09-15 統合・切替準備（進行中、実切替未実施）
+### 2026-09-15 新入口OFFでのmain統合（検証中）
+
+- 新Goalの範囲は「新入口無効でmain統合」。本番切替・L4確認は含めない。
+- 最新remoteを再取得: main `73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`、
+  専用branch `0e7aa79ab04f154f1c40ac49fee2ed998cb3d471`。開始時working tree clean、stashなし。
+- canonicalカードの`auto_expense`・統合先空欄の追加計上条件を今回の統合から除外。
+  `app/auto_expense.py`を統合前mainと同じ内容へ戻し、新親も従来条件だけを使用する。
+  新着/過去未反映どちらも追加計上しない。未反映解消は別の対象・上限・承認を持つ将来作業。
+- 実際のGitHub Actions Variables画面でRepository Variablesなしを確認。
+  production/schedule/legacy停止の3変数はすべて未設定。APIで旧25 Workflowすべてactiveを確認。
+  Variables/Workflowのenable-disable設定は変更していない。
+- 旧入口に有効になる差分はREADME「会計条件の分離」へ記録した。
+  共通lock/main guard、上限超過の処理前停止、preview読取専用化、normal provenance/retention縮小。
+  cron/sourceコマンド/銀行scheduleのpreview、金額/計上先/従来対象は維持する。
+- 修正後Windows検証: 集中回帰42 passed、全体1234 passed（24.74秒）、compileall/diff-check成功。
+  ネットワーク禁止の合成テスト。旧CLIの親OFF、従来3決済source、除外状態、返品/transfer、
+  部分write後と完了後の重複防止を確認。親合成経路も5取込/4支出とカード未反映維持を確認。
+  修正SHAのLinux CIは次のbranch pushで実施する。
+- 次の実作業はDrive固定stateファイルの準備・権限確認・移送。準備前に旧運用を止めない。
+  本GoalではGoogle/state/Task/Variables/Secrets/OAuthに直接変更せず、本番Workflowを手動起動しない。
+
+### 2026-09-15 統合・切替準備の履歴（下記の会計条件追加は上記で除外）
 
 - 最新main `73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2` を独立cloneし、
   `integration/production-orchestration-20260915` で作業。開始時dirty/stashなし。
@@ -60,9 +81,9 @@
   Amazon・一般receipt・カード・残高・PayPayの新規取込と支出反映、通常apply再実行の会計append0を確認。
   銀行は現行どおり空folder preview。state破損/receipt commit後の応答消失では依存後処理を停止。
   ローカルOCR/AI応答のみfixtureとしprivacy判断は既存gateを通した。実通信・削除なし。
-- 通し検証でcanonicalカードの`auto_expense`取込行が共通計上されない不整合を発見・修正。
+- 通し検証でcanonicalカードの`auto_expense`取込行が共通計上されない不整合を発見し、一度修正した。
   canonical ID/hash/取込日時あり・統合先空欄だけを対象にし、既存stable支出ID/dedupe/照合を維持。
-  過去の未反映行も初回previewで確認する。実データの修復は未実施。
+  この追加計上条件は最新Goalで統合対象から除外した。実データの修復は未実施。
   共通preview 5種をread-only Sheets接続へ変更。
 - 親manualへ`scope=amazon_canary`を追加。既存exact reference/1購入/event1/header1条件を使い、
   他source/共通後処理は起動しない。合成canaryの4表各1行、read-only replay write0、

@@ -300,12 +300,27 @@ manual既定`mode=preview`、applyには`mode=apply, confirm=APPLY`が必要。
 checkoutはmainのtracking refを取得し、実HEADと承認SHA/実行イベントSHAの一致を検証する。
 待機中にmainが進んだ場合は、更新後のコードを無審査で動かさず停止する。
 
-**通し合成検証で判明した受け渡し修正:** canonicalカードwriterは取込行へ`auto_expense`を設定するが、
-旧共通後処理は`unclassified_card`だけを対象とし、支出明細が作られなかった。
-branchではcanonical ID/hash/取込時刻を持つカードの`auto_expense`かつ統合先空欄を共通計上対象にする。
-既存stable支出IDで重複を防ぎ、レシート照合待ち・matched/review/transferは昇格させない。
-初回previewでは過去の同条件の未反映行も候補になり得るため、新着と既存未反映の件数を分けて承認する。
-実データの修復はこのGoalでは未実施。
+**会計条件の分離（09-15）:** canonicalカードwriterの`auto_expense`・統合先空欄行を
+新たに共通計上する変更は、今回の統合対象から除外した。`app/auto_expense.py`は統合前mainと同一。
+旧CLI・旧定期入口・新親のすべてで従来の計上条件を維持し、canonical ID/hash/取込日時が
+揃っていても、この状態の行はpreview/applyとも計上対象にしない。新しいオプトインも追加しない。
+従来の`unclassified_paypay` / `unclassified_aupay` / `unclassified_card`と銀行資産形成条件、
+stable支出ID、返金・transfer・照合待ちの扱いを維持する。
+未反映解消は別の会計変更として残す。新着と過去未反映を区別した対象・上限・preview/apply一致の
+検証と承認が必要であり、親有効化を過去分の無制限一括計上承認にはしない。実データ修復は未実施。
+
+統合によって旧入口にも適用される変更:
+
+- 全25既存Workflowの共通concurrency/main限定guard、日常4入口のlegacy停止Variable条件。
+  cron、sourceコマンド、銀行scheduleの`--dry-run`は統合前mainと同じ。
+- au PAY残高は全取得結果を確定してからwriteし、100件上限/不完全paginationでwrite前に停止。
+  receipt/PayPay inboxも100件の取得で次ページがあれば処理前に停止。取得範囲は拡大しない。
+- 共通preview 5種をread-only Sheets接続へ変更し、残高CLIに明示dry-runを追加。
+- 一般receiptの新規処理結果にnormal provenanceを付与し、retentionはnormalと処理日時が
+  両方ある原本に限定。従来の日時だけによる削除対象は縮小する。
+
+新親OFFでもこれらは旧運用で有効になる。今回の作業でGoogle操作を直接行わなくても、
+従来の自動運用は継続するため、環境全体のGoogle write=0とはしない。
 
 ##### 最初の限定canaryと確認記録
 
@@ -348,7 +363,9 @@ sourceごとの実read-back/replayを確認してからscheduleを有効化す�
 Windows直接writeはActionsロックの対象外。移行後はlocalテスト/previewに限定し、
 本番修復は定期運用を止めた保守手順で実施する。現在のTaskは停止していない。
 
-必要な承認は最後にまとめる: 検証済みbranchのmain統合、旧起動停止と新入口切替、
+09-15の新Goalで新入口OFF・旧運用継続を条件とするmain統合は承認済み。
+次の実作業はDrive固定stateファイルの準備・権限確認・移送。準備前に旧運用を止めない。
+今後の外部操作承認は最後にまとめる: 旧起動停止と新入口切替、
 既存認証での非公開Drive folder/file作成・初期state移送、対象を限定したcanary/replay。
 銀行scheduleのapply拡大、機微実データ移転、ホーム反映、公開設定/課金はこれに含めない。
 実装・テスト・文書・checkpoint commitは本Goalの許可内で継続する。
@@ -391,13 +408,13 @@ private化の提案:
 - 推奨順序は「利用枠と必要機能確認→private変更の明示承認→設定変更→既存接続のread-only確認」。
   本Goalでは設定変更・権限追加・有料プラン契約を行わない。
 
-#### 要件別の準備監査（Goalは未完了）
+#### 要件別の準備監査（本番切替は未実施）
 
 | 要件 | 現在の証拠 | 判定 / 残件 |
 |---|---|---|
 | 最新main・入口・Windows・文書の照合 | 本節の25 Workflow表、Task+log、前後fetch `73ff2ff`、Billing画面 | 調査実施。契約利用枠/支出停止設定も確認済み。個別runのwrite件数、他ツール直接writeは未確認 |
 | 親一つ・06:17/18:17・manual既定preview | `kakeibo-production.yml`, `production_flow.py`, `test_production_workflows.py` | branch準備済み。main未統合・未起動 |
-| 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 sourceの新規取込/支出反映/通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
+| 直列/失敗伝播/依存skip | `test_production_integration.py`で共通fake Google transportから既存CLI/parser/SheetsDB/後処理を通す | 5 source新規取込、4 source支出反映、canonicalカード未反映の維持、通常apply再実行の会計append0を確認。銀行は現行どおり空folder preview。state破損/receipt書込み後の応答消失も確認 |
 | 共通排他・Secrets/main guard | 全25既存 + 親にtop-level共通lock。synthetic CIは別lock/Secretsなし | YAML/trigger/guard/依存テスト済み。GitHub実行キュー上の競合は未実行 |
 | native state保存/復旧 | `test_drive_run_state.py`, `test_state_transfer.py`, 既存Amazon writerを使う保存失敗/replay、既存SAのDrive about読取 | 合成検証済み。SA容量0/共有ドライブ作成不可を実確認し、所有者による初期配置を手順化。対象ID未設定のため実state移送/実file所有/共有/更新確認は未実施 |
 | stateless writeの中断と最終成功保持 | `production_ledger.py`, `test_production_ledger.py` | 合成検証済み。運用JSONの初回作成/実接続は未実施 |
@@ -411,7 +428,7 @@ private化の提案:
 公開repoへの通常pushはcheckpoint `20452dc` 時点で自動承認レビューが拒否した。
 理由は新規コード/運用文書のpublic公開先とpayloadへの明示承認不足だった。
 09-15にユーザーが公開pushとSecretsなしLinux合成CIを明示承認し、`943e477`のpushとCI #1が成功した。
-この承認にmain統合・本番起動・実データ移送・公開設定変更は含まれない。
+その後の09-15新Goalで条件付きmain統合まで明示承認された。本番起動・実データ移送・公開設定変更は含まれない。
 
 Secretsに以下を登録:
 - GEMINI_API_KEY
