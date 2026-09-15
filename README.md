@@ -92,13 +92,49 @@ GitHub Actionsの `Process receipt inbox` を手動実行する。完了後、�
 
 ## 8. GitHub Actions
 
-### 統合・切替準備（2026-09-15、実切替未実施）
+### 統合Actions本番運用（2026-09-15切替）
 
 この節をWindows開発 / Actions本番 / Drive状態保存の切替手順の集約先とする。
-現状のscheduleと実績を下表で分離する。新しい親Workflowと既存CLIの接続は
-mainへ統合済み・新入口無効。本節の切替後の移行目標は現行運用ではない。
+正式state移送・全source preview・限定実write・通常apply・再実行確認を完了し、
+新親の定期運用を有効化した。旧日常4入口は停止し、Drive固定4ファイルを正本として継続する。
+銀行はpreview/収入write OFF、Payroll/Medicalは現状維持。cronの実到来は未観測で、L4へ一括昇格しない。
 
-#### 現在地: 新入口無効でmain統合済み
+#### 切替実績と現在の制御
+
+実行コードは `8b52c6a758fc69e77c59467aec43938829624697`、
+[Linux CI 34968751087](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34968751087)
+で合成pytest 1378件・Node 6件、compileall/diff-check成功。後続文書commitも最終main SHAで再検証し、
+`KAKEIBO_VALIDATED_MAIN_SHA`を一致させる。実ID・金額・原本・state本文は非公開証跡へ保存する。
+
+| 工程 | 成功run | 確認結果 |
+|---|---|---|
+| 正式移送 | [34967852055](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34967852055) | 停止後の完全cacheキー、4bundle復元、固定ID更新/GET一致、所有・親・共有維持 |
+| 全source preview | [34968092682](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34968092682) | 全11段階成功、state/台帳/原本不変 |
+| Amazon canary | [34969011775](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34969011775) | 新規通常購入1件、実4表各1行の値・日付・金額・関連ID/重複0を照合 |
+| canary read-only replay | [34969243835](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34969243835) | 同じ購入は既存1件、新規購入候補0、write0 |
+| 通常all apply | [34969415764](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34969415764) | 全11段階成功。同じ購入の再計上0、別の未処理イベント1行保存、表示更新 |
+| 通常all再実行 | [34969971209](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34969971209) | 全11段階成功、会計/event追加0・既存行変更0・原本移動0 |
+
+- Amazon以外の新規計上は0。au PAY残高は22件不変、カードは通常applyで既存10件・withheld1、
+  再実行では処理窓が進み既存2件・withheld0。PayPay入力0、銀行preview対象0/収入更新0。
+- レシートはpreview後に投入フォルダへ新着1件が追加された。通常apply/再実行とも計2件保留、
+  取込・支出write0、processed移動0。新着追加を重複や今回の原本操作として数えない。
+- 過去のcanonicalカード未反映436行は計上対象外のまま。共通自動計上は作成/更新0。
+  支出一覧はcanaryの1件を反映し、再実行後の実値は不変。
+- 固定stateはAmazon generation6、カード4、銀行0、共通ledger46でready。
+  全11段階に最終成功がありpending0。銀行はpreviewのため元checkpointを進めない。
+  既存の処理窓上限を超えた場合は停止し、窓拡大やcheckpoint繰上げで回避しない。
+- 実Variablesでproduction/legacy_disabled/scheduleの3フラグtrue、新定期 `17 9,21 * * *`
+  （06:17/18:17 JST）を確認。旧日常4入口と旧writerを直接使うmanual5入口はdisabledを維持する。
+  月次backup/retention・レビュー表示更新・レビューschema保守の3入口は共通排他/main guardを確認して元のactiveへ戻した。
+- GitHub設定変更は固定ID暗号文5値・検証SHA・切替3フラグと上記Workflow状態だけ。
+  Secrets/OAuth/鍵/共有・Task・公開設定・課金は変更していない。原本削除・過去一括修復は行っていない。
+- 復旧時は新親を止めてDrive正本とSheetsを照合する。実write後に古いcacheの旧運用へ自動復帰しない。
+  元状態・各run・非公開binding・読戻し・比較証跡は `%LOCALAPPDATA%/KakeiboAI/production-state-setup` に保持する。
+
+以下のOFF統合・保存先準備は切替前の履歴。現在の制御はこの節の冒頭と実Variablesを確認する。
+
+#### 履歴: 新入口無効でmain統合
 
 - 09-15、mainを`73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2`から
   `002a112bcbfba2fcee5b9b6abf2e63f0d28e7cca`へfast-forwardで通常pushした。

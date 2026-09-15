@@ -22,7 +22,25 @@
 
 ## 1. Last verified
 
-### 2026-09-15 本番切替進行中（正式state移送・全source preview成功）
+### 2026-09-15 統合Actionsへ本番切替・新定期有効化
+
+- 実行SHA `8b52c6a758fc69e77c59467aec43938829624697`、Linux CI `34968751087` 成功。
+  合成pytest 1378件・Node 6件、compileall/diff-check成功。文書更新後も最終main/承認SHA一致を必要条件とする。
+- 全source preview `34968092682`、Amazon実canary `34969011775`、read-only replay `34969243835`、
+  通常all apply `34969415764`、通常all再実行 `34969971209` が成功。通常経路は両runとも全11段階成功。
+- 新規Amazon通常購入1件を実4表各1行へ反映し、実値/日付/金額/関連ID/重複0を非公開計画と照合。
+  canary後の同じ購入は候補0、続く通常applyでも再計上0。別の未処理イベント1行は通常経路で保存。
+- 再実行前後の実会計/event追加0、既存行変更0、原本移動0。state更新と会計更新を分けて確認した。
+  Amazon/カード/銀行/共通ledgerの固定4ファイルが正本でready、全11段階の最終成功あり、pending0。
+- 新親production=true、legacy_disabled=true、schedule=true、06:17/18:17 JSTをread-only確認。
+  旧日常4と旧writer系manual5入口は停止維持。月次backup/retention・レビュー表示・schema保守3入口のみ元へ戻した。
+  Payroll read-only Taskは維持。銀行preview/収入write OFF、Medical現状維持。
+- 残る保留: レシート2件（実行中の新着追加1件を含む）、通常applyのカードwithheld1、
+  従来対象外のcanonicalカード未反映436行。上限緩和・過去一括修復は行っていない。
+- 将来cronの実到来は未観測。定期と同経路の手動実績と定期ONで切替完了とし、L4の実績を捏造しない。
+  source別件数・runリンク・復旧/main更新手順はREADMEへ集約。実ID/本文/金額/原本はGit/log/artifactへ出さない。
+
+#### 切替準備・移送の実施履歴
 
 - 移送実装SHA `daef10eb19b96a6c92be1ce57cbb8ff78597b7c8`をLinux CI `34967256358`
   （1322+55=1377 pytest、Node 6件）成功後mainへ通常統合。
@@ -34,7 +52,7 @@
   過去のcanonicalカード未反映行は計上対象外。銀行preview/収入write OFFを維持。
 - 実previewに選定購入と無関係なAmazonイベントが含まれていたため、限定canaryだけ
   選定Order IDのイベントへ絞る最小修正を追加。通常applyの対象/上限・計上条件は変更しない。
-  修正検証中は新親/新schedule OFF、旧入口停止を維持。取引writeはまだ未実施。
+  修正検証中は新親/新schedule OFF、旧入口停止を維持し、検証後に上記canaryを実行した。
 
 - 最新Goalは旧停止→正式state移送→preview→限定canary→通常all apply→再実行→新定期ONまで。
   以前のpreview後の旧系復帰計画を置き換え、成功時はDrive正本の新運用を継続する。
@@ -45,7 +63,7 @@
   Python内でだけ復号する。新規鍵・OAuth・Secrets追加なし。実bindingと設定値は非公開領域に保持する。
 - 銀行preview/収入write OFF、Payroll/Medical現状維持。会計条件・authority上限に変更なし。
   成功済みinspect 34962727963とWindows権限試験は反復していない。
-- 修正のLinux CI/main統合後に限定canaryから継続。完了結果は追記し、現時点では切替完了/L4とはしない。
+- 修正のLinux CI/main統合後に限定canaryから継続し、上記の通常apply/replay・新定期ONまで完了した。
 
 ### 2026-09-15 state移送前のcache検査（mainで1回実行、3source成功）
 
