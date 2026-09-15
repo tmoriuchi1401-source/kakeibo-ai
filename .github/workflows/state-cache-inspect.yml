@@ -1,0 +1,115 @@
+name: Inspect legacy state cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Read-only cache inspection before stopping any legacy entry
+        type: choice
+        options: [inspect]
+        default: inspect
+        required: true
+      expected_sha:
+        description: Exact Linux-tested main commit
+        type: string
+        required: true
+      amazon_key:
+        description: Exact amazon-production-state-run_id-attempt cache key
+        type: string
+        required: true
+      card_key:
+        description: Exact aupay-card-production-state-run_id-attempt cache key
+        type: string
+        required: true
+      bank_key:
+        description: Exact bank-pdf-recurring-state-run_id-attempt cache key
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'inspect' &&
+      github.sha == inputs.expected_sha
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Deliberately no production Secrets, Drive IDs, binding, upload or cache save.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify checkout and latest completed source runs
+        uses: actions/github-script@v7
+        env:
+          AMAZON_KEY: ${{ inputs.amazon_key }}
+          CARD_KEY: ${{ inputs.card_key }}
+          BANK_KEY: ${{ inputs.bank_key }}
+        with:
+          script: |
+            const sources = [
+              ['amazon-daily-import.yml', 'amazon-production-state', process.env.AMAZON_KEY],
+              ['aupay-card-recurring-production.yml', 'aupay-card-production-state', process.env.CARD_KEY],
+              ['bank-pdf-recurring.yml', 'bank-pdf-recurring-state', process.env.BANK_KEY],
+            ];
+            const main = await github.rest.repos.getBranch({...context.repo, branch: 'main'});
+            if (main.data.commit.sha !== context.sha) throw new Error('maintenance_main_moved');
+            for (const [workflow_id, prefix, key] of sources) {
+              const match = new RegExp('^' + prefix + '-([1-9][0-9]*)-([1-9][0-9]*)$').exec(key);
+              if (!match) throw new Error('cache_reference_invalid');
+              const runs = await github.rest.actions.listWorkflowRuns({...context.repo, workflow_id, branch: 'main', per_page: 1});
+              const latest = runs.data.workflow_runs[0];
+              if (!latest || String(latest.id) !== match[1] || String(latest.run_attempt) !== match[2]
+                  || latest.status !== 'completed' || latest.conclusion !== 'success') {
+                throw new Error('latest_source_run_not_confirmed');
+              }
+            }
+            core.info('Latest run/attempt references confirmed; inspection only, not final migration sources.');
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore exact Amazon cache
+        id: amazon
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: ${{ inputs.amazon_key }}
+          fail-on-cache-miss: true
+      - name: Restore exact card cache
+        id: card
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aupay-card-production-state
+          key: ${{ inputs.card_key }}
+          fail-on-cache-miss: true
+      - name: Restore exact bank cache
+        id: bank
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bank-pdf-recurring-state
+          key: ${{ inputs.bank_key }}
+          fail-on-cache-miss: true
+      - name: Require exact hits and inspect isolated copies
+        env:
+          AMAZON_EXACT: ${{ steps.amazon.outputs.cache-hit == 'true' && steps.amazon.outputs.cache-matched-key == inputs.amazon_key }}
+          CARD_EXACT: ${{ steps.card.outputs.cache-hit == 'true' && steps.card.outputs.cache-matched-key == inputs.card_key }}
+          BANK_EXACT: ${{ steps.bank.outputs.cache-hit == 'true' && steps.bank.outputs.cache-matched-key == inputs.bank_key }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$AMAZON_EXACT" = true
+          test "$CARD_EXACT" = true
+          test "$BANK_EXACT" = true
+          python -m app.state_cache_inspect --runner-temp "$RUNNER_TEMP"
