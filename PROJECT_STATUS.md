@@ -22,14 +22,18 @@
 
 ## 1. Last verified
 
-### 2026-09-15 固定銀行収入backfillの手動入口
+### 2026-09-15 固定銀行収入backfill完了
 
 - 個別承認済み固定planだけを扱う `bank-income-backfill.yml` を追加。manualのみ、既定preview。
 - mainの検証済みSHA・対象と全列のcommitment・既存ルール一致を実行直前に照合する。
 - 共通production concurrency内で1件canary/read-back/replay、残り、最終preview/replayを順に検証。
 - 他表は数式/値の一致を検査。未知の結果や不一致では停止し、自動retry・rollbackを行わない。
 - full pytest **1307 passed**、compileall / diff-check成功。テストは合成値のみで外部通信禁止。
-- 実績は本番検証後に記録する。recurring収入・Secrets・schedule・Payroll設定・ホームは変更しない。
+- 実行main `e0075c81fb063e3f12a04dda8b51f900c7e44caa`。
+- Actions preview `34956505998` / apply `34956603502` とも成功。
+- 固定集合のcanary・全列read-back・最終preview・replay追加0・月別合計を確認。
+- 別コネクタでも全列とRAW型を再確認。Payroll・支出・取込・要確認・ホーム不変。
+- recurring収入未有効。Secrets・schedule・ルール・Payroll設定・Drive/processed変更なし。
 - 詳細の固定集合・金額・取込IDはGit除外 `.private` に保存。
 
 ### 2026-09-15 銀行収入・Payroll分離（branch検証、本番未切替）
