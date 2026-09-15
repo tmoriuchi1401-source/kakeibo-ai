@@ -161,4 +161,32 @@ Git除外 `.private/bank-income-plan.json` と `.private/bank-income-report.md` 
 - 実データではread-only snapshotに同じpreviewコードを実行。Sheets/Drive write 0。
   シート新設、main反映、既存行削除、Secrets/authority変更、scheduled income writeは未実施。
 
-停止位置：**銀行収入取込・Payroll分離の実装検証完了、本番切替承認待ち**。
+上記は初回実装時の停止位置。以下の個別承認済みbackfill入口を追加した。
+
+## 固定集合の手動backfill
+
+`bank-income-backfill.yml` はmanual dispatchのみ。既定はpreviewで、income recurringは接続しない。
+既存Secretsを参照し、共通 `kakeibo-production` concurrency内のmainジョブで実行する。
+`expected_head` は検証済みmainの完全SHAを渡し、checkout・実行SHA・origin/mainの一致を必須とする。
+同一SHAのpreview成功後、今回承認されたapplyを1回dispatchする。
+
+`app.bank_income_backfill` は私的planの全列と対象Spreadsheetを単一SHA-256 commitmentで拘束する。
+取込時刻の上限は集合復元の補助で、時刻だけでは計上を許可しない。
+元集合・内容・既存ルールが一致しなければシート準備前に停止する。
+後着取引を補充せず、既存完全一致分をskipする。
+
+収入シートがなければaddSheetとA:J RAWヘッダのみを作成する。
+既存シートの修復や共通ensure_schemaは呼ばない。
+既存BankIncomePipeline.applyを使い、未反映1件の全列read-backとreplay 0成功後に残りを追加する。
+最終固定集合の再preview、replay 0、全列一致、重複排除、月別合計の一致を検証する。
+各段階で保護対象の数式/値をbatchGetで比較し、読取頻度を制限する。
+Payroll・支出・取込・要確認・ホームへのwriteやDrive操作はない。
+
+read-back不一致、通信結果不明、保護対象変更では後続を停止する。
+自動retry・rollback・成功分の削除は行わない。失敗したapplyを再実行せず、
+まずread-onlyで結果を確認し、成否不明の行を推測で追加しない。
+公開Actionsログは件数と検証結果だけとし、金額・摘要・対象IDは出さない。
+実績と月別金額はGit除外 `.private` に記録する。
+
+追加テストは合成値だけで、固定内容変更、対象外追加、既存一致、衝突、
+canary失敗・成否不明、保護対象変更、最終照合とreplay、main実行境界を検証する。

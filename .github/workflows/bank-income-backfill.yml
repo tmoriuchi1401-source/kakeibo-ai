@@ -1,0 +1,65 @@
+name: Fixed bank income backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview or apply the single committed backfill plan
+        required: true
+        type: choice
+        options: [preview, apply]
+        default: preview
+      expected_head:
+        description: Exact tested main commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  backfill:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
+      BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
+      BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Bind exact tested main
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$GITHUB_SHA" = "$EXPECTED_HEAD"
+          test "$(git rev-parse origin/main)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run fixed backfill without scheduling income writes
+        env:
+          BACKFILL_MODE: ${{ inputs.mode }}
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+        run: |
+          set -euo pipefail
+          if [[ "$BACKFILL_MODE" == "apply" ]]; then
+            python -m app.bank_income_backfill --expected-head "$EXPECTED_HEAD" --apply
+          else
+            python -m app.bank_income_backfill --expected-head "$EXPECTED_HEAD"
+          fi

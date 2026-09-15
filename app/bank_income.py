@@ -1,7 +1,7 @@
 """Confirmed bank deposits only; Payroll never participates in this ledger.
 
 The schema is intentionally separate from SheetsDB.ensure_schema so deploying
-this module cannot create a production sheet. Live entry points are preview-only.
+this module cannot create a production sheet. Recurring entry points are preview-only.
 """
 from __future__ import annotations
 
@@ -249,9 +249,9 @@ class BankIncomePipeline:
 
     def apply(self, selected_import_ids: tuple[str, ...], *, income_write_enabled=False,
               approved_spreadsheet_id="", max_rows=100) -> dict:
-        """Batch writer for a future separately authorized, serialized caller.
+        """Batch writer for a separately authorized, serialized caller.
 
-        No live CLI/schedule calls this. Re-read imports and destination before
+        Only the fixed manual backfill calls this in production. Re-read before
         append; never update expense links, Payroll, import status or Drive.
         """
         if income_write_enabled is not True:
