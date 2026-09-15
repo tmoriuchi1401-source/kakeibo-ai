@@ -22,6 +22,24 @@
 
 ## 1. Last verified
 
+### 2026-09-15 銀行収入recurring接続（write OFF）
+
+- `b61965c`から専用branchで既存bank runnerへ接続。新たな分類器・DB・schedulerは追加しない。
+- ONかつ保護された収入scopeがある場合だけ、入金RAW保存→既存BankIncomePipeline差分反映。
+  保存済み未反映は新着0件でも再開し、重複PDF・同一IDの再計上を防ぐ。
+- 既存SQLiteのrun記録でappend intentと全列read-backを保持。欠落/不一致の未知結果は停止。
+  親のpendingは従来の復旧手順で扱い、自動解除しない。支出・transfer/card条件は維持。
+- 上限は支出・入金保存・未反映収入のsource ID和集合で共用。固定backfill承認は再利用しない。
+- 銀行専用scheduleはdry-run。直近schedule `34911236780`の実ログでもdry_run_noop/write0。
+  Repository Variablesは0件、統合親は未有効。入口切替担当へ変更範囲を共有した。
+- Workflow差分は収入Variableを既定falseで渡すenv各1行のみ。schedule・commands・guard不変。
+- 実データread-onlyで既存backfill全件一致、追加候補0、要確認保留を確認。
+  Inboxも直近schedule preview以降の新規/更新PDFなし。詳細はGit除外 `.private`。
+- 最終full pytest **1347 passed**、compileall / diff-check成功。実ネットワーク禁止の合成検証。
+- 本番write・Secrets/Variables/authority実変更・入口有効化・Payroll/ホーム変更は未実施。
+- 手順と承認差分: [銀行収入recurring接続](docs/bank_income_recurring.md)。
+  停止位置は**収入write OFF、本番有効化承認待ち**。
+
 ### 2026-09-15 固定銀行収入backfill完了
 
 - 個別承認済み固定planだけを扱う `bank-income-backfill.yml` を追加。manualのみ、既定preview。

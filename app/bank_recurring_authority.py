@@ -73,6 +73,9 @@ class BankRecurringAuthority:
     account_alias: str = ""
     expected_branch: str = "main"
     schema_version: int = BANK_RECURRING_AUTHORITY_SCHEMA_VERSION
+    income_enabled: bool = False
+    income_worksheet: str = ""
+    income_accounts: tuple[tuple[str, str], ...] = ()
 
     def validate(self) -> None:
         aware = (self.initial_start, self.valid_from, self.expires_at)
@@ -102,6 +105,16 @@ class BankRecurringAuthority:
         ):
             raise ValueError("bank_recurring_authority_invalid")
         normalize_folder_id(self.expected_drive_folder_id)
+        if type(self.income_enabled) is not bool:
+            raise ValueError("bank_recurring_income_authority_invalid")
+        if self.income_enabled:
+            if (self.income_worksheet != "収入明細" or not self.income_accounts
+                    or len(set(self.income_accounts)) != len(self.income_accounts)
+                    or any(source not in supported or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,63}", alias)
+                           for source, alias in self.income_accounts)):
+                raise ValueError("bank_recurring_income_authority_invalid")
+        elif self.income_worksheet or self.income_accounts:
+            raise ValueError("bank_recurring_income_authority_disabled")
 
     def authority_reference(self) -> str:
         self.validate()
@@ -125,6 +138,11 @@ class BankRecurringAuthority:
             "expires_at": self.expires_at.isoformat(),
             "expected_branch": self.expected_branch,
         }
+        if self.income_enabled:
+            payload["income_scope"] = {"worksheet": self.income_worksheet,
+                "accounts": sorted(self.income_accounts), "classification": "confirmed_income",
+                "operations": ["deposit_import_append", "income_append", "read_back"],
+                "shared_max_rows": self.max_rows}
         body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return f"bank-recurring-v1:{hashlib.sha256(body.encode('utf-8')).hexdigest()[:32]}"
 
@@ -168,6 +186,9 @@ class ProtectedBankRecurringAuthorityProvider:
                 account_alias=str(raw.get("account_alias", "")),
                 expected_branch=str(raw.get("expected_branch", "main")),
                 schema_version=int(raw.get("schema_version", 0)),
+                income_enabled=raw.get("income_enabled", False),
+                income_worksheet=str(raw.get("income_worksheet", "")),
+                income_accounts=tuple(tuple(item) for item in raw.get("income_accounts", [])),
             )
             policy.validate()
             return policy
