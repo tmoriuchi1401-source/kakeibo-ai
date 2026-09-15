@@ -167,8 +167,42 @@ cache metadataは非公開`source-state-inventory.json`に保存。本文・SQLi
 最終移送時は停止後のrun/attemptに対応する完全キーを選び、cache miss時は停止する。
 通常運用のprefix fallbackや空state bootstrapで不足を埋めない。
 cacheには認証/authority等が混在し得るため、下記allowlistのnativeファイルだけを梱包する。
-取得から固定Driveへの正式移送までの保守実行経路・対象SHAは次回承認時に確定する。
-今回は取得用Workflowも起動せず、cache/stateをpublic log/artifactへ出していない。
+後続の移送準備では、取得・検査だけを行う`state-cache-inspect.yml`を専用branchへ追加した。
+manual/main限定、既定かつ唯一のoperationは`inspect`。Linux検証済みの完全SHAと
+3sourceの完全cacheキーを指定する。最新run/attemptが成功でない、cache miss、prefix一致だけ、
+成功checkpoint欠落、未確定記録/lease、復元不一致では停止する。元cacheを更新せず、WALを含む
+allowlistコピーを一時領域で検査。Google Secrets/実IDは渡さず、cache save/artifact uploadも行わない。
+検証SHA `21112169ae62c99ac04e66c0b77fde4542fba60b`、
+[Linux CI 34960953834](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34960953834)は
+一般1304件＋Payroll/Medical合成55件成功。main通常pushは自動承認レビューが許可範囲外として拒否。
+そのため実cache取得・正式移送・Actions親previewは未実施、旧運用を停止していない。
+この検査の成功は最終移送版の確定や、Driveの本番binding/接続確認を意味しない。
+
+##### state移送とActions previewだけを行う保守手順
+
+1. 検証済み保守コードのmain統合後、旧運用を動かしたまま候補cacheをinspectする。
+   取得・checkpoint・権限・構造に未解決があれば停止工程へ進まない。
+2. 月次/全manual write（銀行収入backfillを含む）/ローカル/他Workを現物確認し、元の設定を非公開保存。
+   Payrollのread-only scanは停止対象にしない。main更新と直接writeも保守中は入れない。
+3. 新scheduleをfalseにしてから旧日常入口を止め、必要なmanual/月次write入口を一時disableする。
+   開始済みrunを強制cancelせず終了を待つ。未開始と確認できる待機runだけ取消し、待機を残さない。
+4. 停止後の最新run/attemptと完全cacheキーを再確定。後続失敗を無視して古い成功cacheを選ばない。
+   native3sourceと新規ledgerの4bundleをすべて検査・一時復元してから、固定4ファイルへ正式移送する。
+   履歴sourceのbootstrap・checkpoint繰上げ・pending解除は禁止。共通ledgerだけ既存の明示初期化を使う。
+5. 全4ファイルを同一IDの新規GETで読戻し、bytes/digestと所有/親/共有維持を確認する。
+   応答不明ならまず同じIDを読み直し、盲目的に再更新しない。部分移送では親を有効にしない。
+6. 固定IDを公開logへ出さない経路を検証後、検証済みmain SHAと限定Variablesを設定する。
+   旧入口停止・新schedule=falseのまま、親`preview / all / bank_apply=false / confirm空 / amazon_target空`
+   を1回だけ実行する。終了後は直ちに新親OFF。apply/canaryや上限緩和で失敗を回避しない。
+7. 4ファイル不変と、停止中のSheets/原本変更0を読取証跡で確認する。接続成功と業務preview成功を区別する。
+8. 新親/schedule OFF、移送/previewの稼働・待機なし、旧native/cache不変、会計結果不明なし、
+   旧処理窓が有効であれば、今回止めた入口だけ元の状態へ戻す。元から無効の入口は有効にしない。
+   コピー先の失敗だけで無傷の旧運用を止め続けず、会計データをrollbackしない。
+9. 復帰後のDrive bundleは試験時点のsnapshotであり、最新の正本ではない。
+   本切替では再停止後の最新stateを再取得・再移送する。このコピーだけで後日新親を有効化しない。
+
+停止以降はまだ実施していない。今回の到達目標は移送・Actions preview検証後の旧運用復帰であり、
+以下の恒久切替手順のcanary/新定期有効化は別工程として残す。
 
 #### 開始時のGit・Windows確認
 

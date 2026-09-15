@@ -22,6 +22,29 @@
 
 ## 1. Last verified
 
+### 2026-09-15 state移送前のcache検査経路（branch検証済み、main統合保留）
+
+- 旧運用を停止する前の検査として、`state-cache-inspect.yml`を追加。manual/main限定・inspectのみ。
+  完全cacheキーと最新run/attempt成功を照合し、exact hit以外は停止。Google Secrets/実ID/本番bindingを渡さない。
+- 元cacheは保持し、許可されたnativeファイルとWALだけを一時領域へコピー。
+  既存adapter/移送CLIでschema・成功checkpoint・未確定記録・lease・復元一致を検査する。
+  診断用bindingのbundleは一時領域だけで破棄。履歴sourceの空bootstrap、cache保存、artifact uploadなし。
+- 他Workの銀行収入OFF変更`d9d1e57b3376d07e50bd77a28d5858690bd325f2`を保持して通常merge。
+  PROJECT_STATUSの同位置追加は両方の記録を保持。会計ルール・旧入口の実行条件は変更していない。
+- 検証SHA `21112169ae62c99ac04e66c0b77fde4542fba60b`。Windows全体 **1359 passed**、compileall/diff-check成功。
+  [Linux CI 34960953834](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34960953834)成功。
+  一般1304件＋Payroll/Medical合成55件。本番Secrets/実帳票なし。
+- 専用branchへ通常push済み。main更新は自動承認レビューが「Drive準備Goalの許可範囲外」として拒否。
+  mainは`d9d1e57`のまま、cache検査の本実行・旧入口停止・state移送・親previewは未実施。
+- 実Variables画面は未設定。既存28 Workflowはactive。元状態をrepository外の非公開
+  `production-state-setup/migration-start-workflows.json`へ保存。設定を変更せず旧運用を継続。
+- 20:05 JSTに本番SAのread-only scopeで固定4ファイルを再読込。すべて未初期化の準備用JSONで
+  前回試験から不変、本人所有・固定親・指定SAだけの共有を再確認。今回のGoogle直接変更は0。
+  証跡は同じ非公開領域の`migration-preflight-destinations.json`。本番state/Actions接続の確認ではない。
+- 次はmain統合の承認境界を解消し、候補cacheを実取得してcheckpointを確認する。
+  銀行scheduleはpreviewであり、cache存在だけで成功checkpointありとは扱わない。
+  取得/構造が未確定の間は旧運用を停止しない。本番切替・L4確認ではない。
+
 ### 2026-09-15 Drive保存先の準備・実接続確認済み
 
 - 今回の到達点は保存先準備とWindowsからの実接続確認。本番state移送・旧運用停止・新親有効化は未実施。
