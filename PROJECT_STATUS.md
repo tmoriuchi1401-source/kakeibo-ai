@@ -22,6 +22,27 @@
 
 ## 1. Last verified
 
+### 2026-09-16 一般再取込の固定・比較準備（実再解析は未実行）
+
+- 最新remote mainと実承認SHAは `1af88c5f3b617fe00d53a838ac49fe7a55352ac3` で一致。
+  production/schedule=true、legacy_disabled=true、旧日常・旧writer入口OFFをread-only再確認。
+  定期run `34980878313` は同SHAでsuccess。今回はrunの状態確認であり、全sourceの個別読戻し検証ではない。
+- 指定一般再取込folder直下31件からPDF/画像24件・31ページを固定。CSV6件と配下folder1件は除外。
+  固定ID/版/hash/原本・既存4表とカテゴリはrepository外の非公開Windows領域に保存。
+  原本移動・新ID発行・既存取込マーカー削除なし。24件すべてに既存receipt/import行があり、
+  うち1件は要確認・支出明細0件。取込IDの存在だけで明細完成とは扱わない。
+- 既存Windows OCR/privacy gateの実判定はnormal10、Medical1、unknown13。
+  unknownには4ページ/5ページのPDFの既存OCR上限による保留を含む。gateや上限は変更していない。
+- `app/receipt_reimport.py`に固定sourceと既存IDでの読取専用比較を追加。
+  不足候補、ヘッダ/明細差、照合済み支払い、手動判断、無効明細、ID競合を区別する。
+  AI差分や既存解析hashの一致だけでは訂正・不足追加を許可しない。writerへの接続は未実装。
+- normal10件の既存Gemini再解析は、送信前に実行環境の自動承認レビューで拒否された。
+  さらに現在のWindows環境には既存Gemini鍵の設定がないことを確認。
+  送信対象10件のID/版/hashと既存送信先/modelを非公開allowlistへ固定。AI送信0、本番変更0。
+  一般再解析・差分修復は未完了。inboxのMedical実1件検証・確認付き運用もまだ開始していない。
+- Windows合成pytest **1389 passed**（追加11件）、関連31 passed、compileall/diff-check成功。
+  branch上の準備でありmain未更新。新定期と固定Drive stateの正本は維持する。
+
 ### 2026-09-15 統合Actionsへ本番切替・新定期有効化
 
 - 実行SHA `8b52c6a758fc69e77c59467aec43938829624697`、Linux CI `34968751087` 成功。

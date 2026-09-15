@@ -251,6 +251,21 @@ Google認証を渡さず、cache保存/Google変更なし。旧運用は停止�
 取引write前で旧state不変・新親停止・結果不明なしが確認できる場合に限り旧運用へ復帰できる。
 将来cronを待たず同経路の手動実績と定期ON確認を完了条件とし、schedule未観測は明記する。
 
+##### 一般レシート再取込の準備状況
+
+一般レシート再取込（2026-09-16開始）は、通常の取込dedupeを迂回してwriteする機能ではない。
+`app/receipt_reimport.py`は今回の再解析結果と既存のreceipt/import/expense関連を比較する読取専用処理。
+一致はno-op、不足候補・差分・既存の確定判断/照合リンクは確認対象とし、AI差分だけで既存値を上書きしない。
+対象24ファイル/31ページを固定し、現行Windows gateでnormal10/Medical1/unknown13を確認した。
+実原本と比較元、normal10件の送信allowlistは
+`%LOCALAPPDATA%/KakeiboAI/production-state-setup/receipt-medical-20260916` に非公開保存する。
+再開時はこの固定ID/版/hashを照合し、既存スナップショットを無条件に作り直さない。
+再解析のGemini送信は自動承認レビューで拒否され、Windowsの既存鍵設定も未提供。
+AI送信・差分修復・Medical運用開始は未実施。工程完了やL4として扱わない。
+必要な送信承認/既存認証が利用可能になった後に一般再解析・比較を進め、
+根拠のある修復だけを共通排他の対象限定Actions経路で行う。ローカルから台帳へwriteしない。
+続いてinboxのMedicalをWindows非AI処理で検証する。既存4stateと他sourceの条件は維持する。
+
 ##### 固定IDの非公開受渡しとmain更新
 
 通常のActions環境変数は処理開始前にログへ出るため、固定folder/4 fileの5 Variablesは
