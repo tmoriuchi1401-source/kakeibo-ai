@@ -43,6 +43,8 @@ jobs:
         env:
           TEST_SELECTION: ${{ matrix.selection }}
         run: python -m pytest -q --tb=short -k "$TEST_SELECTION"
+      - name: Check final cache run selection without credentials
+        run: node --test .github/scripts/verify-state-cache-runs.test.cjs
       - name: Compile and check whitespace
         run: |
           python -m compileall -q app tests

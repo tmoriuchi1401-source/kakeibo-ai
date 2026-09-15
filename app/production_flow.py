@@ -175,12 +175,14 @@ def main():
     parser.add_argument("--amazon-target", default="")
     args = parser.parse_args()
     try:
-        validate_scope(args)
-        if args.bank_apply and args.mode != "apply":
-            raise StateError("bank_apply_requires_approved_apply")
         env = dict(os.environ)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
         verify_execution_boundary(env, head)
+        from .private_state_bindings import decode_environment
+        env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
+        validate_scope(args)
+        if args.bank_apply and args.mode != "apply":
+            raise StateError("bank_apply_requires_approved_apply")
         from .google_clients import drive_service, read_only_drive_service
         ledger_binding = StateBinding("production_run", env.get("SPREADSHEET_ID", ""),
                                        env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get("KAKEIBO_RUN_LEDGER_FILE_ID", ""))

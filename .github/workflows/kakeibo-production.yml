@@ -22,7 +22,7 @@ on:
         default: all
         required: true
       amazon_target:
-        description: Approved amazon-order reference; only for canary apply
+        description: RSA-wrapped approved Amazon reference; only for canary apply
         type: string
         required: false
       bank_apply:
@@ -72,6 +72,7 @@ jobs:
       BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
       BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
       BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
+      # Values are RSA-wrapped fixed IDs, decrypted only inside Python.
       KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
       AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
       AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
@@ -96,6 +97,9 @@ jobs:
           fi
           git switch main
           git branch --set-upstream-to=origin/main main
+      - name: Require normal logging before private bindings
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

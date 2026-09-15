@@ -22,6 +22,19 @@
 
 ## 1. Last verified
 
+### 2026-09-15 本番切替Goalの移送経路準備（旧運用は継続中）
+
+- 最新Goalは旧停止→正式state移送→preview→限定canary→通常all apply→再実行→新定期ONまで。
+  以前のpreview後の旧系復帰計画を置き換え、成功時はDrive正本の新運用を継続する。
+- `state-migration.yml` / `state_migration.py`で完全cacheキーと最終state保存run/attemptを照合し、
+  native3sourceと新規ledgerをすべて検証・復元後、準備済み固定4ファイルへ同一ID更新する経路を追加。
+  manual/main/検証SHA一致・共通排他・既定inspect。Gmail/AI鍵・artifact・cache保存なし。
+- Actionsのenvログへ実IDを出さないため、既存SA鍵の公開部分で5固定ID/限定canary referenceを暗号化し、
+  Python内でだけ復号する。新規鍵・OAuth・Secrets追加なし。実bindingと設定値は非公開領域に保持する。
+- 銀行preview/収入write OFF、Payroll/Medical現状維持。会計条件・authority上限に変更なし。
+  成功済みinspect 34962727963とWindows権限試験は反復しない。準備段階では旧入口/Variables/Googleに変更なし。
+- 回帰検証とLinux CI/main統合後に停止へ進む。実切替結果は完了時に追記し、現時点では切替完了/L4とはしない。
+
 ### 2026-09-15 state移送前のcache検査（mainで1回実行、3source成功）
 
 - 旧運用を停止する前の検査として、`state-cache-inspect.yml`を追加。manual/main限定・inspectのみ。

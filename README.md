@@ -187,10 +187,10 @@ Google認証を渡さず、cache保存/Google変更なし。旧運用は停止�
 この候補検査は最終移送版の確定やDriveの本番binding/接続確認ではない。正式移送・Actions親previewは未実施。
 次は固定4bundleの移送経路と、実IDをActions logへ出さない受渡しを準備・検証する。
 
-##### state移送とActions previewだけを行う保守手順
+##### 本番切替の実行手順（最新の承認範囲）
 
-1. 検証済み保守コードのmain統合後、旧運用を動かしたまま候補cacheをinspectする。
-   取得・checkpoint・権限・構造に未解決があれば停止工程へ進まない。
+1. 移送コード・回帰テスト・SecretsなしLinux CI・検証済みmain統合を旧運用停止前に完成する。
+   成功済みinspectと権限試験は反復しない。取得・checkpoint・構造の未解決があれば停止工程へ進まない。
 2. 月次/全manual write（銀行収入backfillを含む）/ローカル/他Workを現物確認し、元の設定を非公開保存。
    Payrollのread-only scanは停止対象にしない。main更新と直接writeも保守中は入れない。
 3. 新scheduleをfalseにしてから旧日常入口を止め、必要なmanual/月次write入口を一時disableする。
@@ -200,18 +200,38 @@ Google認証を渡さず、cache保存/Google変更なし。旧運用は停止�
    履歴sourceのbootstrap・checkpoint繰上げ・pending解除は禁止。共通ledgerだけ既存の明示初期化を使う。
 5. 全4ファイルを同一IDの新規GETで読戻し、bytes/digestと所有/親/共有維持を確認する。
    応答不明ならまず同じIDを読み直し、盲目的に再更新しない。部分移送では親を有効にしない。
-6. 固定IDを公開logへ出さない経路を検証後、検証済みmain SHAと限定Variablesを設定する。
-   旧入口停止・新schedule=falseのまま、親`preview / all / bank_apply=false / confirm空 / amazon_target空`
-   を1回だけ実行する。終了後は直ちに新親OFF。apply/canaryや上限緩和で失敗を回避しない。
-7. 4ファイル不変と、停止中のSheets/原本変更0を読取証跡で確認する。接続成功と業務preview成功を区別する。
-8. 新親/schedule OFF、移送/previewの稼働・待機なし、旧native/cache不変、会計結果不明なし、
-   旧処理窓が有効であれば、今回止めた入口だけ元の状態へ戻す。元から無効の入口は有効にしない。
-   コピー先の失敗だけで無傷の旧運用を止め続けず、会計データをrollbackしない。
-9. 復帰後のDrive bundleは試験時点のsnapshotであり、最新の正本ではない。
-   本切替では再停止後の最新stateを再取得・再移送する。このコピーだけで後日新親を有効化しない。
+6. 旧入口停止・新schedule=falseのまま、親`preview / all / bank_apply=false / confirm空 / amazon_target空`
+   を実行。新着・過去未反映・保留・予定を非公開記録へ分離する。上限や計上条件は変えない。
+7. 現previewに既存authority内の新規Amazon通常購入があれば1件を非公開固定し、限定canaryと実4表の読戻しを行う。
+   適合対象がなければ架空作成・過去再計上・新着待ちはせず、新規write未確認を明記して他の条件を検証する。
+8. `apply / all / confirm=APPLY / bank_apply=false`と再実行を行い、source別の実反映・原本移動・
+   state/ledger ready・同一IDの二重appendなしを読戻す。新着追加と重複、state更新と会計更新は別集計にする。
+9. 成立後はproduction/legacy_disabled/scheduleの3フラグをtrueにして新定期を開始する。
+   旧日常入口は停止を維持。共通排他/main guardがあり旧writer/cacheを迂回利用しない月次・手動保守だけ元へ戻す。
+   正式移送済みDrive stateが新運用の正本となる。銀行はpreview/収入write OFF、Payroll/Medicalは現状維持。
 
-停止以降はまだ実施していない。今回の到達目標は移送・Actions preview検証後の旧運用復帰であり、
-以下の恒久切替手順のcanary/新定期有効化は別工程として残す。
+本人の最新Goalは停止から本番切替までを連続実行する承認であり、以前の「preview後に旧系へ戻す」を置き換えた。
+実write後は古いcacheの旧系へ自動復帰しない。障害時は新親を止めて読戻し・既存復旧手順で照合する。
+取引write前で旧state不変・新親停止・結果不明なしが確認できる場合に限り旧運用へ復帰できる。
+将来cronを待たず同経路の手動実績と定期ON確認を完了条件とし、schedule未観測は明記する。
+
+##### 固定IDの非公開受渡しとmain更新
+
+通常のActions環境変数は処理開始前にログへ出るため、固定folder/4 fileの5 Variablesは
+`app.private_state_bindings.wrap`で既存本番SA鍵の公開部分を使ったRSA-OAEP-SHA256暗号文にする。
+元のbinding・暗号文設定・本人所有/指定SA共有のmetadata commitmentはrepository外の非公開領域へ保存する。
+Actions側は既存SA鍵でPython内だけ復号し、平文をGITHUB_ENVへ出さない。新しい鍵・OAuth・Secretsは追加しない。
+canaryの`amazon_target`も同じ関数の`AMAZON_TARGET`用途で暗号化する。平文入力・別用途の暗号文は拒否する。
+将来既存SA鍵を正規の手順で交換する際は、5値も再暗号化して同じIDへの復号一致を確認する。
+
+`state-migration.yml`はmanual/main/検証SHA一致・共通排他・既定inspect。最終成功run/attemptの完全キーだけ復元し、
+後続の実行済み失敗runは自動で飛ばさない。Gmail/AI鍵・cache保存・artifact uploadは持たない。
+正式移送は`operation=migrate`、完全SHA/3完全cacheキー/非公開metadataのSHA256を渡す。
+全4準備用JSONの一致と全bundle復元成功後だけ同一IDを更新する。正式ledgerの再初期化は拒否する。
+
+以後mainを更新するときは新scheduleを止め、実行中writeの終了後に通常統合し、更新後SHAのLinux CIと
+実行コード/Workflow差分を確認する。文書commitも含め`KAKEIBO_VALIDATED_MAIN_SHA`を最終main完全SHAへ更新し、
+一致を読取確認してからscheduleを戻す。コードの未検証変更があれば承認SHAを進めない。
 
 #### 開始時のGit・Windows確認
 
@@ -461,7 +481,7 @@ stable支出ID、返金・transfer・照合待ちの扱いを維持する。
    その対象reference、承認SHA、state digest、4表の予定を承認記録に残す。
    明細を含む元preview出力はGit/Actions log/artifactへ載せない。
 4. `mode=apply, scope=amazon_canary, confirm=APPLY, bank_apply=false,
-   amazon_target=<承認reference>`で実行する。
+   amazon_target=<承認referenceのRSA暗号文>`で実行する。
    親は既存CLIへ`--apply-limit 1 --approved-target ... --expected-event-rows 1 --expected-header-rows 1`
    を渡す。対象が一意でない・件数が変わった場合は停止する。銀行applyとの併用は拒否する。
    native/運用JSONのpending→write→read-back→readyを通し、限定実行なので処理窓checkpointは進めない。
@@ -476,12 +496,12 @@ stable支出ID、返金・transfer・照合待ちの扱いを維持する。
 
 canary不一致/不明結果ならscheduleを有効化せず、pendingを人が照合する復旧手順へ進む。
 初回canaryの成功だけで他sourceの本番確認済みとはしない。続く`scope=all` applyは、
-各既存authorityの件数/期間、新着と過去未反映行、共通後処理・原本archiveの変更予定を別途承認し、
+今回の承認範囲内で各既存authorityの件数/期間、新着と過去未反映行、共通後処理・原本archiveの変更予定を確認し、
 sourceごとの実read-back/replayを確認してからscheduleを有効化する。
 
 切替時は **保存先準備完了 → 対象旧入口停止・実行中/待機中処理の終了確認 →
 最新の確定state取得 → 固定ファイルへの正式移送・読戻し → 新入口preview →
-限定canary/read-back/replay → 新schedule有効化**。新旧write並走は禁止。
+限定canary/read-back → 通常all apply・再実行検証 → 新schedule有効化**。新旧write並走は禁止。
 保存先準備前に旧運用を止めない。今回実行したのは保存先準備・接続確認まで。
 移送の保守時間には旧日常4入口だけでなく、月次backup/retention、全manual write入口
 （銀行収入backfillを含む）、ローカル/他Workのwriteも入れない。
@@ -492,12 +512,9 @@ Actions lock外のローカルwriteは操作者の保守手順で止める。待
 Windows直接writeはActionsロックの対象外。移行後はlocalテスト/previewに限定し、
 本番修復は定期運用を止めた保守手順で実施する。現在のTaskは停止していない。
 
-09-15の新Goalで新入口OFF・旧運用継続を条件とするmain統合は承認済み。
-保存先準備・権限確認は完了。次回は全write入口の保守境界を確定し、最新確定stateの取得・移送から進める。
-今後の外部操作承認は最後にまとめる: 旧起動停止と新入口切替、
-固定ファイルへの正式state移送、対象を限定したcanary/replay。
-銀行scheduleのapply拡大、機微実データ移転、ホーム反映、公開設定/課金はこれに含めない。
-実装・テスト・文書・checkpoint commitは本Goalの許可内で継続する。
+09-15の最新Goalで旧入口停止・正式移送・preview/canary/通常apply/replay・新定期ONまで明示承認された。
+工程の区切りだけでは再承認を求めず、既存authorityとprivacyを維持して条件成立時に連続実行する。
+銀行収入write、認証/共有変更、過去一括修復、原本削除、公開設定/課金変更は承認範囲に含めない。
 
 #### 次段階・公開設定
 

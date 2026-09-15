@@ -1,0 +1,129 @@
+name: Migrate fixed production state
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect by default; migrate only after all legacy writes have stopped
+        type: choice
+        options: [inspect, migrate]
+        default: inspect
+        required: true
+      expected_sha:
+        description: Exact Linux-tested main commit
+        type: string
+        required: true
+      amazon_key:
+        description: Exact amazon-production-state-run_id-attempt cache key
+        type: string
+        required: true
+      card_key:
+        description: Exact aupay-card-production-state-run_id-attempt cache key
+        type: string
+        required: true
+      bank_key:
+        description: Exact bank-pdf-recurring-state-run_id-attempt cache key
+        type: string
+        required: true
+      expected_destinations:
+        description: Private destination metadata commitment (SHA256, no file IDs)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  migrate:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.sha == inputs.expected_sha &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
+      vars.KAKEIBO_PRODUCTION_ENABLED != 'true' &&
+      vars.KAKEIBO_SCHEDULE_ENABLED != 'true' &&
+      (inputs.operation != 'migrate' || vars.KAKEIBO_LEGACY_DISABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Only the existing SA and target sheet; no Gmail/AI authority or cache save.
+    env:
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      # Ciphertext only. No plaintext ID is exported back through GITHUB_ENV.
+      KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+      AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+      AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+      BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+      KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify checkout and latest completed source runs
+        uses: actions/github-script@v7
+        env:
+          AMAZON_KEY: ${{ inputs.amazon_key }}
+          CARD_KEY: ${{ inputs.card_key }}
+          BANK_KEY: ${{ inputs.bank_key }}
+        with:
+          script: |
+            const verify = require('./.github/scripts/verify-state-cache-runs.cjs');
+            await verify({github, context, core, keys: {
+              amazon: process.env.AMAZON_KEY, card: process.env.CARD_KEY, bank: process.env.BANK_KEY,
+            }});
+      - name: Require normal logging before private bindings
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing dependencies
+        run: pip install -r requirements.txt
+      - name: Restore exact Amazon cache
+        id: amazon
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/amazon-production-state
+          key: ${{ inputs.amazon_key }}
+          fail-on-cache-miss: true
+      - name: Restore exact card cache
+        id: card
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/aupay-card-production-state
+          key: ${{ inputs.card_key }}
+          fail-on-cache-miss: true
+      - name: Restore exact bank cache
+        id: bank
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bank-pdf-recurring-state
+          key: ${{ inputs.bank_key }}
+          fail-on-cache-miss: true
+      - name: Require exact hits and transfer validated bundles
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MIGRATION_OPERATION: ${{ inputs.operation }}
+          EXPECTED_DESTINATIONS: ${{ inputs.expected_destinations }}
+          AMAZON_EXACT: ${{ steps.amazon.outputs.cache-hit == 'true' && steps.amazon.outputs.cache-matched-key == inputs.amazon_key }}
+          CARD_EXACT: ${{ steps.card.outputs.cache-hit == 'true' && steps.card.outputs.cache-matched-key == inputs.card_key }}
+          BANK_EXACT: ${{ steps.bank.outputs.cache-hit == 'true' && steps.bank.outputs.cache-matched-key == inputs.bank_key }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$AMAZON_EXACT" = true
+          test "$CARD_EXACT" = true
+          test "$BANK_EXACT" = true
+          test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+          python -m app.state_migration "$MIGRATION_OPERATION" --expected-destinations "$EXPECTED_DESTINATIONS"
