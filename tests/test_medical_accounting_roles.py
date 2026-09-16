@@ -116,7 +116,7 @@ def test_shared_table_edge_can_bind_a_merged_header_without_an_inner_divider():
 
 
 def evidence_for_plan(plan):
-    e,m,_=role_fixture([('負担割合',20),('領収印',320)])
+    e,m,_=role_fixture([('領収書',10),('負担割合',70),('領収印',320)])
     actual=plan['mapping'];actual['unresolved_candidates']=e['original_cutout_unresolved']
     e['binding']={k:actual[k] for k in e['binding']}
     return e
@@ -156,3 +156,100 @@ def test_evaluation_tampering_does_not_relax_the_accounting_veto():
     next(iter(store.value['medical_accounting_evaluations'].values()))['evidence']['independent_payment_fields']=2
     with pytest.raises(StateError,match='evaluation_integrity_failed'):post(review,args)
     assert not db.rows['支出明細']
+
+
+def settlement_fixture(*,unreadable=False,partial=False):
+    """Synthetic bill 5000/current receipt 3000/balance 2000, no arithmetic."""
+    title='一部入金領収書' if partial else '領収書'
+    e,m,stream=role_fixture([(title,20),('今回請求額',100),('今回未収額',170)])
+    stream += [token('???円' if unreadable else '5,000円',250,100),token('2,000円',250,170),token('3,000円',250,240)]
+    image=Image.new('RGB',(500,450),'white');draw=ImageDraw.Draw(image)
+    for y in (100,170):draw.rectangle((15,y-10,370,y+35),outline='black')
+    cues=anchors(stream);cuts=[(box,'numeric_region_not_verified') for _,box in cues if box[1]<235]
+    m['unresolved_candidates']=len(cuts)
+    return evaluate_roles((stream,),cues,cuts,m,'今回入金額',image=image),m,stream,image
+
+
+@pytest.mark.parametrize('unreadable',[False,True])
+def test_actual_current_receipt_does_not_require_bill_balance_arithmetic(unreadable):
+    e,_,_,_=settlement_fixture(unreadable=unreadable)
+    p=e['payment_impact']
+    assert e['unresolved_payment_conflicts']>0  # prior role audit is retained
+    assert p['receipt_context_verified'] and p['unresolved_influence_groups']==0
+    assert p['unassigned_currency_fields']==p['independent_competing_payment_fields']==0
+
+
+def test_partial_actual_receipt_posts_3000_not_the_bill_5000_and_reuses_response():
+    from app.medical_image_candidate import seal_crop
+    store,plans,args,send,db,review=automatic();plan=plans[0]
+    e,_,_,_=settlement_fixture(partial=True);m=plan['mapping']
+    m.update(payment_label='今回入金額',unresolved_candidates=e['original_cutout_unresolved'])
+    e['binding']={k:m[k] for k in e['binding']};plan['accounting_evaluation']=e
+    plan['proof']=seal_crop(args['load_crop'](plan),'今回入金額',args['key'])
+    send.return_value.candidates[0].label='今回入金額';send.return_value.candidates[0].amount_yen=3000
+    seal(plan,args['key']);process_plans(plans,**args)
+    original=deepcopy(store.value['medical_image_analyses'])
+    assert post(review,args)==1 and db.rows['支出明細'][0][4]==3000
+    assert next(iter(review.items.values()))['automatic_decision']['accounting_scope']=='medical-current-actual-payment-v1'
+    writes=db.writes
+    assert process_plans(plans,**args)['medical_ai_requests']==0 and post(review,args)==0
+    assert db.writes==writes and send.call_count==1 and store.value['medical_image_analyses']==original
+
+
+@pytest.mark.parametrize('label',['返金額','預り金','入金額調整','不明金額','取消済'])
+def test_receipt_context_does_not_discard_refund_advance_or_payment_notes(label):
+    e,_,_=role_fixture([('領収書',20),(label,100)])
+    assert e['payment_impact']['unresolved_influence_groups']>0
+
+
+def test_explicit_insurance_component_is_not_a_second_payment_or_requires_reading_its_digits():
+    e,_,_=role_fixture([('領収書',20),('今回請求額',100),('保険分負担金額',170)])
+    assert e['unresolved_payment_conflicts']>0
+    assert e['payment_impact']['unresolved_influence_groups']==0
+    e,_,_=role_fixture([('領収書',20),('負担',170)])
+    assert e['payment_impact']['unresolved_influence_groups']>0
+
+
+def test_shifted_ocr_boxes_of_identical_complete_ink_keep_unknown_role_once():
+    e,m,stream=role_fixture([('領収書',20)])
+    a=dict(text='謎金額',box=(60,100,95,120),confidence=50,line=(1,1,100))
+    b=dict(a,box=(59,99,96,121))
+    image=Image.new('RGB',(500,450),'white');ImageDraw.Draw(image).rectangle((65,105,90,115),fill='black')
+    streams=(stream+[a],stream+[b]);cues=list(dict.fromkeys(anchors(streams[0])+anchors(streams[1])))
+    e=evaluate_roles(streams,cues,[],m,'今回入金額',image=image)
+    assert e['unresolved_payment_conflicts']==2
+    assert e['payment_impact']['unresolved_influence_groups']==1
+    assert any(x['reason']=='same_complete_glyph_components' for x in e['payment_impact']['groups'])
+
+
+def test_second_payment_and_second_receipt_are_not_removed_by_scope_or_deduplication():
+    e,_,_=role_fixture([('領収書',20),('今回入金額',100)])
+    assert e['payment_impact']['independent_competing_payment_fields']==1
+    e,_,_=role_fixture([('領収書',20),('領収書',320)])
+    assert not e['payment_impact']['receipt_context_verified']
+
+
+def test_role_word_recovery_rejects_unobserved_annotation_ink(monkeypatch):
+    from app.medical_accounting_roles import _recover_role_label
+    monkeypatch.setattr('app.medical_text_regions.observed_row_regions',lambda *a:[(10,10,80,30)])
+    monkeypatch.setattr('app.medical_text_regions.text_regions',lambda *a:[])
+    observed=[dict(text='領収印',box=(18,12,59,24),confidence=95,line=(1,1,1))]
+    monkeypatch.setattr('app.medical_anonymization.tokens',lambda *a:observed)
+    image=Image.new('RGB',(100,60),'white');draw=ImageDraw.Draw(image)
+    draw.rectangle((20,14,60,25),fill='black')
+    assert _recover_role_label(image,(20,14,60,25),[])[0]['role']=='receipt_stamp'
+    draw.rectangle((73,16,76,23),fill='black')
+    assert _recover_role_label(image,(20,14,60,25),[])==[]
+
+
+def test_white_box_margin_can_join_a_role_but_a_second_ink_region_cannot():
+    e,m,stream=role_fixture([('領収書',20),('領収印',100)])
+    stream.append(dict(text='請求',box=(29,99,130,121),confidence=30,line=(1,1,100)))
+    image=Image.new('RGB',(500,450),'white');draw=ImageDraw.Draw(image)
+    draw.rectangle((35,105,65,115),fill='black')
+    cues=anchors(stream)
+    e=evaluate_roles((stream,),cues,[],m,'今回入金額',image=image)
+    assert e['payment_impact']['unresolved_influence_groups']==0
+    draw.rectangle((100,105,115,115),fill='black')
+    e=evaluate_roles((stream,),cues,[],m,'今回入金額',image=image)
+    assert e['payment_impact']['unresolved_influence_groups']>0

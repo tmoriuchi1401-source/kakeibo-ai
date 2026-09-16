@@ -21,7 +21,7 @@ HOLD_TEXT={
     'saved_analysis_requires_reconciliation':'画像解析の結果を要照合。再送は停止しています。',
     'payment_ambiguous_or_unreadable':'実支払額が不明または複数あります。',
     'payment_meaning_not_unique':'実支払額の意味を一意に確認できません。',
-    'payment_role_conflict':'他の金銭欄と今回の入金との関係が未確定です。',
+    'payment_role_conflict':'別欄・注記が今回の実支払額を変え得るか未確定です。',
     'payment_date_missing_or_ambiguous':'支払日・発行日の根拠が不足または競合しています。',
     'issuer_missing_or_ambiguous':'発行施設を一意に確認できません。',
     'category_not_verified':'既存マスタの医療費カテゴリを確認できません。',
@@ -87,11 +87,18 @@ def decide(item, value, categories, identity_key):
         return None,'payment_meaning_not_unique'
     evaluation_id=p.get('accounting_evaluation_id')
     if evaluation_id:
-        from .medical_accounting_roles import verify_evaluation
+        from .medical_accounting_roles import verify_evaluation,ACCOUNTING_SCOPE
         evidence=verify_evaluation(value,evaluation_id,aid,record,identity_key)
+        impact=evidence.get('payment_impact',{})
         if (evidence.get('complete_candidate_correspondence') is not True
                 or evidence.get('independent_payment_fields')!=1
-                or evidence.get('unresolved_payment_conflicts')!=0):
+                or impact.get('policy')!=ACCOUNTING_SCOPE
+                or impact.get('target')!='current_actual_payment'
+                or impact.get('receipt_context_verified') is not True
+                or impact.get('complete_candidate_correspondence') is not True
+                or impact.get('independent_competing_payment_fields')!=0
+                or impact.get('unresolved_influence_groups')!=0
+                or impact.get('unassigned_currency_fields')!=0):
             return None,'payment_role_conflict'
     elif mapping['unresolved_candidates']:
         return None,'payment_meaning_not_unique'
@@ -169,8 +176,10 @@ def apply_automatic(review, *, identity_key, policy):
             item['automatic_hold']='source_changed';review.save_item(key,item);continue
         # No fabricated M-column choice or human signature. The separate
         # machine decision and full write intent precede every accounting call.
+        from .medical_accounting_roles import ACCOUNTING_SCOPE
         item.update(status='pending',plan=plan,decision_origin='automatic',automatic_decision={
             'policy':POLICY,'source':deepcopy(item['source']),
+            'accounting_scope':ACCOUNTING_SCOPE,
             'candidate_id':item['medical_candidates']['candidate_id'],
             'analysis_id':item['medical_candidates']['provenance']['analysis_id'],
             'accounting_evaluation_id':item['medical_candidates']['provenance'].get('accounting_evaluation_id')})
