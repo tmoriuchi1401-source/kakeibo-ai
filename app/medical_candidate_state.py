@@ -30,10 +30,10 @@ class MedicalCandidateState:
             mapping=mapping,model=model,prompt=prompt))
         return True
 
-    def complete(self,analysis_id,result):
+    def complete(self,analysis_id,result,integrity_tag=None):
         old=self.get(analysis_id)
         if old is None or old['phase']!='intent':raise StateError('medical_analysis_intent_required')
-        old.update(phase='complete',result=deepcopy(result));self.put(analysis_id,old)
+        old.update(phase='complete',result=deepcopy(result),integrity_tag=integrity_tag);self.put(analysis_id,old)
 
     def publish(self,review_id,source,fields):
         """Only candidate/display state; user's eight input fields stay untouched."""

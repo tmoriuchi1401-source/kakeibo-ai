@@ -1,6 +1,7 @@
 """Coordinate derived-only sending after the AI-key-free intake process exits."""
 import base64
 from hashlib import sha256
+import hmac
 import json
 from pathlib import Path
 import subprocess
@@ -16,6 +17,13 @@ from .receipt_confirmation_production import open_context
 LIMIT=3
 SENDER_ENV=('PATH','SYSTEMROOT','WINDIR','TEMP','TMP','PYTHONPATH','PYTHONIOENCODING',
     'GEMINI_API_KEY','GEMINI_MODEL','MEDICAL_CROP_ATTESTATION_KEY','MEDICAL_DERIVED_AI_POLICY')
+
+
+def response_tag(analysis_id,record,result,key):
+    bound={name:record[name] for name in ('source','mapping','model','prompt')}
+    bound.update(analysis_id=analysis_id,result=result)
+    encoded=json.dumps(bound,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()
+    return hmac.new(key,b'medical-analysis-response\0'+encoded,'sha256').hexdigest()
 
 
 def send_derived(packet,payload,env):
@@ -62,9 +70,13 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             verify_source(source,item['folder_id'])
             counts['medical_ai_requests']+=1
             answer=send(packet,payload)
-            state.complete(aid,answer.model_dump())
+            raw=answer.model_dump()
+            state.complete(aid,raw,response_tag(aid,state.get(aid),raw,identity_key))
         else:
-            answer=PaymentAnswer.model_validate(state.get(aid)['result'])
+            saved=state.get(aid)
+            if not hmac.compare_digest(saved.get('integrity_tag') or '',response_tag(aid,saved,saved['result'],identity_key)):
+                raise StateError('medical_saved_result_integrity_failed')
+            answer=PaymentAnswer.model_validate(saved['result'])
             counts['medical_ai_reused']+=1
         result,signals,policy,outcome=admit_answer(answer,payload=payload,mapping=packet['mapping'],
             model=model,identity_key=identity_key)

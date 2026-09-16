@@ -67,6 +67,14 @@ def test_unknown_response_and_save_failure_never_blindly_resend():
     assert send.call_count==0
 
 
+def test_saved_response_tampering_is_rejected_without_resend():
+    store,plans,args,send=fixture();process_plans(plans,**args)
+    saved=next(iter(store.value['medical_image_analyses'].values()))
+    saved['result']['candidates'][0]['amount_yen']=999
+    with pytest.raises(StateError,match='integrity_failed'):process_plans(plans,**args)
+    assert send.call_count==1
+
+
 def test_unknown_result_persistence_does_not_retry_the_completed_request():
     store,plans,args,send=fixture();saved=store.save
     def fail_after_intent(value):

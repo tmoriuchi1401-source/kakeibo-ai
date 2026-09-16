@@ -80,6 +80,16 @@ def test_rotated_and_multi_page_sources_require_mapping_review():
     with pytest.raises(AnonymizationHold,match='page_mapping'):render_single_page(stream.getvalue(),'application/pdf')
 
 
+def test_large_single_pdf_uses_bounded_adaptive_render_without_raising_pixel_limit():
+    from pypdf import PdfWriter
+    from app.medical_anonymization import MAX_PIXELS
+    pdf=PdfWriter();pdf.add_blank_page(width=2000,height=3000)
+    stream=BytesIO();pdf.write(stream)
+    image=render_single_page(stream.getvalue(),'application/pdf')
+    assert image.width*image.height<=MAX_PIXELS
+    assert abs(image.width/image.height-2/3)<.001
+
+
 def answer(amount=321):
     return PaymentAnswer.model_validate({'status':'readable','candidates':[
         {'amount_yen':amount,'label':'領収額','region':[0,0,1000,1000]}],'reason':''})

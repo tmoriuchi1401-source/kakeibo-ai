@@ -66,6 +66,8 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
 def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
     if (source=='receipt_confirmation' and apply and env.get('MEDICAL_DERIVED_AI_POLICY')
             and not env.get('MEDICAL_PREPARE_DIR') and not env.get('MEDICAL_FINALIZE_ONLY')):
+        if env['MEDICAL_DERIVED_AI_POLICY'] not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}:
+            raise StateError('medical_service_terms_not_verified')
         import base64
         from .medical_candidate_runtime import run_prepared
         with tempfile.TemporaryDirectory(prefix='medical-derived-',dir=env.get('RUNNER_TEMP')) as directory:

@@ -11,10 +11,11 @@ from io import BytesIO
 import re
 import struct
 import unicodedata
+import math
 
 from PIL import Image
 
-VERSION = 'medical-payment-cell-v1'
+VERSION = 'medical-payment-cell-v2'
 LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額')
 PAYMENT = re.compile(r'('+'|'.join(LABELS)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
 MAX_PIXELS = 20_000_000
@@ -70,9 +71,13 @@ def render_single_page(payload, mime):
         try:
             page=document[0]
             try:
-                if page.get_width()*page.get_height()*9>MAX_PIXELS:
+                area=page.get_width()*page.get_height()
+                if not math.isfinite(area) or area<=0:
                     raise AnonymizationHold('image_size_exceeded')
-                bitmap=page.render(scale=3)
+                # Large scanner page units do not imply multiple receipts.
+                # Retain the same bounded pixel budget at an adaptive scale.
+                scale=min(3,math.sqrt(MAX_PIXELS*.98/area))
+                bitmap=page.render(scale=scale)
                 try:image=bitmap.to_pil().convert('RGB')
                 finally:bitmap.close()
             finally:page.close()
@@ -204,4 +209,5 @@ def prepare_payment_crop(payload, mime, *, image=None, observations=None):
         'source_image_sha256':sha256(png(image)).hexdigest(),'page':1,'unit':1,
         'crop_coordinates_original':list(box),'rotation_clockwise_degrees':0,
         'crop_sha256':sha256(clean).hexdigest(),'preprocessor':VERSION,
+        'rendered_page_size':list(image.size),
         'validation':'closed_payment_cell_positive_glyphs_complete_ink','metadata_removed':True},label)
