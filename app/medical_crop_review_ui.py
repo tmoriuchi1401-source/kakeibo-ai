@@ -129,13 +129,23 @@ def load_session(binding_path,output,review_id=None):
     items=[v for k,v in store.value['confirmation_items'].items()
         if v['kind']=='medical' and v['status']=='waiting' and (review_id is None or k==review_id)]
     if len(items)!=1:raise ValueError('select_exactly_one_waiting_medical')
-    item=items[0];source=item['source']
+    item=items[0];source=dict(item['source'])
+    def metadata():
+        return drive.files().get(fileId=source['source_id'],fields='version,parents,trashed,mimeType').execute(num_retries=0)
+    before=metadata()
+    if (before.get('trashed') or before.get('parents')!=[item['folder_id']]
+            or before['mimeType']!=source['mime_type']):raise ValueError('review_source_changed')
+    payload=download_drive_file(source['source_id'],drive)
+    if metadata()!=before or sha256(payload).hexdigest()!=source['sha256']:
+        raise ValueError('review_source_changed')
+    # Drive can advance metadata version without changing the original bytes.
+    # The UI may review that exact current version; it never updates the store
+    # or reuses an earlier approval. Actions/install still demand an exact match.
+    source['version']=before['version']
     def verify():
-        meta=drive.files().get(fileId=source['source_id'],fields='version,parents,trashed,mimeType').execute(num_retries=0)
+        meta=metadata()
         if (meta.get('trashed') or meta['version']!=source['version'] or meta['parents']!=[item['folder_id']]
                 or meta['mimeType']!=source['mime_type']):raise ValueError('review_source_changed')
-    verify();payload=download_drive_file(source['source_id'],drive);verify()
-    if sha256(payload).hexdigest()!=source['sha256']:raise ValueError('review_source_changed')
     image=render_single_page(payload,source['mime_type'])
     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
     return ReviewSession(source,image,identity_key(info['private_key']),output,verify)

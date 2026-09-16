@@ -377,6 +377,8 @@ python -m app.medical_crop_review_ui --binding <非公開actions-reimport-bindin
 - 出力先と同じ場所の `.url` ファイルに本人用URLを保存。画面は1時間で終了する。
 - 本人が原本から支払額・印字ラベルだけを選び、**最終PNGを見て匿名化を確認した場合だけ**保存。
   確認をAIで代行しない。保存内容は版/hash/座標/確認署名だけで、原本・PNG・OCR・正解金額を含めない。
+- Drive版だけが変わっても、同一ID/親/MIME/内容hashと読取中の版安定を確認できれば、
+  UIはその現在版を新たな確認対象にする。旧版の承認は流用せず、本番storeも自動更新しない。
 - 保存はローカルのみ。既存保守手順で定期・共通writerを一時停止し、実行中0を確認してから、
   同じ原本を読取・照合し `MedicalCandidateState.install_crop_review` で既存専用JSONへ反映する。
   4 native stateは使わない。本人入力・M列・会計を更新しない。

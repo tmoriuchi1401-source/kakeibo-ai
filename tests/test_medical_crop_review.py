@@ -109,3 +109,30 @@ def test_entire_original_cannot_be_selected_as_payment_crop(tmp_path):
     source,image,key,_=fixture();session=ReviewSession(source,image,key,tmp_path/'human.json',Mock())
     with pytest.raises(ValueError,match='minimal'):
         session.preview({'coordinates':[0,0,image.width,image.height],'label':'領収金額'})
+
+
+@pytest.mark.parametrize('change',['metadata_only','bytes','during_read','parent'])
+def test_ui_can_review_same_bytes_current_version_without_repinning_production(monkeypatch,tmp_path,change):
+    from types import SimpleNamespace
+    from app.medical_crop_review_ui import load_session
+    monkeypatch.delenv('GEMINI_API_KEY',raising=False)
+    source,image,key,box=fixture()
+    item={'source':source,'folder_id':'synthetic-folder','kind':'medical','status':'waiting'}
+    store=SimpleNamespace(value={'confirmation_items':{'synthetic':item}},save=Mock())
+    before={'version':'2','parents':['synthetic-folder'],'trashed':False,'mimeType':'image/png'}
+    if change=='parent':before['parents']=['different-folder']
+    after=dict(before,version='3') if change=='during_read' else before
+    drive=Mock();drive.files().get().execute.side_effect=[before,after,dict(before,version='3')]
+    monkeypatch.setattr('app.google_clients.read_only_drive_service',lambda:drive)
+    monkeypatch.setattr('app.google_clients.download_drive_file',lambda *a:b'changed' if change=='bytes' else png(image))
+    monkeypatch.setattr('app.receipt_reimport_production.ReimportStore',lambda *a:store)
+    monkeypatch.setattr('app.settings.service_account_source',lambda:(None,{'private_key':'synthetic-only'}))
+    binding=tmp_path/'binding.json';binding.write_text(json.dumps({'parent_folder_id':'synthetic-folder','file_id':'synthetic-file','manifest_digest':'synthetic'}))
+    if change=='metadata_only':
+        session=load_session(binding,tmp_path/'review.json')
+        assert session.source['version']=='2' and source['version']=='1'
+        assert not store.save.called and not session.output.exists()
+        with pytest.raises(ValueError,match='review_source_changed'):session.verify()
+    else:
+        with pytest.raises(ValueError,match='review_source_changed'):load_session(binding,tmp_path/'review.json')
+        assert not store.save.called
