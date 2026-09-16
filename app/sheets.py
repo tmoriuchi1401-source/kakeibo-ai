@@ -285,11 +285,12 @@ class SheetsDB:
         sheet_id=sheet["properties"]["sheetId"]
         requests=[
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
-            for index,width in enumerate((90,80,80,95,90,105,125,75,120))
+            for index,width in enumerate((110,190,80))
         ]
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":7,"endColumnIndex":8},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":3,"endIndex":9},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()

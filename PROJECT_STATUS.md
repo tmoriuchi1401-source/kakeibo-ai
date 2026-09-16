@@ -914,7 +914,7 @@ Evidence:
 - 条件はデータ元＋請求名/店舗名の完全一致、銀行では口座別名も完全一致、商品では名前空間付き商品IDだけを自動適用する。NFKCと空白統一以外の別名・部分一致は使わず、Amazon注文総額・決済代行・施設名や商品明細への総額ルールは対象外とする。
 - `CATEGORY_RULE_UI_ENABLED`、`CATEGORY_RULE_SAVE_ENABLED`、`CATEGORY_RULE_AUTO_APPLY_ENABLED`をすべて既定`false`で独立追加。通常の取込・既存UI・定期処理はルール台帳を作成も読込もせず、既存カテゴリを更新しない。将来の別承認時だけ390px向けの`カテゴリ自動分類`チェックボックスUI（初期OFF）を作成・利用できる。
 - 自動適用が将来有効になっても、承認日時より後に到着した未分類の通常決済だけに限定する。人手入力・既存の有効カテゴリ・商品明細を上書きせず、競合は保留。適用した支出明細の備考に`承認ルール=<ID>/r<revision>`、ルール台帳に件数と最終支出IDを記録する。無効化は将来分だけ止め、過去を巻き戻さない。
-- 検証: `tests/test_category_rules.py`、既存`tests/test_auto_expense.py`、Amazon materialization/installmentの関連39件、`compileall`、`git diff --check`を通過。実データはread-onlyのスキーマ確認だけで、UI作成・ルール保存・自動分類の有効化は実施していない。次段階は利用者の別承認後に、UIだけを少数件でcanary確認する。
+- 検証: `tests/test_category_rules.py`、既存`tests/test_auto_expense.py`、Amazon materialization/installment、既存カテゴリUIの関連82件、`compileall`、`git diff --check`を通過。CI相当の隔離合成テストは一般1,389件と敏感合成307件（計1,696件）が成功した。2026-09-17の本番read-only集計では、カテゴリ組56、有効支出441、既定未分類254、有効な確定カテゴリ179、商品明細1、商品情報なしの合計/請求候補331、カテゴリ片側のみまたはマスタ不一致8だった。ルール台帳・ルールUIはいずれも未作成で、候補一致・競合は0（有効ルール0）である。この集計は一致件数を正解率・削減率と扱わず、8件は別途手修正対象として保留する。UI作成・ルール保存・自動分類の有効化は実施していない。次段階は利用者の別承認後に、UIだけを少数件でcanary確認する。
 
 ### Google Sheets 日常UI（対応導線の本番適用・検証完了）
 

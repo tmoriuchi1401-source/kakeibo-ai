@@ -15,17 +15,18 @@ class FakeAI:
 
 
 class FakeDB:
-    def __init__(self, baseline_keys=None, expenses=None):
+    def __init__(self, baseline_keys=None, expenses=None, expense_index=None):
         self.baseline_keys = set(baseline_keys or [])
         self.expenses = list(expenses or [])
         self.appended = {}
         self.updated = {}
+        self._expense_index = dict(expense_index or {})
 
     def amazon_index(self): return {}
     def amazon_baseline_keys(self): return self.baseline_keys
     def product_master(self): return {}
-    def categories(self): return [("その他", "未分類")]
-    def expense_index(self): return {}
+    def categories(self): return [("その他", "未分類"), ("食費", "食品")]
+    def expense_index(self): return self._expense_index
     def expense_rows_for_import(self, import_id):
         return [(index,row) for index,row in enumerate(self.expenses,start=2)
                 if len(row)>10 and row[10]==import_id]
@@ -84,3 +85,18 @@ def test_item_materialization_supersedes_gmail_order_total(tmp_path):
     assert row_num == 2
     assert row[0] == aggregate[0]
     assert row[12] == "superseded_amazon_items"
+
+
+def test_amazon_replay_preserves_existing_human_product_category(tmp_path):
+    path = tmp_path / "amazon.csv"
+    write_csv(path)
+    expense_id = AmazonPipeline._expense_id("ORDER-1|ASIN-1")
+    existing = [
+        expense_id, "2026-08-16", "Amazon.co.jp", "テスト商品", 1200,
+        "食費", "食品", "カード", "Amazon", "", "amazon:ORDER-1", "human", "active",
+    ]
+    db = FakeDB(expenses=[existing], expense_index={expense_id: 2})
+    AmazonPipeline(db, FakeAI()).import_csv(str(path))
+    updated = next(row for _,row in db.updated["支出明細"] if row[0] == expense_id)
+    assert updated[5:7] == ["食費", "食品"]
+    assert updated[11] == "human"

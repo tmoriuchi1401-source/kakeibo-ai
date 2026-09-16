@@ -12,6 +12,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from .reconciliation import ImportTransaction
 
@@ -45,7 +46,10 @@ def parse_timestamp(value: object) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        # Existing Sheets timestamps use now_jst_string() without an offset.
+        # Treating them as UTC could admit a transaction nine hours before an
+        # approval, so preserve that established local-time contract.
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Tokyo"))
     return parsed.astimezone(timezone.utc)
 
 
@@ -122,7 +126,7 @@ def _product_subject(tx: ImportTransaction) -> tuple[str, str]:
     return (("amazon:" + match.group(2), narrow_text(tx.merchant)) if match else ("", ""))
 
 
-def matches(rule: CategoryRule, tx: ImportTransaction) -> bool:
+def matches(rule: CategoryRule, tx: ImportTransaction, *, product_name: str = "") -> bool:
     if not rule.active or narrow_text(tx.source) != rule.source:
         return False
     if rule.amount is not None and abs(tx.amount) != rule.amount:
@@ -136,9 +140,12 @@ def matches(rule: CategoryRule, tx: ImportTransaction) -> bool:
         return merchant == rule.billing_name
     if rule.kind == "store_total":
         return merchant == rule.merchant and not product_id
-    # Import rows have no item name.  A merchant+product-name rule therefore
-    # cannot silently degrade into a merchant-wide rule in this pipeline.
-    return bool(rule.product_id) and product_id == rule.product_id
+    if rule.product_id:
+        return product_id == rule.product_id
+    # A caller with item provenance may opt in to this exact second form.  An
+    # import row alone has no item name, so it remains ineligible rather than
+    # degrading into a merchant-wide rule.
+    return bool(product_name) and merchant == rule.merchant and narrow_text(product_name) == rule.product_name
 
 
 @dataclass(frozen=True)
@@ -148,9 +155,9 @@ class RuleMatch:
 
 
 def match_transaction(rules: list[CategoryRule], tx: ImportTransaction,
-                      categories: set[tuple[str, str]]) -> RuleMatch:
+                      categories: set[tuple[str, str]], *, product_name: str = "") -> RuleMatch:
     imported_at = parse_timestamp(tx.imported_at)
-    candidates = [rule for rule in rules if valid_rule(rule, categories) and matches(rule, tx)]
+    candidates = [rule for rule in rules if valid_rule(rule, categories) and matches(rule, tx, product_name=product_name)]
     if not candidates:
         return RuleMatch("no_match")
     if imported_at is None or any(imported_at <= rule.approved_at for rule in candidates):

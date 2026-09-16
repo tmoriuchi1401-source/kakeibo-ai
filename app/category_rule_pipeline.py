@@ -53,6 +53,13 @@ class CategoryRuleApprovalPipeline:
         if not tx:
             return {"state": "held", "reason": "source_import_not_found"}
         kind = narrow_text(request.kind)
+        # A service/aggregate rule can learn only from the established
+        # automatic-posting path, whose target is this exact stable expense ID.
+        # Product rules have their own narrow provenance contract below.
+        if kind in {"service", "store_total"} and (
+            tx.status != "auto_expense" or tx.target_id != request.expense_id
+        ):
+            return {"state": "held", "reason": "source_not_eligible_for_learning"}
         product_id = narrow_text(request.product_id)
         item_name = narrow_text(expense[3])
         merchant = narrow_text(tx.merchant)
@@ -72,6 +79,8 @@ class CategoryRuleApprovalPipeline:
         elif kind == "product":
             if item_name in RESERVED_ITEM_NAMES or (not product_id and not item_name):
                 return {"state": "held", "reason": "specific_product_required"}
+            if tx.source == "Amazon" and not product_id:
+                return {"state": "held", "reason": "product_namespace_required"}
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, "", merchant, product_id, item_name,
                                      request.exact_amount, current_category, request.expense_id,
                                      self.now(), 1, True)

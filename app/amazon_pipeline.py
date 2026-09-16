@@ -167,12 +167,15 @@ class AmazonPipeline:
             asin=str(r["ASIN"])
             maj,minr,_=master.get(asin,("その他","未分類",""))
             rule_note=""
-            if (maj,minr)==("その他","未分類") and category_rules:
+            # Updated/replayed rows already have a stable ledger expense.  A
+            # newly approved rule may only classify the first materialization,
+            # never retrofit an existing Amazon item.
+            if (maj,minr)==("その他","未分類") and category_rules and kind=="new" and self._expense_id(key) not in expense_idx:
                 imported_at=now_jst_string()
                 rule_tx=ImportTransaction(0, f"amazon:{str(r['Order ID'])}:{asin}", "Amazon",
                                           date_ymd(r["Order Date"]), "Amazon.co.jp", money(r["Total Amount"]),
                                           "unclassified_amazon", "", "", [], imported_at)
-                matched=match_transaction(category_rules,rule_tx,allowed)
+                matched=match_transaction(category_rules,rule_tx,allowed,product_name=str(r["Product Name"]))
                 if matched.state=="matched" and matched.rule:
                     maj,minr=matched.rule.category
                     rule_note=f"; 承認ルール={matched.rule.rule_id}/r{matched.rule.revision}"
@@ -196,6 +199,14 @@ class AmazonPipeline:
                      money(r["Total Amount"]),maj,minr,str(r["Payment Method Type"]),"Amazon","",import_id,
                      f"Amazonキー={key}{rule_note}","active"]
             if expense_id in expense_idx:
+                # Preserve a human-confirmed product category during any CSV
+                # replay/update.  Rules are similarly first-materialization
+                # only and never retrofit an existing expense.
+                existing=next((list(row)+[""]*max(0,13-len(row)) for _,row in self.db.expense_rows_for_import(import_id)
+                               if row and row[0]==expense_id), None)
+                if existing and (existing[5],existing[6]) in allowed and (existing[5],existing[6]) != ("その他","未分類"):
+                    expense[5:7]=existing[5:7]
+                    expense[11]=existing[11]
                 expense_updates.append((expense_idx[expense_id],expense))
             else:
                 expense_new.append(expense)
