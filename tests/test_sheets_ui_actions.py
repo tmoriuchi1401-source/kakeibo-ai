@@ -2,8 +2,17 @@
 from copy import deepcopy
 import pytest
 
-from app.sheets_ui import CATEGORY_UI_ID, CATEGORY_UI_TITLE, HOME_ID, IDS, build_plan, home_cells
-from app.sheets_ui_actions import category_ui_cells, ledger_input_requests
+from app.sheets import SheetsDB
+from app.sheets_ui import (
+    CAP, CATEGORY_UI_ID, CATEGORY_UI_TITLE, EXPENSE_CATEGORY_HELPER_ID,
+    EXPENSE_CATEGORY_HELPER_MARKER, HOME_ID, IDS, VERSION, build_plan, home_cells,
+)
+from app.sheets_ui_actions import (
+    category_ui_cells,
+    expense_category_validation_requests,
+    expense_minor_category_validation_requests,
+    ledger_input_requests,
+)
 from app.sheets_ui_cli import capture_restore, read_metadata
 from app.sheets_ui_verify import category_queue_expected, verify_category_ui
 from test_sheets_ui import Call, FixtureService, metadata
@@ -69,6 +78,65 @@ def test_home_actions_keep_numeric_counts_and_existing_review_destinations():
     assert all(not any(k in r for k in ["updateCells", "setDataValidation", "sortRange"]) for r in ledger_input_requests(ledger))
 
 
+def test_expense_category_rules_are_master_derived_and_row_relative():
+    requests = expense_category_validation_requests()
+    helper_write = next(r["updateCells"] for r in requests if "updateCells" in r)
+    assert helper_write["range"]["endRowIndex"] == CAP + 1
+    assert "SORT(UNIQUE(FILTER(カテゴリ!$A$2:$A" in helper_write["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
+    assert "FILTER(カテゴリ!$B$2:$B" in helper_write["rows"][1]["values"][1]["userEnteredValue"]["formulaValue"]
+    assert "'支出明細'!F2" in helper_write["rows"][1]["values"][1]["userEnteredValue"]["formulaValue"]
+    assert "'支出明細'!F3" in helper_write["rows"][2]["values"][1]["userEnteredValue"]["formulaValue"]
+    rules = [r["setDataValidation"] for r in requests if "setDataValidation" in r]
+    major, *minors = rules
+    assert len(minors) == CAP
+    minor = minors[0]
+    assert major["range"] == {"sheetId": IDS["支出明細"], "startRowIndex": 1,
+                               "endRowIndex": CAP+1, "startColumnIndex": 5, "endColumnIndex": 6}
+    assert minor["range"] == {"sheetId": IDS["支出明細"], "startRowIndex": 1,
+                               "endRowIndex": 2, "startColumnIndex": 6, "endColumnIndex": 7}
+    assert minors[-1]["range"] == {"sheetId": IDS["支出明細"], "startRowIndex": CAP,
+                                    "endRowIndex": CAP+1, "startColumnIndex": 6, "endColumnIndex": 7}
+    assert major["rule"]["condition"]["type"] == minor["rule"]["condition"]["type"] == "ONE_OF_RANGE"
+    assert major["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!$A$2:$A")
+    # Each rule explicitly names its own helper row.  Sheets does not reliably
+    # adjust a range-backed validation source when the rule itself is filled.
+    assert minor["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B2:ALL2")
+    assert minors[1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B3:ALL3")
+    assert all(rule["rule"]["strict"] for rule in [major, *minors])
+
+
+def test_new_ledger_rows_receive_only_their_own_minor_rule():
+    requests = expense_minor_category_validation_requests(1430, 1432)
+    assert [request["setDataValidation"]["range"] for request in requests] == [
+        {"sheetId": IDS["支出明細"], "startRowIndex": row-1, "endRowIndex": row,
+         "startColumnIndex": 6, "endColumnIndex": 7}
+        for row in range(1430, 1433)
+    ]
+    assert requests[2]["setDataValidation"]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B1432:ALL1432")
+
+
+def test_expense_append_reinstalls_only_new_row_rules_after_ui_installation():
+    class AppendService:
+        def __init__(self): self.requests = []
+        def spreadsheets(self): return self
+        def values(self): return self
+        def append(self, **kwargs):
+            updated_range = "支出明細!A1444:M1445" if kwargs["range"] == "支出明細!A:A" else "支出一覧!A2:J2"
+            return Call({"updates": {"updatedRange": updated_range}})
+        def get(self, **kwargs):
+            return Call({"sheets": [{"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID},
+                "developerMetadata": [{"metadataKey": EXPENSE_CATEGORY_HELPER_MARKER,
+                                        "metadataValue": VERSION}]}]})
+        def batchUpdate(self, **kwargs):
+            self.requests.extend(kwargs["body"]["requests"])
+            return Call({})
+    db = SheetsDB("synthetic", service=AppendService())
+    db.append("支出明細", [["new-a"], ["new-b"]])
+    assert [request["setDataValidation"]["range"]["startRowIndex"] for request in db.svc.requests] == [1443, 1444]
+    db.append("支出一覧", [["view-only"]])
+    assert len(db.svc.requests) == 2
+
+
 def test_category_ui_replay_restore_and_collision_preserve_business_surface():
     svc = FixtureService(metadata())
     svc.batchUpdate(body=build_plan(svc.meta))
@@ -77,7 +145,7 @@ def test_category_ui_replay_restore_and_collision_preserve_business_surface():
     assert not any("addSheet" in r or "mergeCells" in r for r in plan["requests"])
     backup = capture_restore(svc, fresh, plan)
     writes = [r["updateCells"] for r in backup["requests"] if "updateCells" in r]
-    assert all(r["range"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID} for r in writes)
+    assert all(r["range"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID, IDS["支出明細"]} for r in writes)
     assert any(r["range"]["sheetId"] == CATEGORY_UI_ID and r["range"]["endColumnIndex"] == 17 for r in writes)
     category = next(s for s in fresh["sheets"] if s["properties"]["title"] == CATEGORY_UI_TITLE)
     category["developerMetadata"][0]["metadataValue"] = "restored:1"

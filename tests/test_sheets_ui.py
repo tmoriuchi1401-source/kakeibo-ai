@@ -10,7 +10,8 @@ from app.review_pipeline import ReviewPipeline, is_reviewable_status
 from app.sheets import HEADERS, SheetsDB
 from app.sheets_ui import (
     CATEGORY_UI_ID, CATEGORY_UI_TITLE,
-    AUTO_MONTH, CAP, CHART_ID, DAILY, HIDDEN, HOME_COLUMNS, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
+    AUTO_MONTH, CAP, CHART_ID, DAILY, EXPENSE_CATEGORY_HELPER_ID, EXPENSE_CATEGORY_HELPER_TITLE,
+    HIDDEN, HOME_COLUMNS, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
     build_plan, home_cells, initial_month_selection, installed, plan_digest, refresh_layout_requests,
 )
 from app.sheets_ui_cli import capture_restore, execute_plan, private_path, read_metadata
@@ -151,13 +152,13 @@ def test_ui_mutation_scope_and_legacy_headers_are_preserved():
     before = deepcopy(meta)
     plan = build_plan(meta)
     assert meta == before
-    assert len([r for r in plan["requests"] if "addSheet" in r]) == 2
+    assert len([r for r in plan["requests"] if "addSheet" in r]) == 3
     for r in plan["requests"]:
         assert len(r) == 1
         kind, v = next(iter(r.items()))
         assert kind not in {"deleteSheet", "deleteDimension", "moveDimension", "sortRange", "addProtectedRange", "setBasicFilter"}
         if kind in {"updateCells", "setDataValidation", "mergeCells"}:
-            assert v["range"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID}
+            assert v["range"]["sheetId"] in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID, IDS["支出明細"]}
         if kind == "repeatCell":
             assert "userEnteredValue" not in v["fields"] and "dataValidation" not in v["fields"]
         if kind == "updateCells":
@@ -316,8 +317,9 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     svc.batchUpdate(body=plan)
     svc.batchUpdate(body=backup)
     assert not installed(svc.meta)
-    assert not any(s["properties"].get("hidden", False) for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID})
-    assert [s["properties"]["title"] for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID}] == list(IDS)
+    assert not any(s["properties"].get("hidden", False) for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID})
+    assert [s["properties"]["title"] for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID}] == list(IDS)
+    assert next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == EXPENSE_CATEGORY_HELPER_ID)["properties"]["hidden"]
     assert not any("addSheet" in r for r in build_plan(read_metadata(svc))["requests"])
 
 
@@ -479,7 +481,8 @@ def test_restore_keeps_dropdown_helper_notes_and_frozen_rows():
     svc.batchUpdate(body=build_plan(svc.meta))
     meta = read_metadata(svc)
     backup = capture_restore(svc, meta, build_plan(meta))
-    block = next(r["updateCells"] for r in backup["requests"] if "updateCells" in r)
+    block = next(r["updateCells"] for r in backup["requests"]
+                 if "updateCells" in r and r["updateCells"]["range"]["sheetId"] == HOME_ID)
     assert block["range"]["endColumnIndex"] == 9 and "note" in block["fields"]
     assert block["rows"][2]["values"][8]["userEnteredValue"] == {"formulaValue": home_cells()[3, 9]}
     assert block["rows"][3]["values"][1]["dataValidation"] == svc.validations[HOME_ID, 3, 1]

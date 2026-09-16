@@ -5,7 +5,8 @@ No classifications, proposed values, approvals, or business writers are added.
 from __future__ import annotations
 
 from .sheets_ui import (
-    CAP, CATEGORY_UI_COLUMNS, CATEGORY_UI_ID, CATEGORY_UI_ROWS, HOME_ID, IDS,
+    CAP, CATEGORY_UI_COLUMNS, CATEGORY_UI_ID, CATEGORY_UI_ROWS,
+    EXPENSE_CATEGORY_HELPER_ID, EXPENSE_CATEGORY_HELPER_TITLE, HOME_ID, IDS,
     cell, color, dimension, grid, source_range, style,
 )
 
@@ -117,3 +118,59 @@ def ledger_input_requests(sheet):
         style(grid(sid, 0, 1, 5, 7), backgroundColorStyle=color("F7DFA2"), textFormat={"bold": True}),
         {"updateSheetProperties": {"properties": {"sheetId": sid,
             "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}}]
+
+
+def expense_minor_category_validation_requests(start_row:int, end_row:int):
+    """Return one exact G rule per inclusive ledger row."""
+    if start_row < 2 or end_row < start_row:
+        raise ValueError("Unexpected expense category validation row range")
+    ledger = IDS["支出明細"]
+    return [
+        {"setDataValidation": {"range": grid(ledger, row-1, row, 6, 7), "rule": {
+            "condition": {"type": "ONE_OF_RANGE", "values": [
+                {"userEnteredValue": f"='{EXPENSE_CATEGORY_HELPER_TITLE}'!B{row}:ALL{row}"}
+            ]}, "strict": True, "showCustomUi": True,
+            "inputMessage": "大カテゴリを変更した場合は、このカテゴリから小カテゴリを選び直してください。"}}}
+        for row in range(start_row, end_row+1)
+    ]
+
+
+def expense_category_validation_requests(*, minor_end_row:int=CAP+1):
+    """Restore the ledger's major → minor category dropdowns.
+
+    Column A contains a formula-derived distinct major list.  Each B row is a
+    formula-derived horizontal list for the same ledger row.  Google Sheets
+    preserves a range-backed dropdown's source row when one rule is copied,
+    so G receives one explicit rule per ledger row rather than relying on a
+    relative-reference fill.  No category values are written or cleared.
+    """
+    helper, ledger = EXPENSE_CATEGORY_HELPER_ID, IDS["支出明細"]
+    minor_formula = lambda row: (
+        f'=IFERROR(TRANSPOSE(UNIQUE(FILTER(カテゴリ!$B$2:$B,'
+        f'カテゴリ!$A$2:$A=\'支出明細\'!F{row}))),"")'
+    )
+    rows = [
+        {"values": [
+            {"userEnteredValue": {"stringValue": "大カテゴリ候補（カテゴリから自動生成）"}},
+            {"userEnteredValue": {"stringValue": "小カテゴリ候補（支出明細の同じ行に連動）"}},
+        ]},
+        {"values": [
+            {"userEnteredValue": {"formulaValue": (
+                '=IFERROR(SORT(UNIQUE(FILTER(カテゴリ!$A$2:$A,カテゴリ!$A$2:$A<>""))),"")'
+            )}},
+            {"userEnteredValue": {"formulaValue": minor_formula(2)}},
+        ]},
+    ]
+    rows.extend({"values": [{}, {"userEnteredValue": {"formulaValue": minor_formula(row)}}]}
+                for row in range(3, CAP+2))
+    return [
+        {"updateCells": {"range": grid(helper, 0, CAP+1, 0, 2), "rows": rows,
+            "fields": "userEnteredValue"}},
+        {"updateSheetProperties": {"properties": {"sheetId": helper, "hidden": True}, "fields": "hidden"}},
+        {"setDataValidation": {"range": grid(ledger, 1, CAP+1, 5, 6), "rule": {
+            "condition": {"type": "ONE_OF_RANGE", "values": [
+                {"userEnteredValue": f"='{EXPENSE_CATEGORY_HELPER_TITLE}'!$A$2:$A"}
+            ]}, "strict": True, "showCustomUi": True,
+            "inputMessage": "カテゴリシートの大カテゴリを選択してください。"}}},
+        *expense_minor_category_validation_requests(2, minor_end_row),
+    ]
