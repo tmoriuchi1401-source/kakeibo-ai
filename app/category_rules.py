@@ -126,20 +126,27 @@ def _product_subject(tx: ImportTransaction) -> tuple[str, str]:
     return (("amazon:" + match.group(2), narrow_text(tx.merchant)) if match else ("", ""))
 
 
-def matches(rule: CategoryRule, tx: ImportTransaction, *, product_name: str = "") -> bool:
+def matches(rule: CategoryRule, tx: ImportTransaction, *, product_name: str = "",
+            product_id: str = "", aggregate_only: bool = False) -> bool:
     if not rule.active or narrow_text(tx.source) != rule.source:
         return False
     if rule.amount is not None and abs(tx.amount) != rule.amount:
         return False
     account = bank_account_alias(tx.import_id)
+    # A bank rule without its statement account is unsafe even if somebody
+    # manually inserted it into the rules tab.  Registration checks this too;
+    # keeping the guard here prevents a malformed saved row widening scope.
+    if str(tx.import_id).startswith("bankpdf:") and not rule.account_alias:
+        return False
     if rule.account_alias and account != rule.account_alias:
         return False
     merchant = narrow_text(tx.merchant)
-    product_id, _ = _product_subject(tx)
+    inferred_product_id, _ = _product_subject(tx)
+    product_id = narrow_text(product_id) or inferred_product_id
     if rule.kind == "service":
         return merchant == rule.billing_name
     if rule.kind == "store_total":
-        return merchant == rule.merchant and not product_id
+        return aggregate_only and merchant == rule.merchant and not product_id
     if rule.product_id:
         return product_id == rule.product_id
     # A caller with item provenance may opt in to this exact second form.  An
@@ -155,12 +162,19 @@ class RuleMatch:
 
 
 def match_transaction(rules: list[CategoryRule], tx: ImportTransaction,
-                      categories: set[tuple[str, str]], *, product_name: str = "") -> RuleMatch:
+                      categories: set[tuple[str, str]], *, product_name: str = "",
+                      product_id: str = "", aggregate_only: bool = False,
+                      require_newer_than_approval: bool = True) -> RuleMatch:
     imported_at = parse_timestamp(tx.imported_at)
-    candidates = [rule for rule in rules if valid_rule(rule, categories) and matches(rule, tx, product_name=product_name)]
+    candidates = [rule for rule in rules if valid_rule(rule, categories) and matches(
+        rule, tx, product_name=product_name, product_id=product_id,
+        aggregate_only=aggregate_only,
+    )]
     if not candidates:
         return RuleMatch("no_match")
-    if imported_at is None or any(imported_at <= rule.approved_at for rule in candidates):
+    if require_newer_than_approval and (
+        imported_at is None or any(imported_at <= rule.approved_at for rule in candidates)
+    ):
         return RuleMatch("held")
     categories_found = {rule.category for rule in candidates}
     if len(categories_found) != 1:

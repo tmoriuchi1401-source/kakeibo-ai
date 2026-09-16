@@ -48,7 +48,8 @@ def test_store_total_rejects_product_and_product_requires_specific_identity():
     categories = {("食費", "外食")}
     tx = parse_import_rows([import_row(merchant="店")])[0]
     total = rule(kind="store_total", merchant="店")
-    assert match_transaction([total], tx, categories).state == "matched"
+    assert match_transaction([total], tx, categories).state == "no_match"
+    assert match_transaction([total], tx, categories, aggregate_only=True).state == "matched"
     product = rule(kind="product", merchant="店")
     assert match_transaction([product], tx, categories).state == "no_match"
 
@@ -120,6 +121,8 @@ def test_amount_and_bank_account_mismatch_are_not_widened():
     wrong_account = parse_import_rows([import_row("bankpdf:bank:account-b:1", "Bank", "料金", 100)])[0]
     assert match_transaction([approved], wrong_amount, categories).state == "no_match"
     assert match_transaction([approved], wrong_account, categories).state == "no_match"
+    malformed = replace(approved, account_alias="")
+    assert match_transaction([malformed], parse_import_rows([import_row("bankpdf:bank:account-a:1", "Bank", "料金", 100)])[0], categories).state == "no_match"
 
 
 def test_deactivate_leaves_existing_expense_unchanged_and_stops_future_match():
@@ -190,3 +193,20 @@ def test_mobile_ui_marks_exact_registered_and_conflicting_rule_without_checking_
     ui = UIDB()
     CategoryRuleUIPipeline(ui, ui_enabled=True, save_enabled=True).refresh()
     assert ui.ui[0][2] is False and ui.ui[0][1].endswith("登録済み")
+
+
+def test_checked_ui_condition_is_never_silently_replaced_on_refresh():
+    db = RuleDB()
+    class UIDB(RuleDB):
+        def __init__(self): self.__dict__ = db.__dict__; self.ui=[]
+        def category_rule_ui_rows(self): return self.ui
+        def ensure_category_rule_ui_sheet(self, header): pass
+        def clear(self, rng): self.ui=[]
+        def append(self, sheet, rows): self.ui.extend(rows)
+    ui = UIDB()
+    pipe = CategoryRuleUIPipeline(ui, ui_enabled=True, save_enabled=True)
+    pipe.refresh(); ui.ui[0][2] = True
+    ui.imports[0][5] = "変更後の請求名"
+    pipe.refresh()
+    assert ui.ui[0][2] is False
+    assert "再承認が必要" in ui.ui[0][1] and "変更後の請求名" in ui.ui[0][1]

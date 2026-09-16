@@ -35,6 +35,8 @@ from .maintenance import (
 from .auto_expense import AutoExpensePipeline
 from .category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprovalRequest
 from .category_rule_ui import CategoryRuleUIPipeline
+from .category_backfill import CategoryBackfillPipeline
+from .category_backfill_ui import CategoryBackfillUIPipeline
 from .bank_finalization import (
     BankFinalizationPipeline,
     validate_bank_finalization_canary,
@@ -243,6 +245,12 @@ def main():
     rule_deactivate.add_argument("rule_id")
     sub.add_parser("category-rule-ui-refresh")
     sub.add_parser("category-rule-ui-apply")
+    sub.add_parser("category-backfill-ui-refresh")
+    sub.add_parser("category-backfill-preview-checked")
+    sub.add_parser("category-backfill-confirmations-refresh")
+    sub.add_parser("category-backfill-apply-confirmed")
+    backfill_restore=sub.add_parser("category-backfill-restore")
+    backfill_restore.add_argument("request_id")
     bank_finalize_preview=sub.add_parser("bank-finalization-preview")
     bank_finalize_preview.add_argument("--source-identity",action="append",default=[])
     bank_finalize=sub.add_parser("bank-finalization-apply")
@@ -1067,6 +1075,16 @@ def main():
         s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).refresh())
     elif args.cmd=="category-rule-ui-apply":
         s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).apply_checked())
+    elif args.cmd=="category-backfill-ui-refresh":
+        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh())
+    elif args.cmd=="category-backfill-preview-checked":
+        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).preview_checked())
+    elif args.cmd=="category-backfill-confirmations-refresh":
+        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh_confirmations())
+    elif args.cmd=="category-backfill-apply-confirmed":
+        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).apply_confirmed())
+    elif args.cmd=="category-backfill-restore":
+        s,db,_=make(False); print(CategoryBackfillPipeline(db, preview_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).restore(args.request_id))
     elif args.cmd=="bank-finalization-preview":
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())

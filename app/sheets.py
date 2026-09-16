@@ -290,13 +290,58 @@ class SheetsDB:
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":3,"endIndex":9},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":3,"endIndex":10},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
     def category_rule_ui_rows(self):
         if "カテゴリ自動分類" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ自動分類!A2:I")
+        return self.get("カテゴリ自動分類!A2:J")
+    def ensure_category_backfill_sheets(self):
+        """Create the two narrow audit tabs only on explicit backfill preview."""
+        from .category_backfill import BACKFILL_REQUEST_HEADERS, BACKFILL_TARGET_HEADERS
+        self.ensure_sheet("カテゴリ過去反映要求", BACKFILL_REQUEST_HEADERS)
+        self.ensure_sheet("カテゴリ過去反映対象", BACKFILL_TARGET_HEADERS)
+    def category_backfill_requests(self):
+        if "カテゴリ過去反映要求" not in set(self.sheet_titles()): return []
+        return self.get("カテゴリ過去反映要求!A2:K")
+    def category_backfill_targets(self):
+        if "カテゴリ過去反映対象" not in set(self.sheet_titles()): return []
+        return self.get("カテゴリ過去反映対象!A2:O")
+    def update_expense_categories(self, rows:list[tuple[int,str,str]]):
+        """Backfill's sole ledger mutation: the existing F:G category cells."""
+        if not rows: return
+        self.svc.spreadsheets().values().batchUpdate(
+            spreadsheetId=self.sid, body={"valueInputOption":"RAW", "data":[
+                {"range":f"支出明細!F{row_num}:G{row_num}", "values":[[major,minor]]}
+                for row_num,major,minor in rows
+            ]},
+        ).execute()
+    def _configure_backfill_mobile_sheet(self, title, header, hidden_from):
+        self.ensure_sheet(title, header)
+        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == title)
+        sheet_id=sheet["properties"]["sheetId"]
+        requests=[
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
+            for index,width in enumerate((120,150,90))
+        ] + [
+            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":hidden_from,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
+        ]
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+    def ensure_category_backfill_ui_sheet(self, header):
+        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 3)
+    def ensure_category_backfill_confirmation_sheet(self, header):
+        self._configure_backfill_mobile_sheet("カテゴリ過去反映確認", header, 4)
+    def category_backfill_ui_rows(self):
+        if "カテゴリ過去反映" not in set(self.sheet_titles()): return []
+        return self.get("カテゴリ過去反映!A2:G")
+    def category_backfill_confirmation_rows(self):
+        if "カテゴリ過去反映確認" not in set(self.sheet_titles()): return []
+        return self.get("カテゴリ過去反映確認!A2:E")
     def expense_rows_for_import(self,import_id:str)->list[tuple[int,list]]:
         return [(i,r) for i,r in enumerate(self.get("支出明細!A2:M"),start=2)
                 if len(r)>10 and r[10]==import_id]

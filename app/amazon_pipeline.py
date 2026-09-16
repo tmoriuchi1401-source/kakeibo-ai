@@ -175,7 +175,10 @@ class AmazonPipeline:
                 rule_tx=ImportTransaction(0, f"amazon:{str(r['Order ID'])}:{asin}", "Amazon",
                                           date_ymd(r["Order Date"]), "Amazon.co.jp", money(r["Total Amount"]),
                                           "unclassified_amazon", "", "", [], imported_at)
-                matched=match_transaction(category_rules,rule_tx,allowed,product_name=str(r["Product Name"]))
+                matched=match_transaction(
+                    category_rules,rule_tx,allowed,product_name=str(r["Product Name"]),
+                    aggregate_only=False,
+                )
                 if matched.state=="matched" and matched.rule:
                     maj,minr=matched.rule.category
                     rule_note=f"; 承認ルール={matched.rule.rule_id}/r{matched.rule.revision}"

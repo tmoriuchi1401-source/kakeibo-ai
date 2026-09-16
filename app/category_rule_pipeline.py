@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import json
 
 from .category_rules import (
     AGGREGATE_ITEM_NAMES, CategoryRule, RESERVED_ITEM_NAMES, bank_account_alias, narrow_text, parse_rules,
@@ -18,6 +19,10 @@ class RuleApprovalRequest:
     kind: str
     product_id: str = ""
     exact_amount: int | None = None
+    # The phone UI supplies the exact condition it rendered.  The pipeline
+    # compares it with a fresh source read before saving so a stale checked row
+    # can never silently become a different rule.
+    condition_snapshot: str = ""
 
 
 class CategoryRuleApprovalPipeline:
@@ -34,6 +39,23 @@ class CategoryRuleApprovalPipeline:
 
     def _transactions(self):
         return {tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
+
+    @staticmethod
+    def snapshot_for(*, expense_id: str, category: tuple[str, str], kind: str,
+                     tx, product_id: str = "", item_name: str = "",
+                     exact_amount: int | None = None) -> str:
+        """A canonical, comparison-only snapshot of the displayed condition."""
+        payload = {
+            "v": 1, "expense_id": narrow_text(expense_id),
+            "category": [narrow_text(category[0]), narrow_text(category[1])],
+            "kind": narrow_text(kind), "source": narrow_text(tx.source),
+            "account_alias": bank_account_alias(tx.import_id),
+            "merchant": narrow_text(tx.merchant), "product_id": narrow_text(product_id),
+            "item_name": narrow_text(item_name), "amount": exact_amount,
+            "import_id": narrow_text(tx.import_id), "import_status": narrow_text(tx.status),
+            "target_id": narrow_text(tx.target_id),
+        }
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     def register(self, request: RuleApprovalRequest) -> dict:
         if not self.save_enabled:
@@ -66,6 +88,19 @@ class CategoryRuleApprovalPipeline:
         account = bank_account_alias(tx.import_id)
         if str(tx.import_id).startswith("bankpdf:") and not account:
             return {"state": "held", "reason": "bank_account_alias_required"}
+        if request.condition_snapshot:
+            current_snapshot = self.snapshot_for(
+                expense_id=request.expense_id, category=current_category, kind=kind,
+                tx=tx, product_id=product_id, item_name=item_name,
+                exact_amount=request.exact_amount,
+            )
+            try:
+                supplied = json.dumps(json.loads(request.condition_snapshot), ensure_ascii=False,
+                                      sort_keys=True, separators=(",", ":"))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return {"state": "held", "reason": "invalid_condition_snapshot"}
+            if supplied != current_snapshot:
+                return {"state": "held", "reason": "condition_changed_concurrently"}
         if kind == "service":
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, merchant, "", "", "",
                                      request.exact_amount, current_category, request.expense_id,

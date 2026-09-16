@@ -155,7 +155,9 @@ class AutoExpensePipeline:
             if decision.action != "post" or decision.category != FALLBACK_CATEGORY:
                 updated.append(decision)
                 continue
-            matched = match_transaction(rules, decision.transaction, categories)
+            matched = match_transaction(
+                rules, decision.transaction, categories, aggregate_only=True,
+            )
             if matched.state == "matched" and matched.rule:
                 updated.append(replace(
                     decision, category=matched.rule.category,

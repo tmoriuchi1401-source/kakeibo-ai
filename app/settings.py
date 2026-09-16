@@ -60,6 +60,14 @@ class Settings:
     category_rule_auto_apply_enabled: bool = os.getenv(
         "CATEGORY_RULE_AUTO_APPLY_ENABLED", "false"
     ).strip().lower() in {"1", "true", "yes", "on"}
+    # Historical backfill has independent opt-in controls.  A stored rule or a
+    # future auto-apply flag never authorizes changing prior ledger rows.
+    category_backfill_preview_enabled: bool = os.getenv(
+        "CATEGORY_BACKFILL_PREVIEW_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    category_backfill_apply_enabled: bool = os.getenv(
+        "CATEGORY_BACKFILL_APPLY_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
     aupay_card_statement_gmail_query: str = field(default_factory=lambda: os.getenv(
         "AUPAY_CARD_STATEMENT_GMAIL_QUERY",
     ) or (
