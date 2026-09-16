@@ -50,10 +50,23 @@
   本人が最終画像を見て確認した結果だけを扱い、代理で確認ボタンを押さない。
   原本を表示するのは本人のブラウザだけで、AIへ送らない。UIはローカルの確認記録のみ保存し、
   保守中の反映後も実際の送信はActions側の検証済みPNGに限定する。
-- 定期・共通保守はmain更新と実前処理のため一時停止中。再開は最終CI/main/承認SHA一致、
-  通常all経路・入力保持・永続stateを確認後に行い、結果を非公開 `anonymous-20260916` に保存する。
-  Medical送信はプラン確認と安全な画像の本人確認待ち。一般運用の再開はこの待ちに依存させない。
-  実送信/候補読戻し/replayは未達で、匿名化AI運用開始・L4とは報告しない。
+- 匿名化確認UIと数値領域の連結拒否を含む実装SHA
+  `c41cacfc78764bc0e411dff4f9e08a77120ae531` のLinux CI `35052205070` 成功。
+  一般1370＋機微合成210＝1580件、Node 6件、compileall/diff-check成功。Windows全体も1580件成功。
+- 同SHAの通常 `all` run `35052380694` は全11段階success。銀行preview/収入write OFF。
+  Amazon対象0、au PAY残高21件不変、PayPay新規0、receiptはMedical1/unknown1を保留。
+  カードの通常新着3件を取込：auto_expense1件・transfer_aupay_charge2件。
+  Sheets読戻しで3件のID一意・統合先空欄・関連支出0件を確認。追加計上条件は復活させていない。
+  auto-expense/review-applyの支出追加/更新0、既存固定一般10件の会計4表も不変。
+- 通常run後も確認5行のH:O/Mは開始前と完全一致、重複0、Medical原本保持・会計4表0行。
+  3 native state ready / 共通ledger全source ready。4stateと専用JSONの本人所有/親/共有を維持。
+  Medical解析intent/実送信/応答は0件。匿名化不成立と利用プラン不明のため画像送信だけ保留。
+- 定期・共通保守を一時停止してmain更新・実前処理・通常経路確認を完了。
+  最終文書commitもLinux CI成功後にmainへ反映し、承認SHAを一致させて06:17/18:17定期と共通保守を再開する。
+  最終設定の読戻しは非公開 `anonymous-20260916/final-github.json` に保存する。旧日常OFFを維持。
+  Medicalの待ちを理由に一般運用を止め続けない。更新後cronは未観測。
+  プラン確認・本人の安全な切出し確認・Gemini実送信/金額候補/replayは未達。
+  匿名化AI運用開始・L4とは報告せず、Goalを継続する。
 
 ### 2026-09-16 一般・Medicalの本番確認受付開始
 
