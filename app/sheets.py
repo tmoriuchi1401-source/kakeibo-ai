@@ -30,6 +30,7 @@ HEADERS={
        "ユーザー判断","統合先取込ID","カテゴリ（大｜小）","小カテゴリ（従来）","ユーザー備考","反映結果",
        "Amazon候補","Amazon候補数","Amazon注文候補選択","Amazon候補ID","Amazon選択状態"],
 "支出一覧":["日付","店舗","商品名","金額","大カテゴリ","小カテゴリ","支払方法","データ元","備考","支出ID"],
+"カテゴリ自動分類ルール":["ルールID","条件種別","データ元","口座別名","請求名","店舗名","商品ID","商品名","金額","大カテゴリ","小カテゴリ","承認元支出ID","承認日時","revision","有効","適用件数","最終適用支出ID","最終適用日時"],
 }
 
 class SheetsDB:
@@ -264,6 +265,37 @@ class SheetsDB:
         return out
     def expense_index(self)->dict[str,int]:
         return {r[0]:i for i,r in enumerate(self.get("支出明細!A2:A"),start=2) if r}
+    def expense_records(self)->dict[str,tuple[int,list]]:
+        """Read the whole canonical ledger record only for guarded updates."""
+        return {str(row[0]): (number, list(row) + [""] * max(0, 13-len(row)))
+                for number,row in enumerate(self.get("支出明細!A2:M"), start=2) if row and row[0]}
+    def category_rules(self):
+        """Rules are optional until an explicit, separately approved UI install."""
+        if "カテゴリ自動分類ルール" not in set(self.sheet_titles()):
+            return []
+        return self.get("カテゴリ自動分類ルール!A2:R")
+    def ensure_category_rule_sheet(self):
+        """Explicit write path only; never called by routine imports or UI refresh."""
+        self.ensure_sheet("カテゴリ自動分類ルール", HEADERS["カテゴリ自動分類ルール"])
+    def ensure_category_rule_ui_sheet(self, header):
+        """Create the opt-in mobile request surface only after UI approval."""
+        self.ensure_sheet("カテゴリ自動分類", header)
+        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == "カテゴリ自動分類")
+        sheet_id=sheet["properties"]["sheetId"]
+        requests=[
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
+            for index,width in enumerate((90,80,80,95,90,105,125,75,120))
+        ]
+        requests += [
+            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":7,"endColumnIndex":8},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
+        ]
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+    def category_rule_ui_rows(self):
+        if "カテゴリ自動分類" not in set(self.sheet_titles()): return []
+        return self.get("カテゴリ自動分類!A2:I")
     def expense_rows_for_import(self,import_id:str)->list[tuple[int,list]]:
         return [(i,r) for i,r in enumerate(self.get("支出明細!A2:M"),start=2)
                 if len(r)>10 and r[10]==import_id]

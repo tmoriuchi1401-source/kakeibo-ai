@@ -33,6 +33,8 @@ from .maintenance import (
     cleanup_processed_receipts,
 )
 from .auto_expense import AutoExpensePipeline
+from .category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprovalRequest
+from .category_rule_ui import CategoryRuleUIPipeline
 from .bank_finalization import (
     BankFinalizationPipeline,
     validate_bank_finalization_canary,
@@ -230,6 +232,17 @@ def main():
     sub.add_parser("expenses-refresh")
     sub.add_parser("auto-expense-preview")
     sub.add_parser("auto-expense")
+    rule_register=sub.add_parser("category-rule-register")
+    rule_register.add_argument("expense_id")
+    rule_register.add_argument("major_category")
+    rule_register.add_argument("minor_category")
+    rule_register.add_argument("kind", choices=("service", "store_total", "product"))
+    rule_register.add_argument("--product-id", default="")
+    rule_register.add_argument("--exact-amount", type=int)
+    rule_deactivate=sub.add_parser("category-rule-deactivate")
+    rule_deactivate.add_argument("rule_id")
+    sub.add_parser("category-rule-ui-refresh")
+    sub.add_parser("category-rule-ui-apply")
     bank_finalize_preview=sub.add_parser("bank-finalization-preview")
     bank_finalize_preview.add_argument("--source-identity",action="append",default=[])
     bank_finalize=sub.add_parser("bank-finalization-apply")
@@ -886,9 +899,9 @@ def main():
         else:
             print(result.model_dump())
     elif args.cmd=="amazon":
-        s,db,ai=make(); print(AmazonPipeline(db,ai).import_csv(args.csv))
+        s,db,ai=make(); print(AmazonPipeline(db,ai,category_rule_auto_apply_enabled=s.category_rule_auto_apply_enabled).import_csv(args.csv))
     elif args.cmd=="amazon-baseline":
-        s,db,_=make(False); print(AmazonPipeline(db,None).import_csv(args.csv,baseline=True))
+        s,db,_=make(False); print(AmazonPipeline(db,None,category_rule_auto_apply_enabled=s.category_rule_auto_apply_enabled).import_csv(args.csv,baseline=True))
     elif args.cmd=="amazon-shipping-backfill-preview":
         s,db,_=make(False); print(AmazonShippingBackfillPipeline(db).preview(args.csv))
     elif args.cmd=="amazon-shipping-backfill":
@@ -1041,9 +1054,19 @@ def main():
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
     elif args.cmd=="auto-expense-preview":
-        s,db,_=make(False,read_only=True); print(AutoExpensePipeline(db).preview())
+        s,db,_=make(False,read_only=True); print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).preview())
     elif args.cmd=="auto-expense":
-        s,db,_=make(False); print(AutoExpensePipeline(db).apply())
+        s,db,_=make(False); print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).apply())
+    elif args.cmd=="category-rule-register":
+        s,db,_=make(False); print(CategoryRuleApprovalPipeline(db, save_enabled=s.category_rule_save_enabled).register(
+            RuleApprovalRequest(args.expense_id, (args.major_category, args.minor_category), args.kind,
+                                args.product_id, args.exact_amount)))
+    elif args.cmd=="category-rule-deactivate":
+        s,db,_=make(False); print(CategoryRuleApprovalPipeline(db, save_enabled=s.category_rule_save_enabled).deactivate(args.rule_id))
+    elif args.cmd=="category-rule-ui-refresh":
+        s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).refresh())
+    elif args.cmd=="category-rule-ui-apply":
+        s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).apply_checked())
     elif args.cmd=="bank-finalization-preview":
         s=Settings(); s.validate(need_sheet=True)
         db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
