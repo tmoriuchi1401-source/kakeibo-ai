@@ -14,7 +14,7 @@ from app.sheets_ui import (
     HIDDEN, HOME_COLUMNS, HOME_ID, IDS, MARKER, RIGHT, SPREADSHEET_ID,
     build_plan, home_cells, initial_month_selection, installed, plan_digest, refresh_layout_requests,
 )
-from app.sheets_ui_cli import capture_restore, execute_plan, private_path, read_metadata
+from app.sheets_ui_cli import capture_restore, execute_backup_read, execute_plan, private_path, read_metadata
 from test_amazon_manual_review import MemoryDB, review_row
 
 
@@ -326,6 +326,16 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     assert [s["properties"]["title"] for s in svc.meta["sheets"] if s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID}] == list(IDS)
     assert next(s for s in svc.meta["sheets"] if s["properties"]["sheetId"] == EXPENSE_CATEGORY_HELPER_ID)["properties"]["hidden"]
     assert not any("addSheet" in r for r in build_plan(read_metadata(svc))["requests"])
+
+
+def test_backup_reads_disable_compression_only_when_supported():
+    class Request:
+        headers = {}
+        def execute(self): return {"ok": True}
+    request = Request()
+    assert execute_backup_read(request) == {"ok": True}
+    assert request.headers["accept-encoding"] == "identity"
+    assert execute_backup_read(Call({"fixture": True})) == {"fixture": True}
 
 
 def test_approval_digest_changes_when_another_work_changes_metadata():
