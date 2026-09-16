@@ -22,28 +22,43 @@
 
 ## 1. Last verified
 
-### 2026-09-16 本番Gemini経路への固定再解析scope接続（branch準備）
+### 2026-09-16 本番Geminiで固定normal10件の再解析・比較
 
 - 更新Goalはnormal10件の実原本を本番Actionsの既存GeminiAIからGoogle公式APIへ送信することを明示承認。
   Windows鍵は不要。本番`GEMINI_API_KEY`/SA/SpreadsheetのSecret存在、Workflow env、
   receipt apply子プロセスとSettings/lazy GeminiAIへの受渡しをread-only確認した。
-  previewは鍵除去を維持。実Gemini認証・送信・応答の成功は未確認であり、Secret存在とは区別する。
+  previewは鍵除去を維持。初回run `35036471978` で実原本の送信・応答・構造化結果検証・保存まで成功。
+  既存Secretをそのまま利用でき、新規キー設定・Windowsへのキー移送・認証方式の変更は不要だった。
 - 新親manual `receipt_reimport` scopeを追加。固定manifest/専用結果IDを要求し、scheduleからの起動は拒否。
   同じReceiptPipelineの解析・validationを共用し、通常のalready_importedスキップと新着scheduleは維持。
   新しい解析器/認証/モデルは追加しない。最初1件、続く各run最大3件。Linux privacy差は保留。
 - 専用結果JSONで送信前intentと成功応答を保存し、同一版のreplayはAI鍵なしで保存結果を再利用。
   ID/版/hash/宛先/modelを照合し、結果不明の再送と保存の盲目的retryを拒否。表示は件数/固定エラーコードのみ。
-  比較処理は既存行を読取専用で扱い、修復writerの接続は実結果評価後に残る。
+  比較処理は既存行を読取専用で扱う。今回は訂正根拠が確定した対象がなく、台帳writeは0。
+  修復writerは未接続であり、将来の修復には対象と独立した根拠を固定した最小接続が必要。
 - 既存本人Drive接続と既存管理フォルダの本人owner/指定SA writerを確認。
-  専用JSON 1個のuploadは、具体的なpayload/保存先の承認不足として自動承認レビューが実行前に拒否した。
-  JSON原稿・固定10件manifest・upload意図を非公開Windows領域へ保存し、再uploadしていない。
-  この専用JSONは4本番stateとは別。新規Google資源・共有変更・実AI送信・台帳更新は0。
-- main/承認SHAは `1af88c5f3b617fe00d53a838ac49fe7a55352ac3`。新定期ON・旧入口OFFを維持。
-  本番停止/main反映は必要準備とCIが揃ってから行う。Medicalは従来の非AI境界を維持し、実検証未実施。
+  初回upload拒否後、本人が専用JSONの作成・更新を明示承認した。承認後の作成1回で固定IDを保存し、
+  SA読戻しbytes一致を確認。以後同一IDへ送信意図・比較元・解析結果を更新した。
+  この専用JSONは4本番stateとは別。新規Google資源はJSON 1個、共有変更・台帳修復・原本移動は0。
+- 実行main/承認SHAは `7313742a6b775f072c757ef8ccf087cc99355a62`。
+  旧SHAの定期run `35036058099` の成功終了を待ち、通常fast-forwardでmainへ反映した。
+  定期と共通保守は一時停止して対象runを直列実行。旧日常/旧cache writerのOFFと銀行previewを維持。
+- 本番実解析run: `35036471978`（1件）、`35036675727` / `35037017029` / `35037469334`（各3件）。
+  normal10件すべてGemini成功・既存validator通過・保存済み。Linux privacy保留0、失敗0。
+  全10件で日付/合計は既存と一致。完全一致3件、内容一致/照合リンク保護2件、差分確認待ち5件。
+  比較器の分類ではunchanged3 / needs_review7（照合保護2を含む）。対象4表の修復前snapshotと読戻しは一致。
+  確認待ち1件の既存明細は0件。非AI原本抽出でも商品/金額対応を確定できず、要確認を維持した。
+  他4件の店舗表記等もAI差分だけでは訂正しない。非公開の対象別比較一覧を `receipt-reimport-review.html` に保存済み。
+- 再実行 `35037853486` 成功。保存結果10件を再利用、AI再送0・会計変更0・残対象0。
+  同一IDの対象4表は修復前snapshotから不変。会計の二重追加/二重修正は0。
+- 終了read-backで3 native state ready / 共通ledger全source ready、4state metadata不変を確認。
+  専用結果JSONも同一ID・本人所有・指定SA writerのみを維持。最終文書commit後にmain/承認SHAをそろえ、
+  新親定期と共通保守を元のactiveへ戻す手順。旧日常/旧cache writerは再開しない。
 - Windows全体合成 **1415 passed**、Node 6件、compileall/diff-check成功。
-  実送信・台帳修復・全10件完了の証拠ではない。Linux CIは同じ専用branchのSecretsなしjobで検証する。
+  合成試験と実送信/比較の証拠を分けて扱う。台帳修復成功・全24件再取込完了・L4とはしない。
 - 実装SHA `d00044dd84030b9ad0d160355d2af367d9715ee1` のLinux CI `35034043311` 成功。
   一般1358件＋機微合成57件＝1415件、Node/compileall/diff-check成功。本番Secrets・実帳票なし。
+- 実行SHA `7313742a6b775f072c757ef8ccf087cc99355a62` のLinux CI `35034710518` も成功。
 
 #### Medicalの独立したWindows非AI検証
 
