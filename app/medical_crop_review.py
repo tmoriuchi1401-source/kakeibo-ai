@@ -51,15 +51,25 @@ def reviewed_crop(source,image,record,key):
         unsigned={k:v for k,v in record.items() if k!='tag'}
         expected=hmac.new(key,b'medical-human-crop\0'+canonical(unsigned),'sha256').hexdigest()
         if not hmac.compare_digest(expected,record.get('tag','')):
-            raise ValueError()
-        if (record['schema']!=REVIEW_VERSION or record['source']!=source
+            raise AnonymizationHold('human_crop_review_signature_mismatch')
+        if record['source']!=source:
+            raise AnonymizationHold('human_crop_review_source_mismatch')
+        if (record['schema']!=REVIEW_VERSION
                 or record['preprocessor']!=VERSION or record['statement']!=STATEMENT
                 or record['page']!=1 or record['unit']!=1 or record['label'] not in LABELS
-                or record['rendered_page_size']!=list(image.size)
-                or record['source_image_sha256']!=sha256(png(image)).hexdigest()):
-            raise ValueError()
+                ):
+            raise AnonymizationHold('human_crop_review_contract_mismatch')
+        if record['rendered_page_size']!=list(image.size):
+            raise AnonymizationHold('human_crop_review_dimensions_mismatch')
         payload=selected_crop(image,record['coordinates'])
-        if sha256(payload).hexdigest()!=record['crop_sha256']:raise ValueError()
+        if record['source_image_sha256']!=sha256(png(image)).hexdigest():
+            if sha256(payload).hexdigest()!=record['crop_sha256']:
+                raise AnonymizationHold('human_crop_review_render_and_png_mismatch')
+            raise AnonymizationHold('human_crop_review_render_mismatch')
+        if sha256(payload).hexdigest()!=record['crop_sha256']:
+            raise AnonymizationHold('human_crop_review_png_mismatch')
+    except AnonymizationHold:
+        raise
     except Exception:
         raise AnonymizationHold('human_crop_review_changed_or_invalid') from None
     return PaymentCrop(payload,{'source_sha256':source['sha256'],

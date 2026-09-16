@@ -65,6 +65,27 @@ def test_saved_review_cannot_approve_a_different_source_or_crop(change):
     with pytest.raises(AnonymizationHold):reviewed_crop(source,image,record,key)
 
 
+@pytest.mark.parametrize('change,reason',[
+    ('key','signature'),('source','source'),('size','dimensions'),('render','render'),
+    ('crop_pixels','render_and_png'),('crop','png')])
+def test_review_hold_reports_only_the_failed_boundary(change,reason):
+    import hmac
+    from app.medical_crop_review import canonical
+    source,image,key,box=fixture()
+    record=make_review(source,image,box,'領収金額',confirmed=True,key=key)
+    if change=='key':key=b'z'*32
+    elif change=='source':source=dict(source,version='different-private-version')
+    elif change=='size':image=image.resize((image.width+1,image.height))
+    elif change=='render':image.putpixel((0,0),(1,2,3))
+    elif change=='crop_pixels':image.putpixel((box[0],box[1]),(0,0,0))
+    else:
+        record['crop_sha256']='0'*64
+        unsigned={k:v for k,v in record.items() if k!='tag'}
+        record['tag']=hmac.new(key,b'medical-human-crop\0'+canonical(unsigned),'sha256').hexdigest()
+    with pytest.raises(AnonymizationHold) as failure:reviewed_crop(source,image,record,key)
+    assert str(failure.value)==f'human_crop_review_{reason}_mismatch'
+
+
 def test_confirmed_pixels_rebuilt_in_key_free_preparation_and_invalid_review_held(monkeypatch):
     monkeypatch.delenv('GEMINI_API_KEY',raising=False)
     source,image,key,box=fixture();record=make_review(source,image,box,'領収金額',confirmed=True,key=key)
