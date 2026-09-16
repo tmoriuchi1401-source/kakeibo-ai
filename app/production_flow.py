@@ -66,7 +66,8 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
 def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
     if (source=='receipt_confirmation' and apply and env.get('MEDICAL_DERIVED_AI_POLICY')
             and not env.get('MEDICAL_PREPARE_DIR') and not env.get('MEDICAL_FINALIZE_ONLY')):
-        if env['MEDICAL_DERIVED_AI_POLICY'] not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}:
+        from .medical_auto_posting import AUTO_POLICIES
+        if env['MEDICAL_DERIVED_AI_POLICY'] not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}|AUTO_POLICIES:
             raise StateError('medical_service_terms_not_verified')
         import base64
         from .medical_candidate_runtime import run_prepared
@@ -78,6 +79,7 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             final=invoke(source,apply=True,env=dict(env,MEDICAL_FINALIZE_ONLY='true'))
             scan['written']=final['written']
             scan['medical_pending']=final['medical_pending']
+            scan['medical_auto_written']=final.get('medical_auto_written',0)
             return scan
     if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
         raise StateError('receipt_confirmation_binding_required')
@@ -90,7 +92,7 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
             result['medical_detected']=scan['medical_detected']
             result['confirmed_written']=scan['written']
-            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held'):
+            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held','medical_auto_written'):
                 if name in scan:result[name]=scan[name]
             return result
     # Child stdout/stderr can contain legacy filenames, totals and API errors.

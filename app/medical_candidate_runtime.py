@@ -36,7 +36,9 @@ def send_derived(packet,payload,env):
     except Exception:raise StateError('medical_image_response_unknown') from None
 
 
-def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_key,allow_send=True):
+def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_key,allow_send=True,automatic_policy=None):
+    from .medical_auto_posting import AUTO_POLICIES,POLICY,send_allowed,owner_blocked
+    automatic=automatic_policy in AUTO_POLICIES
     counts={'medical_ai_requests':0,'medical_ai_reused':0,'medical_ai_candidates':0,'medical_ai_held':0}
     if type(plans) is not list or len(plans)>100:raise StateError('medical_preparation_invalid')
     seen=set()
@@ -46,23 +48,35 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
         seen.add(rid)
         item=state.store.value['confirmation_items'][rid]
         if item['source']!=source:raise StateError('medical_preparation_source_changed')
+        if automatic and (owner_blocked(source,state.store.value) or item['status'] in {'closed_user','closed_machine','superseded'}):
+            counts['medical_ai_held']+=1;continue
         verify_source(source,item['folder_id'])
         fields=dict(plan.get('fields',{}))
         if plan['status']=='held':
-            fields['review_message']='匿名化確認が必要：画像未送信。非公開の支払額画像確認画面で切出し範囲を指定し、送信画像を確認してください。手入力での確定も可能です。'
+            fields['review_message']=('自動匿名化を保留：画像未送信。確認待ちの理由を確認してください。' if automatic else
+                '匿名化確認が必要：画像未送信。非公開の支払額画像確認画面で切出し範囲を指定し、送信画像を確認してください。手入力での確定も可能です。')
             fields['provenance']={'status':'anonymization_held','reason':plan['reason']}
+            if automatic:fields['provenance']['candidate_checks']=plan.get('candidate_checks',{})
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
         packet={k:v for k,v in plan.items() if k not in {'review_id','crop_file'}}
         payload=load_crop(plan)
         verify_preparation(packet,payload,key)
         aid=analysis_key(source,packet['mapping'],model)
         existing=state.get(aid)
+        if automatic:
+            related=[x for x in state.store.value.get('medical_image_analyses',{}).values() if x['source']==source]
+            if ((existing and existing['phase']!='complete') or (existing is None and related)):
+                fields.update(review_message='画像解析の既存記録を要照合。自動再送は行いません。',
+                    provenance={'status':'analysis_reconciliation_required','reason':'saved_analysis_requires_reconciliation'})
+                state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
         if existing is None and not allow_send:
             fields['review_message']='支払額画像の匿名化検証済み。利用プラン確認前のためAI未送信。本人確定はしていません。'
             fields['provenance']={'status':'prepared_not_sent','analysis_id':aid,
                 'crop_sha256':packet['mapping']['crop_sha256'],'local':packet['local_provenance']}
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
-        if existing is None and not state.send_review_allowed(source,packet['mapping']):
+        authorized=(send_allowed(source,packet['mapping'],state.store.value,automatic_policy) if automatic
+            else state.send_review_allowed(source,packet['mapping']))
+        if not authorized:
             fields['review_message']='この原本・切出し画像は今回のAI送信対象外です。候補は未確定のまま保持します。'
             fields['provenance']={'status':'review_scope_not_authorized','local':packet['local_provenance']}
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
@@ -73,7 +87,12 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             # Durable intent precedes the last source check and the only send.
             verify_source(source,item['folder_id'])
             counts['medical_ai_requests']+=1
-            answer=send(packet,payload)
+            try:answer=send(packet,payload)
+            except (TimeoutError,ConnectionError,StateError) as error:
+                if not automatic or (isinstance(error,StateError) and str(error)!='medical_image_response_unknown'):raise
+                fields.update(review_message='画像解析の応答を確認できません。記録を保持し、自動再送は行いません。',
+                    provenance={'status':'analysis_reconciliation_required','reason':'saved_analysis_requires_reconciliation'})
+                state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
             raw=answer.model_dump()
             state.complete(aid,raw,response_tag(aid,state.get(aid),raw,identity_key))
         else:
@@ -88,6 +107,7 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
         if outcome.verdict=='AUTO_ADMITTED_FOR_AUTHORITY_EVALUATION' and candidate.label==packet['proof']['label']:
             fields['amount_yen']=candidate.amount_yen;counts['medical_ai_candidates']+=1
             fields['review_message']='画像AI/非AIの未確定候補。内容確認後「候補で医療費を確定」。不足・誤りだけH:Kへ入力してください。'
+            if automatic:fields['review_message']='自動検証対象。日付・施設・実支払額・重複と既存入力を検証してから反映します。'
         else:
             counts['medical_ai_held']+=1
             fields['review_message']='金額の判読・実支払額の根拠が不足。原本を確認し、不足項目だけ入力してください。'
@@ -95,13 +115,15 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             'amount_origin':'IMAGE_AI_CANDIDATE' if fields.get('amount_yen') else 'IMAGE_AI_ABSTENTION',
             'crop_sha256':packet['mapping']['crop_sha256'],'local':packet['local_provenance'],
             'admission':outcome.verdict,'region':candidate.region if candidate else None}
+        if automatic:fields['provenance']['automatic_policy']=POLICY
         verify_source(source,item['folder_id'])
         state.publish(rid,source,fields)
     return counts
 
 
 def run_prepared(env,directory):
-    if env.get('MEDICAL_DERIVED_AI_POLICY') not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}:
+    from .medical_auto_posting import AUTO_POLICIES
+    if env.get('MEDICAL_DERIVED_AI_POLICY') not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}|AUTO_POLICIES:
         raise StateError('medical_service_terms_not_verified')
     settings,store,db,verify_source=open_context(env,True)
     from .settings import service_account_source
@@ -118,4 +140,4 @@ def run_prepared(env,directory):
     return process_plans(plans,state=MedicalCandidateState(store),verify_source=verify_source,load_crop=load_crop,
         send=lambda p,b:send_derived(p,b,sender_env),model=settings.gemini_model,
         key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True),identity_key=identity_key,
-        allow_send=env['MEDICAL_DERIVED_AI_POLICY']!='prepare-only')
+        allow_send=env['MEDICAL_DERIVED_AI_POLICY']!='prepare-only',automatic_policy=env['MEDICAL_DERIVED_AI_POLICY'])

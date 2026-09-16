@@ -67,11 +67,19 @@ def execute(env,apply):
     settings,store,db,metadata=open_context(env,apply)
     reader=read_only_drive_service()
     review=ReceiptConfirmation(store,db,metadata)
+    from .medical_auto_posting import AUTO_POLICIES,apply_automatic,in_scope,owner_blocked
+    policy=env.get('MEDICAL_DERIVED_AI_POLICY','');automatic=policy in AUTO_POLICIES
     if not apply:return {'found':len(review.items),'written':0,'failure':0}
     review.capture_inputs()
     review.prepare_general()
     if env.get('MEDICAL_FINALIZE_ONLY')=='true':
-        written=review.apply_confirmations();rows=review.render()
+        written=review.apply_confirmations();auto_written=0
+        if automatic:
+            from .settings import service_account_source
+            from .medical_crop_review import identity_key
+            key_path,key_info=service_account_source();key_info=key_info or json.loads(Path(key_path).read_bytes())
+            auto_written=apply_automatic(review,identity_key=identity_key(key_info['private_key']),policy=policy)
+        written+=auto_written;rows=review.render()
         if store.value.get('confirmation_ui_version')!=2:
             configure_ui(db,validation_only=True)
             from copy import deepcopy
@@ -79,7 +87,7 @@ def execute(env,apply):
         if review.refresh_needed():
             from .expense_view import ExpenseViewPipeline
             ExpenseViewPipeline(db).refresh();review.mark_refreshed()
-        return {'found':rows,'written':written,'failure':0,
+        return {'found':rows,'written':written,'medical_auto_written':auto_written,'failure':0,
             'medical_pending':sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())}
     folder=normalize_folder_id(settings.receipt_drive_folder_id)
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
@@ -104,14 +112,19 @@ def execute(env,apply):
                 import base64
                 key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
                 rid=review_id('medical',source)
-                crop_review=store.value.get('medical_crop_reviews',{}).get(rid)
+                # Automatic mode is independent of saved UI coordinates and
+                # owner attestations, including malformed/old manual records.
+                crop_review=None if automatic else store.value.get('medical_crop_reviews',{}).get(rid)
                 review_key=None
                 if crop_review is not None:
                     from .settings import service_account_source
                     from .medical_crop_review import identity_key
                     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
                     review_key=identity_key(info['private_key'])
-                packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key)
+                if automatic and (not in_scope(source,store.value,policy) or owner_blocked(source,store.value)):
+                    packet,crop={'source':source,'fields':{},'status':'held','reason':'automatic_scope_or_owner_input'},None
+                else:
+                    packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic)
                 packet['review_id']=review_id('medical',source)
                 if crop is not None:
                     # Derived pixels only; no original or OCR file is written.

@@ -83,6 +83,7 @@ class ReceiptConfirmation:
         for old_key,old in list(self.items.items()):
             if old['kind']=='medical' and old['source']['source_id']==source['source_id']:
                 if old['status']=='pending':raise StateError('confirmation_pending_source_changed')
+                if old['status'] in {'applied','closed_user','closed_machine'}:continue
                 changed=deepcopy(old);changed['status']='superseded';changed['reason']='原本の版が変更。新しい行で再確認'
                 self.save_item(old_key,changed)
         self.save_item(key,dict(kind='medical',source=source,folder_id=folder_id,status='waiting',
@@ -136,7 +137,7 @@ class ReceiptConfirmation:
         return ReceiptResult(date=day,merchant=str(v[1]).strip(),total=int(amount),payment_method=str(v[4]),
             items=[ReceiptItem(name='医療費（本人確認）',amount=int(amount),major_category=category[0],minor_category=category[1])])
 
-    def _plan(self,item,parsed,linked,distinct=False):
+    def _plan(self,item,parsed,linked,distinct=False,automatic=False):
         source=item['source'];sid=source['source_id'];rid='R-'+sid;iid='receipt:'+sid
         tables=self.tables();before=target_snapshot(tables,sid)
         if item['kind']=='normal' and digest(before)!=digest(item['before']):
@@ -160,15 +161,16 @@ class ReceiptConfirmation:
         elif candidates and not distinct:
             raise ValueError('同日付近・同額の既存支出あり。重複を確認して統合先支出IDを入力してください: '+', '.join(r[0] for r in candidates))
         expected=[]
+        origin='自動検証済み（medical-auto-v1）' if automatic else '本人確認済み'
         old_receipt=before['receipt_rows'][0] if before['receipt_rows'] else None
         old_import=next((r for r in before['import_rows'] if r[0]==iid),None)
         receipt=[rid,parsed.date,parsed.merchant,parsed.total,parsed.payment_method,
                  'https://drive.google.com/file/d/'+sid+'/view','解析済',
                  old_receipt[7] if old_receipt and len(old_receipt)>7 else now_jst_string(),
-                 ((str(old_receipt[8])+'; ') if old_receipt and len(old_receipt)>8 and old_receipt[8] else '')+'本人確認済み（'+item['kind']+'）']
+                 ((str(old_receipt[8])+'; ') if old_receipt and len(old_receipt)>8 and old_receipt[8] else '')+origin+'（'+item['kind']+'）']
         imported=[iid,old_import[1] if old_import else now_jst_string(),'receipt',sid,parsed.date,parsed.merchant,
                   parsed.total,parsed.payment_method,'matched_receipt' if linked else '解析済',linked or '',canonical_hash(parsed.model_dump()),
-                  ((str(old_import[11])+'; ') if old_import and len(old_import)>11 and old_import[11] else '')+'本人確認済み']
+                  ((str(old_import[11])+'; ') if old_import and len(old_import)>11 and old_import[11] else '')+origin]
         expected.append(['レシート',receipt])
         if not linked:
             if len(before['expense_rows'])>len(parsed.items):raise ValueError('既存明細の削除を伴う変更は自動反映しません')
@@ -177,7 +179,7 @@ class ReceiptConfirmation:
                 old=next((r for r in before['expense_rows'] if r[0]==eid),None)
                 if old and (len(old)<13 or old[12]!='active'):raise ValueError('既存の無効明細を保護しています')
                 expected.append(['支出明細',[eid,parsed.date,parsed.merchant,x.name,x.amount,x.major_category,x.minor_category,
-                    parsed.payment_method,'receipt',rid,iid,old[11] if old else '本人確認済み','active']])
+                    parsed.payment_method,'receipt',rid,iid,old[11] if old else origin,'active']])
         elif before['expense_rows']:raise ValueError('既存明細がある対象の重複統合は自動変更しません')
         expected.append(['取込データ',imported])
         for title,row in expected:
@@ -248,18 +250,23 @@ class ReceiptConfirmation:
                             error='反映前に対象または入力が変更。保留に戻してから再確定してください')
                 item.pop('plan',None);item.pop('confirmation_hash',None)
                 self.save_item(key,item);continue
-            for title,row in plan:
-                matches=[(n,r) for n,r in enumerate(_rows(self.db,title),2) if r and r[0]==row[0]]
-                try:
-                    if matches:
-                        if not same_row(title,matches[0][1],row):self.db.update_row_raw(title,matches[0][0],row)
-                    else:self.db.append_raw(title,[row])
-                except Exception:
-                    actual=[r for r in _rows(self.db,title) if r and r[0]==row[0]]
-                    if len(actual)!=1 or not same_row(title,actual[0],row):raise StateError('confirmation_write_unknown') from None
-            if not self._complete(plan):raise StateError('confirmation_readback_mismatch')
-            item['status']='applied';self.save_item(key,item);written+=1
+            self._write_accounting_plan(key,item);written+=1
         return written
+
+    def _write_accounting_plan(self,key,item):
+        if item['status']!='pending':raise StateError('confirmation_intent_required')
+        for title,row in item['plan']:
+            matches=[(n,r) for n,r in enumerate(_rows(self.db,title),2) if r and r[0]==row[0]]
+            if len(matches)>1:raise StateError('confirmation_duplicate_accounting_identity')
+            try:
+                if matches:
+                    if not same_row(title,matches[0][1],row):self.db.update_row_raw(title,matches[0][0],row)
+                else:self.db.append_raw(title,[row])
+            except Exception:
+                actual=[r for r in _rows(self.db,title) if r and r[0]==row[0]]
+                if len(actual)!=1 or not same_row(title,actual[0],row):raise StateError('confirmation_write_unknown') from None
+        if not self._complete(item['plan']):raise StateError('confirmation_readback_mismatch')
+        item['status']='applied';self.save_item(key,item)
 
     def refresh_needed(self):
         return any(x['status']=='applied' and not x.get('display_refreshed') for x in self.items.values())
@@ -292,7 +299,16 @@ class ReceiptConfirmation:
             state={'waiting':'未確認','pending':'確定待ち','applied':'反映済み','closed_user':'変更不要（本人判断）','closed_machine':'変更不要（機械判断）','superseded':'原本変更・再確認'}[item['status']]
             if item['status']=='waiting' and any(item.get('inputs',[])):state='入力中' if not item['inputs'][5] else '確定待ち'
             if item.get('error'):state='要再確認'
-            managed=[key,'医療' if medical else '一般',state,'https://drive.google.com/file/d/'+item['source']['source_id']+'/view',item['reason'],prior,candidate]
+            if item['status']=='applied' and item.get('decision_origin')=='automatic':state='自動反映済み'
+            reason=item['reason']
+            if item.get('automatic_hold') and item['status']=='waiting':
+                from .medical_auto_posting import HOLD_TEXT
+                reason='自動保留: '+HOLD_TEXT.get(item['automatic_hold'],'安全な匿名化・記帳条件を確認できません。本人確認は任意です。')
+            if state=='自動反映済み':
+                reason='機械検証・反映内容の読戻し済み。本人の操作は不要です。'
+                prior='自動検証済み（本人入力H:Oは保持）'
+                candidate=candidate.replace('【未確定候補】','【自動反映内容】',1)
+            managed=[key,'医療' if medical else '一般',state,'https://drive.google.com/file/d/'+item['source']['source_id']+'/view',reason,prior,candidate]
             presentation=managed[:2]+managed[3:7]
             if item.get('presentation')!=presentation:
                 item=deepcopy(item);item['presentation']=presentation;self.save_item(key,item)

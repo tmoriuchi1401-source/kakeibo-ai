@@ -20,7 +20,7 @@ def _canonical(value):
 def local_fields(observations, binding, size):
     groups=defaultdict(list)
     for token in observations:groups[token['line']].append(token)
-    regions=[];days=set()
+    regions=[];days=set();date_verified=True
     for group in groups.values():
         group.sort(key=lambda t:t['box'][0]);boxes=[t['box'] for t in group]
         text=' '.join(t['text'] for t in group);normalized=compact(text)
@@ -31,7 +31,9 @@ def local_fields(observations, binding, size):
         if not any(label in normalized for label in ('領収日','支払日','発行日','会計日')):continue
         if any(label in normalized for label in ('生年月日','処方','診療日','受診日')):continue
         for match in re.finditer(r'(?<!\d)(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})(?:日|\b)',normalized):
-            try:days.add(date(*map(int,match.groups())).isoformat())
+            try:
+                days.add(date(*map(int,match.groups())).isoformat())
+                date_verified=date_verified and min(t['confidence'] for t in group)>=70
             except ValueError:pass
     fields={'date':next(iter(days)) if len(days)==1 else '', 'issuer':'','category':''}
     if not regions:return fields,{'date_candidates':len(days),'issuer_status':'missing'}
@@ -47,11 +49,11 @@ def local_fields(observations, binding, size):
         fields['issuer']=selected.issuer_facility_name
         fields['category']='医療・保険｜'+('薬' if selected.issuer_facility_type=='pharmacy' else '病院')
     # Full OCR page/reference providers are neither persisted nor emitted.
-    return fields,{'date_candidates':len(days),'issuer_status':selected.verdict,
+    return fields,{'date_candidates':len(days),'date_evidence_verified':len(days)==1 and date_verified,'issuer_status':selected.verdict,
         'issuer_selector':selected.selector_version,'document_binding':binding.model_dump()}
 
 
-def prepare(source, payload, key, *, crop_review=None, review_key=None):
+def prepare(source, payload, key, *, crop_review=None, review_key=None, automatic=False):
     if os.environ.get('GEMINI_API_KEY'):raise ValueError('medical_preprocessor_received_ai_key')
     if sha256(payload).hexdigest()!=source['sha256']:raise ValueError('medical_source_content_changed')
     try:
@@ -62,15 +64,22 @@ def prepare(source, payload, key, *, crop_review=None, review_key=None):
         return {'status':'held','reason':str(error),'source':source,'fields':{}},None
     packet={'source':source,'fields':fields,'local_provenance':local_provenance}
     try:
-        if crop_review is not None:
+        if crop_review is not None and not automatic:
             from .medical_crop_review import reviewed_crop
             crop=reviewed_crop(source,image,crop_review,review_key)
         else:
-            crop=prepare_payment_crop(payload,source['mime_type'],image=image,observations=observations)
+            crop=prepare_payment_crop(payload,source['mime_type'],image=image,observations=observations,automatic=automatic)
     except AnonymizationHold as error:
-        packet.update(status='held',reason=str(error));return packet,None
+        packet.update(status='held',reason=str(error))
+        if automatic:packet['candidate_checks']=getattr(error,'candidate_checks',{})
+        return packet,None
     if any(crop.mapping[name]!=getattr(binding,name) for name in ('source_sha256','source_image_sha256','unit','page')):
         raise ValueError('medical_evidence_binding_mismatch')
+    if automatic:
+        from .medical_auto_posting import POLICY
+        # The automatic branch never reads or re-signs a human crop record.
+        crop.mapping.update(automatic_policy=POLICY,payment_label=crop.label,
+            unresolved_candidates=0,verified_payment_cells=1)
     packet.update(status='prepared',mapping=crop.mapping,proof=seal_crop(crop.payload,crop.label,key))
     packet['preparation_tag']=hmac.new(key,b'medical-preparation\0'+_canonical(packet),'sha256').hexdigest()
     return packet,crop.payload

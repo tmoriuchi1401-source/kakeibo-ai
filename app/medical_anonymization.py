@@ -17,6 +17,9 @@ from PIL import Image
 
 VERSION = 'medical-payment-cell-v4'
 LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額', '今回入金額')
+# These positively verified cells are classified locally, never sent or treated
+# as a current payment. Generic totals/charges remain unresolved candidates.
+NONPAYMENT_LABELS=('前回入金額','累計入金額','未収金額','未収額','預り金','お預り金','釣銭','お釣り')
 # Discovery cues are deliberately broader than final outbound content checks.
 # Checkpoint 6d31751 used partial, near and split labels, including generic totals.
 MONEY_CUES = ('領収', '入金', '支払', '請求', '合計', '金額', '料金', '会計', '精算',
@@ -189,7 +192,7 @@ def enclosure(image, box):
     return left+2,top+2,right-1,bottom-1
 
 
-def verify_cell_pixels(image, *, observations=None, glyphs=None):
+def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpayment=False):
     """Positive content grammar plus complete ink coverage, not a PII blacklist.
 
     Does not accept/return an OCR amount. Digit identity may be wrong: the AI
@@ -204,7 +207,9 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None):
     if sum(bool(re.search(r'\d',compact(t['text']))) for t in ordered)!=1:
         raise AnonymizationHold('multiple_numeric_regions')
     text=compact(''.join(t['text'] for t in ordered))
-    if not PAYMENT.fullmatch(text):raise AnonymizationHold('cell_content_not_allowed')
+    labels=LABELS+NONPAYMENT_LABELS if classify_nonpayment else LABELS
+    grammar=re.compile(r'('+'|'.join(labels)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
+    if not grammar.fullmatch(text):raise AnonymizationHold('cell_content_not_allowed')
     if glyphs is None:
         raw=pytesseract.image_to_boxes(image,lang='jpn+eng',config='--psm 7')
         glyphs=[]
@@ -212,8 +217,8 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None):
             char,left,bottom,right,top,_=row.split()
             glyphs.append((char,(int(left),image.height-int(top),int(right),image.height-int(bottom))))
     observed=compact(''.join(char for char,_ in glyphs))
-    if not PAYMENT.fullmatch(observed):raise AnonymizationHold('glyph_content_not_allowed')
-    label=next(label for label in LABELS if observed.startswith(label))
+    if not grammar.fullmatch(observed):raise AnonymizationHold('glyph_content_not_allowed')
+    label=next(label for label in labels if observed.startswith(label))
     if not text.startswith(label):raise AnonymizationHold('payment_label_conflict')
     number_boxes=[box for char,box in glyphs if char in '0123456789,，']
     for left,right in zip(number_boxes,number_boxes[1:]):
@@ -250,22 +255,29 @@ class PaymentCrop:
     label: str
 
 
-def prepare_payment_crop(payload, mime, *, image=None, observations=None):
+def prepare_payment_crop(payload, mime, *, image=None, observations=None, automatic=False):
     image=render_single_page(payload,mime) if image is None else image
     observations=tokens(image) if observations is None else observations
-    boxes=set();failures=[];verified=[]
-    for _,anchor in anchors(observations):
+    boxes=set();failures=[];verified=[];excluded=[]
+    discovered=anchors(observations)
+    for _,anchor in discovered:
         try:boxes.add(enclosure(image,anchor))
         except AnonymizationHold as error:failures.append(str(error))
     for box in sorted(boxes):
         # Inspect every distinct cell, including after an unresolved enclosure.
         # Validate exactly the pixels that would be sent.
         crop=image.crop(box).convert('L').point(lambda value:0 if value<190 else 255).convert('RGB')
-        try:verified.append((box,crop,verify_cell_pixels(crop)))
+        try:
+            label=verify_cell_pixels(crop,classify_nonpayment=True) if automatic else verify_cell_pixels(crop)
+            if label in NONPAYMENT_LABELS:excluded.append(label)
+            else:verified.append((box,crop,label))
         except AnonymizationHold as error:failures.append(str(error))
     # Never discard an unresolved candidate and promote the survivor to truth.
-    if failures:raise AnonymizationHold(failures[0])
-    if len(verified)!=1:raise AnonymizationHold('payment_region_ambiguous_or_absent')
+    if failures or len(verified)!=1:
+        error=AnonymizationHold(failures[0] if failures else 'payment_region_ambiguous_or_absent')
+        error.candidate_checks={'discovered':len(discovered),'enclosed':len(boxes),'verified':len(verified),
+            'excluded_nonpayment':len(excluded),'unresolved_reasons':failures,'multiple_verified':len(verified)>1}
+        raise error
     box,crop,label=verified[0]
     clean=png(crop);validate_png(clean)
     return PaymentCrop(clean,{'source_sha256':sha256(payload).hexdigest(),
@@ -273,4 +285,5 @@ def prepare_payment_crop(payload, mime, *, image=None, observations=None):
         'crop_coordinates_original':list(box),'rotation_clockwise_degrees':0,
         'crop_sha256':sha256(clean).hexdigest(),'preprocessor':VERSION,
         'rendered_page_size':list(image.size),
-        'validation':'closed_payment_cell_positive_glyphs_complete_ink','metadata_removed':True},label)
+        'validation':'closed_payment_cell_positive_glyphs_complete_ink','metadata_removed':True,
+        **({'excluded_nonpayment_cells':len(excluded)} if automatic else {})},label)
