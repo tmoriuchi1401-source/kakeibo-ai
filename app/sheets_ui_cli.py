@@ -12,7 +12,8 @@ from pathlib import Path
 
 from .sheets_ui import (
     CATEGORY_UI_COLUMNS, CATEGORY_UI_ID, CATEGORY_UI_MARKER, CATEGORY_UI_ROWS,
-    CAP, CHART_ID, DAILY, FORMAT_KEYS, FORMAT_MASK, HOME_COLUMNS, HOME_ID, IDS, MARKER, TEXT_KEYS, VERSION,
+    CAP, CHART_ID, DAILY, EXPENSE_CATEGORY_HELPER_ID, EXPENSE_CATEGORY_HELPER_MARKER,
+    FORMAT_KEYS, FORMAT_MASK, HOME_COLUMNS, HOME_ID, IDS, MARKER, TEXT_KEYS, VERSION,
     SPREADSHEET_ID, build_plan, dimension, grid, plan_digest,
 )
 
@@ -62,7 +63,7 @@ def capture_restore(service, meta, plan):
     restore = []
     for s in sorted(meta["sheets"], key=lambda s: s["properties"]["index"], reverse=True):
         p = s["properties"]
-        if p["sheetId"] not in set(IDS.values()) | {HOME_ID, CATEGORY_UI_ID}:
+        if p["sheetId"] not in set(IDS.values()) | {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID}:
             continue
         restore.append({"updateSheetProperties": {"properties": {
             "sheetId": p["sheetId"], "index": 0, "hidden": p.get("hidden", False)},
@@ -78,7 +79,7 @@ def capture_restore(service, meta, plan):
         first_col = 5 if title == "支出明細" else 0
         raw = service.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID, ranges=[f"'{title}'!A1:{chr(64+width)}{n}"],
-            fields="sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredFormat)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
+            fields="sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredFormat,dataValidation)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
         ).execute()["sheets"][0]
         formats, row_sizes, column_sizes = {}, {}, {}
         for block in raw.get("data", []):
@@ -114,6 +115,20 @@ def capture_restore(service, meta, plan):
         restore.append({"updateSheetProperties": {"properties": {"sheetId": sid,
             "gridProperties": {"frozenRowCount": p["gridProperties"].get("frozenRowCount", 0)}},
             "fields": "gridProperties.frozenRowCount"}})
+        if title == "支出明細":
+            observed = raw.get("data", [{}])[0].get("rowData", [])
+            validation_rows = []
+            for row in range(n):
+                cells = observed[row].get("values", []) if row < len(observed) else []
+                validation_rows.append({"values": [
+                    ({"dataValidation": cells[col]["dataValidation"]}
+                     if col < len(cells) and "dataValidation" in cells[col] else {})
+                    for col in (5, 6)
+                ]})
+            # Only restore the prior rules.  Values, formulas, notes, and
+            # formats in the editable ledger are deliberately untouched.
+            restore.append({"updateCells": {"range": grid(sid, 0, n, 5, 7),
+                "rows": validation_rows, "fields": "dataValidation"}})
     # A new Home is hidden, never deleted. Keep ownership while disabling hooks.
     if not any(s["properties"]["sheetId"] == HOME_ID for s in meta["sheets"]):
         restore += [{"updateSheetProperties": {"properties": {"sheetId": HOME_ID,
@@ -172,6 +187,17 @@ def capture_restore(service, meta, plan):
                 "developerMetadata": {"metadataValue": "restored:"+VERSION}, "fields": "metadataValue"}}]
     else:
         restore.extend(capture_category_ui_restore(service, category_ui))
+    expense_helper = next((s for s in meta["sheets"]
+                           if s["properties"]["sheetId"] == EXPENSE_CATEGORY_HELPER_ID), None)
+    if expense_helper is None:
+        restore += [{"updateSheetProperties": {"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID,
+            "hidden": True, "index": len(meta["sheets"])+(0 if any(
+                s["properties"]["sheetId"] == HOME_ID for s in meta["sheets"]) else 1)},
+            "fields": "hidden,index"}},
+            {"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
+                "metadataKey": EXPENSE_CATEGORY_HELPER_MARKER,
+                "metadataLocation": {"sheetId": EXPENSE_CATEGORY_HELPER_ID}}}],
+                "developerMetadata": {"metadataValue": "restored:" + VERSION}, "fields": "metadataValue"}}]
     return {"spreadsheetId": SPREADSHEET_ID, "created_at": datetime.now(timezone.utc).isoformat(),
             "applied_plan_sha256": plan_digest(plan), "requests": restore,
             "sheetIds": {s["properties"]["title"]: s["properties"]["sheetId"] for s in meta["sheets"]},
@@ -231,7 +257,7 @@ def execute_plan(service, plan, *, apply=False, approved_digest=None, backup=Non
     for s in current["sheets"]:
         new = next((v for v in after["sheets"] if v["properties"]["sheetId"] == s["properties"]["sheetId"]), None)
         if new is None or new["properties"]["title"] != s["properties"]["title"] or (
-                s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID} and new["header"] != s["header"]):
+                s["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID} and new["header"] != s["header"]):
             raise ValueError("UI readback requires investigation; do not rerun business pipelines")
     from .sheets_ui_verify import verify_home
     return {"mode": "applied", "request_count": len(fresh["requests"]),
@@ -271,7 +297,7 @@ def main(argv=None):
         for title, header in plan["headers"].items():
             live = next((s for s in meta["sheets"] if s["properties"]["title"] == title), None)
             if live is None or live["properties"]["sheetId"] != plan["sheetIds"][title] or (
-                    live["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID} and live["header"] != header):
+                live["properties"]["sheetId"] not in {HOME_ID, CATEGORY_UI_ID, EXPENSE_CATEGORY_HELPER_ID} and live["header"] != header):
                 raise ValueError("Restore schema changed; inspect before restoring UI")
         if args.apply:
             if args.approve_plan != plan_digest(plan):

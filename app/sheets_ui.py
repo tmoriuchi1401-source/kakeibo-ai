@@ -17,6 +17,14 @@ CATEGORY_UI_TITLE = "カテゴリ対応"
 CATEGORY_UI_MARKER = "kakeibo_category_ui"
 CATEGORY_UI_ROWS = 5005
 CATEGORY_UI_COLUMNS = 17
+EXPENSE_CATEGORY_HELPER_ID = 1909140004
+EXPENSE_CATEGORY_HELPER_TITLE = "_支出明細カテゴリ候補"
+EXPENSE_CATEGORY_HELPER_MARKER = "kakeibo_expense_category_validation"
+# The category sheet currently has 1,000 rows (including its header), so a
+# helper row can represent every possible minor category without a second
+# category master.  This is deliberately a sheet-local support grid, not a
+# user-editable list.
+EXPENSE_CATEGORY_HELPER_COLUMNS = 1000
 MARKER = "kakeibo_daily_ui"
 VERSION = "1"
 HOME_COLUMNS = 9
@@ -36,7 +44,8 @@ DAILY = ["支出一覧", "要確認", "Amazon要確認"]
 RIGHT = [CATEGORY_UI_TITLE, "カテゴリ", "商品マスタ", "店舗", "給与明細ヘッダ", "給与明細項目",
          "給与標準項目", "給与項目別名", "勤務先マスタ", "Coverage確認", "レシート", "取込データ", "支出明細"]
 HIDDEN = ["Amazon注文", "Amazon照合候補",
-          "Amazonイベント", "Amazon注文ヘッダ", "_要確認カテゴリ候補"]
+          "Amazonイベント", "Amazon注文ヘッダ", "_要確認カテゴリ候補",
+          EXPENSE_CATEGORY_HELPER_TITLE]
 FORMAT_KEYS = ["backgroundColorStyle", "textFormat", "verticalAlignment",
                "wrapStrategy", "numberFormat", "horizontalAlignment"]
 TEXT_KEYS = ["fontFamily", "fontSize", "bold", "foregroundColorStyle"]
@@ -346,7 +355,11 @@ def build_plan(meta):
     if any(c["chartId"] == CHART_ID for s in sheets if s != home for c in s.get("charts", [])):
         raise ValueError("Home chart ID collision")
     req, skipped = [], []
-    from .sheets_ui_actions import category_ui_requests, ledger_input_requests
+    from .sheets_ui_actions import (
+        category_ui_requests,
+        expense_category_validation_requests,
+        ledger_input_requests,
+    )
     category_ui = by_title.get(CATEGORY_UI_TITLE)
     if category_ui:
         if category_ui["properties"]["sheetId"] != CATEGORY_UI_ID or not any(
@@ -369,6 +382,41 @@ def build_plan(meta):
                                "frozenRowCount": 5, "hideGridlines": True}}}},
             {"createDeveloperMetadata": {"developerMetadata": {"metadataKey": CATEGORY_UI_MARKER,
                 "metadataValue": VERSION, "visibility": "DOCUMENT", "location": {"sheetId": CATEGORY_UI_ID}}}}]
+    expense_helper = by_title.get(EXPENSE_CATEGORY_HELPER_TITLE)
+    if expense_helper:
+        if expense_helper["properties"]["sheetId"] != EXPENSE_CATEGORY_HELPER_ID or not any(
+            m.get("metadataKey") == EXPENSE_CATEGORY_HELPER_MARKER
+            and m.get("metadataValue") in {VERSION, "restored:" + VERSION}
+            for m in expense_helper.get("developerMetadata", [])
+        ):
+            raise ValueError("Existing expense category helper is not owned by this configuration")
+        gp = expense_helper["properties"]["gridProperties"]
+        if gp["rowCount"] < CAP+1 or gp["columnCount"] < EXPENSE_CATEGORY_HELPER_COLUMNS:
+            req.append({"updateSheetProperties": {"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID,
+                "gridProperties": {"rowCount": max(gp["rowCount"], CAP+1),
+                                   "columnCount": max(gp["columnCount"], EXPENSE_CATEGORY_HELPER_COLUMNS)}},
+                "fields": "gridProperties.rowCount,gridProperties.columnCount"}})
+        if not any(m.get("metadataKey") == EXPENSE_CATEGORY_HELPER_MARKER and m.get("metadataValue") == VERSION
+                   for m in expense_helper.get("developerMetadata", [])):
+            req.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
+                "metadataKey": EXPENSE_CATEGORY_HELPER_MARKER,
+                "metadataLocation": {"sheetId": EXPENSE_CATEGORY_HELPER_ID}}}],
+                "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
+    elif any(s["properties"]["sheetId"] == EXPENSE_CATEGORY_HELPER_ID for s in sheets):
+        raise ValueError("Expense category helper sheet ID collision")
+    else:
+        req += [{"addSheet": {"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID,
+            "title": EXPENSE_CATEGORY_HELPER_TITLE, "hidden": True,
+            "gridProperties": {"rowCount": CAP+1, "columnCount": EXPENSE_CATEGORY_HELPER_COLUMNS}}}},
+            {"createDeveloperMetadata": {"developerMetadata": {
+                "metadataKey": EXPENSE_CATEGORY_HELPER_MARKER, "metadataValue": VERSION,
+                "visibility": "DOCUMENT", "location": {"sheetId": EXPENSE_CATEGORY_HELPER_ID}}}}]
+    ledger_grid = by_title["支出明細"]["properties"]["gridProperties"]
+    if ledger_grid["rowCount"] < CAP+1:
+        # Pre-provisioned blank rows carry the validation into normal
+        # INSERT_ROWS appends; this never changes an existing ledger value.
+        req.append({"updateSheetProperties": {"properties": {"sheetId": IDS["支出明細"],
+            "gridProperties": {"rowCount": CAP+1}}, "fields": "gridProperties.rowCount"}})
     if not home:
         req += [{"addSheet": {"properties": {"sheetId": HOME_ID, "title": "ホーム",
                     "gridProperties": {"rowCount": CAP+1, "columnCount": HOME_COLUMNS,
@@ -387,8 +435,11 @@ def build_plan(meta):
     # for both initial layout and arbitrary user rearrangements on subsequent runs.
     ordered = ["ホーム"] + DAILY + RIGHT + HIDDEN
     for title in reversed(ordered):
-        sid = HOME_ID if title == "ホーム" else CATEGORY_UI_ID if title == CATEGORY_UI_TITLE else IDS[title]
-        if title not in {"ホーム", CATEGORY_UI_TITLE} and (title not in by_title or by_title[title]["properties"]["sheetId"] != sid):
+        sid = (HOME_ID if title == "ホーム" else CATEGORY_UI_ID if title == CATEGORY_UI_TITLE
+               else EXPENSE_CATEGORY_HELPER_ID if title == EXPENSE_CATEGORY_HELPER_TITLE else IDS[title])
+        if title not in {"ホーム", CATEGORY_UI_TITLE, EXPENSE_CATEGORY_HELPER_TITLE} and (
+            title not in by_title or by_title[title]["properties"]["sheetId"] != sid
+        ):
             skipped.append(title)
             continue
         req.append({"updateSheetProperties": {"properties": {
@@ -405,6 +456,12 @@ def build_plan(meta):
     req.extend(home_requests(home))
     req.extend(category_ui_requests(category_ui))
     req.extend(ledger_input_requests(by_title["支出明細"]))
+    # Existing ledger rows receive exact row-specific G rules now.  New rows
+    # are covered by SheetsDB.append after a normal import, avoiding a huge
+    # one-shot batch of unused per-row rules.
+    req.extend(expense_category_validation_requests(
+        minor_end_row=min(by_title["支出明細"]["properties"]["gridProperties"]["rowCount"], CAP+1)
+    ))
     preconditions = [{"sheetId": s["properties"]["sheetId"], "title": s["properties"]["title"],
         "index": s["properties"]["index"], "hidden": s["properties"].get("hidden", False),
         "rows": s["properties"].get("gridProperties", {}).get("rowCount", 0),

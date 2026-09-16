@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timezone
+import re
 from .google_clients import sheets_service
 
 CATEGORY_SEPARATOR = "｜"
@@ -54,7 +55,42 @@ class SheetsDB:
         return self.svc.spreadsheets().values().get(spreadsheetId=self.sid,range=rng).execute().get("values",[])
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
-        self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+        reply=self.svc.spreadsheets().values().append(
+            spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",body={"values":rows},
+        ).execute()
+        if sheet == "支出明細":
+            self._restore_expense_category_validation_for_append(reply)
+
+    def _restore_expense_category_validation_for_append(self, reply:dict):
+        """Apply G's exact row rules to freshly appended ledger rows only.
+
+        This is intentionally a no-op until the reviewed UI plan has installed
+        its owned helper sheet.  Business imports must never create UI support
+        sheets implicitly or overwrite categories.
+        """
+        updated = str(reply.get("updates", {}).get("updatedRange", ""))
+        match = re.search(r"!A(\d+):[A-Z]+(\d+)$", updated)
+        if not match:
+            return
+        start, end = (int(value) for value in match.groups())
+        from .sheets_ui import CAP, EXPENSE_CATEGORY_HELPER_ID, EXPENSE_CATEGORY_HELPER_MARKER, VERSION
+        if start > CAP+1:
+            return
+        end = min(end, CAP+1)
+        meta = self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        helper = next((sheet for sheet in meta.get("sheets", [])
+                       if sheet["properties"].get("sheetId") == EXPENSE_CATEGORY_HELPER_ID), None)
+        if not helper or not any(
+            marker.get("metadataKey") == EXPENSE_CATEGORY_HELPER_MARKER
+            and marker.get("metadataValue") == VERSION
+            for marker in helper.get("developerMetadata", [])
+        ):
+            return
+        from .sheets_ui_actions import expense_minor_category_validation_requests
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={
+            "requests": expense_minor_category_validation_requests(start, end),
+        }).execute()
     def append_raw(self, sheet:str, rows:list[list]):
         """Append literal ledger values; do not interpret bank descriptions as formulas."""
         if not rows:return
