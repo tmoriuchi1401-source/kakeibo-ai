@@ -58,6 +58,18 @@ def write_private(path, value):
         json.dump(value, out, ensure_ascii=False, separators=(",", ":"))
 
 
+def execute_backup_read(request):
+    """Read a UI backup without gzip amplification on repetitive grid data."""
+    # A blank but formatted ledger compresses extremely well.  Google serves
+    # that response with a ratio above httplib2's safety ceiling, even though
+    # the request itself is small.  Request an identity response for backups
+    # only; this does not change spreadsheet state or normal API requests.
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        headers["accept-encoding"] = "identity"
+    return request.execute()
+
+
 def capture_restore(service, meta, plan):
     """Capture only fields this presentation changes, not business cell values."""
     restore = []
@@ -77,10 +89,10 @@ def capture_restore(service, meta, plan):
             continue
         width = {"支出一覧": 10, "要確認": 20, "Amazon要確認": 14, "支出明細": 7}[title]
         first_col = 5 if title == "支出明細" else 0
-        raw = service.spreadsheets().get(
+        raw = execute_backup_read(service.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID, ranges=[f"'{title}'!A1:{chr(64+width)}{n}"],
             fields="sheets(properties(sheetId),data(startRow,startColumn,rowData(values(userEnteredFormat,dataValidation)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
-        ).execute()["sheets"][0]
+        ))["sheets"][0]
         formats, row_sizes, column_sizes = {}, {}, {}
         for block in raw.get("data", []):
             r0, c0 = block.get("startRow", 0), block.get("startColumn", 0)
@@ -145,10 +157,10 @@ def capture_restore(service, meta, plan):
         # merges, and formatting. It is the sole UI-owned content surface.
         old_home = next(s for s in meta["sheets"] if s["properties"]["sheetId"] == HOME_ID)
         width = min(HOME_COLUMNS, old_home["properties"]["gridProperties"]["columnCount"])
-        home = service.spreadsheets().get(
+        home = execute_backup_read(service.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID, ranges=[f"'ホーム'!A1:{chr(64+width)}{CAP+1}"],
             fields="sheets(properties,merges,charts,data(startRow,startColumn,rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
-        ).execute()["sheets"][0]
+        ))["sheets"][0]
         restore.append({"unmergeCells": {"range": grid(HOME_ID, 0, CAP+1, 0, HOME_COLUMNS)}})
         home_data = home.get("data", [{}])[0]
         source_rows = home_data.get("rowData", [])
@@ -211,10 +223,10 @@ def capture_restore(service, meta, plan):
 def capture_category_ui_restore(service, sheet):
     """Snapshot the read-only UI projection; business rows are never copied here."""
     sid, n, width = CATEGORY_UI_ID, CATEGORY_UI_ROWS, CATEGORY_UI_COLUMNS
-    raw = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID,
+    raw = execute_backup_read(service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID,
         ranges=[f"'カテゴリ対応'!A1:Q{n}"],
         fields="sheets(merges,data(rowData(values(userEnteredValue,userEnteredFormat,dataValidation,note)),rowMetadata(pixelSize),columnMetadata(pixelSize,hiddenByUser)))",
-    ).execute()["sheets"][0]
+    ))["sheets"][0]
     data = raw.get("data", [{}])[0]
     observed = data.get("rowData", [])
     keys = ("userEnteredValue", "userEnteredFormat", "dataValidation", "note")
