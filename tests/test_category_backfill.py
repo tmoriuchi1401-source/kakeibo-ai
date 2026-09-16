@@ -5,6 +5,7 @@ from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
 )
 from app.category_rules import CategoryRule
+from app.category_backfill_ui import _period
 
 
 def import_row(import_id="p1", merchant="請求名", amount=100):
@@ -110,3 +111,13 @@ def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
     assert "category-backfill-apply-confirmed" in workflow
     assert "app.cli aupay-gmail" not in workflow
     assert "app.cli drive-" not in workflow
+
+
+def test_month_range_and_changed_request_snapshot_require_a_new_preview():
+    assert _period("2026-02..2026-03") == ("2026-02-01", "2026-03-31")
+    db = BackfillDB()
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True,
+                                    now=lambda: datetime(2026, 9, 17, tzinfo=timezone.utc), id_factory=lambda: "CB-4")
+    assert pipe.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))["state"] == "previewed"
+    db.requests[0][5] = "2026-09-30"  # Simulates a changed fixed period in the request record.
+    assert pipe.confirm("CB-4", expected_count=1) == {"state": "held", "reason": "request_snapshot_changed"}

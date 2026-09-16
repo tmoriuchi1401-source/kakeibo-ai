@@ -30,6 +30,15 @@ def _period(value: object) -> tuple[str, str] | None:
             return None
     if ".." in text:
         start, end = (narrow_text(x) for x in text.split("..", 1))
+        # A phone can specify a whole-month range without typing calendar days.
+        if len(start) == len(end) == 7 and start[4:5] == end[4:5] == "-":
+            try:
+                start_year, start_month = (int(value) for value in start.split("-", 1))
+                end_year, end_month = (int(value) for value in end.split("-", 1))
+                last = calendar.monthrange(end_year, end_month)[1]
+                return f"{start_year:04d}-{start_month:02d}-01", f"{end_year:04d}-{end_month:02d}-{last:02d}"
+            except (TypeError, ValueError):
+                return None
         return start, end
     return None
 

@@ -88,10 +88,12 @@ def _unsafe_source(tx) -> str:
     return ""
 
 
-def _target_digest(rows: list[list]) -> str:
-    """Hash only the immutable target fields, never mutable result/audit cells."""
+def _request_digest(payload: dict, start_date: object, end_date: object, rows: list[list]) -> str:
+    """Bind condition, category, period, and immutable targets as one request."""
     immutable = [list(row[:10]) for row in rows]
-    return hashlib.sha256(_canonical(immutable).encode("utf-8")).hexdigest()
+    return hashlib.sha256(_canonical({
+        "payload": payload, "start_date": _text(start_date), "end_date": _text(end_date), "targets": immutable,
+    }).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -212,7 +214,8 @@ class CategoryBackfillPipeline:
             ])
         self.db.append(BACKFILL_REQUEST_SHEET, [[
             request_id, now, "previewed", _canonical(payload), spec.start_date, spec.end_date,
-            len(targets), sum(_amount(row[4]) for _, _, row, _ in targets), _target_digest(target_rows), False, now,
+            len(targets), sum(_amount(row[4]) for _, _, row, _ in targets),
+            _request_digest(payload, spec.start_date, spec.end_date, target_rows), False, now,
         ]])
         self.db.append(BACKFILL_TARGET_SHEET, target_rows)
         return {"state": "previewed", "request_id": request_id, "targets": len(targets),
@@ -229,6 +232,10 @@ class CategoryBackfillPipeline:
         target_count = sum(1 for _, target in self._targets() if _text(target[0]) == _text(request_id))
         if not target_count or target_count != expected_count or _amount(row[6]) != expected_count:
             return {"state": "held", "reason": "target_count_changed"}
+        payload = _json(row[3])
+        targets = [target for _, target in self._targets() if _text(target[0]) == _text(request_id)]
+        if _text(row[8]) != _request_digest(payload, row[4], row[5], targets):
+            return {"state": "held", "reason": "request_snapshot_changed"}
         row[2], row[9], row[10] = "confirmed", True, self._now()
         self.db.update_rows(BACKFILL_REQUEST_SHEET, [(row_num, row)])
         return {"state": "confirmed", "request_id": request_id, "targets": target_count}
@@ -256,9 +263,9 @@ class CategoryBackfillPipeline:
             return {"state": "held", "reason": "explicit_confirmation_required"}
         if expected_count != len(targets) or _amount(request[6]) != len(targets):
             return {"state": "held", "reason": "target_count_changed"}
-        if _text(request[8]) != _target_digest([row for _, row in targets]):
-            return {"state": "held", "reason": "request_snapshot_changed"}
         payload = _json(request[3])
+        if _text(request[8]) != _request_digest(payload, request[4], request[5], [row for _, row in targets]):
+            return {"state": "held", "reason": "request_snapshot_changed"}
         if not self._request_rule_valid(payload):
             return {"state": "held", "reason": "rule_or_category_changed"}
         records = self.db.expense_records()
