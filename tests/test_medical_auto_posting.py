@@ -76,10 +76,31 @@ def test_card_payment_with_deferred_date_prevents_duplicate_auto_post():
     assert next(iter(review.items.values()))['automatic_hold']=='possible_existing_payment'
 
 
-def test_unresolved_candidates_block_send_and_do_not_use_manual_digest():
+def test_unresolved_document_candidates_allow_safe_image_send_but_veto_posting():
     store,plans,args,send,db,review=automatic();plans[0]['mapping']['unresolved_candidates']=1;seal(plans[0],args['key'])
-    assert process_plans(plans,**args)['medical_ai_requests']==0
-    assert not send.called and not store.value.get('medical_image_analyses') and post(review,args)==0
+    assert process_plans(plans,**args)['medical_ai_requests']==1
+    assert send.called and post(review,args)==0 and not db.rows['支出明細']
+    assert next(iter(review.items.values()))['automatic_hold']=='payment_meaning_not_unique'
+    assert process_plans(plans,**args)['medical_ai_requests']==0 and send.call_count==1
+
+
+def test_multiple_verified_images_are_not_a_unique_accounting_answer():
+    store,plans,args,send,db,review=automatic();plans[0]['mapping']['verified_payment_cells']=2;seal(plans[0],args['key'])
+    assert process_plans(plans,**args)['medical_ai_requests']==1
+    assert post(review,args)==0 and not db.rows['支出明細']
+
+
+@pytest.mark.parametrize('paid,label,expected',[(False,'領収額',0),(True,'領収額',1),(False,'今回入金額',1)])
+def test_issue_date_requires_paid_receipt_evidence(paid,label,expected):
+    store,plans,args,send,db,review=automatic()
+    plans[0]['local_provenance'].update(date_basis='issue',paid_receipt_evidence=paid)
+    if label!='領収額':
+        from app.medical_image_candidate import seal_crop
+        plans[0]['mapping']['payment_label']=label
+        plans[0]['proof']=seal_crop(args['load_crop'](plans[0]),label,args['key'])
+        send.return_value.candidates[0].label=label
+    seal(plans[0],args['key']);process_plans(plans,**args)
+    assert post(review,args)==expected
 
 
 def test_canary_targets_one_source_and_automatic_post_limit_is_one():

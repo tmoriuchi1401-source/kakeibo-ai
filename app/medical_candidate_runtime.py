@@ -56,7 +56,9 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             fields['review_message']=('自動匿名化を保留：画像未送信。確認待ちの理由を確認してください。' if automatic else
                 '匿名化確認が必要：画像未送信。非公開の支払額画像確認画面で切出し範囲を指定し、送信画像を確認してください。手入力での確定も可能です。')
             fields['provenance']={'status':'anonymization_held','reason':plan['reason']}
-            if automatic:fields['provenance']['candidate_checks']=plan.get('candidate_checks',{})
+            if automatic:
+                fields['provenance']['candidate_checks']=plan.get('candidate_checks',{})
+                fields['provenance']['local']=plan.get('local_provenance',{})
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
         packet={k:v for k,v in plan.items() if k not in {'review_id','crop_file'}}
         payload=load_crop(plan)
@@ -121,7 +123,9 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             'amount_origin':'IMAGE_AI_CANDIDATE' if fields.get('amount_yen') else 'IMAGE_AI_ABSTENTION',
             'crop_sha256':packet['mapping']['crop_sha256'],'local':packet['local_provenance'],
             'admission':outcome.verdict,'region':candidate.region if candidate else None}
-        if automatic:fields['provenance']['automatic_policy']=POLICY
+        if automatic:
+            fields['provenance']['automatic_policy']=POLICY
+            fields['provenance']['candidate_checks']=packet['mapping'].get('candidate_checks',{})
         verify_source(source,item['folder_id'])
         state.publish(rid,source,fields)
     return counts

@@ -11,6 +11,9 @@ POLICY='medical-auto-v1'
 AUTO_POLICIES={'auto-v1:free','auto-v1:free:canary'}
 WRITE_LIMIT=1
 VALIDATION='closed_payment_cell_positive_glyphs_complete_ink'
+VALIDATIONS={VALIDATION,'whitespace_text_region_positive_glyphs_complete_ink',
+             'tolerant_ruled_cell_positive_glyphs_complete_ink','adjacent_ruled_cells_positive_glyphs_complete_ink',
+             'ruled_separator_text_fields_positive_glyphs_complete_ink'}
 HOLD_TEXT={
     'owner_input_or_decision':'本人の入力・判断を保持しています。',
     'candidate_missing_or_changed':'現在の原本に対応する候補がありません。',
@@ -30,6 +33,11 @@ HOLD_TEXT={
     'payment_cell_boundary_unknown':'金額欄の境界を確定できず、画像を送信していません。',
     'payment_region_ambiguous_or_absent':'金額欄が不明または複数あり、画像を送信していません。',
     'unaccounted_cell_ink':'金額欄に未確認の文字・図形があり、画像を送信していません。',
+    'text_region_boundary_unknown':'金額欄の罫線・空白境界を確認できず、画像を送信していません。',
+    'numeric_region_not_verified':'数字領域を安全に分離できず、画像を送信していません。',
+    'payment_label_not_verified':'金銭ラベルを検証できず、画像を送信していません。',
+    'cell_content_not_allowed':'金額欄の内容を限定できず、画像を送信していません。',
+    'candidate_geometry_limit':'候補領域が多いため自動検査を保留しました。画像は未送信です。',
 }
 
 
@@ -48,9 +56,10 @@ def owner_blocked(source,value):
 def send_allowed(source, mapping, value, policy):
     from .medical_anonymization import VERSION
     return (in_scope(source,value,policy) and mapping.get('automatic_policy')==POLICY
-        and mapping.get('validation')==VALIDATION and mapping.get('preprocessor')==VERSION
+        and mapping.get('validation') in VALIDATIONS and mapping.get('preprocessor')==VERSION
         and mapping.get('source_sha256')==source['sha256'] and mapping.get('metadata_removed') is True
-        and mapping.get('unresolved_candidates')==0 and mapping.get('verified_payment_cells')==1)
+        and type(mapping.get('unresolved_candidates')) is int and mapping['unresolved_candidates']>=0
+        and type(mapping.get('verified_payment_cells')) is int and mapping['verified_payment_cells']>=1)
 
 
 def decide(item, value, categories, identity_key):
@@ -73,6 +82,8 @@ def decide(item, value, categories, identity_key):
             or p.get('crop_sha256')!=mapping['crop_sha256']):
         raise StateError('medical_auto_evidence_binding_changed')
     answer=PaymentAnswer.model_validate(record['result'])
+    if mapping['unresolved_candidates'] or mapping['verified_payment_cells']!=1:
+        return None,'payment_meaning_not_unique'
     if answer.status!='readable' or len(answer.candidates)!=1:return None,'payment_ambiguous_or_unreadable'
     amount=answer.candidates[0]
     if (amount.label not in LABELS or amount.label!=mapping.get('payment_label')
@@ -83,6 +94,9 @@ def decide(item, value, categories, identity_key):
     if any(binding.get(k)!=mapping.get(k) for k in ('source_sha256','source_image_sha256','page','unit')):
         raise StateError('medical_auto_local_binding_changed')
     if not c.get('date') or local.get('date_candidates')!=1 or local.get('date_evidence_verified') is not True:
+        return None,'payment_date_missing_or_ambiguous'
+    if (local.get('date_basis')=='issue' and local.get('paid_receipt_evidence') is not True
+            and mapping.get('payment_label')!='今回入金額'):
         return None,'payment_date_missing_or_ambiguous'
     if not c.get('issuer') or local.get('issuer_status')!='SELECTED_ISSUER':return None,'issuer_missing_or_ambiguous'
     category=str(c.get('category','')).split('｜')

@@ -48,6 +48,16 @@ def test_digit_recognition_does_not_need_to_agree_on_correct_amount():
     assert verify_cell_pixels(image,observations=observations,glyphs=glyphs)=='領収額'
 
 
+def test_low_confidence_digit_identity_does_not_veto_a_verified_label():
+    image,obs,glyphs=glyph_fixture('領収額123円')
+    obs=[dict(obs[0],text='領収額',box=(4,5,36,20)),
+         dict(obs[0],text='128円',box=(40,5,84,20),confidence=8)]
+    assert verify_cell_pixels(image,observations=obs,glyphs=glyphs)=='領収額'
+    obs[0]['confidence']=8
+    with pytest.raises(AnonymizationHold,match='payment_label_not_verified'):
+        verify_cell_pixels(image,observations=obs,glyphs=glyphs)
+
+
 def test_current_payment_label_is_supported_without_accepting_other_balances():
     from app.medical_anonymization import LABELS
     from app.medical_image_candidate import PaymentEvidence
@@ -80,6 +90,12 @@ def test_anchor_is_not_an_amount_or_a_fixed_coordinate():
     observations=[{'text':'領収','box':(12,22,42,44),'confidence':90,'line':(1,1,1)},
         {'text':'額','box':(44,22,54,44),'confidence':90,'line':(1,1,1)}]
     assert ('領収額',(12,22,54,44)) in anchors(observations)
+
+
+def test_middle_money_cue_does_not_truncate_three_fragment_label():
+    obs=[{'text':text,'box':box,'confidence':20,'line':(1,1,1)} for text,box in
+         [('今回',(10,20,40,40)),('入金',(45,20,75,40)),('額',(80,20,95,40))]]
+    assert ('今回入金額',(10,20,95,40)) in anchors(obs)
 
 
 @pytest.mark.parametrize('label',['今回入金額','請求額','合計','金額','今回のお支払い','患者氏名と入金額',

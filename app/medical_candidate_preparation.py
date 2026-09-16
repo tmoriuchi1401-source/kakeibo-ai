@@ -1,6 +1,5 @@
 """AI-key-free local preparation; only minimal fields/crops cross its boundary."""
 from collections import defaultdict
-from datetime import date
 from hashlib import sha256
 import hmac
 import json
@@ -20,23 +19,18 @@ def _canonical(value):
 def local_fields(observations, binding, size):
     groups=defaultdict(list)
     for token in observations:groups[token['line']].append(token)
-    regions=[];days=set();date_verified=True
+    from .medical_local_date import receipt_date
+    day,date_provenance=receipt_date(observations)
+    regions=[]
     for group in groups.values():
         group.sort(key=lambda t:t['box'][0]);boxes=[t['box'] for t in group]
-        text=' '.join(t['text'] for t in group);normalized=compact(text)
+        text=' '.join(t['text'] for t in group)
         regions.append(OcrFacilityRegion(ordinal=len(regions),reading_order=len(regions),raw_text=text,
             confidence=max(0,min(1,min(t['confidence'] for t in group)/100)),
             bbox_xywh=(float(min(b[0] for b in boxes)),float(min(b[1] for b in boxes)),
                 float(max(b[2] for b in boxes)-min(b[0] for b in boxes)),float(max(b[3] for b in boxes)-min(b[1] for b in boxes)))))
-        if not any(label in normalized for label in ('領収日','支払日','発行日','会計日')):continue
-        if any(label in normalized for label in ('生年月日','処方','診療日','受診日')):continue
-        for match in re.finditer(r'(?<!\d)(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})(?:日|\b)',normalized):
-            try:
-                days.add(date(*map(int,match.groups())).isoformat())
-                date_verified=date_verified and min(t['confidence'] for t in group)>=70
-            except ValueError:pass
-    fields={'date':next(iter(days)) if len(days)==1 else '', 'issuer':'','category':''}
-    if not regions:return fields,{'date_candidates':len(days),'issuer_status':'missing'}
+    fields={'date':day, 'issuer':'','category':''}
+    if not regions:return fields,{**date_provenance,'issuer_status':'missing'}
     page=OcrPageForIssuerSelection(binding=IssuerBinding(source_sha256=binding.source_sha256,
         image_sha256=binding.source_image_sha256,unit=binding.unit,page=binding.page),
         width=size[0],height=size[1],regions=tuple(regions))
@@ -49,7 +43,8 @@ def local_fields(observations, binding, size):
         fields['issuer']=selected.issuer_facility_name
         fields['category']='医療・保険｜'+('薬' if selected.issuer_facility_type=='pharmacy' else '病院')
     # Full OCR page/reference providers are neither persisted nor emitted.
-    return fields,{'date_candidates':len(days),'date_evidence_verified':len(days)==1 and date_verified,'issuer_status':selected.verdict,
+    return fields,{**date_provenance,'issuer_status':selected.verdict,
+        'paid_receipt_evidence':any(any(label in compact(r.raw_text) for label in ('領収書','領収証')) for r in regions),
         'issuer_selector':selected.selector_version,'document_binding':binding.model_dump()}
 
 
@@ -78,8 +73,7 @@ def prepare(source, payload, key, *, crop_review=None, review_key=None, automati
     if automatic:
         from .medical_auto_posting import POLICY
         # The automatic branch never reads or re-signs a human crop record.
-        crop.mapping.update(automatic_policy=POLICY,payment_label=crop.label,
-            unresolved_candidates=0,verified_payment_cells=1)
+        crop.mapping.update(automatic_policy=POLICY,payment_label=crop.label)
     packet.update(status='prepared',mapping=crop.mapping,proof=seal_crop(crop.payload,crop.label,key))
     packet['preparation_tag']=hmac.new(key,b'medical-preparation\0'+_canonical(packet),'sha256').hexdigest()
     return packet,crop.payload

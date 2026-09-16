@@ -169,6 +169,20 @@ def anchors(observations):
                 if (not money_label_cue(third['text']) and _fragment_follows(second,third)
                         and sum(len(compact(t['text'])) for t in (first,second,third))<=8):
                     add([first,second,third])
+    # A money cue in the middle token must not truncate a split full label
+    # (e.g. 今回 / 入金 / 額). Only complete lexical labels extend this pass;
+    # uncertain/partial cues from above are retained as candidates too.
+    vocabulary=LABELS+NONPAYMENT_LABELS+MONEY_CUES
+    groups={}
+    for token in observations:groups.setdefault(tuple(token['line']),[]).append(token)
+    for group in groups.values():
+        group.sort(key=lambda t:t['box'][0])
+        for start in range(len(group)):
+            for stop in range(start+2,min(len(group),start+6)+1):
+                selected=group[start:stop]
+                if (compact(''.join(t['text'] for t in selected)) in vocabulary
+                        and all(_fragment_follows(a,b) for a,b in zip(selected,selected[1:]))):
+                    add(selected)
     return list(found.values())
 
 
@@ -180,19 +194,21 @@ def enclosure(image, box):
     # The cell may contain the label and amount, but no other table row.
     top=[y for y in range(max(0,y1-3*h),y1) if ink[y,x1:x2].mean()>.94]
     bottom=[y for y in range(y2,min(image.height,y2+3*h)) if ink[y,x1:x2].mean()>.94]
-    if not top or not bottom:raise AnonymizationHold('payment_cell_boundary_unknown')
+    def reject(detail):
+        error=AnonymizationHold('payment_cell_boundary_unknown');error.boundary_reason=detail;raise error
+    if not top or not bottom:reject('top_and_bottom_missing' if not top and not bottom else 'top_missing' if not top else 'bottom_missing')
     top=max(top);bottom=min(bottom)
-    if bottom-top>5*h:raise AnonymizationHold('payment_cell_boundary_unknown')
+    if bottom-top>5*h:reject('row_span_exceeded')
     left=[x for x in range(max(0,x1-4*h),x1) if ink[top:bottom+1,x].mean()>.94]
     right=[x for x in range(x2,min(image.width,x2+24*h)) if ink[top:bottom+1,x].mean()>.94]
-    if not left or not right:raise AnonymizationHold('payment_cell_boundary_unknown')
+    if not left or not right:reject('left_and_right_missing' if not left and not right else 'left_missing' if not left else 'right_missing')
     left=max(left);right=min(right)
     if right-left<2*h or not all(ink[y,left:right+1].mean()>.94 for y in (top,bottom)):
-        raise AnonymizationHold('payment_cell_boundary_unknown')
+        reject('horizontal_continuity_or_width')
     return left+2,top+2,right-1,bottom-1
 
 
-def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpayment=False):
+def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpayment=False, psm=7):
     """Positive content grammar plus complete ink coverage, not a PII blacklist.
 
     Does not accept/return an OCR amount. Digit identity may be wrong: the AI
@@ -200,18 +216,28 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpay
     """
     import numpy as np
     import pytesseract
-    observations=tokens(image,7) if observations is None else observations
-    if not observations or min(t['confidence'] for t in observations)<65:
+    observations=tokens(image,psm) if observations is None else observations
+    if not observations:
         raise AnonymizationHold('cell_content_not_verified')
-    ordered=sorted(observations,key=lambda t:t['box'][0])
-    if sum(bool(re.search(r'\d',compact(t['text']))) for t in ordered)!=1:
+    ordered=sorted(observations,key=(lambda t:(t['line'],t['box'][0])) if psm==6 else lambda t:t['box'][0])
+    numeric_tokens=sum(bool(re.search(r'\d',compact(t['text']))) for t in ordered)
+    if not numeric_tokens:raise AnonymizationHold('numeric_region_not_verified')
+    if numeric_tokens!=1:
         raise AnonymizationHold('multiple_numeric_regions')
     text=compact(''.join(t['text'] for t in ordered))
     labels=LABELS+NONPAYMENT_LABELS if classify_nonpayment else LABELS
     grammar=re.compile(r'('+'|'.join(labels)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
     if not grammar.fullmatch(text):raise AnonymizationHold('cell_content_not_allowed')
+    observed_label=next(label for label in labels if text.startswith(label))
+    pos=0
+    for token in ordered:
+        # Exact label recognition is necessary. Low confidence about which
+        # digit is printed does not pre-empt Gemini's reading of the pixels.
+        if pos<len(observed_label) and token['confidence']<65:
+            raise AnonymizationHold('payment_label_not_verified')
+        pos+=len(compact(token['text']))
     if glyphs is None:
-        raw=pytesseract.image_to_boxes(image,lang='jpn+eng',config='--psm 7')
+        raw=pytesseract.image_to_boxes(image,lang='jpn+eng',config=f'--psm {psm}')
         glyphs=[]
         for row in raw.splitlines():
             char,left,bottom,right,top,_=row.split()
@@ -260,6 +286,8 @@ def prepare_payment_crop(payload, mime, *, image=None, observations=None, automa
     observations=tokens(image) if observations is None else observations
     boxes=set();failures=[];verified=[];excluded=[]
     discovered=anchors(observations)
+    if automatic:
+        return _automatic_crop(payload,image,observations,discovered)
     for _,anchor in discovered:
         try:boxes.add(enclosure(image,anchor))
         except AnonymizationHold as error:failures.append(str(error))
@@ -287,3 +315,114 @@ def prepare_payment_crop(payload, mime, *, image=None, observations=None, automa
         'rendered_page_size':list(image.size),
         'validation':'closed_payment_cell_positive_glyphs_complete_ink','metadata_removed':True,
         **({'excluded_nonpayment_cells':len(excluded)} if automatic else {})},label)
+
+
+def _automatic_crop(payload,image,observations,discovered):
+    from .medical_text_regions import text_regions,ruled_region,adjacent_ruled_regions,observed_row_regions,separated_row_regions
+    # Detection-only contrast helps split light table text. Outbound pixels
+    # always come from the original render, never this detection image.
+    detector=image.convert('L').point(lambda value:0 if value<170 else 255).convert('RGB')
+    detection_tokens=tokens(detector,11);extra=anchors(detection_tokens)
+    cues=list(dict.fromkeys((text,tuple(box)) for text,box in discovered+extra))
+    proposals={};retained={};by_anchor=[];boundary_failures=0;boundary_reasons={}
+    for _,anchor in cues:
+        candidate_boxes=[]
+        try:
+            box=enclosure(image,anchor);proposals[box]='closed_payment_cell_positive_glyphs_complete_ink'
+            candidate_boxes.append(box)
+        except AnonymizationHold as error:
+            boundary_failures+=1;reason=getattr(error,'boundary_reason','unknown')
+            boundary_reasons[reason]=boundary_reasons.get(reason,0)+1
+        try:
+            box=ruled_region(image,anchor)
+            proposals.setdefault(box,'tolerant_ruled_cell_positive_glyphs_complete_ink');candidate_boxes.append(box)
+        except AnonymizationHold:pass
+        try:
+            segments=adjacent_ruled_regions(image,anchor)
+            box=(segments[0][0],min(b[1] for b in segments),segments[1][2],max(b[3] for b in segments))
+            proposals[box]='adjacent_ruled_cells_positive_glyphs_complete_ink';retained[box]=segments
+            candidate_boxes.append(box)
+        except AnonymizationHold:pass
+        for box in text_regions(image,anchor):
+            proposals.setdefault(box,'whitespace_text_region_positive_glyphs_complete_ink')
+            candidate_boxes.append(box)
+        for box in text_regions(image,anchor,below=True):
+            proposals.setdefault(box,'whitespace_text_region_positive_glyphs_complete_ink')
+            candidate_boxes.append(box)
+        for box in observed_row_regions(image,anchor,observations+detection_tokens):
+            proposals.setdefault(box,'whitespace_text_region_positive_glyphs_complete_ink');candidate_boxes.append(box)
+        for segments in separated_row_regions(image,anchor,observations+detection_tokens):
+            box=(segments[0][0],min(b[1] for b in segments),segments[1][2],max(b[3] for b in segments))
+            proposals[box]='ruled_separator_text_fields_positive_glyphs_complete_ink';retained[box]=segments
+            candidate_boxes.append(box)
+        by_anchor.append((anchor,candidate_boxes))
+    if len(proposals)>256:
+        error=AnonymizationHold('candidate_geometry_limit');error.candidate_checks={'proposed_regions':len(proposals),'verified':0};raise error
+    checked={};verified={};excluded={}
+    for box,validation in sorted(proposals.items()):
+        if box in retained:
+            crop=Image.new('RGB',(box[2]-box[0],box[3]-box[1]),'white')
+            for segment in retained[box]:crop.paste(image.crop(segment),(segment[0]-box[0],segment[1]-box[1]))
+        else:crop=image.crop(box)
+        crop=crop.convert('L').point(lambda value:0 if value<190 else 255).convert('RGB')
+        padding=max(8,round(crop.height*.25))
+        canvas=Image.new('RGB',(crop.width+2*padding,crop.height+2*padding),'white')
+        canvas.paste(crop,(padding,padding));crop=canvas
+        clean=png(crop)
+        try:
+            # Reopen and check the actual final bytes; never regenerate them.
+            final_image=validate_png(clean)
+            try:label=verify_cell_pixels(final_image,classify_nonpayment=True)
+            except AnonymizationHold:
+                label=verify_cell_pixels(final_image,classify_nonpayment=True,psm=6)
+            target=excluded if label in NONPAYMENT_LABELS else verified
+            target[box]=(clean,label,validation);checked[box]='verified'
+        except AnonymizationHold as error:checked[box]=str(error)
+    # Nested proposals of the same retained ink represent one physical field.
+    unique=[]
+    def ink_digest(payload):
+        import numpy as np
+        im=validate_png(payload);ys,xs=np.where(np.asarray(im.convert('L'))<190)
+        return sha256(png(im.crop((int(xs.min()),int(ys.min()),int(xs.max())+1,int(ys.max())+1)))).digest()
+    for box,result in sorted(verified.items(),key=lambda pair:-(pair[0][2]-pair[0][0])*(pair[0][3]-pair[0][1])):
+        # Keep the maximal verified field, including its optional currency
+        # suffix, instead of counting a nested shorter proposal a second time.
+        if any(result[1]==old[1][1] and (_contains(old[0],box) or
+                (_overlapping(box,old[0]) and ink_digest(result[0])==ink_digest(old[1][0]))) for old in unique):continue
+        unique.append((box,result))
+    resolved=list(verified)+list(excluded)
+    unresolved=[]
+    for anchor,attempts in by_anchor:
+        if any(_contains(box,anchor) for box in resolved):continue
+        if any(_overlapping(anchor,other) for other,_ in unresolved):continue
+        reasons=[checked[b] for b in attempts if b in checked]
+        unresolved.append((anchor,reasons[0] if reasons else 'text_region_boundary_unknown'))
+    checks={'discovered':len(discovered),'additional_cues':len(extra),'distinct_cues':len(cues),
+        'proposed_regions':len(proposals),'closed_boundary_failures':boundary_failures,'boundary_reasons':boundary_reasons,
+        'proposals_by_geometry':{kind:sum(v==kind for v in proposals.values()) for kind in sorted(set(proposals.values()))},
+        'verified':len(unique),'excluded_nonpayment':len(excluded),
+        'unresolved_reasons':[reason for _,reason in unresolved],'multiple_verified':len(unique)>1}
+    if not unique:
+        error=AnonymizationHold(checks['unresolved_reasons'][0] if unresolved else 'payment_region_ambiguous_or_absent')
+        error.candidate_checks=checks;raise error
+    # This selects an image to read, not the document's accounting answer.
+    # Any other unresolved/payment region remains a posting veto.
+    box,(clean,label,validation)=unique[0]
+    return PaymentCrop(clean,{'source_sha256':sha256(payload).hexdigest(),
+        'source_image_sha256':sha256(png(image)).hexdigest(),'page':1,'unit':1,
+        'crop_coordinates_original':list(box),'rotation_clockwise_degrees':0,
+        'crop_sha256':sha256(clean).hexdigest(),'preprocessor':VERSION,
+        'rendered_page_size':list(image.size),'validation':validation,'metadata_removed':True,
+        'unresolved_candidates':len(unresolved),'verified_payment_cells':len(unique),
+        'candidate_checks':checks,'geometry_policy':'bounded-text-regions-v1',
+        'retained_regions_original':[list(region) for region in retained.get(box,(box,))],
+        'derived_padding_pixels':max(8,round((box[3]-box[1])*.25))},label)
+
+
+def _contains(outer,inner):
+    return outer[0]<=inner[0] and outer[1]<=inner[1] and outer[2]>=inner[2] and outer[3]>=inner[3]
+
+
+def _overlapping(a,b):
+    intersection=max(0,min(a[2],b[2])-max(a[0],b[0]))*max(0,min(a[3],b[3])-max(a[1],b[1]))
+    return intersection>=.8*min((a[2]-a[0])*(a[3]-a[1]),(b[2]-b[0])*(b[3]-b[1]))
