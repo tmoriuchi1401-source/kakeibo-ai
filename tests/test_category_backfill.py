@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
@@ -98,3 +99,14 @@ def test_saved_rule_revision_change_holds_fixed_request_before_any_ledger_write(
                              ("食費", "外食"), "M-one", datetime(2026, 9, 1, tzinfo=timezone.utc), 2, True)]
     assert pipe.apply("CB-3", expected_count=1) == {"state": "held", "reason": "rule_or_category_changed"}
     assert db.category_updates == []
+
+
+def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
+    workflow = Path(".github/workflows/category-backfill-sheet.yml").read_text(encoding="utf-8")
+    assert "CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true'" in workflow
+    assert "CATEGORY_BACKFILL_PREVIEW_ENABLED" in workflow
+    assert "CATEGORY_BACKFILL_APPLY_ENABLED" in workflow
+    assert "category-backfill-preview-checked" in workflow
+    assert "category-backfill-apply-confirmed" in workflow
+    assert "app.cli aupay-gmail" not in workflow
+    assert "app.cli drive-" not in workflow
