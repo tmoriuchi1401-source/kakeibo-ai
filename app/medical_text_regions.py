@@ -18,7 +18,7 @@ def _bridge(mask):
     return mask
 
 
-def ruled_region(image,anchor):
+def ruled_regions(image,anchor):
     """Nearest connected four-sided cell with two-pixel line tolerance.
 
     The horizontal runs bound the side search, instead of assuming that a
@@ -30,21 +30,31 @@ def ruled_region(image,anchor):
     if h<5:raise AnonymizationHold('ruled_cell_not_connected')
     ink=np.asarray(image.convert('L'))<190
     def horizontal(y):return _bridge(ink[max(0,y-2):min(image.height,y+3)].any(axis=0))
-    top=next((y for y in range(y1-1,max(-1,y1-3*h),-1) if horizontal(y)[x1:x2].all()),None)
-    bottom=next((y for y in range(y2,min(image.height,y2+3*h)) if horizontal(y)[x1:x2].all()),None)
-    if top is None or bottom is None or bottom-top>5*h:raise AnonymizationHold('ruled_cell_not_connected')
-    spans=[(a,b) for a,b in runs(horizontal(top)&horizontal(bottom)) if a<=x1 and b>=x2]
-    if len(spans)!=1:raise AnonymizationHold('ruled_cell_not_connected')
-    a,b=spans[0]
-    def vertical(x):return _bridge(ink[top:bottom+1,max(0,x-2):min(image.width,x+3)].any(axis=1)).all()
-    left=next((x for x in range(x1-1,a-1,-1) if vertical(x)),None)
-    right=next((x for x in range(x2,b) if vertical(x)),None)
-    if left is None or right is None or not 2*h<=right-left<=40*h:
-        raise AnonymizationHold('ruled_cell_not_connected')
-    box=(left+3,top+3,right-2,bottom-2)
-    if not (box[0]<=x1<x2<=box[2] and box[1]<=y1<y2<=box[3]):
-        raise AnonymizationHold('ruled_cell_not_connected')
-    return box
+    start=max(0,y1-3*h)
+    tops=[start+b-1 for a,b in runs(np.array([horizontal(y)[x1:x2].all() for y in range(start,y1)]))]
+    bottoms=[y2+a for a,b in runs(np.array([horizontal(y)[x1:x2].all() for y in range(y2,min(image.height,y2+3*h))]))]
+    if len(tops)>8 or len(bottoms)>8:raise AnonymizationHold('ruled_cell_line_limit')
+    found=set()
+    # The nearest short rule may stop at a neighbouring merged cell. Try the
+    # other connected row borders within the same bounded neighbourhood too.
+    for top in tops:
+        for bottom in bottoms:
+            if bottom-top>5*h:continue
+            spans=[(a,b) for a,b in runs(horizontal(top)&horizontal(bottom)) if a<=x1 and b>=x2]
+            if len(spans)!=1:continue
+            a,b=spans[0]
+            def vertical(x):return _bridge(ink[top:bottom+1,max(0,x-2):min(image.width,x+3)].any(axis=1)).all()
+            left=next((x for x in range(x1-1,a-1,-1) if vertical(x)),None)
+            right=next((x for x in range(x2,b) if vertical(x)),None)
+            if left is None or right is None or not 2*h<=right-left<=40*h:continue
+            box=(left+3,top+3,right-2,bottom-2)
+            if box[0]<=x1<x2<=box[2] and box[1]<=y1<y2<=box[3]:found.add(box)
+    if not found:raise AnonymizationHold('ruled_cell_not_connected')
+    return sorted(found,key=lambda b:(b[2]-b[0])*(b[3]-b[1]))
+
+
+def ruled_region(image,anchor):
+    return ruled_regions(image,anchor)[0]
 
 
 def adjacent_ruled_regions(image,anchor):
@@ -74,7 +84,10 @@ def observed_row_regions(image,anchor,observations):
     candidates=set()
     for end in aligned:
         if end[2]<=x2:continue
-        row=[a for a in aligned if a[0]<end[2]]+[anchor]
+        # A different OCR pass can return a box spanning several table rows.
+        # Do not let that unrelated box enlarge/veto every candidate. The
+        # original pixels between these two endpoints are still all inspected.
+        row=[anchor,end]
         raw=(x1,min(a[1] for a in row),end[2],max(a[3] for a in row))
         if raw[2]-raw[0]>30*h or raw[3]-raw[1]>2*h:continue
         # Locate blank edges close to the observed extents, without cutting
@@ -108,7 +121,18 @@ def separated_row_regions(image,anchor,observations):
         # Require the separator to extend half a label height beyond *both*
         # observed text bounds. A digit stroke ends inside those bounds.
         context=ink[max(0,top-round(.5*h)):min(image.height,bottom+round(.5*h)),l:r]
-        rule=context.mean(axis=0)>.96
+        # The scan's thin vertical rule can drift by a few pixels. Detect its
+        # continuous corridor, then include the entire isolated rule width;
+        # a single rigid column need not be dark on every row.
+        corridor=context.copy()
+        for shift in (1,2):
+            corridor[:,shift:]|=context[:,:-shift];corridor[:,:-shift]|=context[:,shift:]
+        centres=corridor.mean(axis=0)>.98
+        rule=centres.copy()
+        for shift in (1,2):rule[shift:]|=centres[:-shift];rule[:-shift]|=centres[shift:]
+        # Tolerance searches for the line; blank corridor margins are not part
+        # of its measured width or a reason to reject a genuinely thin rule.
+        rule &= context.any(axis=0)
         for a,b in runs(rule):
             if b-a>.2*h:rule[a:b]=False
         if not rule.any():continue
@@ -116,10 +140,16 @@ def separated_row_regions(image,anchor,observations):
         for a,b in runs(rule):
             if local[:,max(0,a-2):a].any() or local[:,b:min(local.shape[1],b+2)].any():rule[a:b]=False
         local[:,rule]=False
-        occupied=local.any(axis=0);parts=runs(occupied);words=[]
-        for a,b in parts:
-            if words and a-words[-1][1]<.65*h and not rule[words[-1][1]:a].any():words[-1][1]=b
-            else:words.append([a,b])
+        # Keep the entire immediately adjacent value field, including spaced
+        # digits. Do not merge across a second table separator or choose an
+        # amount based on its OCR value.
+        separators=[(a,b) for a,b in runs(rule) if a>x2-l]
+        if not separators:continue
+        a,b=separators[0];limit=separators[1][0] if len(separators)>1 else local.shape[1]
+        words=[]
+        for start,stop in ((0,a),(b,limit)):
+            cols=np.flatnonzero(local[:,start:stop].any(axis=0))
+            if len(cols):words.append([start+int(cols[0]),start+int(cols[-1])+1])
         if len(words)!=2:continue
         segments=[]
         for a,b in words:

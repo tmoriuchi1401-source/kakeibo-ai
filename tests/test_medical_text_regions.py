@@ -35,6 +35,14 @@ def test_connected_lines_bound_a_right_aligned_label_and_tolerate_small_gaps():
     with pytest.raises(AnonymizationHold):ruled_region(image,(140,50,240,70))
 
 
+def test_nearest_partial_rule_does_not_hide_a_connected_outer_cell():
+    image=Image.new('RGB',(600,300),'white');draw=ImageDraw.Draw(image)
+    draw.rectangle((10,80,550,140),outline='black')
+    draw.line((100,90,260,90),fill='black')
+    box=ruled_region(image,(140,100,240,120))
+    assert box[0]<140 and box[2]>240 and 80<box[1]<90 and 120<box[3]<140
+
+
 def test_separate_label_and_amount_cells_keep_original_pixels_and_reject_extra_text():
     original=(Path(__file__).parent/'fixtures/synthetic_medical_payment.png').read_bytes()
     isolated=validate_png(prepare_payment_crop(original,'image/png').payload)
@@ -52,14 +60,23 @@ def test_separate_label_and_amount_cells_keep_original_pixels_and_reject_extra_t
     with pytest.raises(AnonymizationHold):prepare_payment_crop(png(page),'image/png',automatic=True)
 
 
-def test_open_row_with_an_isolated_separator_has_honest_provenance():
+@pytest.mark.parametrize('drift',[False,True])
+def test_open_row_with_an_isolated_separator_has_honest_provenance(drift):
     original=(Path(__file__).parent/'fixtures/synthetic_medical_payment.png').read_bytes()
     isolated=validate_png(prepare_payment_crop(original,'image/png').payload)
     page=Image.new('RGB',(900,600),'white');page.paste(isolated,(50,140))
     draw=ImageDraw.Draw(page);draw.line((240,70,240,290),fill='black',width=2)
+    if drift:
+        draw.line((240,70,240,290),fill='white',width=2)
+        draw.line([(240,70),(242,150),(240,220),(241,290)],fill='black',width=2)
     crop=prepare_payment_crop(png(page),'image/png',automatic=True)
     assert crop.mapping['validation']=='ruled_separator_text_fields_positive_glyphs_complete_ink'
     assert len(crop.mapping['retained_regions_original'])==2
+    output=validate_png(crop.payload);outer=crop.mapping['crop_coordinates_original'];pad=crop.mapping['derived_padding_pixels']
+    expected=Image.new('RGB',output.size,'white')
+    for box in crop.mapping['retained_regions_original']:
+        expected.paste(page.crop(box),(box[0]-outer[0]+pad,box[1]-outer[1]+pad))
+    assert output.tobytes()==expected.tobytes()
     draw.text((250,178),'PRIVATE ID 123',fill='black')
     with pytest.raises(AnonymizationHold):prepare_payment_crop(png(page),'image/png',automatic=True)
 

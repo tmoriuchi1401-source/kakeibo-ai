@@ -251,11 +251,13 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpay
         height=max(left[3]-left[1],right[3]-right[1])
         if right[0]-left[2]>.65*height or abs((left[1]+left[3]-right[1]-right[3])/2)>.5*height:
             raise AnonymizationHold('multiple_numeric_regions')
-    covered=np.zeros((image.height,image.width),dtype=bool)
-    for char,(l,t,r,b) in glyphs:
-        if not (0<=l<r<=image.width and 0<=t<b<=image.height) or r-l>2*(b-t):
+    covered=np.zeros((image.height,image.width),dtype=bool);label_irregular=False
+    for index,(char,(l,t,r,b)) in enumerate(glyphs):
+        if not (0<=l<r<=image.width and 0<=t<b<=image.height):
             raise AnonymizationHold('glyph_geometry_unknown')
-        if covered[t:b,l:r].mean()>.1:raise AnonymizationHold('glyph_geometry_unknown')
+        irregular=r-l>2*(b-t) or covered[t:b,l:r].mean()>.1
+        if irregular and index>=len(label):raise AnonymizationHold('glyph_geometry_unknown')
+        label_irregular=label_irregular or irregular
         covered[max(0,t-1):min(image.height,b+1),max(0,l-1):min(image.width,r+1)]=True
     # Japanese OCR can split a printed label's strokes between adjacent glyph
     # boxes. Cover only the compact, twice-recognized exact allowed label span;
@@ -266,6 +268,21 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpay
             raise AnonymizationHold('label_geometry_unknown')
     l=min(b[0] for b in label_boxes);t=min(b[1] for b in label_boxes)
     r=max(b[2] for b in label_boxes);b=max(b[3] for b in label_boxes)
+    if label_irregular:
+        # Japanese OCR may assign overlapping/wide character boxes within an
+        # otherwise exact label. Validate that word as its own bounded region;
+        # do not relax numeric geometry or let it cover another field.
+        height=max(box[3]-box[1] for box in label_boxes)
+        if (r-l>(len(label)+1)*height or b-t>1.6*height
+                or any(right[0]<left[0] for left,right in zip(label_boxes,label_boxes[1:]))
+                or any(max(l,a)<min(r,c) and max(t,d)<min(b,e) for _,(a,d,c,e) in glyphs[len(label):])):
+            raise AnonymizationHold('label_geometry_unknown')
+        pad=max(8,round(height*.25));word=Image.new('RGB',(r-l+2*pad,b-t+2*pad),'white')
+        word.paste(image.crop((l,t,r,b)),(pad,pad))
+        checked=tokens(word,7)
+        if (not checked or min(x['confidence'] for x in checked)<65
+                or compact(''.join(x['text'] for x in checked))!=label):
+            raise AnonymizationHold('label_geometry_unknown')
     covered[max(0,t-1):min(image.height,b+1),max(0,l-1):min(image.width,r+1)]=True
     # Stray text, QR/barcodes, signatures and unrecognized pixels outside the
     # positively classified glyph extents are not silently dropped from a crop.
@@ -318,7 +335,7 @@ def prepare_payment_crop(payload, mime, *, image=None, observations=None, automa
 
 
 def _automatic_crop(payload,image,observations,discovered):
-    from .medical_text_regions import text_regions,ruled_region,adjacent_ruled_regions,observed_row_regions,separated_row_regions
+    from .medical_text_regions import text_regions,ruled_regions,adjacent_ruled_regions,observed_row_regions,separated_row_regions
     # Detection-only contrast helps split light table text. Outbound pixels
     # always come from the original render, never this detection image.
     detector=image.convert('L').point(lambda value:0 if value<170 else 255).convert('RGB')
@@ -334,8 +351,8 @@ def _automatic_crop(payload,image,observations,discovered):
             boundary_failures+=1;reason=getattr(error,'boundary_reason','unknown')
             boundary_reasons[reason]=boundary_reasons.get(reason,0)+1
         try:
-            box=ruled_region(image,anchor)
-            proposals.setdefault(box,'tolerant_ruled_cell_positive_glyphs_complete_ink');candidate_boxes.append(box)
+            for box in ruled_regions(image,anchor):
+                proposals.setdefault(box,'tolerant_ruled_cell_positive_glyphs_complete_ink');candidate_boxes.append(box)
         except AnonymizationHold:pass
         try:
             segments=adjacent_ruled_regions(image,anchor)

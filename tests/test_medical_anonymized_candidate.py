@@ -58,6 +58,29 @@ def test_low_confidence_digit_identity_does_not_veto_a_verified_label():
         verify_cell_pixels(image,observations=obs,glyphs=glyphs)
 
 
+def test_overlapping_label_boxes_need_an_independent_exact_word_check(monkeypatch):
+    from app import medical_anonymization as module
+    image,obs,glyphs=glyph_fixture('領収額123円')
+    glyphs[0]=('領',(4,5,39,20))
+    monkeypatch.setattr(module,'tokens',lambda *a:[dict(obs[0],text='領収額')])
+    assert verify_cell_pixels(image,observations=obs,glyphs=glyphs)=='領収額'
+    monkeypatch.setattr(module,'tokens',lambda *a:[dict(obs[0],text='患者領収額')])
+    with pytest.raises(AnonymizationHold,match='label_geometry_unknown'):
+        verify_cell_pixels(image,observations=obs,glyphs=glyphs)
+
+
+def test_label_word_check_cannot_relax_numeric_overlap_or_unclassified_ink(monkeypatch):
+    from app import medical_anonymization as module
+    image,obs,glyphs=glyph_fixture('領収額123円');glyphs[0]=('領',(4,5,39,20))
+    monkeypatch.setattr(module,'tokens',lambda *a:[dict(obs[0],text='領収額')])
+    bad=list(glyphs);bad[4]=('2',(44,5,61,20))
+    with pytest.raises(AnonymizationHold,match='glyph_geometry_unknown'):
+        verify_cell_pixels(image,observations=obs,glyphs=bad)
+    ImageDraw.Draw(image).point((1,1),fill='black')
+    with pytest.raises(AnonymizationHold,match='unaccounted_cell_ink'):
+        verify_cell_pixels(image,observations=obs,glyphs=glyphs)
+
+
 def test_current_payment_label_is_supported_without_accepting_other_balances():
     from app.medical_anonymization import LABELS
     from app.medical_image_candidate import PaymentEvidence
