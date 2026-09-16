@@ -8,7 +8,9 @@ on:
     - cron: '7,27,47 * * * *'
 
 concurrency:
-  group: category-backfill-sheet
+  # F:G is the canonical ledger, so this must never overlap any other
+  # production writer even though it has its own opt-in gate.
+  group: kakeibo-production
   cancel-in-progress: false
   queue: max
 
