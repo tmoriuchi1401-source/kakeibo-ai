@@ -66,6 +66,30 @@ def test_medical_missing_inputs_never_post_and_refresh_preserves_typing():
     assert len(restarted.items)==1
 
 
+def test_render_updates_existing_rows_before_append_can_shift_their_positions():
+    service,store,db,verify,source=medical()
+    old_key=review_id('medical',source)
+    db.rows[TITLE][0][14]='Owner note retained'
+    service.capture_inputs()
+    newer=dict(source,version='2');service.observe_medical(newer,'synthetic-folder')
+    new_key=review_id('medical',newer)
+    # Serialized key order can put a new row before an already displayed row.
+    items=store.value['confirmation_items']
+    store.value['confirmation_items']={new_key:items[new_key],old_key:items[old_key]}
+    def insert_before_old(title,rows):
+        assert title==TITLE
+        db.rows[title][0:0]=deepcopy(rows)
+    db.append_raw=insert_before_old
+    service.render()
+    displayed={r[0]:r for r in db.rows[TITLE]}
+    assert set(displayed)=={old_key,new_key}
+    assert displayed[old_key][2]=='原本変更・再確認'
+    assert displayed[old_key][14]=='Owner note retained'
+    assert displayed[new_key][2]=='未確認' and displayed[new_key][7:15]==['']*8
+    service.render()
+    assert len(db.rows[TITLE])==2 and not db.rows['支出明細']
+
+
 def test_medical_confirm_post_readback_restart_replay_no_duplicate():
     service,store,db,verify,s=medical();confirm(db)
     service.capture_inputs();assert service.apply_confirmations()==1

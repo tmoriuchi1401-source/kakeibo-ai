@@ -274,7 +274,9 @@ class ReceiptConfirmation:
             raise StateError('confirmation_sheet_header_mismatch')
         self.db.ensure_sheet(TITLE,HEADERS)
         existing=self.ui_rows()
-        for key,item in self.items.items():
+        # INSERT_ROWS may shift displayed rows. Finish every positional update
+        # before appending so captured row numbers cannot target a new identity.
+        for key,item in sorted(self.items.items(),key=lambda pair:pair[0] not in existing):
             if item['status']=='closed_machine' and key not in existing:continue
             medical=item['kind']=='medical'
             if medical:
