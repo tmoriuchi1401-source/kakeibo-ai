@@ -32,7 +32,7 @@ APPROVAL='medical-derived-payment-20260916'
 class PaymentEvidence(BaseModel):
     model_config=ConfigDict(extra='forbid',strict=True,hide_input_in_errors=True)
     amount_yen: Annotated[StrictInt,Field(ge=1,le=999_999_999)]
-    label: Literal['領収金額','領収額','お支払金額','お支払額','支払金額','支払額']
+    label: Literal['領収金額','領収額','お支払金額','お支払額','支払金額','支払額','今回入金額']
     region: Annotated[list[Annotated[StrictInt,Field(ge=0,le=1000)]],Field(min_length=4,max_length=4)]
 
     @model_validator(mode='after')

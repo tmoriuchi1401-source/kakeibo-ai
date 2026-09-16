@@ -48,6 +48,20 @@ def test_digit_recognition_does_not_need_to_agree_on_correct_amount():
     assert verify_cell_pixels(image,observations=observations,glyphs=glyphs)=='領収額'
 
 
+def test_current_payment_label_is_supported_without_accepting_other_balances():
+    from app.medical_anonymization import LABELS
+    from app.medical_image_candidate import PaymentEvidence
+    image,observations,glyphs=glyph_fixture('今回入金額123円')
+    assert verify_cell_pixels(image,observations=observations,glyphs=glyphs)=='今回入金額'
+    assert anchors([dict(observations[0],text='今回入金額')])
+    candidate=PaymentEvidence(amount_yen=123,label='今回入金額',region=[0,0,1000,1000])
+    assert candidate.label=='今回入金額'
+    assert set(PaymentEvidence.model_json_schema()['properties']['label']['enum'])==set(LABELS)
+    for label in ('前回入金額','累計入金額','今回請求額','今回未収額'):
+        wrong,obs,chars=glyph_fixture(label+'123円')
+        with pytest.raises(AnonymizationHold):verify_cell_pixels(wrong,observations=obs,glyphs=chars)
+
+
 def test_two_numeric_fields_cannot_be_joined_by_removing_whitespace():
     image,observations,glyphs=glyph_fixture('領収額123456円')
     observations=[dict(observations[0],text='領収額123'),dict(observations[0],text='456円')]

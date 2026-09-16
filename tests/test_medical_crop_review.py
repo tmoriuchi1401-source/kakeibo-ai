@@ -37,6 +37,17 @@ def test_only_current_explicit_preview_can_save_and_never_overwrite(tmp_path):
     with pytest.raises(ValueError):session.confirm({'ticket':two['ticket'],'confirmed':True})
 
 
+def test_owner_can_choose_current_payment_label_and_actions_rebuilds_same_crop(tmp_path):
+    source,image,key,box=fixture()
+    session=ReviewSession(source,image,key,tmp_path/'human.json',Mock())
+    preview=session.preview({'coordinates':box,'label':'今回入金額'})
+    session.confirm({'ticket':preview['ticket'],'confirmed':True})
+    record=json.loads(session.output.read_text())
+    # This tests the selection/binding contract, not OCR correctness or a real
+    # person's approval. Production approval must come from the owner UI.
+    assert reviewed_crop(source,image,record,key).label=='今回入金額'
+
+
 def test_source_changed_while_reviewing_does_not_save(tmp_path):
     source,image,key,box=fixture();verify=Mock(side_effect=ValueError('source_changed'))
     session=ReviewSession(source,image,key,tmp_path/'human.json',verify)

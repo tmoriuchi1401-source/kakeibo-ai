@@ -15,8 +15,8 @@ import math
 
 from PIL import Image
 
-VERSION = 'medical-payment-cell-v3'
-LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額')
+VERSION = 'medical-payment-cell-v4'
+LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額', '今回入金額')
 PAYMENT = re.compile(r'('+'|'.join(LABELS)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
 MAX_PIXELS = 20_000_000
 
