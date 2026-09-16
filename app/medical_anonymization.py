@@ -144,7 +144,7 @@ def _fragment_follows(left,right):
         or (a[1]<=b[1] and col_overlap>=.2*min(aw,bw) and b[1]-a[3]<=5*max(ah,bh)))
 
 
-def anchors(observations):
+def anchors(observations, *, details=None):
     # Do not discard uncertain money cues before the independent pixel checks.
     found={}
     def add(selected):
@@ -153,6 +153,8 @@ def anchors(observations):
         boxes=[t['box'] for t in selected]
         box=(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))
         found[(text,box)]=(text,box)
+        if details is not None:
+            details[(text,box)]=tuple(observations.index(t) for t in selected)
     for token in observations:add([token])
     fragments=[t for t in observations if 0<len(compact(t['text']))<=4 and not re.search(r'\d',t['text'])]
     for i,first in enumerate(fragments):
@@ -296,6 +298,7 @@ class PaymentCrop:
     payload: bytes = field(repr=False)
     mapping: dict = field(repr=False)
     label: str
+    accounting_evaluation: dict | None = field(default=None,repr=False)
 
 
 def prepare_payment_crop(payload, mime, *, image=None, observations=None, automatic=False):
@@ -423,9 +426,9 @@ def _automatic_crop(payload,image,observations,discovered):
         error=AnonymizationHold(checks['unresolved_reasons'][0] if unresolved else 'payment_region_ambiguous_or_absent')
         error.candidate_checks=checks;raise error
     # This selects an image to read, not the document's accounting answer.
-    # Any other unresolved/payment region remains a posting veto.
+    # Cutting a field and deciding its accounting role are separate checks.
     box,(clean,label,validation)=unique[0]
-    return PaymentCrop(clean,{'source_sha256':sha256(payload).hexdigest(),
+    mapping={'source_sha256':sha256(payload).hexdigest(),
         'source_image_sha256':sha256(png(image)).hexdigest(),'page':1,'unit':1,
         'crop_coordinates_original':list(box),'rotation_clockwise_degrees':0,
         'crop_sha256':sha256(clean).hexdigest(),'preprocessor':VERSION,
@@ -433,7 +436,10 @@ def _automatic_crop(payload,image,observations,discovered):
         'unresolved_candidates':len(unresolved),'verified_payment_cells':len(unique),
         'candidate_checks':checks,'geometry_policy':'bounded-text-regions-v1',
         'retained_regions_original':[list(region) for region in retained.get(box,(box,))],
-        'derived_padding_pixels':max(8,round((box[3]-box[1])*.25))},label)
+        'derived_padding_pixels':max(8,round((box[3]-box[1])*.25))}
+    from .medical_accounting_roles import evaluate_roles
+    evaluation=evaluate_roles((observations,detection_tokens),cues,unresolved,mapping,label,image=image)
+    return PaymentCrop(clean,mapping,label,evaluation)
 
 
 def _contains(outer,inner):
