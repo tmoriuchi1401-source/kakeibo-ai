@@ -155,9 +155,11 @@ class ReceiptConfirmation:
         old_import=next((r for r in before['import_rows'] if r[0]==iid),None)
         receipt=[rid,parsed.date,parsed.merchant,parsed.total,parsed.payment_method,
                  'https://drive.google.com/file/d/'+sid+'/view','解析済',
-                 old_receipt[7] if old_receipt and len(old_receipt)>7 else now_jst_string(),'本人確認済み（'+item['kind']+'）']
+                 old_receipt[7] if old_receipt and len(old_receipt)>7 else now_jst_string(),
+                 ((str(old_receipt[8])+'; ') if old_receipt and len(old_receipt)>8 and old_receipt[8] else '')+'本人確認済み（'+item['kind']+'）']
         imported=[iid,old_import[1] if old_import else now_jst_string(),'receipt',sid,parsed.date,parsed.merchant,
-                  parsed.total,parsed.payment_method,'matched_receipt' if linked else '解析済',linked or '',canonical_hash(parsed.model_dump()),'本人確認済み']
+                  parsed.total,parsed.payment_method,'matched_receipt' if linked else '解析済',linked or '',canonical_hash(parsed.model_dump()),
+                  ((str(old_import[11])+'; ') if old_import and len(old_import)>11 and old_import[11] else '')+'本人確認済み']
         expected.append(['レシート',receipt])
         if not linked:
             if len(before['expense_rows'])>len(parsed.items):raise ValueError('既存明細の削除を伴う変更は自動反映しません')
@@ -223,8 +225,20 @@ class ReceiptConfirmation:
             # remain pending; next invocation can only reconcile a full readback.
             item.update(status='pending',plan=plan,confirmation_hash=digest(item['inputs']))
             self.save_item(key,item)
-            self.verify_source(item['source'],item['folder_id'])
-            if self.ui_rows()[key][1][7:15]!=item['inputs']:raise StateError('confirmation_changed_before_write')
+            try:
+                self.verify_source(item['source'],item['folder_id'])
+                live=self.ui_rows().get(key)
+                if live is None or live[1][7:15]!=item['inputs']:
+                    raise StateError('confirmation_changed_before_write')
+            except StateError as error:
+                if str(error) not in {'confirmation_source_changed','confirmation_changed_before_write'}:raise
+                # This invocation has made zero accounting calls. Record that
+                # fact and require a fresh human confirmation; do not clear an
+                # earlier pending/unknown write through this path.
+                item.update(status='waiting',require_reconfirm=True,aborted_before_accounting=True,
+                            error='反映前に対象または入力が変更。保留に戻してから再確定してください')
+                item.pop('plan',None);item.pop('confirmation_hash',None)
+                self.save_item(key,item);continue
             for title,row in plan:
                 matches=[(n,r) for n,r in enumerate(_rows(self.db,title),2) if r and r[0]==row[0]]
                 try:

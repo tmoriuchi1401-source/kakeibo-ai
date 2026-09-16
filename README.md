@@ -304,6 +304,10 @@ Medicalの非AI検証は一般の認証問題から切り離して実施した�
 
 ##### 領収書確認（一般・Medical共通の確認受付）
 
+2026-09-16時点では専用branchの実装・合成CI・非公開表示案の検証まで。
+本番反映前の一時停止が自動承認レビューで拒否されたため、main/本番設定は変更していない。
+「領収書確認」タブはまだ作成しておらず、以下は検証済み実装の運用手順。確認受付開始や実記帳成功とはしない。
+
 新親の `receipt_confirmation` scope と通常 `all` のreceipt段階は、専用の「領収書確認」シートを使う。
 生成元は既存の専用結果JSON内の `confirmation_items`。4本番stateを確認データ置場に流用しない。
 `RECEIPT_CONFIRMATION_BINDING` Variableは既存SA鍵で包んだ専用file IDと既存manifest SHA256のJSON。

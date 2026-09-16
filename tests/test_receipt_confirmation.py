@@ -177,6 +177,7 @@ def test_general_missing_details_require_explicit_confirmation_and_replay_once()
     db.rows[TITLE][0][12]='候補明細で確定';service.capture_inputs()
     assert service.apply_confirmations()==1
     assert len(db.rows['支出明細'])==1
+    assert db.rows['レシート'][0][8].startswith('manual-note; ')
     assert ReceiptConfirmation(store,db,Mock()).apply_confirmations()==0
 
 
@@ -238,8 +239,10 @@ def test_input_changed_immediately_before_write_does_not_post():
         count[0]+=1
         if count[0]==2:db.rows[TITLE][0][9]=200
     verify.side_effect=changed
-    with pytest.raises(StateError,match='changed_before_write'):service.apply_confirmations()
+    assert service.apply_confirmations()==0
     assert not db.rows['支出明細']
+    item=next(iter(service.items.values()))
+    assert item['status']=='waiting' and item['require_reconfirm'] and item['aborted_before_accounting']
 
 
 def test_production_cannot_silently_drop_review_persistence_configuration():
