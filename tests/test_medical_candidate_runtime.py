@@ -15,6 +15,7 @@ from app.medical_image_candidate import PaymentAnswer,seal_crop
 from app.medical_candidate_state import MedicalCandidateState
 from app.medical_candidate_runtime import process_plans,send_derived
 from app.receipt_confirmation import ReceiptConfirmation,review_id
+from app.medical_crop_review import make_review,reviewed_crop,canonical
 
 
 class Store:
@@ -30,9 +31,11 @@ def fixture(count=1):
     for i in range(count):
         source={'source_id':f'synthetic-{i}','version':'1','mime_type':'image/png','sha256':sha256(str(i).encode()).hexdigest()}
         review.observe_medical(source,'synthetic-folder')
-        mapping={'source_sha256':source['sha256'],'source_image_sha256':'b'*64,'unit':1,'page':1,
-            'crop_sha256':sha256(payload).hexdigest(),'crop_coordinates_original':[20,30,140,70],
-            'rotation_clockwise_degrees':0,'preprocessor':VERSION}
+        image=Image.new('RGB',(120,40),'white')
+        record=make_review(source,image,[0,0,120,40],'領収額',confirmed=True,key=b'z'*32)
+        mapping=reviewed_crop(source,image,record,b'z'*32).mapping
+        MedicalCandidateState(store).install_crop_review(record,image,b'z'*32)
+        store.value.setdefault('medical_image_send_reviews',[]).append(sha256(canonical(record)).hexdigest())
         packet={'source':source,'fields':{'date':'2026-09-01','issuer':'Synthetic clinic','category':'医療・保険｜病院'},
             'local_provenance':{'origin':'LOCAL_OCR'},'status':'prepared','mapping':mapping,'proof':seal_crop(payload,'領収額',key)}
         encoded=json.dumps(packet,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode()
@@ -65,6 +68,30 @@ def test_unknown_response_and_save_failure_never_blindly_resend():
     store,plans,args,send=fixture();store.fail=True
     with pytest.raises(StateError,match='save_failed'):process_plans(plans,**args)
     assert send.call_count==0
+
+
+def test_only_explicitly_authorized_review_can_create_send_intent():
+    store,plans,args,send=fixture(2)
+    store.value['medical_image_send_reviews']=store.value['medical_image_send_reviews'][:1]
+    counts=process_plans(plans,**args)
+    assert counts['medical_ai_requests']==1 and counts['medical_ai_held']==1
+    assert send.call_count==1 and len(store.value['medical_image_analyses'])==1
+    replay=process_plans(plans,**args)
+    assert replay['medical_ai_requests']==0 and replay['medical_ai_reused']==1
+    assert replay['medical_ai_held']==1 and send.call_count==1
+
+
+@pytest.mark.parametrize('change',['missing_scope','missing_review','unreviewed','different_digest','different_crop','different_source'])
+def test_free_plan_does_not_authorize_unreviewed_or_changed_crop(change):
+    store,plans,args,send=fixture()
+    source=plans[0]['source'];mapping=deepcopy(plans[0]['mapping'])
+    if change=='missing_scope':store.value.pop('medical_image_send_reviews')
+    elif change=='missing_review':store.value.pop('medical_crop_reviews')
+    elif change=='unreviewed':mapping['validation']='closed_payment_cell_positive_glyphs_complete_ink'
+    elif change=='different_digest':mapping['human_review_digest']='0'*64
+    elif change=='different_crop':mapping['crop_sha256']='0'*64
+    else:source=dict(source,version='2')
+    assert not args['state'].send_review_allowed(source,mapping)
 
 
 def test_saved_response_tampering_is_rejected_without_resend():

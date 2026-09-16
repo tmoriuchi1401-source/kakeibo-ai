@@ -105,6 +105,25 @@ def test_broad_discovery_does_not_grant_transmission_or_payment_admission():
         with pytest.raises(ValueError):seal_crop(png(image),label,b'x'*32)
 
 
+@pytest.mark.parametrize('failure',['enclosure','pixels','none'])
+def test_all_candidates_are_checked_without_promoting_a_survivor(monkeypatch,failure):
+    from app import medical_anonymization as module
+    image=Image.new('RGB',(100,100),'white');enclosed=[];checked=[]
+    monkeypatch.setattr(module,'anchors',lambda observations:[('合計',(1,1,10,10)),('入金',(20,20,40,40))])
+    def cell(image,box):
+        enclosed.append(box)
+        if failure=='enclosure' and box[0]==1:raise AnonymizationHold('payment_cell_boundary_unknown')
+        return box
+    def verify(image):
+        checked.append(image.size)
+        if failure=='pixels' and image.width==9:raise AnonymizationHold('cell_content_not_allowed')
+        return '領収額'
+    monkeypatch.setattr(module,'enclosure',cell);monkeypatch.setattr(module,'verify_cell_pixels',verify)
+    with pytest.raises(AnonymizationHold):prepare_payment_crop(b'synthetic','image/png',image=image,observations=[])
+    assert len(enclosed)==2 and (20,20) in checked
+    assert len(checked)==(1 if failure=='enclosure' else 2)
+
+
 def test_fresh_canvas_removes_metadata_and_sender_refuses_it():
     image=Image.new('RGB',(60,20),'white');metadata=PngImagePlugin.PngInfo();metadata.add_text('patient','SYNTHETIC')
     stream=BytesIO();image.save(stream,format='PNG',pnginfo=metadata)

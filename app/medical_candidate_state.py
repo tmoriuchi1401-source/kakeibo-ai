@@ -26,6 +26,20 @@ class MedicalCandidateState:
     def get(self,analysis_id):
         return deepcopy(self.store.value.get('medical_image_analyses',{}).get(analysis_id))
 
+    def send_review_allowed(self,source,mapping):
+        """A service plan alone cannot authorize another source or crop."""
+        from hashlib import sha256
+        from .medical_crop_review import canonical
+        from .receipt_confirmation import review_id
+        record=self.store.value.get('medical_crop_reviews',{}).get(review_id('medical',source))
+        if not record or record.get('source')!=source:return False
+        review_digest=sha256(canonical(record)).hexdigest()
+        return (review_digest in self.store.value.get('medical_image_send_reviews',[])
+            and mapping.get('validation')=='exact_human_reviewed_payment_crop'
+            and mapping.get('human_review_digest')==review_digest
+            and mapping.get('crop_sha256')==record.get('crop_sha256')
+            and mapping.get('preprocessor')==record.get('preprocessor'))
+
     def put(self,analysis_id,record):
         value=deepcopy(self.store.value)
         value.setdefault('medical_image_analyses',{})[analysis_id]=deepcopy(record)

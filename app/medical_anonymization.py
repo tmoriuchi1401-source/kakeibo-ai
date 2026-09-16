@@ -253,13 +253,20 @@ class PaymentCrop:
 def prepare_payment_crop(payload, mime, *, image=None, observations=None):
     image=render_single_page(payload,mime) if image is None else image
     observations=tokens(image) if observations is None else observations
-    boxes={enclosure(image,box) for _,box in anchors(observations)}
-    if len(boxes)!=1:raise AnonymizationHold('payment_region_ambiguous_or_absent')
-    box=next(iter(boxes))
-    # Validate exactly the pixels that will be sent. Faint marks ignored by the
-    # ink test must not survive in a colour/grayscale outbound image.
-    crop=image.crop(box).convert('L').point(lambda value:0 if value<190 else 255).convert('RGB')
-    label=verify_cell_pixels(crop)
+    boxes=set();failures=[];verified=[]
+    for _,anchor in anchors(observations):
+        try:boxes.add(enclosure(image,anchor))
+        except AnonymizationHold as error:failures.append(str(error))
+    for box in sorted(boxes):
+        # Inspect every distinct cell, including after an unresolved enclosure.
+        # Validate exactly the pixels that would be sent.
+        crop=image.crop(box).convert('L').point(lambda value:0 if value<190 else 255).convert('RGB')
+        try:verified.append((box,crop,verify_cell_pixels(crop)))
+        except AnonymizationHold as error:failures.append(str(error))
+    # Never discard an unresolved candidate and promote the survivor to truth.
+    if failures:raise AnonymizationHold(failures[0])
+    if len(verified)!=1:raise AnonymizationHold('payment_region_ambiguous_or_absent')
+    box,crop,label=verified[0]
     clean=png(crop);validate_png(clean)
     return PaymentCrop(clean,{'source_sha256':sha256(payload).hexdigest(),
         'source_image_sha256':sha256(png(image)).hexdigest(),'page':1,'unit':1,

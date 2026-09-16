@@ -62,6 +62,10 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
             fields['provenance']={'status':'prepared_not_sent','analysis_id':aid,
                 'crop_sha256':packet['mapping']['crop_sha256'],'local':packet['local_provenance']}
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
+        if existing is None and not state.send_review_allowed(source,packet['mapping']):
+            fields['review_message']='この原本・切出し画像は今回のAI送信対象外です。候補は未確定のまま保持します。'
+            fields['provenance']={'status':'review_scope_not_authorized','local':packet['local_provenance']}
+            state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
         if existing is None and counts['medical_ai_requests']>=LIMIT:
             counts['medical_ai_held']+=1;continue
         fresh=state.begin(aid,review_id=rid,source=source,mapping=packet['mapping'],model=model,prompt=PROMPT_SHA)
