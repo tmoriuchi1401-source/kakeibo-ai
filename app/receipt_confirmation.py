@@ -13,7 +13,7 @@ TITLE = "領収書確認"
 HEADERS = ["確認ID", "種別", "状態", "原本リンク", "確認する内容", "既存値", "候補（未確定）",
            "支払日（医療）", "発行施設（医療）", "実支払額（医療）", "カテゴリ（医療）",
            "支払方法（医療・任意）", "判断", "統合先支出ID（重複時）", "本人メモ", "反映結果"]
-CHOICES = ["保留", "既存値を維持", "候補明細で確定", "医療費を確定", "既存支出と重複（紐付け）", "重複候補と別の支出として確定"]
+CHOICES = ["保留", "既存値を維持", "候補明細で確定", "医療費を確定", "候補で医療費を確定", "既存支出と重複（紐付け）", "重複候補と別の支出として確定"]
 INPUT_START, INPUT_END = 7, 15
 
 
@@ -113,7 +113,16 @@ class ReceiptConfirmation:
     def _parsed(self,item):
         if item['kind']=='normal':
             return ReceiptResult.model_validate(self.store.value['records'][item['source']['source_id']]['parsed'])
-        v=item['inputs'];day=_date(v[0]);amount=_money(str(v[2]).replace(',',''));category=str(v[3]).split('｜')
+        v=list(item['inputs'])
+        if v[5]=='候補で医療費を確定':
+            candidate=item.get('medical_candidates',{})
+            if candidate.get('source')!=item['source'] or not candidate.get('candidate_id'):
+                raise ValueError('現在の原本に対応する候補がありません')
+            # Explicit adoption uses only missing fields. Never edits H:O and
+            # never overwrites the user's independently entered values.
+            for i,name in enumerate(('date','issuer','amount_yen','category')):
+                if v[i]=='':v[i]=candidate.get(name,'')
+        day=_date(v[0]);amount=_money(str(v[2]).replace(',',''));category=str(v[3]).split('｜')
         if not day:
             import re
             match=re.fullmatch(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})',str(v[0]))
@@ -201,7 +210,7 @@ class ReceiptConfirmation:
                     if item['kind']!='normal':raise ValueError('医療費は必要項目と確定判断を入力してください')
                     if not item['before']['expense_rows']:raise ValueError('明細が未計上です。候補明細の確認、重複先の指定、または保留を選んでください')
                     item['status']='closed_user';item['decision']='本人が既存値維持を選択';self.save_item(key,item);continue
-                if action not in ({'候補明細で確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'} if item['kind']=='normal' else {'医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
+                if action not in ({'候補明細で確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'} if item['kind']=='normal' else {'医療費を確定','候補で医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
                     raise ValueError('種別に対応する確定判断を選択してください')
                 parsed=self._parsed(item)
                 from .receipt_pipeline import validate_receipt_result
@@ -268,7 +277,12 @@ class ReceiptConfirmation:
         for key,item in self.items.items():
             if item['status']=='closed_machine' and key not in existing:continue
             medical=item['kind']=='medical'
-            if medical:prior='候補なし・未入力';candidate='自動抽出では確定できません。患者名・病名・診療内容は入力不要'
+            if medical:
+                prior='本人未確定（入力値はH:O）'
+                values=item.get('medical_candidates',{})
+                if values:
+                    candidate='【未確定候補】\n日付（非AI）: '+str(values.get('date') or '不足')+'\n施設（非AI）: '+str(values.get('issuer') or '不足')+'\n実支払額（画像AI）: '+str(values.get('amount_yen') or '不足')+'\nカテゴリ候補: '+str(values.get('category') or '不足')+'\n'+str(values.get('review_message',''))
+                else:candidate='候補なし。患者名・病名・診療内容は入力不要'
             else:
                 r=self.store.value['records'][item['source']['source_id']];a=r['parsed'];h=item['before']['receipt_rows'][0]
                 prior=f'{h[1]} / {h[2]} / {h[3]} / {h[4]}\n'+ '\n'.join(f'{x[3]}: {x[4]} ({x[5]}｜{x[6]})' for x in item['before']['expense_rows'])

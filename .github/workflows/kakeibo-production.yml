@@ -98,6 +98,8 @@ jobs:
       KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
       # Dedicated review store: encrypted ID plus pinned existing manifest hash.
       RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
+      # Unset until the service plan/terms and derived-only policy are verified.
+      MEDICAL_DERIVED_AI_POLICY: ${{ vars.MEDICAL_DERIVED_AI_POLICY }}
     steps:
       - uses: actions/checkout@v4
         with:

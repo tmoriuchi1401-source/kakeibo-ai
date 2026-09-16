@@ -77,6 +77,57 @@ def test_medical_confirm_post_readback_restart_replay_no_duplicate():
     assert len(db.rows['支出明細'])==1 and db.rows[TITLE][0][2]=='反映済み'
 
 
+def test_medical_ai_candidate_requires_explicit_adoption_and_preserves_inputs():
+    from app.medical_candidate_state import MedicalCandidateState
+    service,store,db,verify,s=medical();key=next(iter(service.items))
+    MedicalCandidateState(store).publish(key,s,{'date':'2026-09-01','issuer':'Synthetic clinic',
+        'amount_yen':123,'category':'医療・保険｜病院','provenance':{'amount':'IMAGE_AI_CANDIDATE'}})
+    service.render()
+    assert db.rows[TITLE][0][7:15]==['']*8
+    assert '画像AI' in db.rows[TITLE][0][6] and service.apply_confirmations()==0
+    # The human may correct an incorrect AI amount; those values take precedence.
+    db.rows[TITLE][0][9]=125;db.rows[TITLE][0][12]='候補で医療費を確定'
+    service.capture_inputs();assert service.apply_confirmations()==1
+    assert db.rows['支出明細'][0][4]==125
+    assert service.apply_confirmations()==0
+
+
+def test_medical_changed_candidate_does_not_reuse_old_human_confirmation():
+    from app.medical_candidate_state import MedicalCandidateState
+    service,store,db,verify,s=medical();key=next(iter(service.items));state=MedicalCandidateState(store)
+    fields={'date':'2026-09-01','issuer':'Synthetic clinic','amount_yen':100,'category':'医療・保険｜病院'}
+    state.publish(key,s,fields);service.render()
+    db.rows[TITLE][0][12]='候補で医療費を確定';service.capture_inputs()
+    state.publish(key,s,dict(fields,amount_yen=101));service.render()
+    assert db.rows[TITLE][0][12]=='候補で医療費を確定'
+    assert service.apply_confirmations()==0 and not db.rows['支出明細']
+    db.rows[TITLE][0][12]='保留';service.capture_inputs();service.render()
+    db.rows[TITLE][0][12]='候補で医療費を確定';service.capture_inputs()
+    assert service.apply_confirmations()==1
+
+
+def test_medical_candidate_incomplete_never_posts_and_does_not_change_general_inputs():
+    from app.medical_candidate_state import MedicalCandidateState
+    service,store,db,verify,s=medical();key=next(iter(service.items));state=MedicalCandidateState(store)
+    state.publish(key,s,{'amount_yen':123});service.render()
+    db.rows[TITLE][0][8]='Owner typing';db.rows[TITLE][0][12]='候補で医療費を確定'
+    service.capture_inputs();service.render()
+    assert service.apply_confirmations()==0 and db.rows[TITLE][0][8]=='Owner typing'
+
+
+def test_medical_send_intent_survives_unknown_results_and_completed_results_replay():
+    from app.medical_candidate_state import MedicalCandidateState
+    service,store,db,verify,s=medical();key=next(iter(service.items));state=MedicalCandidateState(store)
+    args=dict(review_id=key,source=s,mapping={'crop':'synthetic'},model='synthetic-model',prompt='synthetic-prompt')
+    assert state.begin('analysis',**args)
+    with pytest.raises(StateError,match='reconciliation_required'):MedicalCandidateState(store).begin('analysis',**args)
+    state.complete('analysis',{'status':'unreadable'})
+    assert MedicalCandidateState(store).begin('analysis',**args) is False
+    store.fail=True
+    with pytest.raises(StateError):state.begin('another-analysis',**args)
+    assert state.get('another-analysis') is None
+
+
 @pytest.mark.parametrize('col,value',[(7,''),(8,''),(9,''),(9,0),(9,-1),(10,'食費｜食品'),(12,'候補明細で確定')])
 def test_missing_or_wrong_medical_confirmation_cannot_post(col,value):
     service,store,db,verify,s=medical();confirm(db);db.rows[TITLE][0][col]=value

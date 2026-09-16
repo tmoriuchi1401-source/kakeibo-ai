@@ -39,6 +39,31 @@ re-checks exact bytes for direct AI adapters.
 This uses the existing medical/privacy classifier and gate. There is no parallel
 production classifier and no user-maintained General/Medical folder split.
 
+## Validated payment derivatives (implementation awaiting production evidence)
+
+The table above governs **originals**. The separately authorized derived-image
+path does not call `GeminiAI.analyze_receipt` or declare a Medical original normal.
+`medical_anonymization` locates a closed payment-label cell, checks allowed
+content and retained ink, and draws the bounded pixels into a fresh PNG.
+Unknown boundaries, extra ink/content, rotation and ambiguous page/unit mappings
+remain held. OCR's failure to name a PII category is never clearance.
+
+The existing Actions intake runs this preparation without an AI key. A separate
+sender accepts only the exact immutable PNG with a per-invocation attestation.
+It uses the existing stable-v1 Gemini client/model, disables SDK retries and
+request storage, and sends only the pixels plus a constant amount-reading prompt.
+It receives no Drive/Sheets credential, source identity, issuer/date or OCR text.
+The parent binds results to the private source/page/crop/provenance mapping and
+stores request intent/results in the existing confirmation JSON, not native state.
+Uncertain responses are never blindly resent; successful same-version analyses
+are replayed locally. At most three new derived analyses are sent per run.
+
+Candidates are shown separately from H:O and M's human decision. Explicit
+candidate adoption can use a missing input field; it never overwrites user
+inputs. Changed candidates invalidate a previously selected decision until the
+user returns it to hold and confirms again. Accounting keeps the existing
+source/version, duplicate, durable-intent and read-back checks.
+
 ## Medical local shadow handoff
 
 `ReceiptPipeline` accepts an optional `medical_review_observer`. It is invoked

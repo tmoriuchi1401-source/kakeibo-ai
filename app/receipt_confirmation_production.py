@@ -10,7 +10,7 @@ from .receipt_privacy_gate import evaluate_receipt_privacy
 from .drive_receipts import normalize_folder_id,is_supported_receipt_mime
 
 
-def configure_ui(db):
+def configure_ui(db,validation_only=False):
     meta=db.svc.spreadsheets().get(spreadsheetId=db.sid,fields='sheets(properties)').execute(num_retries=0)
     sheet=next(s['properties'] for s in meta['sheets'] if s['properties']['title']==TITLE)
     sid=sheet['sheetId'];requests=[]
@@ -20,6 +20,9 @@ def configure_ui(db):
     choices=medical_categories(db.categories())
     if not choices:raise StateError('medical_category_master_missing')
     requests.extend([validation(12,CHOICES),validation(10,['｜'.join(c) for c in choices])])
+    if validation_only:
+        db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
+        return
     requests += [{'updateSheetProperties':{'properties':{'sheetId':sid,'gridProperties':{'frozenRowCount':1,'frozenColumnCount':3}},'fields':'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'}},
         {'repeatCell':{'range':{'sheetId':sid,'startRowIndex':0,'endRowIndex':1,'endColumnIndex':16},'cell':{'userEnteredFormat':{'backgroundColor':{'red':.94,'green':.95,'blue':.96},'textFormat':{'bold':True},'wrapStrategy':'WRAP'}},'fields':'userEnteredFormat'}},
         {'repeatCell':{'range':{'sheetId':sid,'startRowIndex':1,'endColumnIndex':16},'cell':{'userEnteredFormat':{'wrapStrategy':'WRAP','verticalAlignment':'TOP'}},'fields':'userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment'}},
@@ -30,8 +33,7 @@ def configure_ui(db):
     db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
 
 
-def execute(env,apply):
-    if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
+def open_context(env,apply):
     from .google_clients import drive_service,read_only_drive_service,read_only_sheets_service,download_drive_file
     from .settings import Settings,service_account_source
     from .private_state_bindings import unwrap
@@ -56,15 +58,34 @@ def execute(env,apply):
             raise StateError('confirmation_source_changed')
         return m
     db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service())
+    return settings,store,db,metadata
+
+
+def execute(env,apply):
+    if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
+    from .google_clients import read_only_drive_service,download_drive_file
+    settings,store,db,metadata=open_context(env,apply)
+    reader=read_only_drive_service()
     review=ReceiptConfirmation(store,db,metadata)
     if not apply:return {'found':len(review.items),'written':0,'failure':0}
     review.capture_inputs()
     review.prepare_general()
+    if env.get('MEDICAL_FINALIZE_ONLY')=='true':
+        written=review.apply_confirmations();rows=review.render()
+        if store.value.get('confirmation_ui_version')!=2:
+            configure_ui(db,validation_only=True)
+            from copy import deepcopy
+            value=deepcopy(store.value);value['confirmation_ui_version']=2;store.save(value)
+        if review.refresh_needed():
+            from .expense_view import ExpenseViewPipeline
+            ExpenseViewPipeline(db).refresh();review.mark_refreshed()
+        return {'found':rows,'written':written,'failure':0,
+            'medical_pending':sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())}
     folder=normalize_folder_id(settings.receipt_drive_folder_id)
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
         fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
-    plans=[];counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'failure':0}
+    plans=[];medical_plans=[];counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'failure':0}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
@@ -77,6 +98,19 @@ def execute(env,apply):
         gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical else {}))
         if gate.classification=='medical':
             review.observe_medical(source,folder);counts['medical_detected']+=1
+            if env.get('MEDICAL_PREPARE_DIR'):
+                from .medical_candidate_preparation import prepare
+                from .receipt_confirmation import review_id
+                import base64
+                key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
+                packet,crop=prepare(source,payload,key)
+                packet['review_id']=review_id('medical',source)
+                if crop is not None:
+                    # Derived pixels only; no original or OCR file is written.
+                    path=Path(env['MEDICAL_PREPARE_DIR'])/(packet['review_id']+'.png')
+                    path.write_bytes(crop);path.chmod(0o600)
+                    packet['crop_file']=path.name
+                medical_plans.append(packet)
         elif gate.classification=='normal' and gate.gemini_allowed:
             if env.get('RECEIPT_SCAN_PLAN'):
                 directory=Path(env['RECEIPT_SCAN_PLAN']).parent
@@ -84,7 +118,7 @@ def execute(env,apply):
                 original.write_bytes(payload);original.chmod(0o600)
                 plans.append(dict(source,path=str(original)))
         else:counts['blocked']+=1
-    counts['written']=review.apply_confirmations()
+    if not env.get('MEDICAL_PREPARE_DIR'):counts['written']=review.apply_confirmations()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     create_ui=TITLE not in db.sheet_titles()
     counts['review_rows']=review.render()
@@ -92,6 +126,9 @@ def execute(env,apply):
         configure_ui(db)
         from copy import deepcopy
         value=deepcopy(store.value);value['confirmation_ui_configured']=True;store.save(value)
+    if env.get('MEDICAL_PREPARE_DIR'):
+        path=Path(env['MEDICAL_PREPARE_DIR'])/'medical-plan.json'
+        path.write_text(json.dumps(medical_plans,ensure_ascii=True),encoding='utf-8');path.chmod(0o600)
     if env.get('RECEIPT_SCAN_PLAN'):
         path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans}),encoding='utf-8');path.chmod(0o600)
     if review.refresh_needed():

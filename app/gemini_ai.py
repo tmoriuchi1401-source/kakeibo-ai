@@ -7,9 +7,12 @@ from .medical_receipt_privacy import Classification
 from .receipt_privacy_gate import ReceiptPrivacyBlocked, require_receipt_ai_permission
 
 class GeminiAI:
-    def __init__(self, api_key: str, model: str = "gemini-3.6-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-3.6-flash", *, request_attempts: int | None = None):
         # Use the stable v1 Interactions API.
-        self.client = genai.Client(api_key=api_key, http_options={"api_version": "v1"})
+        options = {"api_version": "v1"}
+        if request_attempts is not None:
+            options['retry_options'] = {'attempts': request_attempts}
+        self.client = genai.Client(api_key=api_key, http_options=options)
         self.model = model
 
     @staticmethod

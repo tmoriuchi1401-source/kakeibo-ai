@@ -343,6 +343,15 @@ Medical原本はinboxに保持し、normal provenanceも付けない。一般原
 
 ##### 固定IDの非公開受渡しとmain更新（共通手順）
 
+Medical派生画像AIの接続は開発中。原本用gateは維持し、Medicalをnormalへ変更しない。
+新親の `MEDICAL_DERIVED_AI_POLICY` は未設定なら既存確認受付だけ、`prepare-only` は非AI準備だけ。
+利用中プランを確認した `reviewed-v1:paid` / `reviewed-v1:free` でのみ検証済み派生PNGの送信を許す。
+これは課金プランを変更する設定ではない。利用条件/実プランが不明なら送信を開始しない。
+[Google公式利用条件](https://ai.google.dev/gemini-api/terms)では無料サービスへ個人・機密・機微情報を
+送らないことを求め、有料サービスではprompt/応答を製品改善に使わないと説明している。
+どちらでもこの経路は実支払額・ラベルだけに限定し、利用者の本人確定を代行しない。
+実送信結果はPROJECT_STATUSへ別途記録し、合成試験・送信0の保留と区別する。
+
 通常のActions環境変数は処理開始前にログへ出るため、固定folder/4 fileの5 Variablesは
 `app.private_state_bindings.wrap`で既存本番SA鍵の公開部分を使ったRSA-OAEP-SHA256暗号文にする。
 元のbinding・暗号文設定・本人所有/指定SA共有のmetadata commitmentはrepository外の非公開領域へ保存する。

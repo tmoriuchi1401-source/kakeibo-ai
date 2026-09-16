@@ -64,6 +64,19 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
 
 
 def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
+    if (source=='receipt_confirmation' and apply and env.get('MEDICAL_DERIVED_AI_POLICY')
+            and not env.get('MEDICAL_PREPARE_DIR') and not env.get('MEDICAL_FINALIZE_ONLY')):
+        import base64
+        from .medical_candidate_runtime import run_prepared
+        with tempfile.TemporaryDirectory(prefix='medical-derived-',dir=env.get('RUNNER_TEMP')) as directory:
+            prepared=dict(env,MEDICAL_PREPARE_DIR=directory,
+                MEDICAL_CROP_ATTESTATION_KEY=base64.b64encode(os.urandom(32)).decode())
+            scan=invoke(source,apply=True,env=prepared)
+            scan.update(run_prepared(prepared,directory))
+            final=invoke(source,apply=True,env=dict(env,MEDICAL_FINALIZE_ONLY='true'))
+            scan['written']=final['written']
+            scan['medical_pending']=final['medical_pending']
+            return scan
     if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
         raise StateError('receipt_confirmation_binding_required')
     if source=='receipts' and apply and env.get('RECEIPT_CONFIRMATION_BINDING') and not env.get('RECEIPT_SCAN_PLAN'):
@@ -75,6 +88,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
             result['medical_detected']=scan['medical_detected']
             result['confirmed_written']=scan['written']
+            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held'):
+                if name in scan:result[name]=scan[name]
             return result
     # Child stdout/stderr can contain legacy filenames, totals and API errors.
     # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
