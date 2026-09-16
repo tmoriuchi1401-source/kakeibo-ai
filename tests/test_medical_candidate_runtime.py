@@ -127,3 +127,23 @@ def test_network_process_gets_no_original_credentials_or_source_metadata(monkeyp
     assert all('must-not-pass'!=v for v in seen[0]['env'].values())
     assert set(json.loads(seen[0]['input']))=={'png','proof'}
     assert 'source_id' not in seen[0]['input'] and 'issuer' not in seen[0]['input']
+
+
+def test_parent_keeps_original_and_finalization_processes_ai_key_free(monkeypatch):
+    from app import production_flow as flow
+    children=[];coordinators=[]
+    def run(command,**kwargs):
+        children.append(kwargs['env'])
+        return SimpleNamespace(returncode=0,stdout=json.dumps({'written':0,'medical_pending':1}),stderr='')
+    def coordinate(env,directory):
+        assert len(children)==1 and 'MEDICAL_PREPARE_DIR' in children[0]
+        coordinators.append(env)
+        return {'medical_ai_requests':0,'medical_ai_reused':0,'medical_ai_candidates':0,'medical_ai_held':1}
+    monkeypatch.setattr(flow.subprocess,'run',run)
+    monkeypatch.setattr('app.medical_candidate_runtime.run_prepared',coordinate)
+    result=flow.invoke('receipt_confirmation',apply=True,env={'GEMINI_API_KEY':'synthetic',
+        'GOOGLE_GMAIL_TOKEN_JSON':'must-not-pass','MEDICAL_DERIVED_AI_POLICY':'prepare-only'})
+    assert len(children)==2 and len(coordinators)==1 and result['medical_ai_requests']==0
+    assert children[1]['MEDICAL_FINALIZE_ONLY']=='true'
+    assert all('GEMINI_API_KEY' not in e and 'GOOGLE_GMAIL_TOKEN_JSON' not in e for e in children)
+    assert coordinators[0]['GEMINI_API_KEY']=='synthetic'

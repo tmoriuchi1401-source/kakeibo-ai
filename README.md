@@ -341,9 +341,10 @@ normalと判定した同一bytesだけを既存一般レシート処理へ渡す
 Medical原本はinboxに保持し、normal provenanceも付けない。一般原本のretention削除条件を満たさない。
 銀行preview、Payroll、旧日常OFFと会計条件は維持する。受付開始と本人確認後の実記帳成功は別に報告する。
 
-##### 固定IDの非公開受渡しとmain更新（共通手順）
+##### Medical匿名化支払額画像の候補解析
 
-Medical派生画像AIの接続は開発中。原本用gateは維持し、Medicalをnormalへ変更しない。
+Medical派生画像AIの実装はmainへ接続済み。実対象は匿名化保留で、Gemini実解析は未確認。
+原本用gateは維持し、Medicalをnormalへ変更しない。
 新親の `MEDICAL_DERIVED_AI_POLICY` は未設定なら既存確認受付だけ、`prepare-only` は非AI準備だけ。
 利用中プランを確認した `reviewed-v1:paid` / `reviewed-v1:free` でのみ検証済み派生PNGの送信を許す。
 これは課金プランを変更する設定ではない。利用条件/実プランが不明なら送信を開始しない。
@@ -351,6 +352,35 @@ Medical派生画像AIの接続は開発中。原本用gateは維持し、Medical
 送らないことを求め、有料サービスではprompt/応答を製品改善に使わないと説明している。
 どちらでもこの経路は実支払額・ラベルだけに限定し、利用者の本人確定を代行しない。
 実送信結果はPROJECT_STATUSへ別途記録し、合成試験・送信0の保留と区別する。
+
+2026-09-16の固定1件はActions前処理で施設・カテゴリ候補を取得したが、
+支払額領域を一意に確定できず `payment_region_ambiguous_or_absent` で保留。
+日付・金額は空欄、本人入力H:O/Mを保持。G列にAI/非AIの未確定候補と保留理由を表示する。
+新候補だけで本人判断を選択しない。「候補で医療費を確定」は本人の明示選択が必要で、
+候補更新時は古い判断を無効にする。同じ原本版/crop/前処理/prompt/modelの保存済み結果は再送しない。
+新規解析は最大3件/run。結果不明のintentは自動再送せず照合する。
+
+自動匿名化が保留の対象は、本人用の一時的なローカル確認画面で範囲を修正できる。
+既存SAの読取権限で原本をメモリに読み、127.0.0.1のランダムURLだけに表示する。
+AI・公開サーバーへ原本を渡さず、別のサービス/DB/認証は作らない。
+
+```text
+python -m app.medical_crop_review_ui --binding <非公開actions-reimport-binding.json> --output <repo外の新しいreview.json>
+```
+
+- 未確定Medicalが複数なら非公開記録の `--review-id` で1件を指定する。
+- 出力先と同じ場所の `.url` ファイルに本人用URLを保存。画面は1時間で終了する。
+- 本人が原本から支払額・印字ラベルだけを選び、**最終PNGを見て匿名化を確認した場合だけ**保存。
+  確認をAIで代行しない。保存内容は版/hash/座標/確認署名だけで、原本・PNG・OCR・正解金額を含めない。
+- 保存はローカルのみ。既存保守手順で定期・共通writerを一時停止し、実行中0を確認してから、
+  同じ原本を読取・照合し `MedicalCandidateState.install_crop_review` で既存専用JSONへ反映する。
+  4 native stateは使わない。本人入力・M列・会計を更新しない。
+- Actionsは同一原本からPNGを再生成し、本人が見たPNGのhash/版/範囲/署名と完全一致した場合だけ受理。
+  Linux/Windowsの描画差も不一致なら保留。回転・複数ページは依然対象外。
+- プラン確認後に派生画像だけを解析し、候補読戻し・同一版のAI再送0を確認する。
+  匿名化確認は会計確定ではない。安全に分離できない場合は既存確認シートの手入力を利用する。
+
+##### 固定IDの非公開受渡しとmain更新（共通手順）
 
 通常のActions環境変数は処理開始前にログへ出るため、固定folder/4 fileの5 Variablesは
 `app.private_state_bindings.wrap`で既存本番SA鍵の公開部分を使ったRSA-OAEP-SHA256暗号文にする。

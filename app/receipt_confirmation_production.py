@@ -103,7 +103,15 @@ def execute(env,apply):
                 from .receipt_confirmation import review_id
                 import base64
                 key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
-                packet,crop=prepare(source,payload,key)
+                rid=review_id('medical',source)
+                crop_review=store.value.get('medical_crop_reviews',{}).get(rid)
+                review_key=None
+                if crop_review is not None:
+                    from .settings import service_account_source
+                    from .medical_crop_review import identity_key
+                    path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
+                    review_key=identity_key(info['private_key'])
+                packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key)
                 packet['review_id']=review_id('medical',source)
                 if crop is not None:
                     # Derived pixels only; no original or OCR file is written.

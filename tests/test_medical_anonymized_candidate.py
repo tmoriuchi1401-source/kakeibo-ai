@@ -48,6 +48,13 @@ def test_digit_recognition_does_not_need_to_agree_on_correct_amount():
     assert verify_cell_pixels(image,observations=observations,glyphs=glyphs)=='領収額'
 
 
+def test_two_numeric_fields_cannot_be_joined_by_removing_whitespace():
+    image,observations,glyphs=glyph_fixture('領収額123456円')
+    observations=[dict(observations[0],text='領収額123'),dict(observations[0],text='456円')]
+    with pytest.raises(AnonymizationHold,match='multiple_numeric_regions'):
+        verify_cell_pixels(image,observations=observations,glyphs=glyphs)
+
+
 def test_unbounded_or_multiple_row_crop_is_not_approved():
     image=Image.new('RGB',(300,130),'white')
     with pytest.raises(AnonymizationHold):enclosure(image,(20,40,65,60))

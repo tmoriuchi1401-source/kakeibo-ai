@@ -39,7 +39,7 @@ re-checks exact bytes for direct AI adapters.
 This uses the existing medical/privacy classifier and gate. There is no parallel
 production classifier and no user-maintained General/Medical folder split.
 
-## Validated payment derivatives (implementation awaiting production evidence)
+## Validated payment derivatives (production preparation held; AI unverified)
 
 The table above governs **originals**. The separately authorized derived-image
 path does not call `GeminiAI.analyze_receipt` or declare a Medical original normal.
@@ -47,6 +47,20 @@ path does not call `GeminiAI.analyze_receipt` or declare a Medical original norm
 content and retained ink, and draws the bounded pixels into a fresh PNG.
 Unknown boundaries, extra ink/content, rotation and ambiguous page/unit mappings
 remain held. OCR's failure to name a PII category is never clearance.
+
+When automatic isolation fails, the owner can review an exact crop in the
+temporary loopback `medical_crop_review_ui`. This is a non-AI, read-only human
+view of the original. It writes only a local signed coordinate/digest decision;
+it cannot call Gemini or update Drive/Sheets. The decision is published into
+the existing confirmation JSON under maintenance, with the source still pinned.
+Actions rebuilds the crop and rejects any source, version, renderer, geometry,
+digest or signature mismatch. Human approval of privacy never approves an
+accounting amount. Unreviewed images remain held; the original gate is unchanged.
+
+Actual run `35051151746` prepared the fixed Medical source, but found no unique
+payment region. Non-AI issuer/category candidates are visible; amount/date are
+missing. Gemini requests and accounting changes remain zero. Current policy
+`prepare-only` also prevents sending while the actual service plan is unknown.
 
 The existing Actions intake runs this preparation without an AI key. A separate
 sender accepts only the exact immutable PNG with a per-invocation attestation.

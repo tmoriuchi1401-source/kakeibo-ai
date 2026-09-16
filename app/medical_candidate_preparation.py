@@ -51,7 +51,7 @@ def local_fields(observations, binding, size):
         'issuer_selector':selected.selector_version,'document_binding':binding.model_dump()}
 
 
-def prepare(source, payload, key):
+def prepare(source, payload, key, *, crop_review=None, review_key=None):
     if os.environ.get('GEMINI_API_KEY'):raise ValueError('medical_preprocessor_received_ai_key')
     if sha256(payload).hexdigest()!=source['sha256']:raise ValueError('medical_source_content_changed')
     try:
@@ -62,7 +62,11 @@ def prepare(source, payload, key):
         return {'status':'held','reason':str(error),'source':source,'fields':{}},None
     packet={'source':source,'fields':fields,'local_provenance':local_provenance}
     try:
-        crop=prepare_payment_crop(payload,source['mime_type'],image=image,observations=observations)
+        if crop_review is not None:
+            from .medical_crop_review import reviewed_crop
+            crop=reviewed_crop(source,image,crop_review,review_key)
+        else:
+            crop=prepare_payment_crop(payload,source['mime_type'],image=image,observations=observations)
     except AnonymizationHold as error:
         packet.update(status='held',reason=str(error));return packet,None
     if any(crop.mapping[name]!=getattr(binding,name) for name in ('source_sha256','source_image_sha256','unit','page')):

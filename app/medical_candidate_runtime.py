@@ -49,7 +49,7 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
         verify_source(source,item['folder_id'])
         fields=dict(plan.get('fields',{}))
         if plan['status']=='held':
-            fields['review_message']='匿名化確認が必要：安全な支払額領域を確定できないため画像未送信。原本を確認してください。'
+            fields['review_message']='匿名化確認が必要：画像未送信。非公開の支払額画像確認画面で切出し範囲を指定し、送信画像を確認してください。手入力での確定も可能です。'
             fields['provenance']={'status':'anonymization_held','reason':plan['reason']}
             state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue
         packet={k:v for k,v in plan.items() if k not in {'review_id','crop_file'}}
@@ -102,7 +102,8 @@ def run_prepared(env,directory):
     settings,store,db,verify_source=open_context(env,True)
     from .settings import service_account_source
     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
-    identity_key=sha256(b'medical-candidate-evidence\0'+info['private_key'].encode()).digest()
+    from .medical_crop_review import identity_key as derive_key
+    identity_key=derive_key(info['private_key'])
     root=Path(directory).resolve();plans=json.loads((root/'medical-plan.json').read_bytes())
     def load_crop(plan):
         path=(root/plan['crop_file']).resolve()

@@ -8,6 +8,21 @@ from .receipt_reimport_production import digest
 class MedicalCandidateState:
     def __init__(self,store):self.store=store
 
+    def install_crop_review(self,record,image,key):
+        """Operator publishes a real UI decision under the existing maintenance lock."""
+        from .medical_crop_review import reviewed_crop
+        from .receipt_confirmation import review_id
+        source=record['source'];rid=review_id('medical',source)
+        item=self.store.value['confirmation_items'][rid]
+        if item['kind']!='medical' or item['status']!='waiting' or item['source']!=source:
+            raise StateError('medical_crop_review_source_changed')
+        reviewed_crop(source,image,record,key)
+        value=deepcopy(self.store.value)
+        if value.get('medical_crop_reviews',{}).get(rid)==record:return False
+        value.setdefault('medical_crop_reviews',{})[rid]=deepcopy(record)
+        self.store.save(value)
+        return True
+
     def get(self,analysis_id):
         return deepcopy(self.store.value.get('medical_image_analyses',{}).get(analysis_id))
 

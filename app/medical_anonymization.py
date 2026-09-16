@@ -15,7 +15,7 @@ import math
 
 from PIL import Image
 
-VERSION = 'medical-payment-cell-v2'
+VERSION = 'medical-payment-cell-v3'
 LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額')
 PAYMENT = re.compile(r'('+'|'.join(LABELS)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
 MAX_PIXELS = 20_000_000
@@ -152,6 +152,8 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None):
     if not observations or min(t['confidence'] for t in observations)<65:
         raise AnonymizationHold('cell_content_not_verified')
     ordered=sorted(observations,key=lambda t:t['box'][0])
+    if sum(bool(re.search(r'\d',compact(t['text']))) for t in ordered)!=1:
+        raise AnonymizationHold('multiple_numeric_regions')
     text=compact(''.join(t['text'] for t in ordered))
     if not PAYMENT.fullmatch(text):raise AnonymizationHold('cell_content_not_allowed')
     if glyphs is None:
@@ -164,6 +166,11 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None):
     if not PAYMENT.fullmatch(observed):raise AnonymizationHold('glyph_content_not_allowed')
     label=next(label for label in LABELS if observed.startswith(label))
     if not text.startswith(label):raise AnonymizationHold('payment_label_conflict')
+    number_boxes=[box for char,box in glyphs if char in '0123456789,，']
+    for left,right in zip(number_boxes,number_boxes[1:]):
+        height=max(left[3]-left[1],right[3]-right[1])
+        if right[0]-left[2]>.65*height or abs((left[1]+left[3]-right[1]-right[3])/2)>.5*height:
+            raise AnonymizationHold('multiple_numeric_regions')
     covered=np.zeros((image.height,image.width),dtype=bool)
     for char,(l,t,r,b) in glyphs:
         if not (0<=l<r<=image.width and 0<=t<b<=image.height) or r-l>2*(b-t):
