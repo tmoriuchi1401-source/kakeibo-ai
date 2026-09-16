@@ -6,7 +6,7 @@ as accounting answers nor changes the original crop mapping/failure counts.
 from collections import Counter
 import re
 
-POLICY='medical-accounting-roles-v1'
+POLICY='medical-accounting-roles-v2'
 LEXICON={
     'receipt_heading':('領収書','領収証'),
     'treatment_heading':('診療費',), 'visit_heading':('外来','入院'),
@@ -127,7 +127,11 @@ def _core_boxes(text,parts):
             chosen=parts[start:stop];value=compact(''.join(t['text'] for t in chosen))
             if any(cue in value for cue in MONEY_CUES):
                 box=_union([t['box'] for t in chosen])
-                if not any(_contains(box,old) for old in cores):cores.append(box)
+                if not any(_contains(box,old) for old in cores):
+                    # A later start can identify the same cue without its
+                    # prefix. Keep the minimal glyph span, not both spans.
+                    cores=[old for old in cores if not _contains(old,box)]
+                    cores.append(box)
                 break
     return cores or [_union([t['box'] for t in parts])]
 

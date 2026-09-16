@@ -75,6 +75,21 @@ def test_low_confidence_or_distance_is_not_a_nonpayment_reason():
     assert e['candidates'][0]['underlying_kind']=='unknown'
 
 
+def test_nested_prefix_variants_keep_one_unknown_physical_cue_and_hold():
+    e,m,stream=role_fixture([])
+    stream += [token('不明',30,100),token('請',58,100),token('求',72,100),token('額',86,100)]
+    # Literal observations of the same cue, with and without its prefix.
+    # Other fuzzy fragments remain separately subject to the unknown-role gate.
+    cues=[c for c in anchors(stream) if c[1][1]!=100 or '請求' in c[0]]
+    assert len([c for c in cues if c[1][1]==100])>1
+    e=evaluate_roles((stream,),cues,[],m,'今回入金額')
+    assert e['unresolved_payment_conflicts']==1
+    unresolved=[c for c in e['candidates'] if c['underlying_kind']=='unknown']
+    assert len({c['field'] for c in unresolved})==1
+    assert sum(c['kind']=='unknown' for c in unresolved)==1
+    assert sum(c['kind']=='duplicate' for c in unresolved)>=1
+
+
 def test_unlabelled_currency_is_held_even_without_a_money_label_cue():
     e,m,stream=role_fixture([])
     stream.append(token('¥???',250,80,confidence=1))
