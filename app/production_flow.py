@@ -45,6 +45,8 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
         return [sys.executable, "-m", "app.production_source", source, "apply" if apply else "preview"]
     if source == "receipt_reimport":
         return [sys.executable, "-m", "app.receipt_reimport_production", "apply" if apply else "preview"]
+    if source == "receipt_confirmation":
+        return [sys.executable, "-m", "app.receipt_confirmation_production", "apply" if apply else "preview"]
     cli = [sys.executable, "-m", "app.cli"]
     if source == "amazon":
         args = cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
@@ -62,11 +64,23 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
 
 
 def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
+    if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
+        raise StateError('receipt_confirmation_binding_required')
+    if source=='receipts' and apply and env.get('RECEIPT_CONFIRMATION_BINDING') and not env.get('RECEIPT_SCAN_PLAN'):
+        with tempfile.TemporaryDirectory(prefix='receipt-intake-',dir=env.get('RUNNER_TEMP')) as directory:
+            prepared=dict(env,RECEIPT_SCAN_PLAN=str(Path(directory)/'plan.json'))
+            scan=invoke('receipt_confirmation',apply=True,env=prepared)
+            result=invoke('receipts',apply=True,env=prepared)
+            result['found']=scan['found']
+            result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
+            result['medical_detected']=scan['medical_detected']
+            result['confirmed_written']=scan['written']
+            return result
     # Child stdout/stderr can contain legacy filenames, totals and API errors.
     # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
     child_env = dict(env)
     child_env.pop("GITHUB_STEP_SUMMARY", None)
-    if source == "receipt_reimport":
+    if source in {"receipt_reimport", "receipt_confirmation"}:
         for name in ("GOOGLE_GMAIL_TOKEN_JSON", "AUPAY_CARD_AUDIT_KEY_JSON",
                      "AUPAY_CARD_RECURRING_AUTHORITY_JSON", "BANK_AUDIT_KEY_JSON",
                      "BANK_PDF_RECURRING_AUTHORITY_JSON"):
@@ -174,6 +188,8 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    if args.scope=='receipt_confirmation' and (args.bank_apply or args.amazon_target):
+        raise StateError('receipt_scope_other_source_forbidden')
     if args.scope == "receipt_reimport":
         if args.bank_apply or args.amazon_target:
             raise StateError("receipt_scope_other_source_forbidden")
@@ -198,7 +214,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation"), default="all")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--receipt-store", default="")
     parser.add_argument("--receipt-manifest", default="")
@@ -212,6 +228,11 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope=='receipt_confirmation':
+            if env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':raise StateError('confirmation_manual_scope_required')
+            result=invoke('receipt_confirmation',apply=args.mode=='apply',env=env)
+            print(json.dumps({'success':True,'scope':args.scope,'counts':result},sort_keys=True))
+            return
         if args.scope == "receipt_reimport":
             if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
                 raise StateError("receipt_reimport_manual_only")

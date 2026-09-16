@@ -32,7 +32,7 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert inputs["mode"]["default"] == "preview"
     assert inputs["bank_apply"]["default"] == "false"
     assert inputs["scope"]["default"] == "all"
-    assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport"]
+    assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport", "receipt_confirmation"]
     assert inputs["receipt_operation"]["options"] == ["reanalyze", "replay"]
     assert inputs["receipt_limit"]["default"] == "1"
     assert inputs["receipt_limit"]["options"] == ["1", "2", "3"]

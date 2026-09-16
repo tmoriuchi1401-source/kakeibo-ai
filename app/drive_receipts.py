@@ -28,22 +28,33 @@ def is_supported_receipt_mime(mime_type: str) -> bool:
 
 
 def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str="", *,
-                  known_source_classification: Classification | None = None):
+                  known_source_classification: Classification | None = None, approved_sources=None):
     folder_id=normalize_folder_id(folder_id)
     processed_folder_id=normalize_folder_id(processed_folder_id) if processed_folder_id else ""
     svc=drive_service()
     q=f"'{folder_id}' in parents and trashed=false"
     response=svc.files().list(
-        q=q,fields="nextPageToken,files(id,name,mimeType,webViewLink,parents,appProperties)",orderBy="createdTime",pageSize=100,
+        q=q,fields="nextPageToken,files(id,name,mimeType,version,webViewLink,parents,appProperties)",orderBy="createdTime",pageSize=100,
         supportsAllDrives=True,includeItemsFromAllDrives=True,
     ).execute()
     if response.get("nextPageToken"):
         raise RuntimeError("receipt_inbox_collection_incomplete")
     files=response.get("files",[])
     results=[]
+    approved=None if approved_sources is None else {x['source_id']:x for x in approved_sources}
     for f in files:
         if not is_supported_receipt_mime(f["mimeType"]): continue
-        data=download_drive_file(f["id"])
+        if approved is not None:
+            if f['id'] not in approved:continue
+            entry=approved[f['id']]
+            if f.get('version')!=entry['version'] or f['mimeType']!=entry['mime_type']:
+                raise RuntimeError('receipt_preflight_source_changed')
+            from pathlib import Path
+            from hashlib import sha256
+            data=Path(entry['path']).read_bytes()
+            if sha256(data).hexdigest()!=entry['sha256']:raise RuntimeError('receipt_preflight_content_changed')
+        else:
+            data=download_drive_file(f["id"])
         source_policy = ({"known_source_classification": known_source_classification}
                          if known_source_classification is not None else {})
         res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)

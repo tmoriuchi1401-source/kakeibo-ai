@@ -129,6 +129,11 @@ class SheetsDB:
         ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
+    def set_raw_range(self, rng:str, rows:list[list]):
+        self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=rng,
+            valueInputOption="RAW",body={"values":rows}).execute(num_retries=0)
+    def update_row_raw(self,sheet:str,row_num:int,row:list):
+        self.set_raw_range(f"'{sheet}'!A{row_num}",[row])
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
         if not rows:return
         data=[{"range":f"{sheet}!A{row_num}","values":[row]} for row_num,row in rows]

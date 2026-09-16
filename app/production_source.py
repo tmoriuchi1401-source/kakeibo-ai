@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
 
 from .cli import make_receipt_pipeline
 from .drive_paypay import DrivePayPayPipeline
@@ -18,9 +20,13 @@ def receipts(settings, *, apply: bool) -> dict:
     db = SheetsDB(settings.spreadsheet_id, service=None if apply else read_only_sheets_service())
     counts = {"found": 0, "written": 0, "needs_review": 0, "unchanged": 0, "failure": 0}
     if apply:
+        approved=None
+        if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
+            if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
+            approved=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())['sources']
         results = process_inbox(
             settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
-            settings.processed_drive_folder_id,
+            settings.processed_drive_folder_id, **({'approved_sources':approved} if approved is not None else {}),
         )
         for _, result in results:
             counts["found"] += 1

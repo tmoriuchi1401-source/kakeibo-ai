@@ -14,6 +14,27 @@ from .models import ReceiptResult
 from .utils import canonical_hash
 
 
+def accounting_equal_keeping_labels(source_id: str, parsed: ReceiptResult, *,
+                                   receipt_rows, import_rows, expense_rows, review_rows, categories) -> bool:
+    """Close only merchant-label differences for an already identity-bound original.
+
+    The caller must separately verify the manifest's source ID/version/hash.
+    Do not normalize products, categories, money, payment methods or links.
+    """
+    from copy import deepcopy
+    tables = deepcopy(dict(receipt_rows=receipt_rows, import_rows=import_rows,
+                           expense_rows=expense_rows, review_rows=review_rows))
+    rid, iid = f"R-{source_id}", f"receipt:{source_id}"
+    for r in tables["receipt_rows"]:
+        if len(r)>2 and r[0]==rid: r[2]=parsed.merchant
+    for r in tables["import_rows"]:
+        if len(r)>5 and r[0]==iid: r[5]=parsed.merchant
+    for r in tables["expense_rows"]:
+        if len(r)>10 and r[9]==rid and r[10]==iid: r[2]=parsed.merchant
+    comparison=compare_receipt(source_id,parsed,**tables,categories=categories)
+    return set(comparison.reasons)<= {"linked_payment_requires_review"}
+
+
 @dataclass(frozen=True)
 class ReceiptComparison:
     status: str

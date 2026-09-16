@@ -1,0 +1,116 @@
+"""Existing Actions receipt intake, with no AI credentials in this process."""
+import json,os,sys
+from hashlib import sha256
+from pathlib import Path
+
+from .drive_run_state import DriveStateTransport,StateError
+from .receipt_reimport_production import ResultBinding,ReimportStore
+from .receipt_confirmation import ReceiptConfirmation,TITLE,CHOICES,medical_categories
+from .receipt_privacy_gate import evaluate_receipt_privacy
+from .drive_receipts import normalize_folder_id,is_supported_receipt_mime
+
+
+def configure_ui(db):
+    meta=db.svc.spreadsheets().get(spreadsheetId=db.sid,fields='sheets(properties)').execute(num_retries=0)
+    sheet=next(s['properties'] for s in meta['sheets'] if s['properties']['title']==TITLE)
+    sid=sheet['sheetId'];requests=[]
+    def validation(col,choices):
+        return {'setDataValidation':{'range':{'sheetId':sid,'startRowIndex':1,'startColumnIndex':col,'endColumnIndex':col+1},
+            'rule':{'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in choices]},'strict':True,'showCustomUi':True}}}
+    choices=medical_categories(db.categories())
+    if not choices:raise StateError('medical_category_master_missing')
+    requests.extend([validation(12,CHOICES),validation(10,['｜'.join(c) for c in choices])])
+    requests += [{'updateSheetProperties':{'properties':{'sheetId':sid,'gridProperties':{'frozenRowCount':1,'frozenColumnCount':3}},'fields':'gridProperties.frozenRowCount,gridProperties.frozenColumnCount'}},
+        {'repeatCell':{'range':{'sheetId':sid,'startRowIndex':0,'endRowIndex':1,'endColumnIndex':16},'cell':{'userEnteredFormat':{'backgroundColor':{'red':.94,'green':.95,'blue':.96},'textFormat':{'bold':True},'wrapStrategy':'WRAP'}},'fields':'userEnteredFormat'}},
+        {'repeatCell':{'range':{'sheetId':sid,'startRowIndex':1,'endColumnIndex':16},'cell':{'userEnteredFormat':{'wrapStrategy':'WRAP','verticalAlignment':'TOP'}},'fields':'userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment'}},
+        {'repeatCell':{'range':{'sheetId':sid,'startRowIndex':1,'startColumnIndex':7,'endColumnIndex':15},'cell':{'userEnteredFormat':{'backgroundColor':{'red':1,'green':.98,'blue':.88}}},'fields':'userEnteredFormat.backgroundColor'}},
+        {'updateDimensionProperties':{'range':{'sheetId':sid,'dimension':'COLUMNS','startIndex':0,'endIndex':1},'properties':{'hiddenByUser':True},'fields':'hiddenByUser'}}]
+    for a,b,width in [(1,3,110),(3,4,180),(4,7,300),(7,13,160),(13,16,240)]:
+        requests.append({'updateDimensionProperties':{'range':{'sheetId':sid,'dimension':'COLUMNS','startIndex':a,'endIndex':b},'properties':{'pixelSize':width},'fields':'pixelSize'}})
+    db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
+
+
+def execute(env,apply):
+    if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
+    from .google_clients import drive_service,read_only_drive_service,read_only_sheets_service,download_drive_file
+    from .settings import Settings,service_account_source
+    from .private_state_bindings import unwrap
+    from .sheets import SheetsDB
+    settings=Settings();settings.validate(need_sheet=True,need_drive=True)
+    path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
+    config=json.loads(env['RECEIPT_CONFIRMATION_BINDING'])
+    fid=unwrap('RECEIPT_REIMPORT_FILE_ID',config['file'],info['private_key'])
+    if fid in [env.get(n) for n in ('AMAZON_STATE_FILE_ID','AUPAY_CARD_STATE_FILE_ID','BANK_STATE_FILE_ID','KAKEIBO_RUN_LEDGER_FILE_ID')]:
+        raise StateError('confirmation_store_must_be_separate')
+    drive=drive_service() if apply else read_only_drive_service()
+    store=ReimportStore(DriveStateTransport(drive,ResultBinding(env['KAKEIBO_STATE_FOLDER_ID'],fid)),config['manifest'],settings.spreadsheet_id)
+    for target in (env['KAKEIBO_STATE_FOLDER_ID'],fid):
+        meta=drive.files().get(fileId=target,fields='owners(emailAddress),permissions(type,role,emailAddress,deleted)').execute(num_retries=0)
+        owner=store.value['manifest']['owner_email'];sa=store.value['manifest']['sa_email']
+        if [o['emailAddress'] for o in meta['owners']]!=[owner] or {(p['type'],p['role'],p['emailAddress']) for p in meta['permissions'] if not p.get('deleted')}!={('user','owner',owner),('user','writer',sa)}:
+            raise StateError('confirmation_store_permissions_changed')
+    reader=read_only_drive_service()
+    def metadata(source,folder):
+        m=reader.files().get(fileId=source['source_id'],fields='id,parents,mimeType,version,trashed').execute(num_retries=0)
+        if m.get('trashed') or m.get('parents')!=[folder] or m.get('version')!=source['version'] or m.get('mimeType')!=source['mime_type']:
+            raise StateError('confirmation_source_changed')
+        return m
+    db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service())
+    review=ReceiptConfirmation(store,db,metadata)
+    if not apply:return {'found':len(review.items),'written':0,'failure':0}
+    review.capture_inputs()
+    review.prepare_general()
+    folder=normalize_folder_id(settings.receipt_drive_folder_id)
+    result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
+        fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
+    if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
+    plans=[];counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'failure':0}
+    previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
+    for f in result.get('files',[]):
+        if not is_supported_receipt_mime(f['mimeType']):continue
+        counts['found']+=1
+        source=dict(source_id=f['id'],mime_type=f['mimeType'],version=f['version'])
+        before=metadata(source,folder)
+        payload=download_drive_file(f['id'],reader)
+        if before!=metadata(source,folder):raise StateError('confirmation_source_changed')
+        source['sha256']=sha256(payload).hexdigest()
+        gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical else {}))
+        if gate.classification=='medical':
+            review.observe_medical(source,folder);counts['medical_detected']+=1
+        elif gate.classification=='normal' and gate.gemini_allowed:
+            if env.get('RECEIPT_SCAN_PLAN'):
+                directory=Path(env['RECEIPT_SCAN_PLAN']).parent
+                original=directory/(sha256(f['id'].encode()).hexdigest()+'.bin')
+                original.write_bytes(payload);original.chmod(0o600)
+                plans.append(dict(source,path=str(original)))
+        else:counts['blocked']+=1
+    counts['written']=review.apply_confirmations()
+    counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
+    create_ui=TITLE not in db.sheet_titles()
+    counts['review_rows']=review.render()
+    if create_ui or not store.value.get('confirmation_ui_configured'):
+        configure_ui(db)
+        from copy import deepcopy
+        value=deepcopy(store.value);value['confirmation_ui_configured']=True;store.save(value)
+    if env.get('RECEIPT_SCAN_PLAN'):
+        path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans}),encoding='utf-8');path.chmod(0o600)
+    if review.refresh_needed():
+        # Existing display writer, only after actual accounting changes.
+        from .expense_view import ExpenseViewPipeline
+        ExpenseViewPipeline(db).refresh()
+        review.mark_refreshed()
+    return counts
+
+
+def main():
+    try:
+        from .production_flow import verify_execution_boundary,REPO
+        import subprocess
+        env=dict(os.environ);head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()
+        verify_execution_boundary(env,head)
+        if len(sys.argv)!=2 or sys.argv[1] not in {'preview','apply'}:raise StateError('confirmation_mode_invalid')
+        print(json.dumps(execute(env,sys.argv[1]=='apply'),sort_keys=True))
+    except Exception:
+        print(json.dumps({'failure':1,'error':'receipt_confirmation_failed'}));raise SystemExit(1)
+
+if __name__=='__main__':main()

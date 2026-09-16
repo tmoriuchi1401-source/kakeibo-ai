@@ -18,7 +18,7 @@ on:
       scope:
         description: All stages or isolated one-purchase Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation]
         default: all
         required: true
       amazon_target:
@@ -96,6 +96,8 @@ jobs:
       AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
       BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
       KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+      # Dedicated review store: encrypted ID plus pinned existing manifest hash.
+      RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
     steps:
       - uses: actions/checkout@v4
         with:
