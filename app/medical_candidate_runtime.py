@@ -64,8 +64,14 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
         aid=analysis_key(source,packet['mapping'],model)
         existing=state.get(aid)
         if automatic:
-            related=[x for x in state.store.value.get('medical_image_analyses',{}).values() if x['source']==source]
-            if ((existing and existing['phase']!='complete') or (existing is None and related)):
+            related=[(k,x) for k,x in state.store.value.get('medical_image_analyses',{}).items() if x['source']==source]
+            for prior_id,prior in related:
+                if prior['phase'] not in {'intent','complete'}:raise StateError('medical_analysis_state_invalid')
+                if prior['phase']=='complete' and not hmac.compare_digest(prior.get('integrity_tag') or '',
+                        response_tag(prior_id,prior,prior['result'],identity_key)):
+                    raise StateError('medical_saved_result_integrity_failed')
+            if ((existing and (existing['phase']!='complete' or existing['mapping']!=packet['mapping']))
+                    or (existing is None and related)):
                 fields.update(review_message='画像解析の既存記録を要照合。自動再送は行いません。',
                     provenance={'status':'analysis_reconciliation_required','reason':'saved_analysis_requires_reconciliation'})
                 state.publish(rid,source,fields);counts['medical_ai_held']+=1;continue

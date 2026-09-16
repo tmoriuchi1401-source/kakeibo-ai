@@ -182,3 +182,17 @@ def test_old_version_owner_hold_cannot_be_bypassed_by_a_new_version():
     newer=dict(source,version='2');review.observe_medical(newer,'synthetic-folder')
     assert owner_blocked(newer,store.value)
     assert post(review,args)==0 and db.rows[TITLE][0][12]=='保留'
+
+
+def test_valid_saved_result_from_manual_binding_is_held_without_resend_or_global_failure():
+    from app.medical_candidate_runtime import response_tag
+    store,plans,args,send,db,review=automatic(2)
+    process_plans(plans[:1],**args)
+    aid,record=next(iter(store.value['medical_image_analyses'].items()))
+    # A completed, authenticated record from the separate legacy manual route.
+    record['mapping']['validation']='exact_human_reviewed_payment_crop'
+    record['mapping'].pop('automatic_policy')
+    record['integrity_tag']=response_tag(aid,record,record['result'],args['identity_key'])
+    result=process_plans(plans,**args)
+    assert result['medical_ai_held']==1 and result['medical_ai_requests']==1
+    assert send.call_count==2 and store.value['medical_image_analyses'][aid]==record
