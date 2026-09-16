@@ -117,8 +117,12 @@ def capture_restore(service, meta, plan):
             "fields": "gridProperties.frozenRowCount"}})
         if title == "支出明細":
             observed = raw.get("data", [{}])[0].get("rowData", [])
+            # The install plan grows the ledger through CAP+1.  Clear the
+            # rules in its newly-created blank rows too; otherwise a restore
+            # would leave category validation behind beyond the original grid.
+            validation_n = CAP + 1
             validation_rows = []
-            for row in range(n):
+            for row in range(validation_n):
                 cells = observed[row].get("values", []) if row < len(observed) else []
                 validation_rows.append({"values": [
                     ({"dataValidation": cells[col]["dataValidation"]}
@@ -127,7 +131,7 @@ def capture_restore(service, meta, plan):
                 ]})
             # Only restore the prior rules.  Values, formulas, notes, and
             # formats in the editable ledger are deliberately untouched.
-            restore.append({"updateCells": {"range": grid(sid, 0, n, 5, 7),
+            restore.append({"updateCells": {"range": grid(sid, 0, validation_n, 5, 7),
                 "rows": validation_rows, "fields": "dataValidation"}})
     # A new Home is hidden, never deleted. Keep ownership while disabling hooks.
     if not any(s["properties"]["sheetId"] == HOME_ID for s in meta["sheets"]):

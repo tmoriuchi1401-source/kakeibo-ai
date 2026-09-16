@@ -314,6 +314,11 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     assert not any("deleteSheet" in r or "deleteDimension" in r or "deleteDeveloperMetadata" in r for r in backup["requests"])
     for r in backup["requests"]:
         if "repeatCell" in r: assert "userEnteredValue" not in r["repeatCell"]["fields"]
+    expense_validation_restore = next(r["updateCells"] for r in backup["requests"]
+                                      if "updateCells" in r
+                                      and r["updateCells"]["range"]["sheetId"] == IDS["支出明細"])
+    assert expense_validation_restore["range"]["endRowIndex"] == CAP + 1
+    assert expense_validation_restore["fields"] == "dataValidation"
     svc.batchUpdate(body=plan)
     svc.batchUpdate(body=backup)
     assert not installed(svc.meta)
