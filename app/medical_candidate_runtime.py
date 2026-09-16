@@ -126,6 +126,11 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
         if automatic:
             fields['provenance']['automatic_policy']=POLICY
             fields['provenance']['candidate_checks']=packet['mapping'].get('candidate_checks',{})
+            if packet.get('accounting_evaluation') is not None:
+                from .medical_accounting_roles import save_evaluation,review_summary
+                fields['provenance']['accounting_evaluation_id']=save_evaluation(
+                    state,aid,packet['accounting_evaluation'],identity_key)
+                fields['review_message']+='\n'+review_summary(packet['accounting_evaluation'])
         verify_source(source,item['folder_id'])
         state.publish(rid,source,fields)
     return counts

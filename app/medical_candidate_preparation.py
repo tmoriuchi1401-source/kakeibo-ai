@@ -74,6 +74,8 @@ def prepare(source, payload, key, *, crop_review=None, review_key=None, automati
         from .medical_auto_posting import POLICY
         # The automatic branch never reads or re-signs a human crop record.
         crop.mapping.update(automatic_policy=POLICY,payment_label=crop.label)
+        if crop.accounting_evaluation is not None:
+            packet['accounting_evaluation']=crop.accounting_evaluation
     packet.update(status='prepared',mapping=crop.mapping,proof=seal_crop(crop.payload,crop.label,key))
     packet['preparation_tag']=hmac.new(key,b'medical-preparation\0'+_canonical(packet),'sha256').hexdigest()
     return packet,crop.payload

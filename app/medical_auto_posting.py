@@ -21,6 +21,7 @@ HOLD_TEXT={
     'saved_analysis_requires_reconciliation':'画像解析の結果を要照合。再送は停止しています。',
     'payment_ambiguous_or_unreadable':'実支払額が不明または複数あります。',
     'payment_meaning_not_unique':'実支払額の意味を一意に確認できません。',
+    'payment_role_conflict':'他の金銭欄と今回の入金との関係が未確定です。',
     'payment_date_missing_or_ambiguous':'支払日・発行日の根拠が不足または競合しています。',
     'issuer_missing_or_ambiguous':'発行施設を一意に確認できません。',
     'category_not_verified':'既存マスタの医療費カテゴリを確認できません。',
@@ -82,7 +83,17 @@ def decide(item, value, categories, identity_key):
             or p.get('crop_sha256')!=mapping['crop_sha256']):
         raise StateError('medical_auto_evidence_binding_changed')
     answer=PaymentAnswer.model_validate(record['result'])
-    if mapping['unresolved_candidates'] or mapping['verified_payment_cells']!=1:
+    if mapping['verified_payment_cells']!=1:
+        return None,'payment_meaning_not_unique'
+    evaluation_id=p.get('accounting_evaluation_id')
+    if evaluation_id:
+        from .medical_accounting_roles import verify_evaluation
+        evidence=verify_evaluation(value,evaluation_id,aid,record,identity_key)
+        if (evidence.get('complete_candidate_correspondence') is not True
+                or evidence.get('independent_payment_fields')!=1
+                or evidence.get('unresolved_payment_conflicts')!=0):
+            return None,'payment_role_conflict'
+    elif mapping['unresolved_candidates']:
         return None,'payment_meaning_not_unique'
     if answer.status!='readable' or len(answer.candidates)!=1:return None,'payment_ambiguous_or_unreadable'
     amount=answer.candidates[0]
@@ -161,7 +172,8 @@ def apply_automatic(review, *, identity_key, policy):
         item.update(status='pending',plan=plan,decision_origin='automatic',automatic_decision={
             'policy':POLICY,'source':deepcopy(item['source']),
             'candidate_id':item['medical_candidates']['candidate_id'],
-            'analysis_id':item['medical_candidates']['provenance']['analysis_id']})
+            'analysis_id':item['medical_candidates']['provenance']['analysis_id'],
+            'accounting_evaluation_id':item['medical_candidates']['provenance'].get('accounting_evaluation_id')})
         item.pop('automatic_hold',None);review.save_item(key,item)
         try:review.verify_source(item['source'],item['folder_id'])
         except StateError as error:
