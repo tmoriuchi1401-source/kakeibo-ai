@@ -79,7 +79,30 @@ def test_unbounded_or_multiple_row_crop_is_not_approved():
 def test_anchor_is_not_an_amount_or_a_fixed_coordinate():
     observations=[{'text':'領収','box':(12,22,42,44),'confidence':90,'line':(1,1,1)},
         {'text':'額','box':(44,22,54,44),'confidence':90,'line':(1,1,1)}]
-    assert anchors(observations)==[('領収額',(12,22,54,44))]
+    assert ('領収額',(12,22,54,44)) in anchors(observations)
+
+
+@pytest.mark.parametrize('label',['今回入金額','請求額','合計','金額','今回のお支払い','患者氏名と入金額',
+    '領収金额','支払顎','前回入金額','未収金額','預り金額','点数合計'])
+def test_money_cues_are_candidates_even_without_exact_label_or_high_confidence(label):
+    observation={'text':label,'box':(20,30,140,55),'confidence':20,'line':(1,1,1)}
+    assert anchors([observation])
+
+
+def test_vertical_money_fragments_are_candidates_but_bare_patient_numbers_are_not():
+    obs=[{'text':'金','box':(10,20,30,40),'confidence':30,'line':(1,1,1)},
+         {'text':'額','box':(10,44,30,64),'confidence':30,'line':(1,1,2)}]
+    assert ('金額',(10,20,30,64)) in anchors(obs)
+    assert not anchors([dict(obs[0],text='患者番号'),dict(obs[1],text='123456')])
+
+
+def test_broad_discovery_does_not_grant_transmission_or_payment_admission():
+    for label in ('請求額','患者氏名と入金額','未収金額','預り金額'):
+        image,observations,glyphs=glyph_fixture(label+'123円')
+        assert anchors(observations)
+        with pytest.raises(AnonymizationHold):
+            verify_cell_pixels(image,observations=observations,glyphs=glyphs)
+        with pytest.raises(ValueError):seal_crop(png(image),label,b'x'*32)
 
 
 def test_fresh_canvas_removes_metadata_and_sender_refuses_it():

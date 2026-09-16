@@ -17,6 +17,11 @@ from PIL import Image
 
 VERSION = 'medical-payment-cell-v4'
 LABELS = ('領収金額', '領収額', 'お支払金額', 'お支払額', '支払金額', '支払額', '今回入金額')
+# Discovery cues are deliberately broader than final outbound content checks.
+# Checkpoint 6d31751 used partial, near and split labels, including generic totals.
+MONEY_CUES = ('領収', '入金', '支払', '請求', '合計', '金額', '料金', '会計', '精算',
+              '負担', '未収', '預り', '預かり', '釣銭', '返金', '残額')
+NEAR_LABELS = ('領収金額', '請求額', '支払額')
 PAYMENT = re.compile(r'('+'|'.join(LABELS)+r')[¥￥]?[0-9][0-9,，]{0,10}円?')
 MAX_PIXELS = 20_000_000
 
@@ -104,20 +109,64 @@ def tokens(image, psm=6):
         for i,t in enumerate(data['text']) if str(t).strip()]
 
 
+def _edit_distance(left,right):
+    # Pure label comparison recovered from the checkpoint's candidate discovery.
+    row=list(range(len(right)+1))
+    for i,a in enumerate(left,1):
+        next_row=[i]
+        for j,b in enumerate(right,1):
+            next_row.append(min(next_row[-1]+1,row[j]+1,row[j-1]+(a!=b)))
+        row=next_row
+    return row[-1]
+
+
+def money_label_cue(value):
+    """Local candidate only. This never approves pixels, payment or transmission."""
+    value=''.join(c for c in compact(value) if c not in ':：()（）[]【】')
+    if any(cue in value for cue in MONEY_CUES):return True
+    for label in NEAR_LABELS:
+        width=len(label)
+        if len(value)>=width-1 and any(_edit_distance(value[i:i+width],label)<=1
+                for i in range(max(1,len(value)-width+1))):return True
+    return False
+
+
+def _fragment_follows(left,right):
+    # Bounded horizontal/vertical reconstruction, not general text guessing.
+    a,b=left['box'],right['box']
+    ah,bh=a[3]-a[1],b[3]-b[1];aw,bw=a[2]-a[0],b[2]-b[0]
+    row_overlap=max(0,min(a[3],b[3])-max(a[1],b[1]))
+    col_overlap=max(0,min(a[2],b[2])-max(a[0],b[0]))
+    return ((a[0]<=b[0] and row_overlap>=.25*min(ah,bh) and b[0]-a[2]<=8*max(ah,bh))
+        or (a[1]<=b[1] and col_overlap>=.2*min(aw,bw) and b[1]-a[3]<=5*max(ah,bh)))
+
+
 def anchors(observations):
-    # Checkpoint's split label reconstruction, bounded to one OCR line.
-    groups={}
-    for token in observations:groups.setdefault(token['line'],[]).append(token)
-    found=[]
-    for group in groups.values():
-        group.sort(key=lambda t:t['box'][0])
-        for start in range(len(group)):
-            for count in range(1,min(8,len(group)-start)+1):
-                selected=group[start:start+count];text=compact(''.join(t['text'] for t in selected))
-                if text not in LABELS or min(t['confidence'] for t in selected)<70:continue
-                boxes=[t['box'] for t in selected]
-                found.append((text,(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))))
-    return found
+    # Do not discard uncertain money cues before the independent pixel checks.
+    found={}
+    def add(selected):
+        text=compact(''.join(t['text'] for t in selected))
+        if not money_label_cue(text):return
+        boxes=[t['box'] for t in selected]
+        box=(min(b[0] for b in boxes),min(b[1] for b in boxes),max(b[2] for b in boxes),max(b[3] for b in boxes))
+        found[(text,box)]=(text,box)
+    for token in observations:add([token])
+    fragments=[t for t in observations if 0<len(compact(t['text']))<=4 and not re.search(r'\d',t['text'])]
+    for i,first in enumerate(fragments):
+        for j in range(i+1,len(fragments)):
+            second=fragments[j]
+            if not _fragment_follows(first,second):continue
+            # If either fragment already identifies a money label, keep its
+            # smaller box instead of annexing unrelated adjacent text.
+            if money_label_cue(first['text']) or money_label_cue(second['text']):
+                if compact(first['text']+second['text']) in LABELS+MONEY_CUES:add([first,second])
+                continue
+            add([first,second])
+            for third in fragments[j+1:]:
+                if (not money_label_cue(third['text']) and _fragment_follows(second,third)
+                        and sum(len(compact(t['text'])) for t in (first,second,third))<=8):
+                    add([first,second,third])
+    return list(found.values())
 
 
 def enclosure(image, box):
