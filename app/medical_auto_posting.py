@@ -131,21 +131,8 @@ def decide(item, value, categories, identity_key):
 
 def possible_duplicate(parsed,tables):
     """Conservative automation; uncertain card/other payments stay for review."""
-    from .receipt_reimport import _date,_money
-    for kind,rows in tables.items():
-        if kind not in {'expense_rows','import_rows'}:continue
-        for row in rows:
-            if kind=='expense_rows':
-                if len(row)<13 or row[12]!='active':continue
-                day,amount=row[1],row[4]
-            else:
-                if len(row)<9:continue
-                day,amount=row[4],row[6]
-            if _money(str(amount))!=parsed.total:continue
-            day=_date(day)
-            # An equal amount with an unusable date cannot be ruled out.
-            if not day or abs((date.fromisoformat(day)-date.fromisoformat(parsed.date)).days)<=31:return True
-    return False
+    from .medical_payment_units import compare_payments
+    return any(x.classification!='different' for x in compare_payments(parsed,tables,days=31,unknown_dates=True))
 
 
 def apply_automatic(review, *, identity_key, policy):
@@ -177,9 +164,11 @@ def apply_automatic(review, *, identity_key, policy):
         # No fabricated M-column choice or human signature. The separate
         # machine decision and full write intent precede every accounting call.
         from .medical_accounting_roles import ACCOUNTING_SCOPE
+        from .medical_payment_units import POLICY as PAYMENT_POLICY
         item.update(status='pending',plan=plan,decision_origin='automatic',automatic_decision={
             'policy':POLICY,'source':deepcopy(item['source']),
             'accounting_scope':ACCOUNTING_SCOPE,
+            'duplicate_policy':PAYMENT_POLICY,
             'candidate_id':item['medical_candidates']['candidate_id'],
             'analysis_id':item['medical_candidates']['provenance']['analysis_id'],
             'accounting_evaluation_id':item['medical_candidates']['provenance'].get('accounting_evaluation_id')})

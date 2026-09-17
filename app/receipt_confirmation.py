@@ -149,12 +149,20 @@ class ReceiptConfirmation:
         if any(any(r[9:15]) for r in before['review_rows']):
             raise ValueError('既存の本人判断を保護しています')
         candidates=[]
-        for row in tables['expense_rows']:
-            r=list(row)+['']*max(0,13-len(row))
-            if r[12]!='active' or r[9]==rid or r[10]==iid:continue
-            day=_date(r[1])
-            if day and abs((date.fromisoformat(day)-date.fromisoformat(parsed.date)).days)<=7 and _money(r[4])==parsed.total:
-                candidates.append(r)
+        if automatic and item['kind']=='medical':
+            from .medical_payment_units import compare_payments
+            matches=compare_payments(parsed,tables,days=7,unknown_dates=False)
+            if linked or distinct:
+                raise ValueError('自動処理では既存支払いの紐付け・別取引の強制指定はできません')
+            if any(x.classification!='different' for x in matches):
+                raise ValueError('同日付近・同額の既存支払い、または支払い単位が未確定です')
+        else:
+            for row in tables['expense_rows']:
+                r=list(row)+['']*max(0,13-len(row))
+                if r[12]!='active' or r[9]==rid or r[10]==iid:continue
+                day=_date(r[1])
+                if day and abs((date.fromisoformat(day)-date.fromisoformat(parsed.date)).days)<=7 and _money(r[4])==parsed.total:
+                    candidates.append(r)
         if linked:
             selected=[r for r in candidates if r[0]==linked]
             if len(selected)!=1:raise ValueError('統合先は同日付近・同額の有効な支出IDから選択してください')
