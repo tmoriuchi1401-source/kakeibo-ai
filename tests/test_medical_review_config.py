@@ -99,7 +99,9 @@ def test_cli_lists_and_shows_persistent_pending_item_read_only(tmp_path, monkeyp
 
 
 def test_enabled_but_invalid_handoff_config_keeps_medical_blocked(monkeypatch):
-    settings = Settings(medical_review_shadow_enabled=True)
+    # Deliberately invalid, even when the developer has a configured .env.
+    # Never open the developer's persistent Medical review store in this test.
+    settings = Settings(medical_review_shadow_enabled=True, medical_review_identity_key="")
     db = FakeDB()
     ai = FakeAI(_normal_receipt_result())
     monkeypatch.setattr(
