@@ -450,7 +450,41 @@ class SheetsDB:
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":hidden_from,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
+        if title == "カテゴリ過去反映":
+            # The range-backed list keeps phone entry concise while non-strict
+            # validation deliberately retains the established month/date-range
+            # manual input.  B values themselves are restored by the fixed-key
+            # replacement path before this rendering pass.
+            period_rule={"condition":{"type":"ONE_OF_RANGE","values":[
+                {"userEnteredValue":"='カテゴリ過去反映'!$Z$2:$Z$1000"}
+            ]},"strict":False,"showCustomUi":True}
+            period_formula=(
+                "=LET(months,FILTER('ホーム'!$I$3:$I$5001,"
+                "REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\"^[0-9]{4}-(0[1-9]|1[0-2])$\")),"
+                "years,SORT(UNIQUE(ARRAYFORMULA(LEFT(months,4))),1,FALSE),"
+                "{ARRAYFORMULA(\"対象月:\"&months);ARRAYFORMULA(years&\"-01..\"&years&\"-12\");\"全期間\"})"
+            )
+            requests.extend([
+                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,
+                    "startColumnIndex":1,"endColumnIndex":2}}},
+                {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
+                    "startColumnIndex":1,"endColumnIndex":2},"rows":[{"values":[{"note":
+                    "B列のプルダウンで単月・年全体・全期間を選択できます。選んだ期間だけでは反映されません。C列のプレビュー後、確認画面で対象件数を確認して承認してください。作成済みの固定プレビューの期間は、この欄の変更では変わりません。"
+                }]}],"fields":"note"}},
+                {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
+                    "startColumnIndex":25,"endColumnIndex":26},"rows":[{"values":[{"userEnteredValue":
+                    "過去反映・対象期間候補"}]}],"fields":"userEnteredValue"}},
+                {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,
+                    "startColumnIndex":25,"endColumnIndex":26},
+                    "rows":[{"values":[{"userEnteredValue":{"formulaValue":period_formula}}]}],
+                    "fields":"userEnteredValue"}},
+                {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS",
+                    "startIndex":25,"endIndex":26},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            ])
         for row_num in control_rows:
+            if title == "カテゴリ過去反映":
+                requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
+                    "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"rule":period_rule}})
             requests.extend([
                 {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
                 {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},

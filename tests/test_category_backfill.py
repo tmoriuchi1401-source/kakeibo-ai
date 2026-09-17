@@ -222,7 +222,9 @@ def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
 
 
 def test_month_range_and_changed_request_snapshot_require_a_new_preview():
+    assert _period("対象月:2026-02") == ("2026-02-01", "2026-02-28")
     assert _period("2026-02..2026-03") == ("2026-02-01", "2026-03-31")
+    assert _period("全期間") == ("", "")
     db = BackfillDB()
     pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True,
                                     now=lambda: datetime(2026, 9, 17, tzinfo=timezone.utc), id_factory=lambda: "CB-4")
@@ -321,13 +323,13 @@ def test_backfill_ui_replacement_preserves_checked_period_without_append_rows():
 
     db=ReplacingDB(); pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
     assert pipe.refresh()["conditions"] == 1
-    db.ui[0][1:3] = ["対象月:2026-08", True]
+    db.ui[0][1:3] = ["2026-01..2026-12", True]
     assert pipe.refresh()["conditions"] == 1
-    assert db.ui[0][1:3] == ["対象月:2026-08", True]
+    assert db.ui[0][1:3] == ["2026-01..2026-12", True]
     # A later row-count increase keeps the first fixed key's input in place.
     db.rules.append(service_rule("CR-two", "別の請求名", ("食費", "外食")))
     assert pipe.refresh()["conditions"] == 2
-    assert db.ui[0][1:3] == ["対象月:2026-08", True]
+    assert db.ui[0][1:3] == ["2026-01..2026-12", True]
     assert len(db.replacements) == 3
 
 
@@ -375,3 +377,40 @@ def test_sheets_backfill_control_render_clears_stale_boxes_and_marks_only_action
     assert "rule" not in validations[0]
     assert [item["range"]["startRowIndex"] for item in validations[1:]] == [1, 3]
     assert all(item["rule"]["condition"]["type"] == "BOOLEAN" for item in validations[1:])
+
+
+def test_sheets_backfill_period_dropdown_is_rendered_only_for_condition_rows():
+    class Call:
+        def __init__(self, value): self.value=value
+        def execute(self): return self.value
+    class Service:
+        def __init__(self): self.requests=[]
+        def spreadsheets(self): return self
+        def get(self, **kwargs):
+            return Call({"sheets":[{"properties":{"sheetId":92,"title":"カテゴリ過去反映"}}]})
+        def batchUpdate(self, **kwargs): self.requests.extend(kwargs["body"]["requests"]); return Call({})
+
+    db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
+    db.ensure_sheet=lambda title, header: None
+    db._configure_backfill_mobile_sheet("カテゴリ過去反映", ["A","B","C","D","E","F","G"], 3, [2, 4])
+    validations=[request["setDataValidation"] for request in db.svc.requests if "setDataValidation" in request]
+    period=[item for item in validations if item["range"]["startColumnIndex"] == 1]
+    assert len(period) == 3
+    assert "rule" not in period[0] and period[0]["range"]["endRowIndex"] == 1000
+    assert [item["range"]["startRowIndex"] for item in period[1:]] == [1, 3]
+    assert all(item["rule"] == {
+        "condition":{"type":"ONE_OF_RANGE","values":[
+            {"userEnteredValue":"='カテゴリ過去反映'!$Z$2:$Z$1000"}
+        ]}, "strict":False, "showCustomUi":True,
+    } for item in period[1:])
+    updates=[request["updateCells"] for request in db.svc.requests if "updateCells" in request]
+    assert any(update["range"]["startColumnIndex"] == 25 and
+               update["rows"][0]["values"][0]["userEnteredValue"] == "過去反映・対象期間候補"
+               for update in updates)
+    formula=next(update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
+                 for update in updates if update["range"]["startRowIndex"] == 1)
+    assert '"対象月:"&months' in formula and 'years&"-01.."&years&"-12"' in formula
+    assert '"全期間"' in formula and "ホーム'!$I$3:$I$5001" in formula
+    assert any(request.get("updateDimensionProperties",{}).get("range",{}).get("startIndex") == 25 and
+               request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
+               for request in db.svc.requests)
