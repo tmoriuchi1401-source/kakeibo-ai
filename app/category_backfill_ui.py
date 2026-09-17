@@ -43,6 +43,17 @@ def _period(value: object) -> tuple[str, str] | None:
     return None
 
 
+def condition_label(payload: dict) -> str:
+    """Expose every matching limiter before the operator confirms a request."""
+    parts = [f"種別={narrow_text(payload.get('kind'))}", f"データ元={narrow_text(payload.get('source'))}"]
+    labels = (("口座", "account_alias"), ("請求名", "billing_name"), ("店舗名", "merchant"),
+              ("商品ID", "product_id"), ("商品名", "product_name"))
+    parts.extend(f"{label}={narrow_text(payload[key])}" for label,key in labels if narrow_text(payload.get(key)))
+    if payload.get("amount") is not None:
+        parts.append(f"金額={payload['amount']}円")
+    return " / ".join(parts)
+
+
 def _condition_from_payload(payload: dict) -> CategoryRule | None:
     try:
         category = tuple(payload["category"])
@@ -92,7 +103,7 @@ class CategoryBackfillUIPipeline:
             payload = self._payload(rule, saved_rule=True); prior = old.get(rule.rule_id, [])
             unchanged = len(prior) > 6 and prior[6] == payload
             rows.append([
-                f"{rule.kind}: {rule.source}\n{rule.category[0]} / {rule.category[1]}",
+                f"{condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}",
                 prior[1] if unchanged and len(prior) > 1 else default_period,
                 _is_checked(prior[2]) if unchanged and len(prior) > 2 else False,
                 "保存済みルール", rule.rule_id, rule.revision, payload,
@@ -112,7 +123,7 @@ class CategoryBackfillUIPipeline:
                                 (narrow_text(category[0]), narrow_text(category[1])), "", datetime.now(timezone.utc), 1, True)
             if not valid_rule(rule, categories): continue
             payload = self._payload(rule, saved_rule=False); prior = old.get(key, [])
-            rows.append([f"表示中: {rule.source}\n{rule.category[0]} / {rule.category[1]}",
+            rows.append([f"表示中: {condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}",
                          prior[1] if len(prior) > 1 and len(prior) > 6 and prior[6] == payload else default_period,
                          _is_checked(prior[2]) if len(prior) > 6 and prior[6] == payload else False,
                          "表示中の条件（過去分のみ）", key, 1, payload])
@@ -161,7 +172,7 @@ class CategoryBackfillUIPipeline:
             category = payload.get("category", ["?", "?"]) if isinstance(payload, dict) else ["?", "?"]
             excluded = payload.get("excluded", {}) if isinstance(payload, dict) else {}
             exclusion_text = "、".join(f"{key}:{value}" for key,value in excluded.items()) or "なし"
-            rows.append([f"{cells[0]}\n{cells[4]} .. {cells[5]}\nその他/未分類 → {category[0]} / {category[1]}", f"{cells[6]}件 / {cells[7]}円\n除外: {exclusion_text}",
+            rows.append([f"{cells[0]}\n{cells[4]} .. {cells[5]}\n{condition_label(payload if isinstance(payload, dict) else {})}\nその他/未分類 → {category[0]} / {category[1]}", f"{cells[6]}件 / {cells[7]}円\n除外: {exclusion_text}",
                          _is_checked(prior[2]) if len(prior)>2 else False, cells[2], cells[0]])
             for target in self.db.category_backfill_targets():
                 detail=list(target)+[""]*15

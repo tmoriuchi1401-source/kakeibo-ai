@@ -23,16 +23,26 @@ def rule(*, kind="service", source="PayPay", merchant="請求名", category=("�
 def test_exact_service_rule_is_new_only_and_no_partial_name_match():
     approved = rule()
     categories = {("その他", "未分類"), ("食費", "外食")}
-    assert match_transaction([approved], parse_import_rows([import_row()])[0], categories).state == "matched"
-    assert match_transaction([approved], parse_import_rows([import_row(merchant="請求名A")])[0], categories).state == "no_match"
-    assert match_transaction([approved], parse_import_rows([import_row(merchant="KDDIご利用料金")])[0], categories).state == "no_match"
-    assert match_transaction([approved], parse_import_rows([import_row(imported_at="2026-09-15T00:00:00+00:00")])[0], categories).state == "held"
+    assert match_transaction([approved], parse_import_rows([import_row()])[0], categories, aggregate_only=True).state == "matched"
+    assert match_transaction([approved], parse_import_rows([import_row(merchant="請求名A")])[0], categories, aggregate_only=True).state == "no_match"
+    assert match_transaction([approved], parse_import_rows([import_row(merchant="KDDIご利用料金")])[0], categories, aggregate_only=True).state == "no_match"
+    assert match_transaction([approved], parse_import_rows([import_row(imported_at="2026-09-15T00:00:00+00:00")])[0], categories, aggregate_only=True).state == "held"
+
+
+def test_service_rule_never_matches_product_detail_and_cannot_be_registered_from_one():
+    approved = rule()
+    tx = parse_import_rows([import_row()])[0]
+    assert match_transaction([approved], tx, {("食費", "外食")}, product_name="商品明細").state == "no_match"
+    db = RuleDB(); db.expenses["M-source"][1][3] = "商品明細"
+    assert CategoryRuleApprovalPipeline(db, save_enabled=True).register(
+        RuleApprovalRequest("M-source", ("食費", "外食"), "service")) == {
+            "state": "held", "reason": "service_requires_aggregate_only"}
 
 
 def test_naive_sheet_timestamp_is_interpreted_as_jst_for_approval_boundary():
     approved = rule(approved="2026-09-16T15:30:00+00:00")  # 00:30 JST on 17th
     tx = parse_import_rows([import_row(imported_at="2026-09-17 00:00:00")])[0]
-    assert match_transaction([approved], tx, {("食費", "外食")}).state == "held"
+    assert match_transaction([approved], tx, {("食費", "外食")}, aggregate_only=True).state == "held"
 
 
 def test_conflicting_rules_hold_and_inactive_rule_stops_future_application():
@@ -40,8 +50,8 @@ def test_conflicting_rules_hold_and_inactive_rule_stops_future_application():
     second = rule(category=("交通", "電車"))
     categories = {("食費", "外食"), ("交通", "電車"), ("その他", "未分類")}
     tx = parse_import_rows([import_row()])[0]
-    assert match_transaction([first, second], tx, categories).state == "conflict"
-    assert match_transaction([rule(active=False)], tx, categories).state == "no_match"
+    assert match_transaction([first, second], tx, categories, aggregate_only=True).state == "conflict"
+    assert match_transaction([rule(active=False)], tx, categories, aggregate_only=True).state == "no_match"
 
 
 def test_store_total_rejects_product_and_product_requires_specific_identity():

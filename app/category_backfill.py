@@ -45,6 +45,14 @@ def _ymd(value: object) -> date | None:
         return None
 
 
+def _period_ymd(value: object) -> date | None:
+    """Period controls accept exactly one ISO calendar date, never a prefix."""
+    text = _text(value).replace("/", "-")
+    if len(text) != 10:
+        return None
+    return _ymd(text)
+
+
 def _json(value: object) -> dict:
     try:
         parsed = json.loads(str(value))
@@ -163,10 +171,19 @@ class CategoryBackfillPipeline:
             return {"state": "held", "reason": "invalid_target_category"}
         if spec.condition.kind not in {"service", "store_total", "product"}:
             return {"state": "held", "reason": "invalid_condition_kind"}
-        start, end = _ymd(spec.start_date) if spec.start_date else None, _ymd(spec.end_date) if spec.end_date else None
+        start = _period_ymd(spec.start_date) if spec.start_date else None
+        end = _period_ymd(spec.end_date) if spec.end_date else None
+        if (spec.start_date and start is None) or (spec.end_date and end is None):
+            return {"state": "held", "reason": "invalid_period"}
         if start and end and start > end:
             return {"state": "held", "reason": "invalid_period"}
         transactions = {tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
+        # An ad-hoc past-only condition must still fail closed when an active
+        # saved rule yields a different category for the same source evidence.
+        # A saved rule is represented only once, by the immutable condition
+        # selected into this request.
+        rules = [spec.condition] + [rule for rule in parse_rules(self.db.category_rules())
+                                   if rule.rule_id != spec.condition.rule_id]
         targets, excluded = [], {}
         for expense_id, (row_num, expense) in sorted(self.db.expense_records().items()):
             expense = list(expense) + [""] * max(0, 13 - len(expense))
@@ -192,10 +209,12 @@ class CategoryBackfillPipeline:
                 excluded[unsafe] = excluded.get(unsafe, 0) + 1; continue
             product_id = _product_id(expense)
             matched = match_transaction(
-                [spec.condition], tx, categories, product_name=_text(expense[3]), product_id=product_id,
+                rules, tx, categories, product_name=_text(expense[3]), product_id=product_id,
                 aggregate_only=_text(expense[3]) in AGGREGATE_ITEM_NAMES,
                 require_newer_than_approval=False,
             )
+            if matched.state == "conflict":
+                excluded["conflicting_active_rule"] = excluded.get("conflicting_active_rule", 0) + 1; continue
             if matched.state != "matched":
                 excluded["condition_not_matched"] = excluded.get("condition_not_matched", 0) + 1; continue
             targets.append((str(expense_id), row_num, expense, self._source_snapshot(tx, expense)))

@@ -5,7 +5,7 @@ from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
 )
 from app.category_rules import CategoryRule
-from app.category_backfill_ui import _period
+from app.category_backfill_ui import _period, condition_label
 
 
 def import_row(import_id="p1", merchant="請求名", amount=100):
@@ -21,7 +21,8 @@ class BackfillDB:
         }
         self.imports = [import_row()]
         self.requests=[]; self.targets=[]; self.category_updates=[]; self.rules=[]
-    def categories(self): return [("その他", "未分類"), ("食費", "外食")]
+        self.category_pairs=[("その他", "未分類"), ("食費", "外食")]
+    def categories(self): return self.category_pairs
     def expense_records(self): return self.expenses
     def get(self, rng):
         if rng == "取込データ!A2:L": return self.imports
@@ -121,3 +122,22 @@ def test_month_range_and_changed_request_snapshot_require_a_new_preview():
     assert pipe.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))["state"] == "previewed"
     db.requests[0][5] = "2026-09-30"  # Simulates a changed fixed period in the request record.
     assert pipe.confirm("CB-4", expected_count=1) == {"state": "held", "reason": "request_snapshot_changed"}
+
+
+def test_backfill_rejects_invalid_period_and_conflicting_active_rule():
+    db = BackfillDB(); pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False)
+    assert pipe.preview(BackfillSpec(condition(), "2026-08-01oops", "2026-08-31")) == {"state": "held", "reason": "invalid_period"}
+    assert pipe.preview(BackfillSpec(condition(), "2026-08-31", "2026-08-01")) == {"state": "held", "reason": "invalid_period"}
+    db.category_pairs.append(("交通", "電車"))
+    db.rules = [CategoryRule("CR-conflict", "service", "PayPay", "", "請求名", "", "", "", None,
+                             ("交通", "電車"), "M-one", datetime(2026, 9, 1, tzinfo=timezone.utc), 1, True)]
+    result = pipe.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))
+    assert result["state"] == "preview_empty" and result["excluded"]["conflicting_active_rule"] == 1
+
+
+def test_confirmation_condition_label_exposes_billing_merchant_and_limiters():
+    label = condition_label({"kind": "service", "source": "PayPay", "account_alias": "main",
+                             "billing_name": "請求名", "merchant": "店舗名", "product_id": "amazon:B1",
+                             "product_name": "商品", "amount": 1200})
+    assert "請求名=請求名" in label and "店舗名=店舗名" in label
+    assert "口座=main" in label and "商品ID=amazon:B1" in label and "金額=1200円" in label

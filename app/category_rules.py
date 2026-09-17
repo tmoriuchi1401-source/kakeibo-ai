@@ -144,7 +144,10 @@ def matches(rule: CategoryRule, tx: ImportTransaction, *, product_name: str = ""
     inferred_product_id, _ = _product_subject(tx)
     product_id = narrow_text(product_id) or inferred_product_id
     if rule.kind == "service":
-        return merchant == rule.billing_name
+        # A service condition describes one transaction-level billing entry;
+        # it must not classify a product-detail ledger row sharing the same
+        # merchant text.  Callers explicitly mark aggregate rows instead.
+        return aggregate_only and merchant == rule.billing_name
     if rule.kind == "store_total":
         return aggregate_only and merchant == rule.merchant and not product_id
     if rule.product_id:

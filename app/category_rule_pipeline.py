@@ -102,6 +102,8 @@ class CategoryRuleApprovalPipeline:
             if supplied != current_snapshot:
                 return {"state": "held", "reason": "condition_changed_concurrently"}
         if kind == "service":
+            if item_name not in AGGREGATE_ITEM_NAMES:
+                return {"state": "held", "reason": "service_requires_aggregate_only"}
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, merchant, "", "", "",
                                      request.exact_amount, current_category, request.expense_id,
                                      self.now(), 1, True)
