@@ -6,11 +6,15 @@ from .google_clients import sheets_service
 CATEGORY_SEPARATOR = "｜"
 CATEGORY_RULE_UI_SHEET = "カテゴリ自動分類"
 CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
-# The ledger helper's A:ALL area is its existing row-relative surface.  Use a
-# distant, UI-owned helper column so category-rule choices cannot collide with
-# its horizontal minor-category spills.
+# The shared helper sheet has two disjoint horizontal spill surfaces.  Ledger
+# G may only read B:ZY; the opt-in rule UI may only read ZZ:ALL.  Keeping this
+# as an explicit contract prevents either row-relative formula from leaking
+# choices into the other dropdown.
+EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1 = "B"
+EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1 = "ZY"
 CATEGORY_RULE_UI_HELPER_COLUMN = 701  # ZZ, zero based
 CATEGORY_RULE_UI_HELPER_A1 = "ZZ"
+CATEGORY_RULE_UI_HELPER_END_A1 = "ALL"
 
 
 def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
@@ -63,7 +67,7 @@ def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
             "startColumnIndex": 3, "endColumnIndex": 4}, "rule": {
                 "condition": {"type": "ONE_OF_RANGE", "values": [{
                     "userEnteredValue": (
-                        f"='{CATEGORY_RULE_UI_HELPER_SHEET}'!${CATEGORY_RULE_UI_HELPER_A1}${row_num}:$ALL${row_num}"
+                        f"='{CATEGORY_RULE_UI_HELPER_SHEET}'!${CATEGORY_RULE_UI_HELPER_A1}${row_num}:${CATEGORY_RULE_UI_HELPER_END_A1}${row_num}"
                     )
                 }]}, "strict": True, "showCustomUi": True,
                 "inputMessage": "選んだ大カテゴリに属する小カテゴリを選択してください。"}}})
