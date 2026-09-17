@@ -193,10 +193,14 @@ def test_saved_rule_condition_change_with_same_revision_holds_fixed_request():
 def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
     workflow = Path(".github/workflows/category-backfill-sheet.yml").read_text(encoding="utf-8")
     assert "CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true'" in workflow
+    assert "CATEGORY_RULE_UI_ENABLED" in workflow
+    assert "env.CATEGORY_RULE_UI_ENABLED == 'true'" in workflow
+    assert "category-rule-ui-refresh" in workflow
     assert "CATEGORY_BACKFILL_PREVIEW_ENABLED" in workflow
     assert "CATEGORY_BACKFILL_APPLY_ENABLED" in workflow
     assert "category-backfill-preview-checked" in workflow
     assert "category-backfill-apply-confirmed" in workflow
+    assert workflow.index("category-rule-ui-refresh") < workflow.index("category-backfill-ui-refresh")
     assert "app.cli aupay-gmail" not in workflow
     assert "app.cli drive-" not in workflow
 
