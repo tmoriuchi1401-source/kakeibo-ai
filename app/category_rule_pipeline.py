@@ -24,14 +24,18 @@ class RuleApprovalRequest:
     # can never silently become a different rule.
     condition_snapshot: str = ""
     allow_fallback_origin: bool = False
+    # A categorized representative can supply a separately selected, valid
+    # future-rule category without changing its historical F:G values.
+    allow_classified_override: bool = False
 
 
 class CategoryRuleApprovalPipeline:
-    """Register only an explicitly checked, still-current ledger classification.
+    """Register only an explicitly checked, still-current rule proposal.
 
     The caller supplies the category it displayed next to the unchecked control;
-    this pipeline rereads F/G and refuses it if a concurrent edit changed either
-    value.  It never writes a category itself.
+    this pipeline rereads F/G to bind the representative identity, and accepts
+    a different category only when the UI's fresh proposal snapshot explicitly
+    marks it.  It never writes a category itself.
     """
     def __init__(self, db, *, save_enabled: bool, now=None):
         self.db = db
@@ -71,7 +75,8 @@ class CategoryRuleApprovalPipeline:
         requested_category = (narrow_text(request.category[0]), narrow_text(request.category[1]))
         categories = set(self.db.categories())
         fallback_proposal = request.allow_fallback_origin and current_category == ("その他", "未分類")
-        if current_category != requested_category and not fallback_proposal:
+        classified_override = request.allow_classified_override and current_category != requested_category
+        if current_category != requested_category and not (fallback_proposal or classified_override):
             return {"state": "held", "reason": "category_changed_concurrently"}
         if requested_category not in categories:
             return {"state": "held", "reason": "invalid_category_pair"}
@@ -96,7 +101,8 @@ class CategoryRuleApprovalPipeline:
             current_snapshot = self.snapshot_for(
                 expense_id=request.expense_id, category=requested_category, kind=kind,
                 tx=tx, product_id=product_id, item_name=item_name,
-                exact_amount=request.exact_amount, proposal="fallback_group" if fallback_proposal else "",
+                exact_amount=request.exact_amount, proposal=("fallback_group" if fallback_proposal
+                                                              else "classified_override" if classified_override else ""),
             )
             try:
                 supplied = json.dumps(json.loads(request.condition_snapshot), ensure_ascii=False,

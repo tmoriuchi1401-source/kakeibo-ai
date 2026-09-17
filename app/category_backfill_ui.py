@@ -123,7 +123,7 @@ class CategoryBackfillUIPipeline:
             # group can request a past-only preview.  The preview engine still
             # targets only current fallback F:G rows, so this never reclassifies
             # the already-categorized representative that exposed the choice.
-            if (snapshot.get("proposal") not in {"", "fallback_group"}
+            if (snapshot.get("proposal") not in {"", "fallback_group", "classified_override"}
                     or snapshot.get("kind") != "service" or len(category) != 2
                     or not all(narrow_text(value) for value in category)):
                 continue

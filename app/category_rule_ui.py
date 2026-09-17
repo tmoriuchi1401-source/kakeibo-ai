@@ -56,19 +56,37 @@ class CategoryRuleUIPipeline:
             prior=old.get(expense_id, {})
             checked=str(prior.get("future", "")).upper() in {"TRUE","1"}
             past_checked=str(prior.get("past", "")).upper() in {"TRUE","1"}
+            entered=(narrow_text(prior.get("major")), narrow_text(prior.get("minor")))
+            # F:G is an initial proposal only.  Once a person has selected a
+            # pair in this UI, keep that independent registration proposal
+            # rather than rebuilding C:D from the ledger on every refresh.
+            proposal=entered if any(entered) else category
             account_text=f" / 口座={account}" if account else ""
-            snapshot=CategoryRuleApprovalPipeline.snapshot_for(
+            baseline_snapshot=CategoryRuleApprovalPipeline.snapshot_for(
                 expense_id=expense_id, category=category, kind="service", tx=tx,
                 item_name=narrow_text(expense[3]),
             )
+            proposal_kind="classified_override" if proposal != category else ""
+            snapshot=CategoryRuleApprovalPipeline.snapshot_for(
+                expense_id=expense_id, category=proposal, kind="service", tx=tx,
+                item_name=narrow_text(expense[3]),
+                proposal=proposal_kind,
+            )
+            # A pending row initially snapshots F:G.  A person's first C:D
+            # override plus its checks is one decision, not a stale approval.
+            # Subsequent category/source changes compare against the proposal
+            # snapshot and require a new check while retaining C:D.
+            initial_override = bool((checked or past_checked) and proposal != category
+                                    and _canonical_snapshot(prior.get("snapshot"))
+                                    == _canonical_snapshot(baseline_snapshot))
             changed_checked_condition = bool((checked or past_checked) and prior.get("snapshot")
-                                             and prior.get("snapshot") != snapshot)
+                                             and prior.get("snapshot") != snapshot and not initial_override)
             if changed_checked_condition:
                 checked=past_checked=False
             same=[rule for rule in rules if rule.identity() == identity]
-            if any(rule.active and rule.category == category for rule in same):
+            if any(rule.active and rule.category == proposal for rule in same):
                 state="登録済み"; checked=False
-            elif any(rule.active and rule.category != category for rule in same):
+            elif any(rule.active and rule.category != proposal for rule in same):
                 state="競合"; checked=False
             else:
                 state="登録待ち" if checked else ("再承認が必要" if changed_checked_condition else "未登録")
@@ -78,7 +96,7 @@ class CategoryRuleUIPipeline:
                 condition=f"{old_condition}\n現在: {tx.source}{account_text} / {narrow_text(tx.merchant)}（完全一致）\n再承認が必要（条件またはカテゴリが変更）"
             rows.append([
                 f"{tx.source} / {narrow_text(tx.merchant)}\n代表 {expense[1]}",
-                condition, category[0], category[1], checked, past_checked,
+                condition, proposal[0], proposal[1], checked, past_checked,
                 expense_id, expense_id, expense[1], tx.source, "service", snapshot,
             ])
         # Unclassified records are grouped strictly by the full reusable
@@ -133,7 +151,8 @@ class CategoryRuleUIPipeline:
             result=CategoryRuleApprovalPipeline(self.db, save_enabled=True).register(
                 RuleApprovalRequest(narrow_text(cells[7]), (narrow_text(cells[2]), narrow_text(cells[3])),
                                     narrow_text(cells[10]), condition_snapshot=narrow_text(cells[11]),
-                                    allow_fallback_origin=snapshot.get("proposal") == "fallback_group"))
+                                    allow_fallback_origin=snapshot.get("proposal") == "fallback_group",
+                                    allow_classified_override=snapshot.get("proposal") == "classified_override"))
             results.append((narrow_text(cells[6]), result))
             cells[4] = False
             cells[1] += "\n" + (result["state"] if "reason" not in result else f"{result['state']}: {result['reason']}")
@@ -153,3 +172,10 @@ def _snapshot_has_category(value: object) -> bool:
     except (TypeError, ValueError, json.JSONDecodeError):
         return False
     return isinstance(category, list) and len(category) == 2 and all(narrow_text(item) for item in category)
+
+
+def _canonical_snapshot(value: object) -> str:
+    try:
+        return json.dumps(json.loads(narrow_text(value)), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
