@@ -303,6 +303,26 @@ def test_same_row_ledger_and_rule_ui_minor_dropdowns_use_disjoint_helper_ranges(
     assert "カテゴリ自動分類'!C3" in helper["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
 
 
+def test_helper_range_isolation_survives_rule_ui_row_count_changes():
+    """Changing the rule UI's C row cannot change a ledger F row's spill source."""
+    ledger_helper = next(request["updateCells"] for request in expense_category_validation_requests()
+                         if "updateCells" in request)
+    # The row-three ledger formula is permanently driven by 支出明細!F3.
+    ledger_formula = ledger_helper["rows"][2]["values"][1]["userEnteredValue"]["formulaValue"]
+    assert "'支出明細'!F3" in ledger_formula
+
+    one_candidate = category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=1)
+    four_candidates = category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=4)
+    assert one_candidate[0]["updateCells"]["range"]["endRowIndex"] == 2
+    assert four_candidates[0]["updateCells"]["range"]["endRowIndex"] == 5
+    four_minor_rules = [request["setDataValidation"] for request in four_candidates
+                        if "setDataValidation" in request
+                        and request["setDataValidation"]["range"]["startColumnIndex"] == 3]
+    assert four_minor_rules[-1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        "!$ZZ$5:$ALL$5"
+    )
+
+
 def test_classified_past_choice_survives_refresh_and_reaches_past_preview_ui():
     from app.category_backfill_ui import CategoryBackfillUIPipeline
 
