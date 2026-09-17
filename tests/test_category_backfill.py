@@ -219,6 +219,8 @@ def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
     assert "CATEGORY_BACKFILL_APPLY_ENABLED" in workflow
     assert "category-backfill-preview-checked" in workflow
     assert "category-backfill-apply-confirmed" in workflow
+    assert "display_only" in workflow
+    assert workflow.count("github.event.inputs.display_only != 'true'") == 3
     assert workflow.index("category-rule-ui-refresh") < workflow.index("category-backfill-ui-refresh")
     assert "app.cli aupay-gmail" not in workflow
     assert "app.cli drive-" not in workflow
