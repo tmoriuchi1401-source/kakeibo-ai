@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 
 from .reconciliation import ImportTransaction, parse_import_rows, reconcile_transactions
 from .bank_pdf_pipeline import DOCOMO_SMTB_SOURCE
@@ -12,6 +13,7 @@ from .bank_reconciliation import (
 )
 from .sheets import SheetsDB
 from .utils import normalize_store
+from .category_rules import match_transaction, parse_rules
 
 
 ELIGIBLE_STATUSES = {
@@ -138,12 +140,39 @@ def auto_expense_decisions(
 
 
 class AutoExpensePipeline:
-    def __init__(self, db: SheetsDB):
+    def __init__(self, db: SheetsDB, *, category_rule_auto_apply_enabled: bool = False):
         self.db = db
+        self.category_rule_auto_apply_enabled = category_rule_auto_apply_enabled
+
+    def _with_approved_rule(self, decisions, categories):
+        if not self.category_rule_auto_apply_enabled or not hasattr(self.db, "category_rules"):
+            return decisions
+        rules = parse_rules(self.db.category_rules())
+        updated = []
+        for decision in decisions:
+            # Rules fill only the established fallback. Existing authoritative
+            # decisions and manual/product categories cannot be overwritten.
+            if decision.action != "post" or decision.category != FALLBACK_CATEGORY:
+                updated.append(decision)
+                continue
+            matched = match_transaction(
+                rules, decision.transaction, categories, aggregate_only=True,
+            )
+            if matched.state == "matched" and matched.rule:
+                updated.append(replace(
+                    decision, category=matched.rule.category,
+                    reason=f"{decision.reason}; 承認ルール={matched.rule.rule_id}/r{matched.rule.revision}",
+                ))
+            elif matched.state in {"conflict", "held"}:
+                updated.append(replace(decision, reason=f"{decision.reason}; 承認ルール={matched.state}（保留）"))
+            else:
+                updated.append(decision)
+        return updated
 
     def preview(self) -> dict:
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
-        decisions = auto_expense_decisions(transactions, set(self.db.categories()))
+        categories = set(self.db.categories())
+        decisions = self._with_approved_rule(auto_expense_decisions(transactions, categories), categories)
         return self._summary(decisions)
 
     def apply(self) -> dict:
@@ -151,11 +180,17 @@ class AutoExpensePipeline:
         categories = set(self.db.categories())
         if FALLBACK_CATEGORY not in categories:
             raise RuntimeError("カテゴリマスタに「その他 / 未分類」がありません")
-        decisions = auto_expense_decisions(transactions, categories)
+        decisions = self._with_approved_rule(auto_expense_decisions(transactions, categories), categories)
         expense_index = self.db.expense_index()
+        records = self.db.expense_records() if hasattr(self.db, "expense_records") else {}
         expense_new = []
         expense_updates = []
         import_updates = []
+        rule_rows = self.db.category_rules() if (
+            self.category_rule_auto_apply_enabled and hasattr(self.db, "category_rules")
+        ) else []
+        rules_by_marker = {(rule.rule_id, rule.revision): rule for rule in parse_rules(rule_rows)}
+        rule_trace: dict[tuple[str, int], list] = {}
         for decision in decisions:
             tx = decision.transaction
             if decision.action == "skip":
@@ -178,15 +213,41 @@ class AutoExpensePipeline:
                     decision.reason, "active",
                 ]
                 if spend_id in expense_index:
+                    existing = records.get(spend_id)
+                    # A replay after an append but before the import status
+                    # update must never erase a user-confirmed F/G selection.
+                    if existing:
+                        old = existing[1]
+                        old_category = (str(old[5]).strip(), str(old[6]).strip())
+                        if old_category in categories and old_category != FALLBACK_CATEGORY:
+                            expense[5:7] = list(old_category)
+                            expense[11] = old[11]
                     expense_updates.append((expense_index[spend_id], expense))
                 else:
                     expense_new.append(expense)
+                    matched = re.search(r"承認ルール=(CR-[0-9a-f]+)/r(\d+)", decision.reason)
+                    if matched:
+                        marker = (matched.group(1), int(matched.group(2)))
+                        rule = rules_by_marker.get(marker)
+                        if rule:
+                            if marker in rule_trace:
+                                rule_trace[marker][2] += 1
+                                rule_trace[marker][3] = spend_id
+                            else:
+                                raw = list(rule_rows[rule.row_num - 2]) + [""] * max(0, 18 - len(rule_rows[rule.row_num - 2]))
+                                count = int(raw[15]) if str(raw[15]).strip().isdigit() else 0
+                                rule_trace[marker] = [rule.row_num, raw, count + 1, spend_id]
             import_updates.append((tx.row_num, updated))
         if expense_new or expense_updates:
             self.db.ensure_expense_status_column()
         self.db.append("支出明細", expense_new)
         self.db.update_rows("支出明細", expense_updates)
         self.db.update_rows("取込データ", import_updates)
+        # The per-expense note is the immutable trace; the master keeps a
+        # compact latest-ID/count index for inspection without another ledger.
+        for _, (row_num, raw, count, spend_id) in rule_trace.items():
+            raw[15:18] = [count, spend_id, datetime.now().astimezone().isoformat()]
+            self.db.update_rows("カテゴリ自動分類ルール", [(row_num, raw[:18])])
         result = self._summary(decisions)
         result.update({
             "expenses_created": len(expense_new),
@@ -202,4 +263,7 @@ class AutoExpensePipeline:
             "auto_expense": sum(x.action == "post" for x in decisions),
             "needs_review": sum(x.action == "review" for x in decisions),
             "skipped": sum(x.action == "skip" for x in decisions),
+            "category_rule_applied": sum("承認ルール=CR-" in x.reason for x in decisions),
+            "category_rule_held": sum("承認ルール=held" in x.reason for x in decisions),
+            "category_rule_conflicts": sum("承認ルール=conflict" in x.reason for x in decisions),
         }

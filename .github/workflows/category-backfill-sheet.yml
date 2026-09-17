@@ -1,0 +1,50 @@
+name: Apply approved category backfill from Sheets
+
+on:
+  workflow_dispatch:
+  schedule:
+    # The Sheet controls are polled only after the dedicated runner variable is
+    # enabled. No import, Gmail, or Drive pipeline is part of this workflow.
+    - cron: '7,27,47 * * * *'
+
+concurrency:
+  # F:G is the canonical ledger, so this must never overlap any other
+  # production writer even though it has its own opt-in gate.
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  apply-sheet-confirmed-request:
+    if: ${{ github.ref == 'refs/heads/main' && vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      # Preview and apply remain separate opt-ins. A preview never authorizes
+      # any F:G mutation.
+      CATEGORY_BACKFILL_PREVIEW_ENABLED: ${{ vars.CATEGORY_BACKFILL_PREVIEW_ENABLED }}
+      CATEGORY_BACKFILL_APPLY_ENABLED: ${{ vars.CATEGORY_BACKFILL_APPLY_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Refresh phone-width condition choices
+        if: ${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli category-backfill-ui-refresh
+      - name: Materialize checked fixed previews
+        if: ${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli category-backfill-preview-checked
+      - name: Refresh count, amount, exclusions, and target details
+        if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli category-backfill-confirmations-refresh
+      - name: Apply only Sheet-confirmed fixed requests
+        if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli category-backfill-apply-confirmed
+      - name: Refresh result state after apply
+        if: ${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
+        run: python -m app.cli category-backfill-confirmations-refresh

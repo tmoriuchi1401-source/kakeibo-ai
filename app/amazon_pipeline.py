@@ -5,6 +5,8 @@ from .gemini_ai import GeminiAI
 from .sheets import SheetsDB
 from .utils import canonical_hash, now_jst_string
 from .auto_expense import expense_id as canonical_expense_id
+from .category_rules import match_transaction, parse_rules
+from .reconciliation import ImportTransaction
 
 def money(v)->int:
     if pd.isna(v): return 0
@@ -50,9 +52,10 @@ def shipping_fields(df:pd.DataFrame)->dict[str,tuple[str,int]]:
     }
 
 class AmazonPipeline:
-    def __init__(self,db:SheetsDB,ai:GeminiAI|None):
+    def __init__(self,db:SheetsDB,ai:GeminiAI|None, *, category_rule_auto_apply_enabled:bool=False):
         self.db=db
         self.ai=ai
+        self.category_rule_auto_apply_enabled=category_rule_auto_apply_enabled
 
     @staticmethod
     def _row_obj(r):
@@ -78,6 +81,10 @@ class AmazonPipeline:
         master=self.db.product_master()
         cats=self.db.categories()
         allowed=set(cats)
+        rule_rows=self.db.category_rules() if (
+            self.category_rule_auto_apply_enabled and hasattr(self.db, "category_rules")
+        ) else []
+        category_rules=parse_rules(rule_rows)
 
         # Determine genuinely new/changed rows BEFORE calling Gemini.
         pending=[]
@@ -153,11 +160,29 @@ class AmazonPipeline:
         update_rows=[]
         expense_new=[]
         expense_updates=[]
+        rule_traces={}
         expense_idx=self.db.expense_index()
         materialized=[]
         for r,key,h,kind in pending:
             asin=str(r["ASIN"])
             maj,minr,_=master.get(asin,("その他","未分類",""))
+            rule_note=""
+            # Updated/replayed rows already have a stable ledger expense.  A
+            # newly approved rule may only classify the first materialization,
+            # never retrofit an existing Amazon item.
+            if (maj,minr)==("その他","未分類") and category_rules and kind=="new" and self._expense_id(key) not in expense_idx:
+                imported_at=now_jst_string()
+                rule_tx=ImportTransaction(0, f"amazon:{str(r['Order ID'])}:{asin}", "Amazon",
+                                          date_ymd(r["Order Date"]), "Amazon.co.jp", money(r["Total Amount"]),
+                                          "unclassified_amazon", "", "", [], imported_at)
+                matched=match_transaction(
+                    category_rules,rule_tx,allowed,product_name=str(r["Product Name"]),
+                    aggregate_only=False,
+                )
+                if matched.state=="matched" and matched.rule:
+                    maj,minr=matched.rule.category
+                    rule_note=f"; 承認ルール={matched.rule.rule_id}/r{matched.rule.revision}"
+                    rule_traces[(matched.rule.rule_id,matched.rule.revision)]=matched.rule
             baseline_update=kind=="updated" and key in baseline_keys
             out=[key,str(r["Order ID"]),asin,date_ymd(r["Order Date"]),str(r["Product Name"]),
                  float(r["Original Quantity"]),money(r["Total Amount"]),str(r["Payment Method Type"]),
@@ -175,8 +200,16 @@ class AmazonPipeline:
             import_id=f"amazon:{str(r['Order ID'])}"
             expense=[expense_id,date_ymd(r["Order Date"]),"Amazon.co.jp",str(r["Product Name"]),
                      money(r["Total Amount"]),maj,minr,str(r["Payment Method Type"]),"Amazon","",import_id,
-                     f"Amazonキー={key}","active"]
+                     f"Amazonキー={key}{rule_note}","active"]
             if expense_id in expense_idx:
+                # Preserve a human-confirmed product category during any CSV
+                # replay/update.  Rules are similarly first-materialization
+                # only and never retrofit an existing expense.
+                existing=next((list(row)+[""]*max(0,13-len(row)) for _,row in self.db.expense_rows_for_import(import_id)
+                               if row and row[0]==expense_id), None)
+                if existing and (existing[5],existing[6]) in allowed and (existing[5],existing[6]) != ("その他","未分類"):
+                    expense[5:7]=existing[5:7]
+                    expense[11]=existing[11]
                 expense_updates.append((expense_idx[expense_id],expense))
             else:
                 expense_new.append(expense)
@@ -198,6 +231,15 @@ class AmazonPipeline:
                     expense_updates.append((row_num,row[:13]))
         self.db.append("支出明細",expense_new)
         self.db.update_rows("支出明細",expense_updates)
+        for _,rule in rule_traces.items():
+            raw=list(rule_rows[rule.row_num-2])+[""]*max(0,18-len(rule_rows[rule.row_num-2]))
+            count=int(raw[15]) if str(raw[15]).strip().isdigit() else 0
+            # Count only new materializations; updates retain prior trace.
+            matched_new=sum(1 for row in expense_new if f"承認ルール={rule.rule_id}/r{rule.revision}" in str(row[11]))
+            if matched_new:
+                last=next(row[0] for row in reversed(expense_new) if f"承認ルール={rule.rule_id}/r{rule.revision}" in str(row[11]))
+                raw[15:18]=[count+matched_new,last,now_jst_string()]
+                self.db.update_rows("カテゴリ自動分類ルール",[(rule.row_num,raw[:18])])
 
         # Store one canonical import row per order for receipt reconciliation.
         import_idx=self.db.import_index()
