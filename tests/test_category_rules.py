@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from dataclasses import replace
+import json
 
 from app.auto_expense import AutoExpensePipeline
 from app.category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprovalRequest
@@ -256,6 +257,65 @@ def test_unclassified_group_can_save_only_the_user_selected_future_rule():
     assert result["results"][0][1]["state"] == "registered"
     assert len(db.rule_rows) == 1
     assert db.expenses["M-source"][1][5:7] == ["その他", "未分類"]
+
+
+def test_classified_user_proposal_survives_runner_refresh_and_saves_without_changing_ledger():
+    from app.category_backfill_ui import CategoryBackfillUIPipeline
+
+    class OverrideDB(RuleDB):
+        def __init__(self):
+            super().__init__()
+            self.expenses["M-source"][1][5:7] = ["自動車", "高速料金"]
+            self.ui=[]
+            self.backfill=[]
+        def categories(self):
+            return [("その他", "未分類"), ("自動車", "高速料金"), ("交通", "高速料金")]
+        def category_rule_ui_rows(self): return self.ui
+        def category_backfill_ui_rows(self): return self.backfill
+        def replace_category_rule_ui_rows(self, rows, header): self.ui = [list(row) for row in rows]
+        def ensure_category_backfill_ui_sheet(self, header): pass
+        def clear(self, rng):
+            if "カテゴリ過去反映" in rng: self.backfill=[]
+        def update_rows(self, sheet, rows):
+            if sheet == "カテゴリ自動分類":
+                for row_num, row in rows: self.ui[row_num-2] = row
+            else:
+                super().update_rows(sheet, rows)
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ過去反映": self.backfill.extend(rows)
+            else: super().append(sheet, rows)
+
+    db = OverrideDB(); pipe = CategoryRuleUIPipeline(db, ui_enabled=True, save_enabled=True)
+    pipe.refresh()
+    # The initial snapshot represents the ledger proposal.  The person chooses
+    # a different valid rule category and checks both independent actions.
+    db.ui[0][2:6] = ["交通", "高速料金", True, True]
+    pipe.refresh()
+    assert db.ui[0][2:6] == ["交通", "高速料金", True, True]
+    assert json.loads(db.ui[0][11])["proposal"] == "classified_override"
+    assert db.expenses["M-source"][1][5:7] == ["自動車", "高速料金"]
+
+    saved = pipe.apply_checked()
+    assert saved["results"][0][1]["state"] == "registered"
+    assert db.rule_rows[0][9:11] == ["交通", "高速料金"]
+    assert db.ui[0][4:6] == [False, True]
+    assert db.expenses["M-source"][1][5:7] == ["自動車", "高速料金"]
+    # The independent past choice remains a fixed-preview candidate; it is
+    # not an instruction to change the already-classified representative.
+    past = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    assert past["conditions"] == 2
+    assert any(row[3] == "表示中の条件（過去分のみ）" for row in db.backfill)
+
+    # A source change requires new checks but never reverts the selected C:D.
+    db.imports[0][5] = "変更後の請求名"
+    pipe.refresh()
+    assert db.ui[0][2:6] == ["交通", "高速料金", False, False]
+    assert "再承認が必要" in db.ui[0][1]
+    db.ui[0][4] = True
+    pipe.refresh()
+    assert pipe.apply_checked()["results"][0][1]["state"] == "registered"
+    assert pipe.apply_checked()["checked"] == 0
+    assert db.expenses["M-source"][1][5:7] == ["自動車", "高速料金"]
 
 
 def test_rendered_rule_rows_get_row_relative_dropdowns_and_checkboxes():
