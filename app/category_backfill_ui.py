@@ -119,8 +119,13 @@ class CategoryBackfillUIPipeline:
             except (TypeError, ValueError, json.JSONDecodeError): snapshot = {}
             if not isinstance(snapshot, dict): continue
             category = snapshot.get("category", [])
-            if (snapshot.get("proposal") != "fallback_group" or snapshot.get("kind") != "service"
-                    or len(category) != 2 or not all(narrow_text(value) for value in category)):
+            # Both a categorized representative and an unclassified condition
+            # group can request a past-only preview.  The preview engine still
+            # targets only current fallback F:G rows, so this never reclassifies
+            # the already-categorized representative that exposed the choice.
+            if (snapshot.get("proposal") not in {"", "fallback_group"}
+                    or snapshot.get("kind") != "service" or len(category) != 2
+                    or not all(narrow_text(value) for value in category)):
                 continue
             key = "displayed:" + narrow_text(shown[6])
             rule = CategoryRule("adhoc", "service", narrow_text(snapshot.get("source")), narrow_text(snapshot.get("account_alias")),
@@ -153,6 +158,13 @@ class CategoryBackfillUIPipeline:
                 result=CategoryBackfillPipeline(self.db, preview_enabled=True, apply_enabled=self.apply_enabled).preview(
                     BackfillSpec(rule, period[0], period[1], bool(payload.get("saved_rule"))))
             results.append(result); cells[2]=False
+            # A fixed preview is the terminal processing of the source UI's
+            # past choice.  Consume that choice by its immutable key so the
+            # next runner refresh cannot create the same request again.
+            source_key = narrow_text(cells[4]).removeprefix("displayed:")
+            if (source_key and result.get("state") in {"previewed", "preview_empty", "held"}
+                    and hasattr(self.db, "consume_category_rule_ui_past_choice")):
+                self.db.consume_category_rule_ui_past_choice(source_key, result)
             if result.get("state") == "previewed":
                 excluded = "、".join(f"{key}:{value}" for key,value in result.get("excluded", {}).items()) or "なし"
                 cells[0] += (f"\n要求={result['request_id']}\nその他/未分類 → {rule.category[0]} / {rule.category[1]}"

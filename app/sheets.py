@@ -4,6 +4,70 @@ import re
 from .google_clients import sheets_service
 
 CATEGORY_SEPARATOR = "｜"
+CATEGORY_RULE_UI_SHEET = "カテゴリ自動分類"
+CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
+# The ledger helper's A:ALL area is its existing row-relative surface.  Use a
+# distant, UI-owned helper column so category-rule choices cannot collide with
+# its horizontal minor-category spills.
+CATEGORY_RULE_UI_HELPER_COLUMN = 701  # ZZ, zero based
+CATEGORY_RULE_UI_HELPER_A1 = "ZZ"
+
+
+def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
+                                      row_count: int) -> list[dict]:
+    """Return controls for the rows actually rendered by the rule UI.
+
+    The minor choice is a native range dropdown whose source is a row-specific
+    formula in the established hidden category helper.  It deliberately uses
+    one validation request per rendered row: Sheets otherwise freezes a
+    range-backed source when the rule is filled down.
+    """
+    if row_count <= 0:
+        return []
+    end_row = row_count + 1
+    helper_rows = []
+    for row_num in range(2, end_row + 1):
+        helper_rows.append({"values": [{"userEnteredValue": {"formulaValue": (
+            "=IFERROR(TRANSPOSE(UNIQUE(FILTER('カテゴリ'!$B$2:$B,"
+            f"'カテゴリ'!$A$2:$A='{CATEGORY_RULE_UI_SHEET}'!C{row_num}))),\"\")"
+        )}}]})
+    requests = [
+        {"updateCells": {"range": {"sheetId": helper_sheet_id,
+            "startRowIndex": 1, "endRowIndex": end_row,
+            "startColumnIndex": CATEGORY_RULE_UI_HELPER_COLUMN,
+            "endColumnIndex": CATEGORY_RULE_UI_HELPER_COLUMN + 1},
+            "rows": helper_rows, "fields": "userEnteredValue"}},
+        {"setDataValidation": {"range": {"sheetId": sheet_id,
+            "startRowIndex": 1, "endRowIndex": end_row,
+            "startColumnIndex": 2, "endColumnIndex": 3}, "rule": {
+                "condition": {"type": "ONE_OF_RANGE", "values": [
+                    {"userEnteredValue": "='カテゴリ'!$A$2:$A"}
+                ]}, "strict": True, "showCustomUi": True,
+                "inputMessage": "カテゴリマスタの大カテゴリを選択してください。"}}},
+        {"setDataValidation": {"range": {"sheetId": sheet_id,
+            "startRowIndex": 1, "endRowIndex": end_row,
+            "startColumnIndex": 4, "endColumnIndex": 6}, "rule": {
+                "condition": {"type": "BOOLEAN"}, "strict": True,
+                "showCustomUi": True}}},
+        {"repeatCell": {"range": {"sheetId": sheet_id,
+            "startRowIndex": 1, "endRowIndex": end_row,
+            "startColumnIndex": 0, "endColumnIndex": 6}, "cell": {
+                "userEnteredFormat": {"backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                    "textFormat": {"foregroundColor": {"red": 0.16, "green": 0.20, "blue": 0.23},
+                        "bold": False}, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
+    ]
+    for row_num in range(2, end_row + 1):
+        requests.append({"setDataValidation": {"range": {"sheetId": sheet_id,
+            "startRowIndex": row_num - 1, "endRowIndex": row_num,
+            "startColumnIndex": 3, "endColumnIndex": 4}, "rule": {
+                "condition": {"type": "ONE_OF_RANGE", "values": [{
+                    "userEnteredValue": (
+                        f"='{CATEGORY_RULE_UI_HELPER_SHEET}'!${CATEGORY_RULE_UI_HELPER_A1}${row_num}:$ALL${row_num}"
+                    )
+                }]}, "strict": True, "showCustomUi": True,
+                "inputMessage": "選んだ大カテゴリに属する小カテゴリを選択してください。"}}})
+    return requests
 
 
 def combined_category_options(categories:list[tuple[str,str]])->list[str]:
@@ -279,9 +343,9 @@ class SheetsDB:
         self.ensure_sheet("カテゴリ自動分類ルール", HEADERS["カテゴリ自動分類ルール"])
     def ensure_category_rule_ui_sheet(self, header):
         """Create the opt-in mobile request surface only after UI approval."""
-        self.ensure_sheet("カテゴリ自動分類", header)
+        self.ensure_sheet(CATEGORY_RULE_UI_SHEET, header)
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
-        sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == "カテゴリ自動分類")
+        sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
         sheet_id=sheet["properties"]["sheetId"]
         requests=[
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
@@ -289,19 +353,56 @@ class SheetsDB:
         ]
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":4,"endColumnIndex":6},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
-            # Major is a true dropdown.  Minor uses a strict pair check so a
-            # category outside the currently selected major cannot be saved;
-            # the two compact controls fit a phone without exposing ledger F:G.
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"='カテゴリ'!$A$2:$A"}]},"strict":True,"showCustomUi":True,"inputMessage":"カテゴリマスタの大カテゴリを選択してください。"}}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":3,"endColumnIndex":4},"rule":{"condition":{"type":"CUSTOM_FORMULA","values":[{"userEnteredValue":"=COUNTIFS(カテゴリ!$A$2:$A,$C2,カテゴリ!$B$2:$B,$D2)>0"}]},"strict":True,"showCustomUi":True,"inputMessage":"選んだ大カテゴリに属する小カテゴリを入力してください。"}}},
+            # The actual rows get their controls only after refresh writes
+            # them.  Applying range validation before INSERT_ROWS was the
+            # cause of the controls drifting below the visible candidates.
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+
+    def replace_category_rule_ui_rows(self, rows:list[list], header:list[str]):
+        """Replace the UI-owned values without inserting rows below controls."""
+        self.ensure_category_rule_ui_sheet(header)
+        self.clear(f"{CATEGORY_RULE_UI_SHEET}!A2:L")
+        if rows:
+            self.svc.spreadsheets().values().update(
+                spreadsheetId=self.sid, range=f"{CATEGORY_RULE_UI_SHEET}!A2",
+                valueInputOption="USER_ENTERED", body={"values": rows},
+            ).execute()
+        if not rows:
+            return
+        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        sheet_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
+                      if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
+        helper_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
+                       if value["properties"]["title"] == CATEGORY_RULE_UI_HELPER_SHEET)
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={"requests":
+            category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper_id,
+                                              row_count=len(rows))
+        }).execute()
     def category_rule_ui_rows(self):
-        if "カテゴリ自動分類" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ自動分類!A2:L")
+        if CATEGORY_RULE_UI_SHEET not in set(self.sheet_titles()): return []
+        return self.get(f"{CATEGORY_RULE_UI_SHEET}!A2:L")
+
+    def consume_category_rule_ui_past_choice(self, condition_key: str, result: dict) -> bool:
+        """Consume only the processed past checkbox for its stable condition key."""
+        for row_num, row in enumerate(self.category_rule_ui_rows(), start=2):
+            cells=list(row) + [""] * max(0, 12-len(row))
+            if cells[6] != condition_key:
+                continue
+            state=str(result.get("state", "processed"))
+            suffix=(f"\n過去プレビュー: {state}"
+                    + (f" / 要求={result['request_id']}" if result.get("request_id") else ""))
+            self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid, body={
+                "valueInputOption": "USER_ENTERED", "data": [
+                    {"range": f"{CATEGORY_RULE_UI_SHEET}!B{row_num}", "values": [[str(cells[1]) + suffix]]},
+                    {"range": f"{CATEGORY_RULE_UI_SHEET}!F{row_num}", "values": [[False]]},
+                ],
+            }).execute()
+            return True
+        return False
     def ensure_category_backfill_sheets(self):
         """Create the two narrow audit tabs only on explicit backfill preview."""
         from .category_backfill import BACKFILL_REQUEST_HEADERS, BACKFILL_TARGET_HEADERS

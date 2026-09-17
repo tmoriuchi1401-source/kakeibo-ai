@@ -55,14 +55,16 @@ class CategoryRuleUIPipeline:
             # detail until their own review controls are approved.
             prior=old.get(expense_id, {})
             checked=str(prior.get("future", "")).upper() in {"TRUE","1"}
+            past_checked=str(prior.get("past", "")).upper() in {"TRUE","1"}
             account_text=f" / 口座={account}" if account else ""
             snapshot=CategoryRuleApprovalPipeline.snapshot_for(
                 expense_id=expense_id, category=category, kind="service", tx=tx,
                 item_name=narrow_text(expense[3]),
             )
-            changed_checked_condition = bool(checked and prior.get("snapshot") and prior.get("snapshot") != snapshot)
+            changed_checked_condition = bool((checked or past_checked) and prior.get("snapshot")
+                                             and prior.get("snapshot") != snapshot)
             if changed_checked_condition:
-                checked=False
+                checked=past_checked=False
             same=[rule for rule in rules if rule.identity() == identity]
             if any(rule.active and rule.category == category for rule in same):
                 state="登録済み"; checked=False
@@ -76,7 +78,7 @@ class CategoryRuleUIPipeline:
                 condition=f"{old_condition}\n現在: {tx.source}{account_text} / {narrow_text(tx.merchant)}（完全一致）\n再承認が必要（条件またはカテゴリが変更）"
             rows.append([
                 f"{tx.source} / {narrow_text(tx.merchant)}\n代表 {expense[1]}",
-                condition, category[0], category[1], checked, False,
+                condition, category[0], category[1], checked, past_checked,
                 expense_id, expense_id, expense[1], tx.source, "service", snapshot,
             ])
         # Unclassified records are grouped strictly by the full reusable
@@ -109,9 +111,12 @@ class CategoryRuleUIPipeline:
                 f"未分類 {len(members)}件 / {amount}円\n完全一致・金額不問・自動計上のみ\n{state}",
                 major, minor, checked, past_checked, key, expense_id, expense[1], tx.source, "service", snapshot,
             ])
-        self.db.ensure_category_rule_ui_sheet(UI_HEADERS)
-        self.db.clear("カテゴリ自動分類!A2:L")
-        self.db.append("カテゴリ自動分類", rows)
+        if hasattr(self.db, "replace_category_rule_ui_rows"):
+            self.db.replace_category_rule_ui_rows(rows, UI_HEADERS)
+        else:  # Minimal test and legacy adapter compatibility.
+            self.db.ensure_category_rule_ui_sheet(UI_HEADERS)
+            self.db.clear("カテゴリ自動分類!A2:L")
+            self.db.append("カテゴリ自動分類", rows)
         return {"state":"refreshed", "candidates":len(rows), "unclassified_groups":len(grouped), "checked_carried":sum(_checked(row[4]) for row in rows)}
 
     def apply_checked(self):

@@ -272,3 +272,34 @@ def test_grouped_unclassified_past_checkbox_is_independent_from_future_rule_save
     assert pipe.refresh()["conditions"] == 1
     assert db.backfill_ui[0][3] == "表示中の条件（過去分のみ）"
     assert db.rules == [] and db.category_updates == []
+
+
+def test_preview_consumes_its_source_past_choice_by_fixed_condition_key():
+    class UIDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.ui=[]; self.backfill_ui=[]; self.consumed=[]
+        def category_rule_ui_rows(self): return self.ui
+        def category_backfill_ui_rows(self): return self.backfill_ui
+        def ensure_category_backfill_ui_sheet(self, header): pass
+        def clear(self, rng): self.backfill_ui=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ過去反映": self.backfill_ui.extend(rows)
+            else: super().append(sheet, rows)
+        def update_rows(self, sheet, rows):
+            if sheet == "カテゴリ過去反映":
+                for row_num, row in rows: self.backfill_ui[row_num-2] = row
+            else: super().update_rows(sheet, rows)
+        def consume_category_rule_ui_past_choice(self, key, result):
+            self.consumed.append((key, result["state"]))
+            self.ui[0][5] = False
+            return True
+    db = UIDB()
+    snapshot = '{"proposal":"fallback_group","kind":"service","source":"PayPay","account_alias":"","merchant":"請求名","category":["食費","外食"]}'
+    db.ui = [["条件", "未分類 1件", "食費", "外食", False, True,
+              "group:one", "M-one", "2026-08-10", "PayPay", "service", snapshot]]
+    pipe = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
+    pipe.refresh(); db.backfill_ui[0][1] = "対象月:2026-08"; db.backfill_ui[0][2] = True
+    result = pipe.preview_checked()
+    assert result["results"][0]["state"] == "previewed"
+    assert db.consumed == [("group:one", "previewed")]
+    assert db.ui[0][5] is False
