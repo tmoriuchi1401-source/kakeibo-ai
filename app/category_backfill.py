@@ -227,10 +227,25 @@ class CategoryBackfillPipeline:
         )
         return "conflicting_active_rule" if combined_match.state == "conflict" else "matched"
 
-    def preview(self, spec: BackfillSpec) -> dict:
+    def preview(self, spec: BackfillSpec, *, display_read_cache: dict | None = None) -> dict:
         if not self.preview_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
-        categories = set(self.db.categories())
+        # A multi-row phone preview reads one immutable display snapshot during
+        # that command only.  Apply/confirm never use it: those paths still
+        # reread categories, rules, imports, and ledger rows immediately
+        # before a guarded mutation.
+        inputs=(display_read_cache.get("preview_inputs")
+                if display_read_cache is not None else None)
+        if inputs is None:
+            inputs={
+                "categories":set(self.db.categories()),
+                "transactions":{tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))},
+                "active_rules":parse_rules(self.db.category_rules()),
+                "records":self.db.expense_records(),
+            }
+            if display_read_cache is not None:
+                display_read_cache["preview_inputs"]=inputs
+        categories=inputs["categories"]
         if spec.condition.category not in categories:
             return {"state": "held", "reason": "invalid_target_category"}
         if spec.condition.kind not in {"service", "store_total", "product"}:
@@ -241,10 +256,8 @@ class CategoryBackfillPipeline:
             return {"state": "held", "reason": "invalid_period"}
         if start and end and start > end:
             return {"state": "held", "reason": "invalid_period"}
-        transactions = {tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
-        active_rules = parse_rules(self.db.category_rules())
         targets, excluded = [], {}
-        for expense_id, (row_num, expense) in sorted(self.db.expense_records().items()):
+        for expense_id, (row_num, expense) in sorted(inputs["records"].items()):
             expense = list(expense) + [""] * max(0, 13 - len(expense))
             if _text(expense[12]) != "active":
                 excluded["inactive"] = excluded.get("inactive", 0) + 1; continue
@@ -254,7 +267,7 @@ class CategoryBackfillPipeline:
             if category != FALLBACK_CATEGORY:
                 reason = "partial_or_invalid_category" if not all(category) or category not in categories else "already_classified"
                 excluded[reason] = excluded.get(reason, 0) + 1; continue
-            tx = transactions.get(str(expense[10]))
+            tx = inputs["transactions"].get(str(expense[10]))
             if not tx:
                 excluded["source_import_not_found"] = excluded.get("source_import_not_found", 0) + 1; continue
             if tx.status not in {"auto_expense", "canonical_amazon", "unclassified_amazon"}:
@@ -266,7 +279,7 @@ class CategoryBackfillPipeline:
             unsafe = _unsafe_source(tx)
             if unsafe:
                 excluded[unsafe] = excluded.get(unsafe, 0) + 1; continue
-            match_state = self._selected_match_state(spec.condition, active_rules, tx, categories, expense)
+            match_state = self._selected_match_state(spec.condition, inputs["active_rules"], tx, categories, expense)
             if match_state != "matched":
                 excluded[match_state] = excluded.get(match_state, 0) + 1; continue
             targets.append((str(expense_id), row_num, expense, self._source_snapshot(tx, expense)))
@@ -300,11 +313,11 @@ class CategoryBackfillPipeline:
         if not found:
             return {"state": "not_found"}
         row_num, row = found
-        target_count = sum(1 for _, target in self._targets() if _text(target[0]) == _text(request_id))
+        targets=[target for _, target in self._targets() if _text(target[0]) == _text(request_id)]
+        target_count=len(targets)
         if not target_count or target_count != expected_count or _amount(row[6]) != expected_count:
             return {"state": "held", "reason": "target_count_changed"}
         payload = _json(row[3])
-        targets = [target for _, target in self._targets() if _text(target[0]) == _text(request_id)]
         if _text(row[8]) != _request_digest(payload, row[4], row[5], targets):
             return {"state": "held", "reason": "request_snapshot_changed"}
         row[2], row[9], row[10] = "confirmed", True, self._now()

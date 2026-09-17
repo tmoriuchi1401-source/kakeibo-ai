@@ -144,6 +144,13 @@ def make(require_gemini=True, *, read_only=False):
     return s,db,ai
 
 
+def with_sheet_read_metrics(db, result):
+    """Keep runner observability with the command that performed the reads."""
+    if isinstance(result, dict) and hasattr(db, "sheet_read_metrics"):
+        return {**result, "sheet_reads":db.sheet_read_metrics()}
+    return result
+
+
 def make_receipt_pipeline(settings, db, ai):
     observer = None
     if settings is not None and getattr(settings, "medical_review_shadow_enabled", False):
@@ -1072,17 +1079,17 @@ def main():
     elif args.cmd=="category-rule-deactivate":
         s,db,_=make(False); print(CategoryRuleApprovalPipeline(db, save_enabled=s.category_rule_save_enabled).deactivate(args.rule_id))
     elif args.cmd=="category-rule-ui-refresh":
-        s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).refresh())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).refresh()))
     elif args.cmd=="category-rule-ui-apply":
-        s,db,_=make(False); print(CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).apply_checked())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryRuleUIPipeline(db, ui_enabled=s.category_rule_ui_enabled, save_enabled=s.category_rule_save_enabled).apply_checked()))
     elif args.cmd=="category-backfill-ui-refresh":
-        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh()))
     elif args.cmd=="category-backfill-preview-checked":
-        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).preview_checked())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).preview_checked()))
     elif args.cmd=="category-backfill-confirmations-refresh":
-        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh_confirmations())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).refresh_confirmations()))
     elif args.cmd=="category-backfill-apply-confirmed":
-        s,db,_=make(False); print(CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).apply_confirmed())
+        s,db,_=make(False); print(with_sheet_read_metrics(db, CategoryBackfillUIPipeline(db, ui_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).apply_confirmed()))
     elif args.cmd=="category-backfill-restore":
         s,db,_=make(False); print(CategoryBackfillPipeline(db, preview_enabled=s.category_backfill_preview_enabled, apply_enabled=s.category_backfill_apply_enabled).restore(args.request_id))
     elif args.cmd=="bank-finalization-preview":

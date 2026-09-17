@@ -144,7 +144,7 @@ class CategoryBackfillUIPipeline:
     def preview_checked(self):
         if not self.ui_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
-        results=[]; updates=[]
+        results=[]; updates=[]; display_read_cache={}
         for row_num, row in enumerate(self.db.category_backfill_ui_rows(), start=2):
             cells=list(row)+[""]*max(0, 7-len(row))
             if not _is_checked(cells[2]): continue
@@ -156,7 +156,8 @@ class CategoryBackfillUIPipeline:
                 result={"state":"held", "reason":"invalid_period_or_condition"}
             else:
                 result=CategoryBackfillPipeline(self.db, preview_enabled=True, apply_enabled=self.apply_enabled).preview(
-                    BackfillSpec(rule, period[0], period[1], bool(payload.get("saved_rule"))))
+                    BackfillSpec(rule, period[0], period[1], bool(payload.get("saved_rule"))),
+                    display_read_cache=display_read_cache)
             results.append(result); cells[2]=False
             # A fixed preview is the terminal processing of the source UI's
             # past choice.  Consume that choice by its immutable key so the
@@ -179,10 +180,19 @@ class CategoryBackfillUIPipeline:
         if not self.ui_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
         old={narrow_text(row[4]): row for row in self.db.category_backfill_confirmation_rows() if len(row)>4}
+        request_rows=[list(request)+[""]*11 for request in self.db.category_backfill_requests()]
+        visible_requests=[request for request in request_rows
+                          if request[2] in {"previewed", "confirmed", "partial"}]
+        targets_by_request={}
+        if visible_requests:
+            visible_ids={narrow_text(request[0]) for request in visible_requests}
+            for target in self.db.category_backfill_targets():
+                detail=list(target)+[""]*15
+                request_id=narrow_text(detail[0])
+                if request_id in visible_ids:
+                    targets_by_request.setdefault(request_id, []).append(detail)
         rows=[]
-        for request in self.db.category_backfill_requests():
-            cells=list(request)+[""]*11
-            if cells[2] not in {"previewed", "confirmed", "partial"}: continue
+        for cells in visible_requests:
             prior=old.get(narrow_text(cells[0]), [])
             try: payload = json.loads(cells[3]) if narrow_text(cells[3]) else {}
             except (TypeError, ValueError, json.JSONDecodeError): payload = {}
@@ -191,12 +201,10 @@ class CategoryBackfillUIPipeline:
             exclusion_text = "、".join(f"{key}:{value}" for key,value in excluded.items()) or "なし"
             rows.append([f"{cells[0]}\n{cells[4]} .. {cells[5]}\n{condition_label(payload if isinstance(payload, dict) else {})}\nその他/未分類 → {category[0]} / {category[1]}", f"{cells[6]}件 / {cells[7]}円\n除外: {exclusion_text}",
                          _is_checked(prior[2]) if len(prior)>2 else False, cells[2], cells[0]])
-            for target in self.db.category_backfill_targets():
-                detail=list(target)+[""]*15
-                if narrow_text(detail[0]) == narrow_text(cells[0]):
-                    # A target detail is context only, never an approval
-                    # control.  Keep C visibly empty even before formatting.
-                    rows.append([f"{detail[3]}\n{detail[1]}", f"{detail[4]}円\n{detail[5]} / {detail[6]} → {detail[7]} / {detail[8]}", "", "内訳", ""])
+            for detail in targets_by_request.get(narrow_text(cells[0]), []):
+                # A target detail is context only, never an approval control.
+                # Keep C visibly empty even before formatting.
+                rows.append([f"{detail[3]}\n{detail[1]}", f"{detail[4]}円\n{detail[5]} / {detail[6]} → {detail[7]} / {detail[8]}", "", "内訳", ""])
         _replace_rows(self.db, "replace_category_backfill_confirmation_rows",
                       BACKFILL_CONFIRM_SHEET, BACKFILL_CONFIRM_HEADERS, rows)
         return {"state":"refreshed", "requests":len(rows)}

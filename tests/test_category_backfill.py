@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from httplib2 import Response
+from googleapiclient.errors import HttpError
+import pytest
 
 from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
@@ -336,8 +339,11 @@ def test_backfill_ui_replacement_preserves_checked_period_without_append_rows():
 def test_confirmation_replacement_controls_only_request_rows_and_preserves_check():
     class ReplacingDB(BackfillDB):
         def __init__(self):
-            super().__init__(); self.confirm=[]; self.replacements=[]
+            super().__init__(); self.confirm=[]; self.replacements=[]; self.target_reads=0
         def category_backfill_confirmation_rows(self): return self.confirm
+        def category_backfill_targets(self):
+            self.target_reads += 1
+            return super().category_backfill_targets()
         def replace_category_backfill_confirmation_rows(self, rows, header):
             self.replacements.append((rows, header)); self.confirm=[list(row) for row in rows]
         def append(self, sheet, rows):
@@ -345,14 +351,17 @@ def test_confirmation_replacement_controls_only_request_rows_and_preserves_check
             super().append(sheet, rows)
 
     db=ReplacingDB()
-    CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False,
-                             id_factory=lambda: "CB-replace").preview(
-        BackfillSpec(condition(), "2026-08-01", "2026-08-31"))
+    request_ids=iter(("CB-replace-one", "CB-replace-two"))
+    pipeline=CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False,
+                                      id_factory=lambda: next(request_ids))
+    pipeline.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))
+    pipeline.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))
     pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
-    assert pipe.refresh_confirmations()["requests"] == 2
-    assert db.confirm[0][4] == "CB-replace" and db.confirm[1][2] == ""
+    assert pipe.refresh_confirmations()["requests"] == 4
+    assert db.target_reads == 1
+    assert db.confirm[0][4] == "CB-replace-one" and db.confirm[1][2] == ""
     db.confirm[0][2] = True
-    assert pipe.refresh_confirmations()["requests"] == 2
+    assert pipe.refresh_confirmations()["requests"] == 4
     assert db.confirm[0][2] is True and db.confirm[1][2] == ""
     assert len(db.replacements) == 2
 
@@ -405,7 +414,9 @@ def test_sheets_backfill_period_dropdown_is_rendered_only_for_condition_rows():
     } for item in period[1:])
     updates=[request["updateCells"] for request in db.svc.requests if "updateCells" in request]
     assert any(update["range"]["startColumnIndex"] == 25 and
-               update["rows"][0]["values"][0]["userEnteredValue"] == "過去反映・対象期間候補"
+               update["rows"][0]["values"][0]["userEnteredValue"] == {
+                   "stringValue":"過去反映・対象期間候補"
+               }
                for update in updates)
     formula=next(update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
                  for update in updates if update["range"]["startRowIndex"] == 1)
@@ -414,3 +425,63 @@ def test_sheets_backfill_period_dropdown_is_rendered_only_for_condition_rows():
     assert any(request.get("updateDimensionProperties",{}).get("range",{}).get("startIndex") == 25 and
                request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
                for request in db.svc.requests)
+
+
+def test_sheets_read_metadata_is_cached_and_only_429_is_retried():
+    class Call:
+        def __init__(self, value=None, error=None): self.value=value; self.error=error
+        def execute(self):
+            if self.error: raise self.error
+            return self.value
+    class Service:
+        def __init__(self): self.metadata_calls=0
+        def spreadsheets(self): return self
+        def get(self, **kwargs):
+            self.metadata_calls += 1
+            return Call({"sheets":[{"properties":{"title":"A"}}]})
+
+    service=Service(); sleeps=[]; db=SheetsDB("synthetic", service=service, read_sleeper=sleeps.append)
+    assert db.sheet_titles() == ["A"]
+    assert db.sheet_titles() == ["A"]
+    assert service.metadata_calls == 1 and db.sheet_read_metrics() == {"logical":1,"attempts":1,"retries":0}
+
+    attempts=iter((Call(error=HttpError(Response({"status":"429"}), b"quota")), Call({"ok":True})))
+    assert db._execute_sheet_read(lambda: next(attempts)) == {"ok":True}
+    assert sleeps == [1]
+    assert db.sheet_read_metrics() == {"logical":2,"attempts":3,"retries":1}
+
+    with pytest.raises(HttpError):
+        db._execute_sheet_read(lambda: Call(error=HttpError(Response({"status":"400"}), b"bad request")))
+    assert db.sheet_read_metrics() == {"logical":3,"attempts":4,"retries":1}
+
+    exhausted=[]; retry_db=SheetsDB("synthetic", service=service, read_sleeper=exhausted.append)
+    with pytest.raises(HttpError):
+        retry_db._execute_sheet_read(
+            lambda: Call(error=HttpError(Response({"status":"429"}), b"quota"))
+        )
+    assert exhausted == [1, 2, 4]
+    assert retry_db.sheet_read_metrics() == {"logical":1,"attempts":4,"retries":3}
+
+
+def test_multiple_previews_reuse_display_reads_but_apply_input_is_not_cached():
+    class CountingDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.calls={"categories":0,"imports":0,"rules":0,"expenses":0}
+        def categories(self): self.calls["categories"] += 1; return super().categories()
+        def get(self, rng): self.calls["imports"] += 1; return super().get(rng)
+        def category_rules(self): self.calls["rules"] += 1; return super().category_rules()
+        def expense_records(self): self.calls["expenses"] += 1; return super().expense_records()
+
+    db, first, second = two_service_candidates()
+    counting=CountingDB(); counting.expenses=db.expenses; counting.imports=db.imports
+    counting.category_pairs=db.category_pairs
+    ids=iter(("CB-first", "CB-second"))
+    pipe=CategoryBackfillPipeline(counting, preview_enabled=True, apply_enabled=True, id_factory=lambda: next(ids))
+    display_cache={}
+    assert pipe.preview(BackfillSpec(first, "2026-08-01", "2026-08-31"), display_read_cache=display_cache)["state"] == "previewed"
+    assert pipe.preview(BackfillSpec(second, "2026-08-01", "2026-08-31"), display_read_cache=display_cache)["state"] == "previewed"
+    assert counting.calls == {"categories":1,"imports":1,"rules":1,"expenses":1}
+    # Apply always rereads current source data rather than using preview input.
+    assert pipe.confirm("CB-first", expected_count=1)["state"] == "confirmed"
+    assert pipe.apply("CB-first", expected_count=1)["state"] == "complete"
+    assert all(counting.calls[name] >= 2 for name in counting.calls)

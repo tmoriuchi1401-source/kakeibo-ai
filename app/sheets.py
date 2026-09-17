@@ -1,6 +1,8 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import re
+import time
+from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
 
 CATEGORY_SEPARATOR = "｜"
@@ -102,16 +104,58 @@ HEADERS={
 }
 
 class SheetsDB:
-    def __init__(self, spreadsheet_id:str, service=None):
+    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep):
         self.sid=spreadsheet_id; self.svc=service or sheets_service()
+        self._read_sleeper=read_sleeper
+        self._sheet_metadata_cache=None
+        self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
+
+    def _read_metrics(self):
+        if not hasattr(self, "_sheet_read_metrics"):
+            self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
+        return self._sheet_read_metrics
+
+    def sheet_read_metrics(self):
+        """Expose bounded read/retry counts for a single CLI process."""
+        return dict(self._read_metrics())
+
+    def _execute_sheet_read(self, request_factory):
+        """Retry only Sheets read-quota responses; never wrap writes."""
+        metrics=self._read_metrics(); metrics["logical"] += 1
+        for attempt in range(4):
+            try:
+                metrics["attempts"] += 1
+                return request_factory().execute()
+            except HttpError as exc:
+                status=int(getattr(getattr(exc, "resp", None), "status", 0) or 0)
+                if status != 429 or attempt == 3:
+                    raise
+                metrics["retries"] += 1
+                getattr(self, "_read_sleeper", time.sleep)(1 * (2 ** attempt))
+        raise RuntimeError("sheets_read_retry_exhausted")
+
+    def _sheet_metadata(self):
+        cached=getattr(self, "_sheet_metadata_cache", None)
+        if cached is None:
+            cached=self._execute_sheet_read(
+                lambda: self.svc.spreadsheets().get(spreadsheetId=self.sid)
+            )
+            self._sheet_metadata_cache=cached
+        return cached
+
+    def _invalidate_sheet_metadata(self):
+        self._sheet_metadata_cache=None
+
     def sheet_titles(self):
-        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        meta=self._sheet_metadata()
         return [s["properties"]["title"] for s in meta["sheets"]]
     def ensure_schema(self, categories:list[tuple[str,str]]|None=None):
         titles=set(self.sheet_titles()); req=[]
         for title in HEADERS:
             if title not in titles: req.append({"addSheet":{"properties":{"title":title}}})
-        if req: self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":req}).execute()
+        if req:
+            self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":req}).execute()
+            self._invalidate_sheet_metadata()
         for title, hdr in HEADERS.items():
             existing=self.get(f"{title}!1:1")
             if not existing or existing[0][:len(hdr)] != hdr:
@@ -121,7 +165,9 @@ class SheetsDB:
             self.svc.spreadsheets().values().clear(spreadsheetId=self.sid,range="カテゴリ!A2:B",body={}).execute()
             self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range="カテゴリ!A2",valueInputOption="RAW",body={"values":rows}).execute()
     def get(self, rng:str):
-        return self.svc.spreadsheets().values().get(spreadsheetId=self.sid,range=rng).execute().get("values",[])
+        return self._execute_sheet_read(
+            lambda: self.svc.spreadsheets().values().get(spreadsheetId=self.sid,range=rng)
+        ).get("values",[])
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         reply=self.svc.spreadsheets().values().append(
@@ -147,7 +193,7 @@ class SheetsDB:
         if start > CAP+1:
             return
         end = min(end, CAP+1)
-        meta = self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        meta = self._sheet_metadata()
         helper = next((sheet for sheet in meta.get("sheets", [])
                        if sheet["properties"].get("sheetId") == EXPENSE_CATEGORY_HELPER_ID), None)
         if not helper or not any(
@@ -177,6 +223,7 @@ class SheetsDB:
                     "title":title,"gridProperties":{"frozenRowCount":1}
                 }}}]},
             ).execute()
+            self._invalidate_sheet_metadata()
         existing=self.get(f"{title}!1:1")
         if not existing or existing[0][:len(header)] != header:
             self.svc.spreadsheets().values().update(
@@ -348,7 +395,7 @@ class SheetsDB:
     def ensure_category_rule_ui_sheet(self, header):
         """Create the opt-in mobile request surface only after UI approval."""
         self.ensure_sheet(CATEGORY_RULE_UI_SHEET, header)
-        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        meta=self._sheet_metadata()
         sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
         sheet_id=sheet["properties"]["sheetId"]
         requests=[
@@ -377,7 +424,7 @@ class SheetsDB:
             ).execute()
         if not rows:
             return
-        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        meta=self._sheet_metadata()
         sheet_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
                       if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
         helper_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
@@ -435,7 +482,7 @@ class SheetsDB:
         rows) on a later detail/blank row.
         """
         self.ensure_sheet(title, header)
-        meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
+        meta=self._sheet_metadata()
         sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == title)
         sheet_id=sheet["properties"]["sheetId"]
         requests=[
@@ -473,7 +520,7 @@ class SheetsDB:
                 }]}],"fields":"note"}},
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
                     "startColumnIndex":25,"endColumnIndex":26},"rows":[{"values":[{"userEnteredValue":
-                    "過去反映・対象期間候補"}]}],"fields":"userEnteredValue"}},
+                    {"stringValue":"過去反映・対象期間候補"}}]}],"fields":"userEnteredValue"}},
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,
                     "startColumnIndex":25,"endColumnIndex":26},
                     "rows":[{"values":[{"userEnteredValue":{"formulaValue":period_formula}}]}],
