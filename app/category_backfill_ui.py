@@ -137,8 +137,8 @@ class CategoryBackfillUIPipeline:
                          prior[1] if len(prior) > 1 and len(prior) > 6 and prior[6] == payload else default_period,
                          _is_checked(prior[2]) if len(prior) > 6 and prior[6] == payload else False,
                          "表示中の条件（過去分のみ）", key, 1, payload])
-        self.db.ensure_category_backfill_ui_sheet(BACKFILL_UI_HEADERS)
-        self.db.clear(f"{BACKFILL_UI_SHEET}!A2:G"); self.db.append(BACKFILL_UI_SHEET, rows)
+        _replace_rows(self.db, "replace_category_backfill_ui_rows",
+                      BACKFILL_UI_SHEET, BACKFILL_UI_HEADERS, rows)
         return {"state": "refreshed", "conditions": len(rows), "default_period": default_period}
 
     def preview_checked(self):
@@ -194,9 +194,11 @@ class CategoryBackfillUIPipeline:
             for target in self.db.category_backfill_targets():
                 detail=list(target)+[""]*15
                 if narrow_text(detail[0]) == narrow_text(cells[0]):
-                    rows.append([f"{detail[3]}\n{detail[1]}", f"{detail[4]}円\n{detail[5]} / {detail[6]} → {detail[7]} / {detail[8]}", False, "内訳", ""])
-        self.db.ensure_category_backfill_confirmation_sheet(BACKFILL_CONFIRM_HEADERS)
-        self.db.clear(f"{BACKFILL_CONFIRM_SHEET}!A2:E"); self.db.append(BACKFILL_CONFIRM_SHEET, rows)
+                    # A target detail is context only, never an approval
+                    # control.  Keep C visibly empty even before formatting.
+                    rows.append([f"{detail[3]}\n{detail[1]}", f"{detail[4]}円\n{detail[5]} / {detail[6]} → {detail[7]} / {detail[8]}", "", "内訳", ""])
+        _replace_rows(self.db, "replace_category_backfill_confirmation_rows",
+                      BACKFILL_CONFIRM_SHEET, BACKFILL_CONFIRM_HEADERS, rows)
         return {"state":"refreshed", "requests":len(rows)}
 
     def apply_confirmed(self):
@@ -213,3 +215,19 @@ class CategoryBackfillUIPipeline:
             cells[2]=False; cells[3]=result.get("state", "held"); updates.append((row_num,cells)); results.append(result)
         if updates: self.db.update_rows(BACKFILL_CONFIRM_SHEET, updates)
         return {"state":"applied", "results":results}
+
+
+def _replace_rows(db, method_name, sheet, header, rows):
+    """Use the in-place production writer; retain minimal test-double support."""
+    writer=getattr(db, method_name, None)
+    if writer:
+        writer(rows, header)
+        return
+    # Existing lightweight test doubles do not model Google row insertion.
+    # Production SheetsDB always has the replacement method above.
+    if sheet == BACKFILL_UI_SHEET:
+        db.ensure_category_backfill_ui_sheet(header)
+    else:
+        db.ensure_category_backfill_confirmation_sheet(header)
+    db.clear(f"{sheet}!A2:{chr(64 + len(header))}")
+    db.append(sheet, rows)

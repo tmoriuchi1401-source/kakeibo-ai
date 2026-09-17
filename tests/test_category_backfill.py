@@ -6,6 +6,7 @@ from app.category_backfill import (
 )
 from app.category_rules import CategoryRule
 from app.category_backfill_ui import CategoryBackfillUIPipeline, _period, condition_label
+from app.sheets import SheetsDB
 
 
 def import_row(import_id="p1", merchant="請求名", amount=100, target="M-one"):
@@ -303,3 +304,74 @@ def test_preview_consumes_its_source_past_choice_by_fixed_condition_key():
     assert result["results"][0]["state"] == "previewed"
     assert db.consumed == [("group:one", "previewed")]
     assert db.ui[0][5] is False
+
+
+def test_backfill_ui_replacement_preserves_checked_period_without_append_rows():
+    class ReplacingDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.ui=[]; self.replacements=[]
+            self.rules=[service_rule("CR-one", "請求名", ("食費", "外食"))]
+        def category_rule_ui_rows(self): return []
+        def category_backfill_ui_rows(self): return self.ui
+        def replace_category_backfill_ui_rows(self, rows, header):
+            self.replacements.append((rows, header)); self.ui=[list(row) for row in rows]
+        def append(self, sheet, rows):
+            assert sheet != "カテゴリ過去反映", "generated UI must not INSERT_ROWS"
+            super().append(sheet, rows)
+
+    db=ReplacingDB(); pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
+    assert pipe.refresh()["conditions"] == 1
+    db.ui[0][1:3] = ["対象月:2026-08", True]
+    assert pipe.refresh()["conditions"] == 1
+    assert db.ui[0][1:3] == ["対象月:2026-08", True]
+    # A later row-count increase keeps the first fixed key's input in place.
+    db.rules.append(service_rule("CR-two", "別の請求名", ("食費", "外食")))
+    assert pipe.refresh()["conditions"] == 2
+    assert db.ui[0][1:3] == ["対象月:2026-08", True]
+    assert len(db.replacements) == 3
+
+
+def test_confirmation_replacement_controls_only_request_rows_and_preserves_check():
+    class ReplacingDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.confirm=[]; self.replacements=[]
+        def category_backfill_confirmation_rows(self): return self.confirm
+        def replace_category_backfill_confirmation_rows(self, rows, header):
+            self.replacements.append((rows, header)); self.confirm=[list(row) for row in rows]
+        def append(self, sheet, rows):
+            assert sheet != "カテゴリ過去反映確認", "generated confirmation must not INSERT_ROWS"
+            super().append(sheet, rows)
+
+    db=ReplacingDB()
+    CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False,
+                             id_factory=lambda: "CB-replace").preview(
+        BackfillSpec(condition(), "2026-08-01", "2026-08-31"))
+    pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
+    assert pipe.refresh_confirmations()["requests"] == 2
+    assert db.confirm[0][4] == "CB-replace" and db.confirm[1][2] == ""
+    db.confirm[0][2] = True
+    assert pipe.refresh_confirmations()["requests"] == 2
+    assert db.confirm[0][2] is True and db.confirm[1][2] == ""
+    assert len(db.replacements) == 2
+
+
+def test_sheets_backfill_control_render_clears_stale_boxes_and_marks_only_action_rows():
+    class Call:
+        def __init__(self, value): self.value=value
+        def execute(self): return self.value
+    class Service:
+        def __init__(self): self.requests=[]
+        def spreadsheets(self): return self
+        def get(self, **kwargs):
+            return Call({"sheets":[{"properties":{"sheetId":91,"title":"カテゴリ過去反映確認"}}]})
+        def batchUpdate(self, **kwargs): self.requests.extend(kwargs["body"]["requests"]); return Call({})
+
+    db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
+    db.ensure_sheet=lambda title, header: None
+    db._configure_backfill_mobile_sheet("カテゴリ過去反映確認", ["A","B","C","D","E"], 4, [2, 4])
+    validations=[request["setDataValidation"] for request in db.svc.requests if "setDataValidation" in request]
+    assert validations[0]["range"] == {"sheetId":91,"startRowIndex":1,"endRowIndex":1000,
+                                        "startColumnIndex":2,"endColumnIndex":3}
+    assert "rule" not in validations[0]
+    assert [item["range"]["startRowIndex"] for item in validations[1:]] == [1, 3]
+    assert all(item["rule"]["condition"]["type"] == "BOOLEAN" for item in validations[1:])
