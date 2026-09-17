@@ -80,6 +80,19 @@ def test_backfill_preview_is_immutable_and_apply_touches_only_previewed_fallback
     assert db.expenses["M-later"][1][5:7] == ["その他", "未分類"]
 
 
+def test_backfill_digest_survives_sheet_numeric_round_trip_before_confirmation():
+    db = BackfillDB()
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True,
+                                    now=lambda: datetime(2026, 9, 17, tzinfo=timezone.utc), id_factory=lambda: "CB-round")
+    assert pipe.preview(BackfillSpec(condition(), "2026-08-01", "2026-08-31"))["state"] == "previewed"
+    # Values API reads these Sheet numbers back as strings; this is not a
+    # modification of the immutable fixed target.
+    db.targets[0][2] = str(db.targets[0][2])
+    db.targets[0][4] = str(db.targets[0][4])
+    assert pipe.confirm("CB-round", expected_count=1)["state"] == "confirmed"
+    assert pipe.apply("CB-round", expected_count=1)["applied"] == 1
+
+
 def test_backfill_apply_holds_changed_source_and_restore_preserves_later_human_edit():
     db = BackfillDB()
     pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True,

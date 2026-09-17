@@ -98,7 +98,21 @@ def _unsafe_source(tx) -> str:
 
 def _request_digest(payload: dict, start_date: object, end_date: object, rows: list[list]) -> str:
     """Bind condition, category, period, and immutable targets as one request."""
-    immutable = [list(row[:10]) for row in rows]
+    # Sheets round-trips numeric row numbers and amounts as strings.  Bind the
+    # semantic values, rather than the transport representation, so an
+    # untouched preview can pass its later confirmation/apply verification.
+    # The source snapshot itself is already canonical JSON when generated;
+    # canonicalizing it again makes the check equally stable after a Sheet
+    # round-trip.
+    immutable = []
+    for raw in rows:
+        row = list(raw) + [""] * max(0, 10 - len(raw))
+        source_snapshot = _json(row[9])
+        immutable.append([
+            _text(row[0]), _text(row[1]), _amount(row[2]), _text(row[3]), _amount(row[4]),
+            _text(row[5]), _text(row[6]), _text(row[7]), _text(row[8]),
+            _canonical(source_snapshot) if source_snapshot else _text(row[9]),
+        ])
     return hashlib.sha256(_canonical({
         "payload": payload, "start_date": _text(start_date), "end_date": _text(end_date), "targets": immutable,
     }).encode("utf-8")).hexdigest()
