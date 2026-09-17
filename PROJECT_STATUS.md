@@ -22,6 +22,12 @@
 
 ## 1. Last verified
 
+### 2026-09-18 カテゴリ専用runnerの読み取り429修正と表示限定確認
+
+- **コード修正:** [PR #22](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/22) を通常マージし、main `74a1be9` へ統合。期間候補ヘッダZ1はSheets APIの`ExtendedValue.stringValue`で書き、Z2の`formulaValue`とB列dropdown条件の参照式文字列はそれぞれ既存の正しい型のまま維持する。カテゴリUIの同一プロセス内metadata再利用、確認画面の要求ID単位一括読込、429だけを1/2/4秒で有限再試行するread-only retryを追加した。400等は即時失敗し、write/applyの再試行は行わない。
+- **表示更新成功:** [PR #23](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/23) を通常マージし、main `51d7850` へ統合。既存の専用runnerへ手動`display_only`入力だけを追加し、候補UI・過去反映UI・確認画面を更新しつつ、ルール保存、checked preview生成、確認済みapplyをskipできるようにした。表示限定run `35279252797` はこのSHAで成功（40秒）。候補168件／未分類条件グループ108件、過去反映条件24件、確認要求0件。各CLIのSheets読み取りは順にlogical 6/8/5/5、retry 0で、旧run `35259534315` の最終metadata GETにおける429とは異なり完走した。
+- **業務値と運用境界:** 表示限定runは新規preview、ルール保存、過去applyを実行していない。利用者の期間・チェック・固定要求、支出明細F:G、監査の変更は0。UI上の対象タブを読み取り確認し、Z1/Z2・B/C入力規則・Z列非表示は成功したSheets更新APIの生成契約で確認した。実機iPhone操作は未確認であり、ブラウザー確認と混同しない。
+
 ### 2026-09-18 カテゴリ過去反映の期間候補を再生成へ同期
 
 - 本番で先行設定済みの`カテゴリ過去反映`B列の期間候補を、既存の置換型UI生成へ同期した。実在する条件行だけに、同シートの非表示Z列`Z2:Z1000`を参照する非strict native dropdownを設定する。Z2はホームI列の年月から「対象月:YYYY-MM」・各年の「YYYY-01..YYYY-12」・「全期間」を作る配列式であり、B1の操作説明とZ列非表示も再生成時に復元する。
