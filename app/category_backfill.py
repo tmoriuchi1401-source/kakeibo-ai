@@ -125,6 +125,33 @@ class BackfillSpec:
         }
 
 
+def _condition_from_payload(payload: dict) -> CategoryRule | None:
+    """Rebuild only the immutable request condition; never select a new rule."""
+    try:
+        category = tuple(payload["category"])
+        if len(category) != 2:
+            return None
+        amount = payload.get("amount")
+        if amount is not None:
+            amount = int(amount)
+        return CategoryRule(
+            "request-condition", _text(payload["kind"]), _text(payload["source"]),
+            _text(payload.get("account_alias")), _text(payload.get("billing_name")),
+            _text(payload.get("merchant")), _text(payload.get("product_id")),
+            _text(payload.get("product_name")), amount,
+            (_text(category[0]), _text(category[1])), "", datetime.now(timezone.utc), 1, True,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _same_condition(rule: CategoryRule, payload: dict) -> bool:
+    """A saved rule must still equal the entire frozen condition, not just ID/r."""
+    expected = _condition_from_payload(payload)
+    return bool(expected and rule.identity() == expected.identity()
+                and rule.category == expected.category and rule.kind == expected.kind)
+
+
 class CategoryBackfillPipeline:
     def __init__(self, db, *, preview_enabled: bool, apply_enabled: bool, now=None, id_factory=None):
         self.db = db
@@ -163,6 +190,29 @@ class CategoryBackfillPipeline:
         end = _ymd(spec.end_date) if spec.end_date else None
         return (start is None or value >= start) and (end is None or value <= end)
 
+    @staticmethod
+    def _matching_inputs(expense: list) -> dict:
+        return {
+            "product_name": _text(expense[3]), "product_id": _product_id(expense),
+            "aggregate_only": _text(expense[3]) in AGGREGATE_ITEM_NAMES,
+        }
+
+    def _selected_match_state(self, selected: CategoryRule, active_rules: list[CategoryRule], tx, categories, expense: list) -> str:
+        """Require selected-condition match before using other rules for conflicts."""
+        inputs = self._matching_inputs(expense)
+        selected_match = match_transaction(
+            [selected], tx, categories, require_newer_than_approval=False, **inputs,
+        )
+        if selected_match.state != "matched":
+            return "condition_not_matched"
+        # Other active rules are consulted solely to hold category conflicts;
+        # they never make an otherwise-unselected expense a target.
+        all_rules = [selected] + [rule for rule in active_rules if rule.rule_id != selected.rule_id]
+        combined_match = match_transaction(
+            all_rules, tx, categories, require_newer_than_approval=False, **inputs,
+        )
+        return "conflicting_active_rule" if combined_match.state == "conflict" else "matched"
+
     def preview(self, spec: BackfillSpec) -> dict:
         if not self.preview_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
@@ -178,12 +228,7 @@ class CategoryBackfillPipeline:
         if start and end and start > end:
             return {"state": "held", "reason": "invalid_period"}
         transactions = {tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
-        # An ad-hoc past-only condition must still fail closed when an active
-        # saved rule yields a different category for the same source evidence.
-        # A saved rule is represented only once, by the immutable condition
-        # selected into this request.
-        rules = [spec.condition] + [rule for rule in parse_rules(self.db.category_rules())
-                                   if rule.rule_id != spec.condition.rule_id]
+        active_rules = parse_rules(self.db.category_rules())
         targets, excluded = [], {}
         for expense_id, (row_num, expense) in sorted(self.db.expense_records().items()):
             expense = list(expense) + [""] * max(0, 13 - len(expense))
@@ -207,16 +252,9 @@ class CategoryBackfillPipeline:
             unsafe = _unsafe_source(tx)
             if unsafe:
                 excluded[unsafe] = excluded.get(unsafe, 0) + 1; continue
-            product_id = _product_id(expense)
-            matched = match_transaction(
-                rules, tx, categories, product_name=_text(expense[3]), product_id=product_id,
-                aggregate_only=_text(expense[3]) in AGGREGATE_ITEM_NAMES,
-                require_newer_than_approval=False,
-            )
-            if matched.state == "conflict":
-                excluded["conflicting_active_rule"] = excluded.get("conflicting_active_rule", 0) + 1; continue
-            if matched.state != "matched":
-                excluded["condition_not_matched"] = excluded.get("condition_not_matched", 0) + 1; continue
+            match_state = self._selected_match_state(spec.condition, active_rules, tx, categories, expense)
+            if match_state != "matched":
+                excluded[match_state] = excluded.get(match_state, 0) + 1; continue
             targets.append((str(expense_id), row_num, expense, self._source_snapshot(tx, expense)))
         if not targets:
             return {"state": "preview_empty", "targets": 0, "total_amount": 0, "excluded": excluded}
@@ -266,7 +304,7 @@ class CategoryBackfillPipeline:
         rule = next((item for item in parse_rules(self.db.category_rules())
                      if item.rule_id == saved.get("id")), None)
         return bool(rule and rule.active and rule.revision == saved.get("revision")
-                    and list(rule.category) == payload.get("category") and rule.kind == payload.get("kind"))
+                    and _same_condition(rule, payload))
 
     def apply(self, request_id: str, *, expected_count: int) -> dict:
         if not self.apply_enabled:
@@ -287,9 +325,13 @@ class CategoryBackfillPipeline:
             return {"state": "held", "reason": "request_snapshot_changed"}
         if not self._request_rule_valid(payload):
             return {"state": "held", "reason": "rule_or_category_changed"}
+        selected = _condition_from_payload(payload)
+        if not selected:
+            return {"state": "held", "reason": "invalid_request_condition"}
         records = self.db.expense_records()
         transactions = {tx.import_id: tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
         allowed = set(self.db.categories())
+        active_rules = parse_rules(self.db.category_rules())
         writes, updates, applied, skipped = [], [], 0, {}
         now = self._now()
         for target_row_num, target in targets:
@@ -309,6 +351,8 @@ class CategoryBackfillPipeline:
                 elif (_text(target[7]), _text(target[8])) not in allowed: reason = "target_category_invalid"
                 elif not tx: reason = "source_import_not_found"
                 elif _canonical(self._source_snapshot(tx, expense)) != _text(target[9]): reason = "source_changed_concurrently"
+                else: reason = self._selected_match_state(selected, active_rules, tx, allowed, expense)
+                if reason == "matched": reason = ""
             if reason:
                 target[10], target[11], target[14] = "skipped", reason, now
                 skipped[reason] = skipped.get(reason, 0) + 1

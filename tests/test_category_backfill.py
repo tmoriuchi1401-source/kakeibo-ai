@@ -8,9 +8,9 @@ from app.category_rules import CategoryRule
 from app.category_backfill_ui import _period, condition_label
 
 
-def import_row(import_id="p1", merchant="請求名", amount=100):
+def import_row(import_id="p1", merchant="請求名", amount=100, target="M-one"):
     return [import_id, "2026-09-17T12:00:00+00:00", "PayPay", import_id, "2026-08-10", merchant, amount,
-            "通常払い", "auto_expense", "M-one", "h", ""]
+            "通常払い", "auto_expense", target, "h", ""]
 
 
 class BackfillDB:
@@ -46,6 +46,22 @@ class BackfillDB:
 def condition():
     return CategoryRule("adhoc", "service", "PayPay", "", "請求名", "", "", "", None,
                         ("食費", "外食"), "M-one", datetime(2026, 9, 1, tzinfo=timezone.utc), 1, True)
+
+
+def service_rule(rule_id, merchant, category):
+    return CategoryRule(rule_id, "service", "PayPay", "", merchant, "", "", "", None,
+                        category, "M-A", datetime(2026, 9, 1, tzinfo=timezone.utc), 1, True)
+
+
+def two_service_candidates():
+    db = BackfillDB()
+    db.category_pairs.extend([("水道・光熱", "ガス"), ("交通", "電車")])
+    db.expenses = {
+        "M-A": (2, ["M-A", "2026-08-10", "A喫茶店", "自動計上", 500, "その他", "未分類", "", "PayPay", "", "pA", "", "active"]),
+        "M-B": (3, ["M-B", "2026-08-11", "Bガス料金", "自動計上", 600, "その他", "未分類", "", "PayPay", "", "pB", "", "active"]),
+    }
+    db.imports = [import_row("pA", "A喫茶店", 500, "M-A"), import_row("pB", "Bガス料金", 600, "M-B")]
+    return db, service_rule("selected-A", "A喫茶店", ("食費", "外食")), service_rule("saved-B", "Bガス料金", ("水道・光熱", "ガス"))
 
 
 def test_backfill_preview_is_immutable_and_apply_touches_only_previewed_fallback_ids():
@@ -101,6 +117,77 @@ def test_saved_rule_revision_change_holds_fixed_request_before_any_ledger_write(
                              ("食費", "外食"), "M-one", datetime(2026, 9, 1, tzinfo=timezone.utc), 2, True)]
     assert pipe.apply("CB-3", expected_count=1) == {"state": "held", "reason": "rule_or_category_changed"}
     assert db.category_updates == []
+
+
+def test_selected_condition_only_targets_its_own_transaction_despite_other_rules():
+    db, selected, other = two_service_candidates()
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True, id_factory=lambda: "CB-A")
+    db.rules = [other]
+    result = pipe.preview(BackfillSpec(selected, "2026-08-01", "2026-08-31"))
+    assert result["state"] == "previewed" and result["targets"] == 1
+    assert [row[1] for row in db.targets] == ["M-A"]
+    assert db.targets[0][7:9] == ["食費", "外食"]
+    assert pipe.confirm("CB-A", expected_count=1)["state"] == "confirmed"
+    applied = pipe.apply("CB-A", expected_count=1)
+    assert applied["applied"] == 1 and db.expenses["M-B"][1][5:7] == ["その他", "未分類"]
+
+
+def test_other_same_category_rule_never_adds_its_own_transaction_to_selected_preview():
+    db, selected, other = two_service_candidates()
+    db.rules = [service_rule(other.rule_id, other.billing_name, ("食費", "外食"))]
+    result = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False).preview(
+        BackfillSpec(selected, "2026-08-01", "2026-08-31"))
+    assert result["targets"] == 1 and [row[1] for row in db.targets] == ["M-A"]
+
+
+def test_other_rule_match_cannot_create_target_when_selected_condition_matches_zero():
+    db, selected, other = two_service_candidates()
+    db.expenses.pop("M-A"); db.imports = [db.imports[1]]; db.rules = [other]
+    result = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False).preview(
+        BackfillSpec(selected, "2026-08-01", "2026-08-31"))
+    assert result["state"] == "preview_empty" and result["excluded"]["condition_not_matched"] == 1
+
+
+def test_selected_match_conflicts_only_when_another_valid_rule_matches_same_transaction():
+    db, selected, _ = two_service_candidates()
+    db.rules = [service_rule("conflict", "A喫茶店", ("交通", "電車"))]
+    result = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False).preview(
+        BackfillSpec(selected, "2026-08-01", "2026-08-31"))
+    assert result["state"] == "preview_empty" and result["excluded"]["conflicting_active_rule"] == 1
+    # An invalid category pair is ignored by the shared rule matcher.
+    db.rules = [service_rule("invalid", "A喫茶店", ("不存在", "無効"))]
+    result = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False).preview(
+        BackfillSpec(selected, "2026-08-01", "2026-08-31"))
+    assert result["targets"] == 1
+
+
+def test_same_category_rules_apply_one_target_once_and_new_conflict_skips_apply():
+    db, selected, _ = two_service_candidates()
+    db.rules = [service_rule("same", "A喫茶店", ("食費", "外食"))]
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True, id_factory=lambda: "CB-same")
+    assert pipe.preview(BackfillSpec(selected, "2026-08-01", "2026-08-31"))["targets"] == 1
+    assert pipe.confirm("CB-same", expected_count=1)["state"] == "confirmed"
+    assert pipe.apply("CB-same", expected_count=1)["applied"] == 1
+    assert len(db.category_updates) == 1
+    # A distinct request demonstrates the apply-time conflict readback.
+    db, selected, _ = two_service_candidates()
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True, id_factory=lambda: "CB-conflict")
+    pipe.preview(BackfillSpec(selected, "2026-08-01", "2026-08-31")); pipe.confirm("CB-conflict", expected_count=1)
+    db.rules = [service_rule("late-conflict", "A喫茶店", ("交通", "電車"))]
+    result = pipe.apply("CB-conflict", expected_count=1)
+    assert result["applied"] == 0 and result["skipped"] == {"conflicting_active_rule": 1}
+    assert db.category_updates == []
+
+
+def test_saved_rule_condition_change_with_same_revision_holds_fixed_request():
+    db = BackfillDB()
+    saved = CategoryRule("CR-saved", "service", "PayPay", "", "請求名", "", "", "", None,
+                         ("食費", "外食"), "M-one", datetime(2026, 9, 1, tzinfo=timezone.utc), 1, True)
+    db.rules = [saved]
+    pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=True, id_factory=lambda: "CB-condition")
+    pipe.preview(BackfillSpec(saved, "2026-08-01", "2026-08-31", saved_rule=True)); pipe.confirm("CB-condition", expected_count=1)
+    db.rules = [service_rule("CR-saved", "変更後の請求名", ("食費", "外食"))]
+    assert pipe.apply("CB-condition", expected_count=1) == {"state": "held", "reason": "rule_or_category_changed"}
 
 
 def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
