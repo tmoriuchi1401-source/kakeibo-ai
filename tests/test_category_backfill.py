@@ -5,7 +5,7 @@ from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
 )
 from app.category_rules import CategoryRule
-from app.category_backfill_ui import _period, condition_label
+from app.category_backfill_ui import CategoryBackfillUIPipeline, _period, condition_label
 
 
 def import_row(import_id="p1", merchant="請求名", amount=100, target="M-one"):
@@ -207,8 +207,10 @@ def test_sheet_runner_requires_independent_opt_in_and_never_starts_imports():
     workflow = Path(".github/workflows/category-backfill-sheet.yml").read_text(encoding="utf-8")
     assert "CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true'" in workflow
     assert "CATEGORY_RULE_UI_ENABLED" in workflow
+    assert "CATEGORY_RULE_SAVE_ENABLED" in workflow
     assert "env.CATEGORY_RULE_UI_ENABLED == 'true'" in workflow
     assert "category-rule-ui-refresh" in workflow
+    assert "category-rule-ui-apply" in workflow
     assert "CATEGORY_BACKFILL_PREVIEW_ENABLED" in workflow
     assert "CATEGORY_BACKFILL_APPLY_ENABLED" in workflow
     assert "category-backfill-preview-checked" in workflow
@@ -245,3 +247,28 @@ def test_confirmation_condition_label_exposes_billing_merchant_and_limiters():
                              "product_name": "商品", "amount": 1200})
     assert "請求名=請求名" in label and "店舗名=店舗名" in label
     assert "口座=main" in label and "商品ID=amazon:B1" in label and "金額=1200円" in label
+
+
+def test_grouped_unclassified_past_checkbox_is_independent_from_future_rule_save():
+    class UIDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.ui=[]; self.backfill_ui=[]
+        def category_rule_ui_rows(self): return self.ui
+        def category_backfill_ui_rows(self): return self.backfill_ui
+        def ensure_category_backfill_ui_sheet(self, header): self.header=header
+        def clear(self, rng): self.backfill_ui=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ過去反映": self.backfill_ui.extend(rows)
+            else: super().append(sheet, rows)
+    db = UIDB()
+    snapshot = '{"proposal":"fallback_group","kind":"service","source":"PayPay","account_alias":"","merchant":"請求名","category":["食費","外食"]}'
+    # Future checked by itself does not expose a historical request.
+    db.ui = [["条件", "未分類 1件", "食費", "外食", True, False,
+              "group:one", "M-one", "2026-08-10", "PayPay", "service", snapshot]]
+    pipe = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
+    assert pipe.refresh()["conditions"] == 0
+    # The separate past action exposes a past-only condition, not a saved rule.
+    db.ui[0][5] = True
+    assert pipe.refresh()["conditions"] == 1
+    assert db.backfill_ui[0][3] == "表示中の条件（過去分のみ）"
+    assert db.rules == [] and db.category_updates == []

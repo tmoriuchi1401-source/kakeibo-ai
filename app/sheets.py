@@ -285,18 +285,23 @@ class SheetsDB:
         sheet_id=sheet["properties"]["sheetId"]
         requests=[
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
-            for index,width in enumerate((110,190,80))
+            for index,width in enumerate((90,100,60,60,40,40))
         ]
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":3,"endIndex":10},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":4,"endColumnIndex":6},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+            # Major is a true dropdown.  Minor uses a strict pair check so a
+            # category outside the currently selected major cannot be saved;
+            # the two compact controls fit a phone without exposing ledger F:G.
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"ONE_OF_RANGE","values":[{"userEnteredValue":"='カテゴリ'!$A$2:$A"}]},"strict":True,"showCustomUi":True,"inputMessage":"カテゴリマスタの大カテゴリを選択してください。"}}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":3,"endColumnIndex":4},"rule":{"condition":{"type":"CUSTOM_FORMULA","values":[{"userEnteredValue":"=COUNTIFS(カテゴリ!$A$2:$A,$C2,カテゴリ!$B$2:$B,$D2)>0"}]},"strict":True,"showCustomUi":True,"inputMessage":"選んだ大カテゴリに属する小カテゴリを入力してください。"}}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
     def category_rule_ui_rows(self):
         if "カテゴリ自動分類" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ自動分類!A2:J")
+        return self.get("カテゴリ自動分類!A2:L")
     def ensure_category_backfill_sheets(self):
         """Create the two narrow audit tabs only on explicit backfill preview."""
         from .category_backfill import BACKFILL_REQUEST_HEADERS, BACKFILL_TARGET_HEADERS

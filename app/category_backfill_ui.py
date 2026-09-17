@@ -111,13 +111,18 @@ class CategoryBackfillUIPipeline:
         # A displayed, not-yet-saved condition is also allowed for a past-only
         # request.  It never writes a future rule because saved_rule is false.
         for shown in self.db.category_rule_ui_rows():
-            if len(shown) < 10: continue
-            try: snapshot = json.loads(shown[9]) if narrow_text(shown[9]) else {}
+            # Only the separate past checkbox creates an ad-hoc historical
+            # choice.  Selecting a category or checking future registration
+            # alone never previews (and therefore cannot touch F:G).
+            if len(shown) < 12 or not _is_checked(shown[5]): continue
+            try: snapshot = json.loads(shown[11]) if narrow_text(shown[11]) else {}
             except (TypeError, ValueError, json.JSONDecodeError): snapshot = {}
             if not isinstance(snapshot, dict): continue
             category = snapshot.get("category", [])
-            if snapshot.get("kind") != "service" or len(category) != 2: continue
-            key = "displayed:" + narrow_text(snapshot.get("expense_id"))
+            if (snapshot.get("proposal") != "fallback_group" or snapshot.get("kind") != "service"
+                    or len(category) != 2 or not all(narrow_text(value) for value in category)):
+                continue
+            key = "displayed:" + narrow_text(shown[6])
             rule = CategoryRule("adhoc", "service", narrow_text(snapshot.get("source")), narrow_text(snapshot.get("account_alias")),
                                 narrow_text(snapshot.get("merchant")), "", "", "", None,
                                 (narrow_text(category[0]), narrow_text(category[1])), "", datetime.now(timezone.utc), 1, True)
