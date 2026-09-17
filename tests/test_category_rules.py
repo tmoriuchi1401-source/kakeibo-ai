@@ -183,7 +183,7 @@ def test_mobile_ui_is_opt_in_and_checkbox_is_initially_off():
     enabled = UIDB()
     result = CategoryRuleUIPipeline(enabled, ui_enabled=True, save_enabled=False).refresh()
     assert result["candidates"] == 1
-    assert enabled.ui[0][2] is False and enabled.ui[0][3] == "M-source" and enabled.ui[0][8] == "service"
+    assert enabled.ui[0][4] is False and enabled.ui[0][6] == "M-source" and enabled.ui[0][10] == "service"
     assert enabled.ui[0][1].endswith("未登録")
     assert CategoryRuleUIPipeline(enabled, ui_enabled=True, save_enabled=False).apply_checked()["state"] == "disabled"
     assert CategoryRuleUIPipeline(enabled, ui_enabled=True, save_enabled=True).apply_checked()["checked"] == 0
@@ -202,7 +202,7 @@ def test_mobile_ui_marks_exact_registered_and_conflicting_rule_without_checking_
         def append(self, sheet, rows): self.ui.extend(rows)
     ui = UIDB()
     CategoryRuleUIPipeline(ui, ui_enabled=True, save_enabled=True).refresh()
-    assert ui.ui[0][2] is False and ui.ui[0][1].endswith("登録済み")
+    assert ui.ui[0][4] is False and ui.ui[0][1].endswith("登録済み")
 
 
 def test_checked_ui_condition_is_never_silently_replaced_on_refresh():
@@ -215,8 +215,37 @@ def test_checked_ui_condition_is_never_silently_replaced_on_refresh():
         def append(self, sheet, rows): self.ui.extend(rows)
     ui = UIDB()
     pipe = CategoryRuleUIPipeline(ui, ui_enabled=True, save_enabled=True)
-    pipe.refresh(); ui.ui[0][2] = True
+    pipe.refresh(); ui.ui[0][4] = True
     ui.imports[0][5] = "変更後の請求名"
     pipe.refresh()
-    assert ui.ui[0][2] is False
+    assert ui.ui[0][4] is False
     assert "再承認が必要" in ui.ui[0][1] and "変更後の請求名" in ui.ui[0][1]
+
+
+def test_unclassified_group_can_save_only_the_user_selected_future_rule():
+    class UIDB(RuleDB):
+        def __init__(self):
+            super().__init__(); self.ui=[]
+            self.expenses["M-source"][1][5:7] = ["その他", "未分類"]
+        def category_rule_ui_rows(self): return self.ui
+        def ensure_category_rule_ui_sheet(self, header): self.header=header
+        def clear(self, rng): self.ui=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ自動分類": self.ui.extend(rows)
+            else: self.rule_rows.extend(rows)
+        def update_rows(self, sheet, rows): self.calls.extend(rows)
+    db = UIDB(); pipe = CategoryRuleUIPipeline(db, ui_enabled=True, save_enabled=True)
+    refreshed = pipe.refresh()
+    assert refreshed["unclassified_groups"] == 1
+    assert db.ui[0][2:6] == ["", "", False, False]
+    # Selection is an input proposal.  Refresh binds it into the fresh
+    # snapshot but does not write the ledger or a rule.
+    db.ui[0][2:4] = ["食費", "外食"]
+    db.ui[0][4] = True
+    pipe.refresh()
+    assert db.ui[0][4] is True
+    assert db.rule_rows == [] and db.expenses["M-source"][1][5:7] == ["その他", "未分類"]
+    result = pipe.apply_checked()
+    assert result["results"][0][1]["state"] == "registered"
+    assert len(db.rule_rows) == 1
+    assert db.expenses["M-source"][1][5:7] == ["その他", "未分類"]

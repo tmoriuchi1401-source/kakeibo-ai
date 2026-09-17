@@ -23,6 +23,7 @@ class RuleApprovalRequest:
     # compares it with a fresh source read before saving so a stale checked row
     # can never silently become a different rule.
     condition_snapshot: str = ""
+    allow_fallback_origin: bool = False
 
 
 class CategoryRuleApprovalPipeline:
@@ -43,7 +44,7 @@ class CategoryRuleApprovalPipeline:
     @staticmethod
     def snapshot_for(*, expense_id: str, category: tuple[str, str], kind: str,
                      tx, product_id: str = "", item_name: str = "",
-                     exact_amount: int | None = None) -> str:
+                     exact_amount: int | None = None, proposal: str = "") -> str:
         """A canonical, comparison-only snapshot of the displayed condition."""
         payload = {
             "v": 1, "expense_id": narrow_text(expense_id),
@@ -54,6 +55,7 @@ class CategoryRuleApprovalPipeline:
             "item_name": narrow_text(item_name), "amount": exact_amount,
             "import_id": narrow_text(tx.import_id), "import_status": narrow_text(tx.status),
             "target_id": narrow_text(tx.target_id),
+            "proposal": narrow_text(proposal),
         }
         return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -66,10 +68,12 @@ class CategoryRuleApprovalPipeline:
             return {"state": "held", "reason": "expense_not_found"}
         _, expense = found
         current_category = (narrow_text(expense[5]), narrow_text(expense[6]))
+        requested_category = (narrow_text(request.category[0]), narrow_text(request.category[1]))
         categories = set(self.db.categories())
-        if current_category != request.category:
+        fallback_proposal = request.allow_fallback_origin and current_category == ("その他", "未分類")
+        if current_category != requested_category and not fallback_proposal:
             return {"state": "held", "reason": "category_changed_concurrently"}
-        if current_category not in categories:
+        if requested_category not in categories:
             return {"state": "held", "reason": "invalid_category_pair"}
         tx = self._transactions().get(str(expense[10]))
         if not tx:
@@ -90,9 +94,9 @@ class CategoryRuleApprovalPipeline:
             return {"state": "held", "reason": "bank_account_alias_required"}
         if request.condition_snapshot:
             current_snapshot = self.snapshot_for(
-                expense_id=request.expense_id, category=current_category, kind=kind,
+                expense_id=request.expense_id, category=requested_category, kind=kind,
                 tx=tx, product_id=product_id, item_name=item_name,
-                exact_amount=request.exact_amount,
+                exact_amount=request.exact_amount, proposal="fallback_group" if fallback_proposal else "",
             )
             try:
                 supplied = json.dumps(json.loads(request.condition_snapshot), ensure_ascii=False,
@@ -105,13 +109,13 @@ class CategoryRuleApprovalPipeline:
             if item_name not in AGGREGATE_ITEM_NAMES:
                 return {"state": "held", "reason": "service_requires_aggregate_only"}
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, merchant, "", "", "",
-                                     request.exact_amount, current_category, request.expense_id,
+                                     request.exact_amount, requested_category, request.expense_id,
                                      self.now(), 1, True)
         elif kind == "store_total":
             if item_name not in AGGREGATE_ITEM_NAMES or tx.source == "Amazon":
                 return {"state": "held", "reason": "store_total_requires_aggregate_only"}
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, "", merchant, "", "",
-                                     request.exact_amount, current_category, request.expense_id,
+                                     request.exact_amount, requested_category, request.expense_id,
                                      self.now(), 1, True)
         elif kind == "product":
             if item_name in RESERVED_ITEM_NAMES or (not product_id and not item_name):
@@ -119,7 +123,7 @@ class CategoryRuleApprovalPipeline:
             if tx.source == "Amazon" and not product_id:
                 return {"state": "held", "reason": "product_namespace_required"}
             candidate = CategoryRule("", kind, narrow_text(tx.source), account, "", merchant, product_id, item_name,
-                                     request.exact_amount, current_category, request.expense_id,
+                                     request.exact_amount, requested_category, request.expense_id,
                                      self.now(), 1, True)
         else:
             return {"state": "held", "reason": "unknown_rule_kind"}
