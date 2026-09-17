@@ -6,6 +6,7 @@ from app.category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprova
 from app.category_rule_ui import CategoryRuleUIPipeline
 from app.category_rules import CategoryRule, match_transaction, rule_id_for
 from app.reconciliation import parse_import_rows
+from app.sheets import CATEGORY_RULE_UI_HELPER_A1, category_rule_ui_control_requests
 
 
 def import_row(import_id="p1", source="PayPay", merchant="請求名", amount=100, imported_at="2026-09-17T12:00:00+00:00"):
@@ -249,3 +250,84 @@ def test_unclassified_group_can_save_only_the_user_selected_future_rule():
     assert result["results"][0][1]["state"] == "registered"
     assert len(db.rule_rows) == 1
     assert db.expenses["M-source"][1][5:7] == ["その他", "未分類"]
+
+
+def test_rendered_rule_rows_get_row_relative_dropdowns_and_checkboxes():
+    requests = category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=3)
+    helper = requests[0]["updateCells"]
+    assert helper["range"] == {"sheetId": 11, "startRowIndex": 1, "endRowIndex": 4,
+                               "startColumnIndex": 701, "endColumnIndex": 702}
+    assert "カテゴリ自動分類'!C2" in helper["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
+    assert "カテゴリ自動分類'!C4" in helper["rows"][2]["values"][0]["userEnteredValue"]["formulaValue"]
+    validations = [request["setDataValidation"] for request in requests if "setDataValidation" in request]
+    major = next(item for item in validations if item["range"]["startColumnIndex"] == 2)
+    checks = next(item for item in validations if item["range"]["startColumnIndex"] == 4)
+    minors = [item for item in validations if item["range"]["startColumnIndex"] == 3]
+    assert major["rule"]["condition"]["type"] == "ONE_OF_RANGE"
+    assert checks["rule"]["condition"]["type"] == "BOOLEAN"
+    assert len(minors) == 3 and all(item["rule"]["condition"]["type"] == "ONE_OF_RANGE" for item in minors)
+    assert minors[0]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(f"${CATEGORY_RULE_UI_HELPER_A1}$2:$ALL$2")
+    assert minors[-1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(f"${CATEGORY_RULE_UI_HELPER_A1}$4:$ALL$4")
+
+
+def test_classified_past_choice_survives_refresh_and_reaches_past_preview_ui():
+    from app.category_backfill_ui import CategoryBackfillUIPipeline
+
+    class CombinedDB(RuleDB):
+        def __init__(self): super().__init__(); self.ui=[]; self.backfill=[]
+        def category_rule_ui_rows(self): return self.ui
+        def category_backfill_ui_rows(self): return self.backfill
+        def ensure_category_rule_ui_sheet(self, header): pass
+        def ensure_category_backfill_ui_sheet(self, header): pass
+        def clear(self, rng):
+            if "カテゴリ過去反映" in rng: self.backfill=[]
+            else: self.ui=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ自動分類": self.ui.extend(rows)
+            elif sheet == "カテゴリ過去反映": self.backfill.extend(rows)
+            else: self.rule_rows.extend(rows)
+    db = CombinedDB(); rule_ui = CategoryRuleUIPipeline(db, ui_enabled=True, save_enabled=True)
+    rule_ui.refresh(); db.ui[0][5] = True
+    rule_ui.refresh()
+    assert db.ui[0][5] is True
+    backfill = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    assert backfill["conditions"] == 1
+    assert db.backfill[0][3] == "表示中の条件（過去分のみ）"
+
+
+def test_runner_order_preserves_both_choices_until_their_own_processors_consume_them():
+    from app.category_backfill_ui import CategoryBackfillUIPipeline
+
+    class RunnerDB(RuleDB):
+        def __init__(self):
+            super().__init__(); self.ui=[]; self.backfill=[]; self.replacements=[]
+            self.expenses["M-source"][1][5:7] = ["その他", "未分類"]
+        def category_rule_ui_rows(self): return self.ui
+        def category_backfill_ui_rows(self): return self.backfill
+        def replace_category_rule_ui_rows(self, rows, header):
+            self.replacements.append(rows); self.ui = [list(row) for row in rows]
+        def ensure_category_backfill_ui_sheet(self, header): pass
+        def clear(self, rng): self.backfill=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ過去反映": self.backfill.extend(rows)
+            else: self.rule_rows.extend(rows)
+        def update_rows(self, sheet, rows):
+            if sheet == "カテゴリ自動分類":
+                for row_num, row in rows: self.ui[row_num-2] = row
+            elif sheet == "カテゴリ過去反映":
+                for row_num, row in rows: self.backfill[row_num-2] = row
+            else: super().update_rows(sheet, rows)
+    db = RunnerDB(); rule_ui = CategoryRuleUIPipeline(db, ui_enabled=True, save_enabled=True)
+    rule_ui.refresh()
+    db.ui[0][2:6] = ["食費", "外食", True, True]
+    # First runner stage binds the person's category to a fresh snapshot while
+    # retaining both independent choices; it uses replacement, not INSERT_ROWS.
+    rule_ui.refresh()
+    assert db.replacements and db.ui[0][4:6] == [True, True]
+    future = rule_ui.apply_checked()
+    assert future["results"][0][1]["state"] == "registered"
+    assert db.ui[0][4:6] == [False, True]
+    # The subsequent past-preview stage still receives the surviving F check.
+    backfill = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    assert backfill["conditions"] == 2  # saved future rule + displayed past-only condition
+    assert any(row[3] == "表示中の条件（過去分のみ）" for row in db.backfill)
