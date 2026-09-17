@@ -24,6 +24,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       # Preview and apply remain separate opt-ins. A preview never authorizes
       # any F:G mutation.
+      CATEGORY_RULE_UI_ENABLED: ${{ vars.CATEGORY_RULE_UI_ENABLED }}
       CATEGORY_BACKFILL_PREVIEW_ENABLED: ${{ vars.CATEGORY_BACKFILL_PREVIEW_ENABLED }}
       CATEGORY_BACKFILL_APPLY_ENABLED: ${{ vars.CATEGORY_BACKFILL_APPLY_ENABLED }}
     steps:
@@ -33,6 +34,9 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
+      - name: Refresh opt-in category condition candidates
+        if: ${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.CATEGORY_RULE_UI_ENABLED == 'true' }}
+        run: python -m app.cli category-rule-ui-refresh
       - name: Refresh phone-width condition choices
         if: ${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
         run: python -m app.cli category-backfill-ui-refresh
