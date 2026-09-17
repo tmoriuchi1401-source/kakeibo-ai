@@ -2,7 +2,11 @@
 from copy import deepcopy
 import pytest
 
-from app.sheets import SheetsDB
+from app.sheets import (
+    EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1,
+    EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1,
+    SheetsDB,
+)
 from app.sheets_ui import (
     CAP, CATEGORY_UI_ID, CATEGORY_UI_TITLE, EXPENSE_CATEGORY_HELPER_ID,
     EXPENSE_CATEGORY_HELPER_MARKER, HOME_ID, IDS, VERSION, build_plan, home_cells,
@@ -100,8 +104,12 @@ def test_expense_category_rules_are_master_derived_and_row_relative():
     assert major["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!$A$2:$A")
     # Each rule explicitly names its own helper row.  Sheets does not reliably
     # adjust a range-backed validation source when the rule itself is filled.
-    assert minor["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B2:ALL2")
-    assert minors[1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B3:ALL3")
+    assert minor["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        f"!{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1}2:{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1}2"
+    )
+    assert minors[1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        f"!{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1}3:{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1}3"
+    )
     assert all(rule["rule"]["strict"] for rule in [major, *minors])
 
 
@@ -112,7 +120,9 @@ def test_new_ledger_rows_receive_only_their_own_minor_rule():
          "startColumnIndex": 6, "endColumnIndex": 7}
         for row in range(1430, 1433)
     ]
-    assert requests[2]["setDataValidation"]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("!B1432:ALL1432")
+    assert requests[2]["setDataValidation"]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        f"!{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1}1432:{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1}1432"
+    )
 
 
 def test_expense_append_reinstalls_only_new_row_rules_after_ui_installation():

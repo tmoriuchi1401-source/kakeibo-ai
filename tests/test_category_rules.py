@@ -6,7 +6,13 @@ from app.category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprova
 from app.category_rule_ui import CategoryRuleUIPipeline
 from app.category_rules import CategoryRule, match_transaction, rule_id_for
 from app.reconciliation import parse_import_rows
-from app.sheets import CATEGORY_RULE_UI_HELPER_A1, category_rule_ui_control_requests
+from app.sheets import (
+    CATEGORY_RULE_UI_HELPER_A1,
+    CATEGORY_RULE_UI_HELPER_END_A1,
+    EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1,
+    category_rule_ui_control_requests,
+)
+from app.sheets_ui_actions import expense_category_validation_requests
 
 
 def import_row(import_id="p1", source="PayPay", merchant="請求名", amount=100, imported_at="2026-09-17T12:00:00+00:00"):
@@ -266,8 +272,35 @@ def test_rendered_rule_rows_get_row_relative_dropdowns_and_checkboxes():
     assert major["rule"]["condition"]["type"] == "ONE_OF_RANGE"
     assert checks["rule"]["condition"]["type"] == "BOOLEAN"
     assert len(minors) == 3 and all(item["rule"]["condition"]["type"] == "ONE_OF_RANGE" for item in minors)
-    assert minors[0]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(f"${CATEGORY_RULE_UI_HELPER_A1}$2:$ALL$2")
-    assert minors[-1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(f"${CATEGORY_RULE_UI_HELPER_A1}$4:$ALL$4")
+    assert minors[0]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        f"${CATEGORY_RULE_UI_HELPER_A1}$2:${CATEGORY_RULE_UI_HELPER_END_A1}$2"
+    )
+    assert minors[-1]["rule"]["condition"]["values"][0]["userEnteredValue"].endswith(
+        f"${CATEGORY_RULE_UI_HELPER_A1}$4:${CATEGORY_RULE_UI_HELPER_END_A1}$4"
+    )
+    assert EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1 == "ZY"
+
+
+def test_same_row_ledger_and_rule_ui_minor_dropdowns_use_disjoint_helper_ranges():
+    """A ledger 食費 row and a rule-UI 通信 row must never share spill cells."""
+    ledger_rules = [request["setDataValidation"] for request in expense_category_validation_requests()
+                    if "setDataValidation" in request]
+    ledger_row_three = next(rule for rule in ledger_rules
+                            if rule["range"]["startColumnIndex"] == 6
+                            and rule["range"]["startRowIndex"] == 2)
+    ui_rules = [request["setDataValidation"] for request in
+                category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=3)
+                if "setDataValidation" in request]
+    ui_row_three = next(rule for rule in ui_rules
+                        if rule["range"]["startColumnIndex"] == 3
+                        and rule["range"]["startRowIndex"] == 2)
+    ledger_source = ledger_row_three["rule"]["condition"]["values"][0]["userEnteredValue"]
+    ui_source = ui_row_three["rule"]["condition"]["values"][0]["userEnteredValue"]
+    assert ledger_source.endswith("!B3:ZY3")
+    assert ui_source.endswith("!$ZZ$3:$ALL$3")
+
+    helper = category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=3)[0]["updateCells"]
+    assert "カテゴリ自動分類'!C3" in helper["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
 
 
 def test_classified_past_choice_survives_refresh_and_reaches_past_preview_ui():

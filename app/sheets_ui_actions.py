@@ -9,6 +9,10 @@ from .sheets_ui import (
     EXPENSE_CATEGORY_HELPER_ID, EXPENSE_CATEGORY_HELPER_TITLE, HOME_ID, IDS,
     cell, color, dimension, grid, source_range, style,
 )
+from .sheets import (
+    EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1,
+    EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1,
+)
 
 
 def category_ui_cells():
@@ -128,7 +132,11 @@ def expense_minor_category_validation_requests(start_row:int, end_row:int):
     return [
         {"setDataValidation": {"range": grid(ledger, row-1, row, 6, 7), "rule": {
             "condition": {"type": "ONE_OF_RANGE", "values": [
-                {"userEnteredValue": f"='{EXPENSE_CATEGORY_HELPER_TITLE}'!B{row}:ALL{row}"}
+                {"userEnteredValue": (
+                    f"='{EXPENSE_CATEGORY_HELPER_TITLE}'!"
+                    f"{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_START_A1}{row}:"
+                    f"{EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1}{row}"
+                )}
             ]}, "strict": True, "showCustomUi": True,
             "inputMessage": "大カテゴリを変更した場合は、このカテゴリから小カテゴリを選び直してください。"}}}
         for row in range(start_row, end_row+1)
