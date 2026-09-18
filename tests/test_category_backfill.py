@@ -493,8 +493,12 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
                for update in updates)
     formulas=[update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
               for update in updates if update["range"]["startRowIndex"] == 1]
-    assert any("ホーム'!$I$3:$I$5001" in formula and "$B$2:$B$1000" in formula for formula in formulas)
-    assert any('"過去すべて"' in formula and "$C$2:$C$1000" in formula for formula in formulas)
+    start_formula=next(formula for formula in formulas if "$B$2:$B$1000" in formula)
+    end_formula=next(formula for formula in formulas if "$C$2:$C$1000" in formula)
+    assert "ホーム'!$I$3:$I$5001" in start_formula
+    assert 'ARRAYFORMULA(IF(ISNUMBER($B$2:$B$1000),TEXT($B$2:$B$1000,"yyyy-mm"),TO_TEXT($B$2:$B$1000)))' in start_formula
+    assert '"過去すべて"' in end_formula
+    assert 'ARRAYFORMULA(IF(ISNUMBER($C$2:$C$1000),TEXT($C$2:$C$1000,"yyyy-mm"),TO_TEXT($C$2:$C$1000)))' in end_formula
     assert any(request.get("updateDimensionProperties",{}).get("range",{}).get("startIndex") == 25 and
                request["updateDimensionProperties"]["range"]["endIndex"] == 27 and
                request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
@@ -508,6 +512,25 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
            and request["repeatCell"]["range"].get("startColumnIndex") == 1
            and request["repeatCell"]["range"].get("startRowIndex") == 3]
     assert faded and faded[0]["cell"]["userEnteredFormat"]["textFormat"]["italic"] is True
+
+
+def test_date_serial_month_controls_are_normalized_and_keep_preview_semantics():
+    class SerialDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.rules=[service_rule("CR-one", "請求名", ("食費", "外食"))]; self.replaced=[]
+        def category_backfill_ui_table(self):
+            payload=CategoryBackfillUIPipeline._payload(self.rules[0], saved_rule=True)
+            return ([
+                "条件・カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間",
+            ], [["旧", 46204, "2026-07", True, "保存済みルール", "CR-one", 1, payload, ""]])
+        def category_rule_ui_rows(self): return []
+        def replace_category_backfill_ui_rows(self, rows, header): self.replaced=(rows, header)
+
+    db=SerialDB(); CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    row=db.replaced[0][0]
+    assert row[1:4] == ["2026-07", "2026-07", True]
+    assert _month_period(46204, "2026-07") == ("2026-07-01", "2026-07-31")
+    assert _month_period(46204, "過去すべて") == ("", "")
 
 
 def test_sheets_read_metadata_is_cached_and_only_429_is_retried():

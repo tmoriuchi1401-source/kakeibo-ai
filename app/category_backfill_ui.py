@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 import calendar
-from datetime import datetime, timezone
+import math
+from datetime import date, datetime, timedelta, timezone
 
 from .category_backfill import BackfillSpec, CategoryBackfillPipeline
 from .category_rules import CategoryRule, narrow_text, parse_rules, valid_rule
@@ -48,6 +49,17 @@ def _period(value: object) -> tuple[str, str] | None:
 
 
 def _month(value: object) -> str | None:
+    # The Sheets Values API can expose a cell formatted as ``2026-07`` as
+    # the underlying Google Sheets date serial (for example, 46204).  Keep
+    # the control contract textual, including when a prior UI row has not
+    # yet been rewritten by the new dropdown source.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(value):
+            return None
+        try:
+            return (date(1899, 12, 30) + timedelta(days=value)).strftime("%Y-%m")
+        except (OverflowError, ValueError):
+            return None
     text = narrow_text(value)
     if len(text) != 7 or text[4:5] != "-":
         return None
@@ -58,6 +70,12 @@ def _month(value: object) -> str | None:
     except (TypeError, ValueError):
         return None
     return f"{year:04d}-{number:02d}"
+
+
+def _month_control(value: object) -> str:
+    """Preserve textual controls and rewrite Sheets date serials as months."""
+    month = _month(value)
+    return month if month is not None else narrow_text(value)
 
 
 def _month_period(start_value: object, end_value: object) -> tuple[str, str] | None:
@@ -172,7 +190,8 @@ class CategoryBackfillUIPipeline:
         unchanged=len(prior) > PAYLOAD and prior[PAYLOAD] == payload
         if not unchanged:
             return default_month, default_month, False, ""
-        return (narrow_text(prior[START_MONTH]), narrow_text(prior[END_MONTH]),
+        return (_month_control(prior[START_MONTH]),
+                "過去すべて" if narrow_text(prior[END_MONTH]) == "過去すべて" else _month_control(prior[END_MONTH]),
                 _is_checked(prior[PREVIEW]), narrow_text(prior[LEGACY_PERIOD]))
 
     @staticmethod
