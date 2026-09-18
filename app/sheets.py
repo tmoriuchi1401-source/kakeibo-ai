@@ -6,7 +6,14 @@ from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
 
 CATEGORY_SEPARATOR = "｜"
-CATEGORY_RULE_UI_SHEET = "カテゴリ自動分類"
+CATEGORY_RULE_UI_SHEET = "カテゴリ操作"
+LEGACY_CATEGORY_RULE_UI_SHEET = "カテゴリ自動分類"
+CATEGORY_WORKFLOW_SHEET = CATEGORY_RULE_UI_SHEET
+CATEGORY_WORKFLOW_MARKERS = {
+    "rule": "■ 1. カテゴリを選ぶ・今後の自動分類",
+    "backfill": "■ 2. 過去分の固定プレビュー",
+    "confirm": "■ 3. 固定プレビューを確認して反映",
+}
 CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
 # The shared helper sheet has two disjoint horizontal spill surfaces.  Ledger
 # G may only read B:ZY; the opt-in rule UI may only read ZZ:ALL.  Keeping this
@@ -20,7 +27,7 @@ CATEGORY_RULE_UI_HELPER_END_A1 = "ALL"
 
 
 def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
-                                      row_count: int) -> list[dict]:
+                                      row_count: int, start_row: int = 2) -> list[dict]:
     """Return controls for the rows actually rendered by the rule UI.
 
     The minor choice is a native range dropdown whose source is a row-specific
@@ -30,28 +37,28 @@ def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
     """
     if row_count <= 0:
         return []
-    end_row = row_count + 1
+    end_row = start_row + row_count - 1
     helper_rows = []
-    for row_num in range(2, end_row + 1):
+    for row_num in range(start_row, end_row + 1):
         helper_rows.append({"values": [{"userEnteredValue": {"formulaValue": (
             "=IFERROR(TRANSPOSE(UNIQUE(FILTER('カテゴリ'!$B$2:$B,"
             f"'カテゴリ'!$A$2:$A='{CATEGORY_RULE_UI_SHEET}'!C{row_num}))),\"\")"
         )}}]})
     requests = [
         {"updateCells": {"range": {"sheetId": helper_sheet_id,
-            "startRowIndex": 1, "endRowIndex": end_row,
+            "startRowIndex": start_row - 1, "endRowIndex": end_row,
             "startColumnIndex": CATEGORY_RULE_UI_HELPER_COLUMN,
             "endColumnIndex": CATEGORY_RULE_UI_HELPER_COLUMN + 1},
             "rows": helper_rows, "fields": "userEnteredValue"}},
         {"setDataValidation": {"range": {"sheetId": sheet_id,
-            "startRowIndex": 1, "endRowIndex": end_row,
+            "startRowIndex": start_row - 1, "endRowIndex": end_row,
             "startColumnIndex": 2, "endColumnIndex": 3}, "rule": {
                 "condition": {"type": "ONE_OF_RANGE", "values": [
                     {"userEnteredValue": "='カテゴリ'!$A$2:$A"}
                 ]}, "strict": True, "showCustomUi": True,
                 "inputMessage": "カテゴリマスタの大カテゴリを選択してください。"}}},
         {"setDataValidation": {"range": {"sheetId": sheet_id,
-            "startRowIndex": 1, "endRowIndex": end_row,
+            "startRowIndex": start_row - 1, "endRowIndex": end_row,
             "startColumnIndex": 4, "endColumnIndex": 6}, "rule": {
                 "condition": {"type": "BOOLEAN"}, "strict": True,
                 "showCustomUi": True}}},
@@ -63,7 +70,7 @@ def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
                         "bold": False}, "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
             "fields": "userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
     ]
-    for row_num in range(2, end_row + 1):
+    for row_num in range(start_row, end_row + 1):
         requests.append({"setDataValidation": {"range": {"sheetId": sheet_id,
             "startRowIndex": row_num - 1, "endRowIndex": row_num,
             "startColumnIndex": 3, "endColumnIndex": 4}, "rule": {
@@ -288,6 +295,19 @@ class SheetsDB:
         self.set_raw_range(f"'{sheet}'!A{row_num}",[row])
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
         if not rows:return
+        section={"カテゴリ自動分類":"rule", "カテゴリ過去反映":"backfill",
+                 "カテゴリ過去反映確認":"confirm"}.get(sheet)
+        if section and CATEGORY_WORKFLOW_SHEET in set(self.sheet_titles()):
+            blocks=self._category_workflow_blocks()
+            start=self._workflow_positions(blocks)[section]["start"]
+            data=[{"range":f"{CATEGORY_WORKFLOW_SHEET}!A{start+row_num-2}",
+                   "values":[self._workflow_physical_row(section, row)]}
+                  for row_num,row in rows]
+            self.svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.sid,
+                body={"valueInputOption":"RAW","data":data}
+            ).execute()
+            return
         data=[{"range":f"{sheet}!A{row_num}","values":[row]} for row_num,row in rows]
         self.svc.spreadsheets().values().batchUpdate(
             spreadsheetId=self.sid,
@@ -392,54 +412,200 @@ class SheetsDB:
     def ensure_category_rule_sheet(self):
         """Explicit write path only; never called by routine imports or UI refresh."""
         self.ensure_sheet("カテゴリ自動分類ルール", HEADERS["カテゴリ自動分類ルール"])
+    def _category_workflow_defaults(self):
+        from .category_backfill_ui import BACKFILL_CONFIRM_HEADERS, BACKFILL_UI_HEADERS
+        from .category_rule_ui import UI_HEADERS
+        return {"rule": list(UI_HEADERS), "backfill": list(BACKFILL_UI_HEADERS),
+                "confirm": list(BACKFILL_CONFIRM_HEADERS)}
+
+    @staticmethod
+    def _workflow_logical_row(section, physical):
+        cells=list(physical)+[""]*max(0, 12-len(physical))
+        if section == "backfill":
+            return cells[:5]+cells[6:11]
+        if section == "confirm":
+            return cells[:4]+[cells[6]]
+        return cells[:12]
+
+    @staticmethod
+    def _workflow_physical_row(section, logical):
+        cells=list(logical)
+        if section == "backfill":
+            cells += [""]*max(0, 10-len(cells))
+            return cells[:5]+[""]+cells[5:10]+[""]
+        if section == "confirm":
+            cells += [""]*max(0, 5-len(cells))
+            return cells[:4]+["", "", cells[4]]+[""]*5
+        return cells[:12]+[""]*max(0, 12-len(cells))
+
+    def _category_workflow_blocks(self):
+        """Read the three independently-approved actions from one visible tab."""
+        defaults=self._category_workflow_defaults(); titles=set(self.sheet_titles())
+        if CATEGORY_WORKFLOW_SHEET not in titles:
+            legacy={}
+            legacy["rule"]=(defaults["rule"], self.get(f"{LEGACY_CATEGORY_RULE_UI_SHEET}!A2:L")
+                            if LEGACY_CATEGORY_RULE_UI_SHEET in titles else [])
+            legacy["backfill"]=(defaults["backfill"], self.get("カテゴリ過去反映!A2:J")
+                                if "カテゴリ過去反映" in titles else [])
+            legacy["confirm"]=(defaults["confirm"], self.get("カテゴリ過去反映確認!A2:E")
+                               if "カテゴリ過去反映確認" in titles else [])
+            return legacy
+        values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+        markers={key: next((index for index,row in enumerate(values)
+                            if row and row[0] == marker), None)
+                 for key,marker in CATEGORY_WORKFLOW_MARKERS.items()}
+        blocks={}
+        ordered=["rule", "backfill", "confirm"]
+        for position,key in enumerate(ordered):
+            marker=markers[key]
+            if marker is None:
+                blocks[key]=(defaults[key], [])
+                continue
+            following=[markers[after] for after in ordered[position+1:]
+                       if markers[after] is not None]
+            end=min(following) if following else len(values)
+            header=list(values[marker+1]) if marker+1 < len(values) and values[marker+1] else defaults[key]
+            rows=[]
+            for row in values[marker+2:end]:
+                if any(str(value).strip() for value in row):
+                    rows.append(self._workflow_logical_row(key, row))
+            blocks[key]=(header, rows)
+        return blocks
+
+    def _ensure_category_workflow_sheet(self):
+        titles=set(self.sheet_titles())
+        if CATEGORY_WORKFLOW_SHEET in titles:
+            return
+        if LEGACY_CATEGORY_RULE_UI_SHEET in titles:
+            legacy=next(sheet for sheet in self._sheet_metadata()["sheets"]
+                        if sheet["properties"]["title"] == LEGACY_CATEGORY_RULE_UI_SHEET)
+            self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={"requests":[{
+                "updateSheetProperties":{"properties":{"sheetId":legacy["properties"]["sheetId"],
+                    "title":CATEGORY_WORKFLOW_SHEET},"fields":"title"}
+            }]}).execute()
+        else:
+            self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={"requests":[{
+                "addSheet":{"properties":{"title":CATEGORY_WORKFLOW_SHEET}}
+            }]}).execute()
+        self._invalidate_sheet_metadata()
+
+    def _workflow_positions(self, blocks):
+        row_num=1; positions={}
+        for section in ("rule", "backfill", "confirm"):
+            header,rows=blocks[section]
+            positions[section]={"marker":row_num, "header":row_num+1,
+                                "start":row_num+2, "count":len(rows)}
+            row_num += len(rows)+3
+        return positions
+
+    def _workflow_backfill_requests(self, sheet_id, start_row, rows):
+        """Controls for the historical-preview block, scoped to its rows only."""
+        start_rule={"condition":{"type":"ONE_OF_RANGE","values":[
+            {"userEnteredValue":f"='{CATEGORY_WORKFLOW_SHEET}'!$Z$2:$Z$1000"}
+        ]},"strict":True,"showCustomUi":True}
+        end_rule={"condition":{"type":"ONE_OF_RANGE","values":[
+            {"userEnteredValue":f"='{CATEGORY_WORKFLOW_SHEET}'!$AA$2:$AA$1000"}
+        ]},"strict":True,"showCustomUi":True}
+        normalizer="ARRAYFORMULA(IF(ISNUMBER(%s),TEXT(%s,\"yyyy-mm\"),TO_TEXT(%s)))"
+        home_raw="'ホーム'!$I$3:$I$5001"; start_raw="$C$2:$C$1000"; end_raw="$D$2:$D$1000"
+        month_pattern="^[0-9]{4}-(0[1-9]|1[0-2])$"
+        home_text=normalizer%(home_raw,home_raw,home_raw); start_text=normalizer%(start_raw,start_raw,start_raw); end_text=normalizer%(end_raw,end_raw,end_raw)
+        start_formula=("=LET(home_text,"+home_text+",home,FILTER(home_text,REGEXMATCH(home_text,\""+month_pattern+"\")),current_text,"+start_text+",current,IFERROR(FILTER(current_text,REGEXMATCH(current_text,\""+month_pattern+"\")),\"\"),values,TOCOL({home;current},1),SORT(UNIQUE(values),1,TRUE))")
+        end_formula=("=LET(home_text,"+home_text+",home,FILTER(home_text,REGEXMATCH(home_text,\""+month_pattern+"\")),current_text,"+end_text+",current,IFERROR(FILTER(current_text,REGEXMATCH(current_text,\""+month_pattern+"\")),\"\"),values,TOCOL({home;current},1),{\"過去すべて\";SORT(UNIQUE(values),1,TRUE)})")
+        header_row=start_row-1
+        requests=[
+            {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":header_row-1,"endRowIndex":header_row,
+                "startColumnIndex":2,"endColumnIndex":4},"rows":[{"values":[
+                    {"note":"開始月を選びます。終了月が「過去すべて」のとき開始月は使用しません。選択だけでは反映されません。"},
+                    {"note":"終了月を選びます。「過去すべて」は取込済みの全期間を対象にします。作成済み固定プレビューは変更しません。"},
+                ]}],"fields":"note"}},
+            {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,"startColumnIndex":25,"endColumnIndex":26},"rows":[{"values":[{"userEnteredValue":{"stringValue":"過去反映・開始月候補"}}]}],"fields":"userEnteredValue"}},
+            {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":25,"endColumnIndex":26},"rows":[{"values":[{"userEnteredValue":{"formulaValue":start_formula}}]}],"fields":"userEnteredValue"}},
+            {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,"startColumnIndex":26,"endColumnIndex":27},"rows":[{"values":[{"userEnteredValue":{"stringValue":"過去反映・終了月候補"}}]}],"fields":"userEnteredValue"}},
+            {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":26,"endColumnIndex":27},"rows":[{"values":[{"userEnteredValue":{"formulaValue":end_formula}}]}],"fields":"userEnteredValue"}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":25,"endIndex":27},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+        ]
+        for row_num,row in enumerate(rows, start=start_row):
+            requests.extend([
+                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":start_rule}},
+                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":3,"endColumnIndex":4},"rule":end_rule}},
+                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":4,"endColumnIndex":5},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+                {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":4,"endColumnIndex":5},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},
+            ])
+            if len(row)>3 and row[3] == "過去すべて":
+                requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.93,"green":0.93,"blue":0.93},"textFormat":{"foregroundColor":{"red":0.45,"green":0.45,"blue":0.45},"italic":True}}},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
+        return requests
+
+    def _configure_category_workflow(self, blocks, positions):
+        meta=self._sheet_metadata(); sheet=next(value for value in meta["sheets"]
+            if value["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+        sheet_id=sheet["properties"]["sheetId"]
+        helper=next((value for value in meta["sheets"] if value["properties"]["title"] == CATEGORY_RULE_UI_HELPER_SHEET), None)
+        used=max(position["start"]+position["count"] for position in positions.values())
+        requests=[]
+        column_count=sheet["properties"].get("gridProperties", {}).get("columnCount", 0)
+        if column_count < 27:
+            requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"COLUMNS","length":27-column_count}})
+        requests += [
+            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":6}}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":12},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":2}},"fields":"gridProperties.frozenRowCount"}},
+        ]
+        for section in ("rule", "backfill", "confirm"):
+            marker=positions[section]["marker"]-1; header=positions[section]["header"]-1
+            requests += [
+                {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":marker,"endRowIndex":marker+1,"startColumnIndex":0,"endColumnIndex":6},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
+                {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":header,"endRowIndex":header+1,"startColumnIndex":0,"endColumnIndex":6},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.20,"green":0.36,"blue":0.50},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
+            ]
+        rule_position=positions["rule"]
+        if helper and rule_position["count"]:
+            requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
+        backfill_position=positions["backfill"]
+        requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))
+        confirm_position=positions["confirm"]
+        for row_num,row in enumerate(blocks["confirm"][1], start=confirm_position["start"]):
+            if len(row)>4 and str(row[4]).strip():
+                requests.extend([
+                    {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+                    {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},
+                ])
+        for legacy_title in ("カテゴリ過去反映", "カテゴリ過去反映確認"):
+            legacy=next((value for value in meta["sheets"] if value["properties"]["title"] == legacy_title), None)
+            if legacy:
+                requests.append({"updateSheetProperties":{"properties":{"sheetId":legacy["properties"]["sheetId"],"hidden":True},"fields":"hidden"}})
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+
+    def _replace_category_workflow_section(self, section, rows, header):
+        blocks=self._category_workflow_blocks(); blocks[section]=(list(header), [list(row) for row in rows])
+        self._ensure_category_workflow_sheet(); positions=self._workflow_positions(blocks)
+        values=[]
+        for key in ("rule", "backfill", "confirm"):
+            block_header,block_rows=blocks[key]
+            values.append([CATEGORY_WORKFLOW_MARKERS[key]])
+            values.append(self._workflow_physical_row(key, block_header))
+            values.extend(self._workflow_physical_row(key, row) for row in block_rows)
+            values.append([""])
+        self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+        self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
+        self._configure_category_workflow(blocks, positions)
+
     def ensure_category_rule_ui_sheet(self, header):
         """Create the opt-in mobile request surface only after UI approval."""
-        self.ensure_sheet(CATEGORY_RULE_UI_SHEET, header)
-        meta=self._sheet_metadata()
-        sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
-        sheet_id=sheet["properties"]["sheetId"]
-        requests=[
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
-            for index,width in enumerate((90,100,60,60,40,40))
-        ]
-        requests += [
-            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
-            # The actual rows get their controls only after refresh writes
-            # them.  Applying range validation before INSERT_ROWS was the
-            # cause of the controls drifting below the visible candidates.
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
-            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
-        ]
-        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+        self._ensure_category_workflow_sheet()
 
     def replace_category_rule_ui_rows(self, rows:list[list], header:list[str]):
         """Replace the UI-owned values without inserting rows below controls."""
-        self.ensure_category_rule_ui_sheet(header)
-        self.clear(f"{CATEGORY_RULE_UI_SHEET}!A2:L")
-        if rows:
-            self.svc.spreadsheets().values().update(
-                spreadsheetId=self.sid, range=f"{CATEGORY_RULE_UI_SHEET}!A2",
-                valueInputOption="USER_ENTERED", body={"values": rows},
-            ).execute()
-        if not rows:
-            return
-        meta=self._sheet_metadata()
-        sheet_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
-                      if value["properties"]["title"] == CATEGORY_RULE_UI_SHEET)
-        helper_id=next(value["properties"]["sheetId"] for value in meta["sheets"]
-                       if value["properties"]["title"] == CATEGORY_RULE_UI_HELPER_SHEET)
-        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={"requests":
-            category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper_id,
-                                              row_count=len(rows))
-        }).execute()
+        self._replace_category_workflow_section("rule", rows, header)
     def category_rule_ui_rows(self):
-        if CATEGORY_RULE_UI_SHEET not in set(self.sheet_titles()): return []
-        return self.get(f"{CATEGORY_RULE_UI_SHEET}!A2:L")
+        return self._category_workflow_blocks()["rule"][1]
 
     def consume_category_rule_ui_past_choice(self, condition_key: str, result: dict) -> bool:
         """Consume only the processed past checkbox for its stable condition key."""
-        for row_num, row in enumerate(self.category_rule_ui_rows(), start=2):
+        blocks=self._category_workflow_blocks()
+        start=self._workflow_positions(blocks)["rule"]["start"]
+        for row_num, row in enumerate(blocks["rule"][1], start=start):
             cells=list(row) + [""] * max(0, 12-len(row))
             if cells[6] != condition_key:
                 continue
@@ -448,8 +614,8 @@ class SheetsDB:
                     + (f" / 要求={result['request_id']}" if result.get("request_id") else ""))
             self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid, body={
                 "valueInputOption": "USER_ENTERED", "data": [
-                    {"range": f"{CATEGORY_RULE_UI_SHEET}!B{row_num}", "values": [[str(cells[1]) + suffix]]},
-                    {"range": f"{CATEGORY_RULE_UI_SHEET}!F{row_num}", "values": [[False]]},
+                    {"range": f"{CATEGORY_WORKFLOW_SHEET}!B{row_num}", "values": [[str(cells[1]) + suffix]]},
+                    {"range": f"{CATEGORY_WORKFLOW_SHEET}!F{row_num}", "values": [[False]]},
                 ],
             }).execute()
             return True
@@ -591,9 +757,9 @@ class SheetsDB:
                     }},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
     def ensure_category_backfill_ui_sheet(self, header):
-        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 5, ())
+        self._ensure_category_workflow_sheet()
     def ensure_category_backfill_confirmation_sheet(self, header):
-        self._configure_backfill_mobile_sheet("カテゴリ過去反映確認", header, 4, ())
+        self._ensure_category_workflow_sheet()
     def _replace_backfill_rows(self, title, header, hidden_from, rows, control_rows, ignored_start_rows=()):
         """Replace generated values in place; never insert physical rows."""
         self.ensure_sheet(title, header)
@@ -608,25 +774,17 @@ class SheetsDB:
             ).execute()
         self._configure_backfill_mobile_sheet(title, header, hidden_from, control_rows, ignored_start_rows)
     def replace_category_backfill_ui_rows(self, rows:list[list], header:list[str]):
-        self._replace_backfill_rows("カテゴリ過去反映", header, 5, rows,
-                                    range(2, len(rows)+2),
-                                    [row_num for row_num,row in enumerate(rows, start=2)
-                                     if len(row) > 3 and row[3] == "過去すべて"])
+        self._replace_category_workflow_section("backfill", rows, header)
     def replace_category_backfill_confirmation_rows(self, rows:list[list], header:list[str]):
-        self._replace_backfill_rows("カテゴリ過去反映確認", header, 4, rows,
-                                    [row_num for row_num,row in enumerate(rows, start=2)
-                                     if len(row) > 4 and str(row[4]).strip()])
+        self._replace_category_workflow_section("confirm", rows, header)
     def category_backfill_ui_rows(self):
-        if "カテゴリ過去反映" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ過去反映!A2:J")
+        return self._category_workflow_blocks()["backfill"][1]
 
     def category_backfill_ui_table(self):
-        if "カテゴリ過去反映" not in set(self.sheet_titles()): return [], []
-        values=self.get("カテゴリ過去反映!A1:I")
-        return (list(values[0]) if values else [], [list(row) for row in values[1:]])
+        header,rows=self._category_workflow_blocks()["backfill"]
+        return list(header), [list(row) for row in rows]
     def category_backfill_confirmation_rows(self):
-        if "カテゴリ過去反映確認" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ過去反映確認!A2:E")
+        return self._category_workflow_blocks()["confirm"][1]
     def expense_rows_for_import(self,import_id:str)->list[tuple[int,list]]:
         return [(i,r) for i,r in enumerate(self.get("支出明細!A2:M"),start=2)
                 if len(r)>10 and r[10]==import_id]
