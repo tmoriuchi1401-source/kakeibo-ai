@@ -497,6 +497,10 @@ class SheetsDB:
             # checkbox cannot survive on a now-empty/detail row.
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":len(header)},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":clear_start,"endColumnIndex":clear_end}}},
+            # The prior one-period layout hid D:G.  Explicitly re-expose the
+            # new four input columns so D's checkbox cannot stay hidden after
+            # a header-only migration.
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":hidden_from},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":hidden_from,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
