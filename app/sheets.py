@@ -430,13 +430,20 @@ class SheetsDB:
     @staticmethod
     def _workflow_physical_row(section, logical):
         cells=list(logical)
+        def checkbox(value):
+            text=str(value).strip().upper()
+            return True if text == "TRUE" else False if text == "FALSE" else value
         if section == "backfill":
             cells += [""]*max(0, 10-len(cells))
+            cells[4]=checkbox(cells[4])
             return cells[:5]+[""]+cells[5:10]+[""]
         if section == "confirm":
             cells += [""]*max(0, 5-len(cells))
+            cells[2]=checkbox(cells[2])
             return cells[:4]+["", "", cells[4]]+[""]*5
-        return cells[:12]+[""]*max(0, 12-len(cells))
+        cells += [""]*max(0, 12-len(cells))
+        cells[4]=checkbox(cells[4]); cells[5]=checkbox(cells[5])
+        return cells[:12]
 
     def _category_workflow_blocks(self):
         """Read the three independently-approved actions from one visible tab."""
@@ -550,7 +557,7 @@ class SheetsDB:
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":6}}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
-            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":12},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+            {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":25},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":2}},"fields":"gridProperties.frozenRowCount"}},
         ]
         for section in ("rule", "backfill", "confirm"):
