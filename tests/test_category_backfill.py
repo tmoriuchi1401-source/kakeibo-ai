@@ -498,6 +498,10 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
                request["updateDimensionProperties"]["range"]["endIndex"] == 27 and
                request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
                for request in db.svc.requests)
+    assert any(request.get("updateDimensionProperties",{}).get("range") == {
+                   "sheetId":92,"dimension":"COLUMNS","startIndex":0,"endIndex":4
+               } and request["updateDimensionProperties"]["properties"] == {"hiddenByUser":False}
+               for request in db.svc.requests)
     faded=[request["repeatCell"] for request in db.svc.requests if "repeatCell" in request
            and request["repeatCell"]["range"].get("startColumnIndex") == 1
            and request["repeatCell"]["range"].get("startRowIndex") == 3]
