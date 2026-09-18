@@ -8,6 +8,7 @@ from app.category_rule_ui import CategoryRuleUIPipeline
 from app.category_rules import CategoryRule, match_transaction, rule_id_for
 from app.reconciliation import parse_import_rows
 from app.sheets import (
+    CATEGORY_RULE_UI_SHEET,
     CATEGORY_RULE_UI_HELPER_A1,
     CATEGORY_RULE_UI_HELPER_END_A1,
     EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1,
@@ -323,8 +324,8 @@ def test_rendered_rule_rows_get_row_relative_dropdowns_and_checkboxes():
     helper = requests[0]["updateCells"]
     assert helper["range"] == {"sheetId": 11, "startRowIndex": 1, "endRowIndex": 4,
                                "startColumnIndex": 701, "endColumnIndex": 702}
-    assert "カテゴリ自動分類'!C2" in helper["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
-    assert "カテゴリ自動分類'!C4" in helper["rows"][2]["values"][0]["userEnteredValue"]["formulaValue"]
+    assert f"{CATEGORY_RULE_UI_SHEET}'!C2" in helper["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
+    assert f"{CATEGORY_RULE_UI_SHEET}'!C4" in helper["rows"][2]["values"][0]["userEnteredValue"]["formulaValue"]
     validations = [request["setDataValidation"] for request in requests if "setDataValidation" in request]
     major = next(item for item in validations if item["range"]["startColumnIndex"] == 2)
     checks = next(item for item in validations if item["range"]["startColumnIndex"] == 4)
@@ -339,6 +340,16 @@ def test_rendered_rule_rows_get_row_relative_dropdowns_and_checkboxes():
         f"${CATEGORY_RULE_UI_HELPER_A1}$4:${CATEGORY_RULE_UI_HELPER_END_A1}$4"
     )
     assert EXPENSE_CATEGORY_HELPER_LEDGER_MINOR_END_A1 == "ZY"
+
+
+def test_rule_controls_follow_their_section_after_rows_above_it_change():
+    requests=category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=2, start_row=19)
+    helper=requests[0]["updateCells"]
+    assert helper["range"]["startRowIndex"] == 18 and helper["range"]["endRowIndex"] == 20
+    assert f"{CATEGORY_RULE_UI_SHEET}'!C19" in helper["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
+    minor=next(request for request in requests if "setDataValidation" in request
+               and request["setDataValidation"]["range"]["startColumnIndex"] == 3)
+    assert minor["setDataValidation"]["range"]["startRowIndex"] == 18
 
 
 def test_same_row_ledger_and_rule_ui_minor_dropdowns_use_disjoint_helper_ranges():
@@ -360,7 +371,7 @@ def test_same_row_ledger_and_rule_ui_minor_dropdowns_use_disjoint_helper_ranges(
     assert ui_source.endswith("!$ZZ$3:$ALL$3")
 
     helper = category_rule_ui_control_requests(sheet_id=10, helper_sheet_id=11, row_count=3)[0]["updateCells"]
-    assert "カテゴリ自動分類'!C3" in helper["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
+    assert f"{CATEGORY_RULE_UI_SHEET}'!C3" in helper["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
 
 
 def test_helper_range_isolation_survives_rule_ui_row_count_changes():

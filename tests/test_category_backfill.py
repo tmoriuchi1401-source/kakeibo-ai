@@ -555,6 +555,30 @@ def test_backfill_replacement_writes_month_controls_as_raw_text():
     assert db.svc.updates[0]["valueInputOption"] == "RAW"
 
 
+def test_unified_category_workflow_keeps_each_action_block_and_its_hidden_key_separate():
+    from app.sheets import SheetsDB
+
+    backfill=["条件", "食費\n外食", "2026-07", "2026-07", True,
+              "保存済みルール", "CR-one", 1, "{payload}", ""]
+    physical=SheetsDB._workflow_physical_row("backfill", backfill)
+    assert physical[:6] == backfill[:5] + [""]
+    assert physical[6:11] == backfill[5:]
+    assert SheetsDB._workflow_logical_row("backfill", physical) == backfill
+
+    confirmation=["CB-one", "3件 / 100円", True, "プレビュー済み", "CB-one"]
+    physical=SheetsDB._workflow_physical_row("confirm", confirmation)
+    assert physical[2] is True and physical[4:6] == ["", ""] and physical[6] == "CB-one"
+    assert SheetsDB._workflow_logical_row("confirm", physical) == confirmation
+
+    positions=object.__new__(SheetsDB)._workflow_positions({
+        "rule": (["h"], [["r"]]*2), "backfill": (["h"], [["b"]]*3),
+        "confirm": (["h"], [["c"]]),
+    })
+    assert positions["rule"]["start"] == 3
+    assert positions["backfill"]["start"] == 8
+    assert positions["confirm"]["start"] == 14
+
+
 def test_sheets_read_metadata_is_cached_and_only_429_is_retried():
     class Call:
         def __init__(self, value=None, error=None): self.value=value; self.error=error
