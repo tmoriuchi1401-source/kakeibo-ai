@@ -474,7 +474,7 @@ class SheetsDB:
                 for row_num,major,minor in rows
             ]},
         ).execute()
-    def _configure_backfill_mobile_sheet(self, title, header, hidden_from, control_rows):
+    def _configure_backfill_mobile_sheet(self, title, header, hidden_from, control_rows, ignored_start_rows=()):
         """Render backfill controls only on the rows that can be actioned.
 
         These sheets are regenerated views.  Clearing their values must not
@@ -485,63 +485,91 @@ class SheetsDB:
         meta=self._sheet_metadata()
         sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == title)
         sheet_id=sheet["properties"]["sheetId"]
+        is_backfill=title == "カテゴリ過去反映"
+        widths=(140,75,75,70) if is_backfill else (120,150,90,90)
+        clear_start,clear_end=(1,4) if is_backfill else (2,3)
         requests=[
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
-            for index,width in enumerate((120,150,90,90))
+            for index,width in enumerate(widths)
         ] + [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
             # Reset the generated body so an INSERT_ROWS-era dark header or
             # checkbox cannot survive on a now-empty/detail row.
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":len(header)},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":2,"endColumnIndex":3}}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":clear_start,"endColumnIndex":clear_end}}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":hidden_from,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":1}},"fields":"gridProperties.frozenRowCount"}},
         ]
-        if title == "カテゴリ過去反映":
-            # The range-backed list keeps phone entry concise while non-strict
-            # validation deliberately retains the established month/date-range
-            # manual input.  B values themselves are restored by the fixed-key
-            # replacement path before this rendering pass.
-            period_rule={"condition":{"type":"ONE_OF_RANGE","values":[
+        if is_backfill:
+            # Keep each independently selected valid month in the range source
+            # so a home-month refresh never drops a current selection.  The
+            # end control alone adds the explicit all-history choice.
+            start_rule={"condition":{"type":"ONE_OF_RANGE","values":[
                 {"userEnteredValue":"='カテゴリ過去反映'!$Z$2:$Z$1000"}
-            ]},"strict":False,"showCustomUi":True}
-            period_formula=(
-                "=LET(months,FILTER('ホーム'!$I$3:$I$5001,"
-                "REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\"^[0-9]{4}-(0[1-9]|1[0-2])$\")),"
-                "years,SORT(UNIQUE(ARRAYFORMULA(LEFT(months,4))),1,FALSE),"
-                "{ARRAYFORMULA(\"対象月:\"&months);ARRAYFORMULA(years&\"-01..\"&years&\"-12\");\"全期間\"})"
+            ]},"strict":True,"showCustomUi":True}
+            end_rule={"condition":{"type":"ONE_OF_RANGE","values":[
+                {"userEnteredValue":"='カテゴリ過去反映'!$AA$2:$AA$1000"}
+            ]},"strict":True,"showCustomUi":True}
+            month_pattern="^[0-9]{4}-(0[1-9]|1[0-2])$"
+            start_formula=(
+                "=LET(home,FILTER('ホーム'!$I$3:$I$5001,REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\""
+                + month_pattern + "\")),current,IFERROR(FILTER($B$2:$B$1000,REGEXMATCH(TO_TEXT($B$2:$B$1000),\""
+                + month_pattern + "\")),\"\"),values,TOCOL({home;current},1),SORT(UNIQUE(values),1,TRUE))"
+            )
+            end_formula=(
+                "=LET(home,FILTER('ホーム'!$I$3:$I$5001,REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\""
+                + month_pattern + "\")),current,IFERROR(FILTER($C$2:$C$1000,REGEXMATCH(TO_TEXT($C$2:$C$1000),\""
+                + month_pattern + "\")),\"\"),values,TOCOL({home;current},1),{\"過去すべて\";SORT(UNIQUE(values),1,TRUE)})"
             )
             requests.extend([
-                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,
-                    "startColumnIndex":1,"endColumnIndex":2}}},
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
-                    "startColumnIndex":1,"endColumnIndex":2},"rows":[{"values":[{"note":
-                    "B列のプルダウンで単月・年全体・全期間を選択できます。選んだ期間だけでは反映されません。C列のプレビュー後、確認画面で対象件数を確認して承認してください。作成済みの固定プレビューの期間は、この欄の変更では変わりません。"
-                }]}],"fields":"note"}},
+                    "startColumnIndex":1,"endColumnIndex":3},"rows":[{"values":[
+                        {"note":"開始月を選びます。終了月が「過去すべて」のとき開始月は使用しません。選択だけでは反映されません。"},
+                        {"note":"終了月を選びます。「過去すべて」は取込済みの全期間を対象にします。作成済み固定プレビューは変更しません。"},
+                    ]}],"fields":"note"}},
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
                     "startColumnIndex":25,"endColumnIndex":26},"rows":[{"values":[{"userEnteredValue":
-                    {"stringValue":"過去反映・対象期間候補"}}]}],"fields":"userEnteredValue"}},
+                    {"stringValue":"過去反映・開始月候補"}}]}],"fields":"userEnteredValue"}},
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,
                     "startColumnIndex":25,"endColumnIndex":26},
-                    "rows":[{"values":[{"userEnteredValue":{"formulaValue":period_formula}}]}],
+                    "rows":[{"values":[{"userEnteredValue":{"formulaValue":start_formula}}]}],
+                    "fields":"userEnteredValue"}},
+                {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
+                    "startColumnIndex":26,"endColumnIndex":27},"rows":[{"values":[{"userEnteredValue":
+                    {"stringValue":"過去反映・終了月候補"}}]}],"fields":"userEnteredValue"}},
+                {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":2,
+                    "startColumnIndex":26,"endColumnIndex":27},
+                    "rows":[{"values":[{"userEnteredValue":{"formulaValue":end_formula}}]}],
                     "fields":"userEnteredValue"}},
                 {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS",
-                    "startIndex":25,"endIndex":26},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
+                    "startIndex":25,"endIndex":27},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             ])
         for row_num in control_rows:
-            if title == "カテゴリ過去反映":
-                requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
-                    "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"rule":period_rule}})
+            if is_backfill:
+                requests.extend([
+                    {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
+                        "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"rule":start_rule}},
+                    {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
+                        "endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":end_rule}},
+                ])
+            checkbox_column=3 if is_backfill else 2
             requests.extend([
-                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
-                {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},
+                {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":checkbox_column,"endColumnIndex":checkbox_column+1},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
+                {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":checkbox_column,"endColumnIndex":checkbox_column+1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},
             ])
+        if is_backfill:
+            for row_num in ignored_start_rows:
+                requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
+                    "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"cell":{"userEnteredFormat":{
+                        "backgroundColor":{"red":0.93,"green":0.93,"blue":0.93},
+                        "textFormat":{"foregroundColor":{"red":0.45,"green":0.45,"blue":0.45},"italic":True},
+                    }},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
     def ensure_category_backfill_ui_sheet(self, header):
-        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 3, ())
+        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 4, ())
     def ensure_category_backfill_confirmation_sheet(self, header):
         self._configure_backfill_mobile_sheet("カテゴリ過去反映確認", header, 4, ())
-    def _replace_backfill_rows(self, title, header, hidden_from, rows, control_rows):
+    def _replace_backfill_rows(self, title, header, hidden_from, rows, control_rows, ignored_start_rows=()):
         """Replace generated values in place; never insert physical rows."""
         self.ensure_sheet(title, header)
         self.clear(f"{title}!A2:{chr(64 + len(header))}")
@@ -550,17 +578,24 @@ class SheetsDB:
                 spreadsheetId=self.sid, range=f"{title}!A2", valueInputOption="USER_ENTERED",
                 body={"values":rows},
             ).execute()
-        self._configure_backfill_mobile_sheet(title, header, hidden_from, control_rows)
+        self._configure_backfill_mobile_sheet(title, header, hidden_from, control_rows, ignored_start_rows)
     def replace_category_backfill_ui_rows(self, rows:list[list], header:list[str]):
-        self._replace_backfill_rows("カテゴリ過去反映", header, 3, rows,
-                                    range(2, len(rows)+2))
+        self._replace_backfill_rows("カテゴリ過去反映", header, 4, rows,
+                                    range(2, len(rows)+2),
+                                    [row_num for row_num,row in enumerate(rows, start=2)
+                                     if len(row) > 2 and row[2] == "過去すべて"])
     def replace_category_backfill_confirmation_rows(self, rows:list[list], header:list[str]):
         self._replace_backfill_rows("カテゴリ過去反映確認", header, 4, rows,
                                     [row_num for row_num,row in enumerate(rows, start=2)
                                      if len(row) > 4 and str(row[4]).strip()])
     def category_backfill_ui_rows(self):
         if "カテゴリ過去反映" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ過去反映!A2:G")
+        return self.get("カテゴリ過去反映!A2:I")
+
+    def category_backfill_ui_table(self):
+        if "カテゴリ過去反映" not in set(self.sheet_titles()): return [], []
+        values=self.get("カテゴリ過去反映!A1:I")
+        return (list(values[0]) if values else [], [list(row) for row in values[1:]])
     def category_backfill_confirmation_rows(self):
         if "カテゴリ過去反映確認" not in set(self.sheet_titles()): return []
         return self.get("カテゴリ過去反映確認!A2:E")

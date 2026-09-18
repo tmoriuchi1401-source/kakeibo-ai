@@ -10,8 +10,11 @@ from .category_rules import CategoryRule, narrow_text, parse_rules, valid_rule
 
 BACKFILL_UI_SHEET = "カテゴリ過去反映"
 BACKFILL_CONFIRM_SHEET = "カテゴリ過去反映確認"
-BACKFILL_UI_HEADERS = ["条件・カテゴリ", "対象期間", "プレビューする", "種別", "ルールID", "revision", "条件JSON"]
+BACKFILL_UI_HEADERS = ["条件・カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間"]
+LEGACY_BACKFILL_UI_HEADERS = ["条件・カテゴリ", "対象期間", "プレビューする", "種別", "ルールID", "revision", "条件JSON"]
 BACKFILL_CONFIRM_HEADERS = ["反映要求", "対象", "この件数に反映", "状態", "反映要求ID"]
+
+LABEL, START_MONTH, END_MONTH, PREVIEW, KIND, RULE_ID, REVISION, PAYLOAD, LEGACY_PERIOD = range(9)
 
 
 def _is_checked(value: object) -> bool:
@@ -19,6 +22,7 @@ def _is_checked(value: object) -> bool:
 
 
 def _period(value: object) -> tuple[str, str] | None:
+    """Parse a legacy single-cell period during the one-way UI migration."""
     text = narrow_text(value)
     if text == "全期間": return "", ""
     if text.startswith("対象月:") and len(text) == 11:
@@ -41,6 +45,54 @@ def _period(value: object) -> tuple[str, str] | None:
                 return None
         return start, end
     return None
+
+
+def _month(value: object) -> str | None:
+    text = narrow_text(value)
+    if len(text) != 7 or text[4:5] != "-":
+        return None
+    try:
+        year, number = (int(item) for item in text.split("-", 1))
+        if not 1 <= number <= 12:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return f"{year:04d}-{number:02d}"
+
+
+def _month_period(start_value: object, end_value: object) -> tuple[str, str] | None:
+    """Convert the two phone controls to the immutable preview date bounds."""
+    if narrow_text(end_value) == "過去すべて":
+        # The visible start value is deliberately retained, but has no effect.
+        return "", ""
+    start, end = _month(start_value), _month(end_value)
+    if not start or not end or start > end:
+        return None
+    year, number = (int(item) for item in end.split("-", 1))
+    return f"{start}-01", f"{end}-{calendar.monthrange(year, number)[1]:02d}"
+
+
+def _legacy_period_to_months(value: object) -> tuple[str, str, str] | None:
+    """Return start/end controls and an optional exact legacy value to retain.
+
+    A non-month-aligned date range is intentionally not rounded out: it stays
+    in the hidden migration record and the row is made to require new input.
+    """
+    text = narrow_text(value)
+    if text == "全期間":
+        return "", "過去すべて", ""
+    bounds = _period(text)
+    if not bounds:
+        return None
+    start, end = bounds
+    try:
+        start_date = datetime.strptime(start, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if start_date.day != 1 or end_date.day != calendar.monthrange(end_date.year, end_date.month)[1]:
+        return "", "", text
+    return start[:7], end[:7], ""
 
 
 def condition_label(payload: dict) -> str:
@@ -83,6 +135,54 @@ class CategoryBackfillUIPipeline:
         if len(selected) == 7 and selected[4] == "-": return selected
         return datetime.now().strftime("%Y-%m")
 
+    def _existing_ui(self) -> tuple[list[str], list[list]]:
+        """Read header and rows together so legacy C booleans are never an end month."""
+        reader=getattr(self.db, "category_backfill_ui_table", None)
+        if reader:
+            header, rows=reader()
+            return list(header), [list(row) for row in rows]
+        return BACKFILL_UI_HEADERS, [list(row) for row in self.db.category_backfill_ui_rows()]
+
+    @staticmethod
+    def _old_rows(header: list[str], rows: list[list]) -> dict[str, tuple[list, bool]]:
+        legacy=header[:len(LEGACY_BACKFILL_UI_HEADERS)] == LEGACY_BACKFILL_UI_HEADERS
+        old={}
+        for row in rows:
+            if legacy:
+                cells=row+[""]*max(0, 7-len(row))
+                key=narrow_text(cells[4])
+            else:
+                cells=row+[""]*max(0, len(BACKFILL_UI_HEADERS)-len(row))
+                key=narrow_text(cells[RULE_ID])
+            if key:
+                old[key]=(cells, legacy)
+        return old
+
+    @staticmethod
+    def _restored_controls(prior: list, legacy: bool, payload: str, default_month: str) -> tuple[str, str, bool, str]:
+        if legacy:
+            unchanged=len(prior) > 6 and prior[6] == payload
+            if not unchanged:
+                return default_month, default_month, False, ""
+            migrated=_legacy_period_to_months(prior[1])
+            if not migrated:
+                return "", "", False, narrow_text(prior[1])
+            start, end, retained=migrated
+            return start, end, _is_checked(prior[2]) if not retained else False, retained
+        unchanged=len(prior) > PAYLOAD and prior[PAYLOAD] == payload
+        if not unchanged:
+            return default_month, default_month, False, ""
+        return (narrow_text(prior[START_MONTH]), narrow_text(prior[END_MONTH]),
+                _is_checked(prior[PREVIEW]), narrow_text(prior[LEGACY_PERIOD]))
+
+    @staticmethod
+    def _label_with_period_notice(label: str, end_month: str, legacy_period: str) -> str:
+        if legacy_period:
+            return label + f"\n再設定待ち: 旧期間={legacy_period}（月単位で再設定してください）"
+        if end_month == "過去すべて":
+            return label + "\n過去すべて選択中は開始月を使用しません。"
+        return label
+
     @staticmethod
     def _payload(rule: CategoryRule, *, saved_rule: bool) -> str:
         return json.dumps({
@@ -95,18 +195,16 @@ class CategoryBackfillUIPipeline:
     def refresh(self):
         if not self.ui_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
-        old = {narrow_text(row[4]): row for row in self.db.category_backfill_ui_rows()
-               if len(row) > 4 and narrow_text(row[4])}
+        header, existing=self._existing_ui(); old=self._old_rows(header, existing)
         categories = set(self.db.categories()); default_period = "対象月:" + self._home_month(); rows=[]
         for rule in parse_rules(self.db.category_rules()):
             if not rule.active or not valid_rule(rule, categories): continue
-            payload = self._payload(rule, saved_rule=True); prior = old.get(rule.rule_id, [])
-            unchanged = len(prior) > 6 and prior[6] == payload
+            payload = self._payload(rule, saved_rule=True); prior,legacy=old.get(rule.rule_id, ([], False))
+            start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
+            label=self._label_with_period_notice(
+                f"{condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}", end, retained)
             rows.append([
-                f"{condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}",
-                prior[1] if unchanged and len(prior) > 1 else default_period,
-                _is_checked(prior[2]) if unchanged and len(prior) > 2 else False,
-                "保存済みルール", rule.rule_id, rule.revision, payload,
+                label, start, end, checked, "保存済みルール", rule.rule_id, rule.revision, payload, retained,
             ])
         # A displayed, not-yet-saved condition is also allowed for a past-only
         # request.  It never writes a future rule because saved_rule is false.
@@ -132,11 +230,11 @@ class CategoryBackfillUIPipeline:
                                 narrow_text(snapshot.get("merchant")), "", "", "", None,
                                 (narrow_text(category[0]), narrow_text(category[1])), "", datetime.now(timezone.utc), 1, True)
             if not valid_rule(rule, categories): continue
-            payload = self._payload(rule, saved_rule=False); prior = old.get(key, [])
-            rows.append([f"表示中: {condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}",
-                         prior[1] if len(prior) > 1 and len(prior) > 6 and prior[6] == payload else default_period,
-                         _is_checked(prior[2]) if len(prior) > 6 and prior[6] == payload else False,
-                         "表示中の条件（過去分のみ）", key, 1, payload])
+            payload = self._payload(rule, saved_rule=False); prior,legacy=old.get(key, ([], False))
+            start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
+            label=self._label_with_period_notice(
+                f"表示中: {condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}", end, retained)
+            rows.append([label, start, end, checked, "表示中の条件（過去分のみ）", key, 1, payload, retained])
         _replace_rows(self.db, "replace_category_backfill_ui_rows",
                       BACKFILL_UI_SHEET, BACKFILL_UI_HEADERS, rows)
         return {"state": "refreshed", "conditions": len(rows), "default_period": default_period}
@@ -146,10 +244,10 @@ class CategoryBackfillUIPipeline:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
         results=[]; updates=[]; display_read_cache={}
         for row_num, row in enumerate(self.db.category_backfill_ui_rows(), start=2):
-            cells=list(row)+[""]*max(0, 7-len(row))
-            if not _is_checked(cells[2]): continue
-            period=_period(cells[1])
-            try: payload=json.loads(cells[6])
+            cells=list(row)+[""]*max(0, len(BACKFILL_UI_HEADERS)-len(row))
+            if not _is_checked(cells[PREVIEW]): continue
+            period=_month_period(cells[START_MONTH], cells[END_MONTH])
+            try: payload=json.loads(cells[PAYLOAD])
             except (TypeError, ValueError, json.JSONDecodeError): payload={}
             rule=_condition_from_payload(payload)
             if not period or not rule:
@@ -158,11 +256,11 @@ class CategoryBackfillUIPipeline:
                 result=CategoryBackfillPipeline(self.db, preview_enabled=True, apply_enabled=self.apply_enabled).preview(
                     BackfillSpec(rule, period[0], period[1], bool(payload.get("saved_rule"))),
                     display_read_cache=display_read_cache)
-            results.append(result); cells[2]=False
+            results.append(result); cells[PREVIEW]=False
             # A fixed preview is the terminal processing of the source UI's
             # past choice.  Consume that choice by its immutable key so the
             # next runner refresh cannot create the same request again.
-            source_key = narrow_text(cells[4]).removeprefix("displayed:")
+            source_key = narrow_text(cells[RULE_ID]).removeprefix("displayed:")
             if (source_key and result.get("state") in {"previewed", "preview_empty", "held"}
                     and hasattr(self.db, "consume_category_rule_ui_past_choice")):
                 self.db.consume_category_rule_ui_past_choice(source_key, result)
@@ -199,7 +297,8 @@ class CategoryBackfillUIPipeline:
             category = payload.get("category", ["?", "?"]) if isinstance(payload, dict) else ["?", "?"]
             excluded = payload.get("excluded", {}) if isinstance(payload, dict) else {}
             exclusion_text = "、".join(f"{key}:{value}" for key,value in excluded.items()) or "なし"
-            rows.append([f"{cells[0]}\n{cells[4]} .. {cells[5]}\n{condition_label(payload if isinstance(payload, dict) else {})}\nその他/未分類 → {category[0]} / {category[1]}", f"{cells[6]}件 / {cells[7]}円\n除外: {exclusion_text}",
+            period_label="過去すべて" if not narrow_text(cells[4]) and not narrow_text(cells[5]) else f"{cells[4]} .. {cells[5]}"
+            rows.append([f"{cells[0]}\n{period_label}\n{condition_label(payload if isinstance(payload, dict) else {})}\nその他/未分類 → {category[0]} / {category[1]}", f"{cells[6]}件 / {cells[7]}円\n除外: {exclusion_text}",
                          _is_checked(prior[2]) if len(prior)>2 else False, cells[2], cells[0]])
             for detail in targets_by_request.get(narrow_text(cells[0]), []):
                 # A target detail is context only, never an approval control.
