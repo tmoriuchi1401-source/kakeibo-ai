@@ -565,6 +565,8 @@ def test_unified_category_workflow_keeps_each_action_block_and_its_hidden_key_se
     assert physical[6:11] == backfill[5:]
     assert SheetsDB._workflow_logical_row("backfill", physical) == backfill
 
+    assert SheetsDB._workflow_physical_row("rule", ["", "", "", "", "FALSE", "TRUE"])[4:6] == [False, True]
+
     confirmation=["CB-one", "3件 / 100円", True, "プレビュー済み", "CB-one"]
     physical=SheetsDB._workflow_physical_row("confirm", confirmation)
     assert physical[2] is True and physical[4:6] == ["", ""] and physical[6] == "CB-one"
