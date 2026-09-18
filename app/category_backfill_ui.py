@@ -11,11 +11,12 @@ from .category_rules import CategoryRule, narrow_text, parse_rules, valid_rule
 
 BACKFILL_UI_SHEET = "カテゴリ過去反映"
 BACKFILL_CONFIRM_SHEET = "カテゴリ過去反映確認"
-BACKFILL_UI_HEADERS = ["条件・カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間"]
+BACKFILL_UI_HEADERS = ["条件", "カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間"]
+COMBINED_BACKFILL_UI_HEADERS = ["条件・カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間"]
 LEGACY_BACKFILL_UI_HEADERS = ["条件・カテゴリ", "対象期間", "プレビューする", "種別", "ルールID", "revision", "条件JSON"]
 BACKFILL_CONFIRM_HEADERS = ["反映要求", "対象", "この件数に反映", "状態", "反映要求ID"]
 
-LABEL, START_MONTH, END_MONTH, PREVIEW, KIND, RULE_ID, REVISION, PAYLOAD, LEGACY_PERIOD = range(9)
+CONDITION, CATEGORY, START_MONTH, END_MONTH, PREVIEW, KIND, RULE_ID, REVISION, PAYLOAD, LEGACY_PERIOD = range(10)
 
 
 def _is_checked(value: object) -> bool:
@@ -177,6 +178,10 @@ class CategoryBackfillUIPipeline:
             if legacy:
                 cells=row+[""]*max(0, 7-len(row))
                 key=narrow_text(cells[4])
+            elif header[:len(COMBINED_BACKFILL_UI_HEADERS)] == COMBINED_BACKFILL_UI_HEADERS:
+                prior=row+[""]*max(0, len(COMBINED_BACKFILL_UI_HEADERS)-len(row))
+                cells=["", "", prior[1], prior[2], prior[3], *prior[4:]]
+                key=narrow_text(cells[RULE_ID])
             else:
                 cells=row+[""]*max(0, len(BACKFILL_UI_HEADERS)-len(row))
                 key=narrow_text(cells[RULE_ID])
@@ -228,10 +233,10 @@ class CategoryBackfillUIPipeline:
             if not rule.active or not valid_rule(rule, categories): continue
             payload = self._payload(rule, saved_rule=True); prior,legacy=old.get(rule.rule_id, ([], False))
             start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
-            label=self._label_with_period_notice(
-                f"{condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}", end, retained)
+            label=self._label_with_period_notice(condition_label(json.loads(payload)), end, retained)
             rows.append([
-                label, start, end, checked, "保存済みルール", rule.rule_id, rule.revision, payload, retained,
+                label, f"{rule.category[0]}\n{rule.category[1]}", start, end, checked,
+                "保存済みルール", rule.rule_id, rule.revision, payload, retained,
             ])
         # A displayed, not-yet-saved condition is also allowed for a past-only
         # request.  It never writes a future rule because saved_rule is false.
@@ -260,8 +265,9 @@ class CategoryBackfillUIPipeline:
             payload = self._payload(rule, saved_rule=False); prior,legacy=old.get(key, ([], False))
             start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
             label=self._label_with_period_notice(
-                f"表示中: {condition_label(json.loads(payload))}\n{rule.category[0]} / {rule.category[1]}", end, retained)
-            rows.append([label, start, end, checked, "表示中の条件（過去分のみ）", key, 1, payload, retained])
+                f"表示中: {condition_label(json.loads(payload))}", end, retained)
+            rows.append([label, f"{rule.category[0]}\n{rule.category[1]}", start, end, checked,
+                         "表示中の条件（過去分のみ）", key, 1, payload, retained])
         _replace_rows(self.db, "replace_category_backfill_ui_rows",
                       BACKFILL_UI_SHEET, BACKFILL_UI_HEADERS, rows)
         return {"state": "refreshed", "conditions": len(rows), "default_period": default_period}
@@ -293,10 +299,10 @@ class CategoryBackfillUIPipeline:
                 self.db.consume_category_rule_ui_past_choice(source_key, result)
             if result.get("state") == "previewed":
                 excluded = "、".join(f"{key}:{value}" for key,value in result.get("excluded", {}).items()) or "なし"
-                cells[0] += (f"\n要求={result['request_id']}\nその他/未分類 → {rule.category[0]} / {rule.category[1]}"
+                cells[CONDITION] += (f"\n要求={result['request_id']}\nその他/未分類 → {rule.category[0]} / {rule.category[1]}"
                              f"\n対象 {result['targets']}件 / {result['total_amount']}円\n除外: {excluded}")
             else:
-                cells[0] += "\n" + (result.get("state", "held") + ": " + result.get("reason", ""))
+                cells[CONDITION] += "\n" + (result.get("state", "held") + ": " + result.get("reason", ""))
             updates.append((row_num, cells))
         if updates: self.db.update_rows(BACKFILL_UI_SHEET, updates)
         return {"state":"previewed", "results":results}

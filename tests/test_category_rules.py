@@ -304,7 +304,7 @@ def test_classified_user_proposal_survives_runner_refresh_and_saves_without_chan
     # not an instruction to change the already-classified representative.
     past = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     assert past["conditions"] == 2
-    assert any(row[4] == "表示中の条件（過去分のみ）" for row in db.backfill)
+    assert any(row[5] == "表示中の条件（過去分のみ）" for row in db.backfill)
 
     # A source change requires new checks but never reverts the selected C:D.
     db.imports[0][5] = "変更後の請求名"
@@ -405,7 +405,7 @@ def test_classified_past_choice_survives_refresh_and_reaches_past_preview_ui():
     assert db.ui[0][5] is True
     backfill = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     assert backfill["conditions"] == 1
-    assert db.backfill[0][4] == "表示中の条件（過去分のみ）"
+    assert db.backfill[0][5] == "表示中の条件（過去分のみ）"
 
 
 def test_runner_order_preserves_both_choices_until_their_own_processors_consume_them():
@@ -443,4 +443,4 @@ def test_runner_order_preserves_both_choices_until_their_own_processors_consume_
     # The subsequent past-preview stage still receives the surviving F check.
     backfill = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     assert backfill["conditions"] == 2  # saved future rule + displayed past-only condition
-    assert any(row[4] == "表示中の条件（過去分のみ）" for row in db.backfill)
+    assert any(row[5] == "表示中の条件（過去分のみ）" for row in db.backfill)

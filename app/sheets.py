@@ -486,8 +486,8 @@ class SheetsDB:
         sheet=next(value for value in meta["sheets"] if value["properties"]["title"] == title)
         sheet_id=sheet["properties"]["sheetId"]
         is_backfill=title == "カテゴリ過去反映"
-        widths=(140,75,75,70) if is_backfill else (120,150,90,90)
-        clear_start,clear_end=(1,4) if is_backfill else (2,3)
+        widths=(130,70,55,60,50) if is_backfill else (120,150,90,90)
+        clear_start,clear_end=(2,5) if is_backfill else (2,3)
         requests=[]
         if is_backfill:
             # Z was the former helper's final column.  AA is the independent
@@ -507,7 +507,7 @@ class SheetsDB:
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":len(header)},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,"endRowIndex":1000,"startColumnIndex":clear_start,"endColumnIndex":clear_end}}},
             # The prior one-period layout hid D:G.  Explicitly re-expose the
-            # new four input columns so D's checkbox cannot stay hidden after
+            # new five input columns so E's checkbox cannot stay hidden after
             # a header-only migration.
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":hidden_from},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":hidden_from,"endIndex":len(header)},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
@@ -529,8 +529,8 @@ class SheetsDB:
             # display value; it does not change the values FILTER returns.
             normalizer = "ARRAYFORMULA(IF(ISNUMBER(%s),TEXT(%s,\"yyyy-mm\"),TO_TEXT(%s)))"
             home_raw = "'ホーム'!$I$3:$I$5001"
-            start_raw = "$B$2:$B$1000"
-            end_raw = "$C$2:$C$1000"
+            start_raw = "$C$2:$C$1000"
+            end_raw = "$D$2:$D$1000"
             home_text = normalizer % (home_raw, home_raw, home_raw)
             start_text = normalizer % (start_raw, start_raw, start_raw)
             end_text = normalizer % (end_raw, end_raw, end_raw)
@@ -548,7 +548,7 @@ class SheetsDB:
             )
             requests.extend([
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
-                    "startColumnIndex":1,"endColumnIndex":3},"rows":[{"values":[
+                    "startColumnIndex":2,"endColumnIndex":4},"rows":[{"values":[
                         {"note":"開始月を選びます。終了月が「過去すべて」のとき開始月は使用しません。選択だけでは反映されません。"},
                         {"note":"終了月を選びます。「過去すべて」は取込済みの全期間を対象にします。作成済み固定プレビューは変更しません。"},
                     ]}],"fields":"note"}},
@@ -573,11 +573,11 @@ class SheetsDB:
             if is_backfill:
                 requests.extend([
                     {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
-                        "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"rule":start_rule}},
+                        "endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":start_rule}},
                     {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
-                        "endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"rule":end_rule}},
+                        "endRowIndex":row_num,"startColumnIndex":3,"endColumnIndex":4},"rule":end_rule}},
                 ])
-            checkbox_column=3 if is_backfill else 2
+            checkbox_column=4 if is_backfill else 2
             requests.extend([
                 {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":checkbox_column,"endColumnIndex":checkbox_column+1},"rule":{"condition":{"type":"BOOLEAN"},"strict":True,"showCustomUi":True}}},
                 {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":checkbox_column,"endColumnIndex":checkbox_column+1},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":0.95,"blue":0.75},"horizontalAlignment":"CENTER","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment)"}},
@@ -585,13 +585,13 @@ class SheetsDB:
         if is_backfill:
             for row_num in ignored_start_rows:
                 requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,
-                    "endRowIndex":row_num,"startColumnIndex":1,"endColumnIndex":2},"cell":{"userEnteredFormat":{
+                    "endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{
                         "backgroundColor":{"red":0.93,"green":0.93,"blue":0.93},
                         "textFormat":{"foregroundColor":{"red":0.45,"green":0.45,"blue":0.45},"italic":True},
                     }},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
     def ensure_category_backfill_ui_sheet(self, header):
-        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 4, ())
+        self._configure_backfill_mobile_sheet("カテゴリ過去反映", header, 5, ())
     def ensure_category_backfill_confirmation_sheet(self, header):
         self._configure_backfill_mobile_sheet("カテゴリ過去反映確認", header, 4, ())
     def _replace_backfill_rows(self, title, header, hidden_from, rows, control_rows, ignored_start_rows=()):
@@ -608,17 +608,17 @@ class SheetsDB:
             ).execute()
         self._configure_backfill_mobile_sheet(title, header, hidden_from, control_rows, ignored_start_rows)
     def replace_category_backfill_ui_rows(self, rows:list[list], header:list[str]):
-        self._replace_backfill_rows("カテゴリ過去反映", header, 4, rows,
+        self._replace_backfill_rows("カテゴリ過去反映", header, 5, rows,
                                     range(2, len(rows)+2),
                                     [row_num for row_num,row in enumerate(rows, start=2)
-                                     if len(row) > 2 and row[2] == "過去すべて"])
+                                     if len(row) > 3 and row[3] == "過去すべて"])
     def replace_category_backfill_confirmation_rows(self, rows:list[list], header:list[str]):
         self._replace_backfill_rows("カテゴリ過去反映確認", header, 4, rows,
                                     [row_num for row_num,row in enumerate(rows, start=2)
                                      if len(row) > 4 and str(row[4]).strip()])
     def category_backfill_ui_rows(self):
         if "カテゴリ過去反映" not in set(self.sheet_titles()): return []
-        return self.get("カテゴリ過去反映!A2:I")
+        return self.get("カテゴリ過去反映!A2:J")
 
     def category_backfill_ui_table(self):
         if "カテゴリ過去反映" not in set(self.sheet_titles()): return [], []
