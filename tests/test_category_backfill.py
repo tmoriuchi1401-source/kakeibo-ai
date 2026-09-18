@@ -280,9 +280,9 @@ def test_legacy_periods_migrate_by_fixed_key_without_misreading_old_checkbox_as_
     db=MigrationDB(); result=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     assert result["conditions"] == 1
     rows,header=db.replaced
-    assert header[:4] == ["条件・カテゴリ", "開始月", "終了月", "プレビューする"]
-    assert rows[0][1:4] == ["2026-04", "2026-08", True]
-    assert rows[0][5] == "CR-one" and rows[0][7]
+    assert header[:5] == ["条件", "カテゴリ", "開始月", "終了月", "プレビューする"]
+    assert rows[0][2:5] == ["2026-04", "2026-08", True]
+    assert rows[0][6] == "CR-one" and rows[0][8]
 
 
 def test_non_month_aligned_legacy_period_is_retained_but_requires_new_unchecked_controls():
@@ -297,8 +297,8 @@ def test_non_month_aligned_legacy_period_is_retained_but_requires_new_unchecked_
         def replace_category_backfill_ui_rows(self, rows, header): self.rows=rows
 
     db=MigrationDB(); CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
-    assert db.rows[0][1:4] == ["", "", False]
-    assert db.rows[0][8] == "2026-04-02..2026-08-30"
+    assert db.rows[0][2:5] == ["", "", False]
+    assert db.rows[0][9] == "2026-04-02..2026-08-30"
     assert "再設定待ち" in db.rows[0][0]
 
 
@@ -342,7 +342,7 @@ def test_grouped_unclassified_past_checkbox_is_independent_from_future_rule_save
     # The separate past action exposes a past-only condition, not a saved rule.
     db.ui[0][5] = True
     assert pipe.refresh()["conditions"] == 1
-    assert db.backfill_ui[0][4] == "表示中の条件（過去分のみ）"
+    assert db.backfill_ui[0][5] == "表示中の条件（過去分のみ）"
     assert db.rules == [] and db.category_updates == []
 
 
@@ -370,7 +370,7 @@ def test_preview_consumes_its_source_past_choice_by_fixed_condition_key():
     db.ui = [["条件", "未分類 1件", "食費", "外食", False, True,
               "group:one", "M-one", "2026-08-10", "PayPay", "service", snapshot]]
     pipe = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
-    pipe.refresh(); db.backfill_ui[0][1:4] = ["2026-08", "2026-08", True]
+    pipe.refresh(); db.backfill_ui[0][2:5] = ["2026-08", "2026-08", True]
     result = pipe.preview_checked()
     assert result["results"][0]["state"] == "previewed"
     assert db.consumed == [("group:one", "previewed")]
@@ -392,13 +392,13 @@ def test_backfill_ui_replacement_preserves_checked_period_without_append_rows():
 
     db=ReplacingDB(); pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
     assert pipe.refresh()["conditions"] == 1
-    db.ui[0][1:4] = ["2026-01", "2026-12", True]
+    db.ui[0][2:5] = ["2026-01", "2026-12", True]
     assert pipe.refresh()["conditions"] == 1
-    assert db.ui[0][1:4] == ["2026-01", "2026-12", True]
+    assert db.ui[0][2:5] == ["2026-01", "2026-12", True]
     # A later row-count increase keeps the first fixed key's input in place.
     db.rules.append(service_rule("CR-two", "別の請求名", ("食費", "外食")))
     assert pipe.refresh()["conditions"] == 2
-    assert db.ui[0][1:4] == ["2026-01", "2026-12", True]
+    assert db.ui[0][2:5] == ["2026-01", "2026-12", True]
     assert len(db.replacements) == 3
 
 
@@ -468,13 +468,13 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
 
     db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
     db.ensure_sheet=lambda title, header: None
-    db._configure_backfill_mobile_sheet("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I"], 4, [2, 4], [4])
+    db._configure_backfill_mobile_sheet("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I","J"], 5, [2, 4], [4])
     validations=[request["setDataValidation"] for request in db.svc.requests if "setDataValidation" in request]
-    start=[item for item in validations if item["range"]["startColumnIndex"] == 1]
-    end=[item for item in validations if item["range"]["startColumnIndex"] == 2]
-    checkbox=[item for item in validations if item["range"]["startColumnIndex"] == 3]
+    start=[item for item in validations if item["range"]["startColumnIndex"] == 2]
+    end=[item for item in validations if item["range"]["startColumnIndex"] == 3]
+    checkbox=[item for item in validations if item["range"]["startColumnIndex"] == 4]
     assert len(start) == 3 and len(end) == len(checkbox) == 2
-    assert "rule" not in start[0] and start[0]["range"]["endColumnIndex"] == 4
+    assert "rule" not in start[0] and start[0]["range"]["endColumnIndex"] == 5
     assert [item["range"]["startRowIndex"] for item in start[1:]] == [1, 3]
     assert all(item["rule"] == {
         "condition":{"type":"ONE_OF_RANGE","values":[
@@ -493,23 +493,23 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
                for update in updates)
     formulas=[update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
               for update in updates if update["range"]["startRowIndex"] == 1]
-    start_formula=next(formula for formula in formulas if "$B$2:$B$1000" in formula)
-    end_formula=next(formula for formula in formulas if "$C$2:$C$1000" in formula)
+    start_formula=next(formula for formula in formulas if "$C$2:$C$1000" in formula)
+    end_formula=next(formula for formula in formulas if "$D$2:$D$1000" in formula)
     assert "ホーム'!$I$3:$I$5001" in start_formula
-    assert 'ARRAYFORMULA(IF(ISNUMBER($B$2:$B$1000),TEXT($B$2:$B$1000,"yyyy-mm"),TO_TEXT($B$2:$B$1000)))' in start_formula
+    assert 'ARRAYFORMULA(IF(ISNUMBER($C$2:$C$1000),TEXT($C$2:$C$1000,"yyyy-mm"),TO_TEXT($C$2:$C$1000)))' in start_formula
     assert '"過去すべて"' in end_formula
-    assert 'ARRAYFORMULA(IF(ISNUMBER($C$2:$C$1000),TEXT($C$2:$C$1000,"yyyy-mm"),TO_TEXT($C$2:$C$1000)))' in end_formula
+    assert 'ARRAYFORMULA(IF(ISNUMBER($D$2:$D$1000),TEXT($D$2:$D$1000,"yyyy-mm"),TO_TEXT($D$2:$D$1000)))' in end_formula
     assert any(request.get("updateDimensionProperties",{}).get("range",{}).get("startIndex") == 25 and
                request["updateDimensionProperties"]["range"]["endIndex"] == 27 and
                request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
                for request in db.svc.requests)
     assert any(request.get("updateDimensionProperties",{}).get("range") == {
-                   "sheetId":92,"dimension":"COLUMNS","startIndex":0,"endIndex":4
+                   "sheetId":92,"dimension":"COLUMNS","startIndex":0,"endIndex":5
                } and request["updateDimensionProperties"]["properties"] == {"hiddenByUser":False}
                for request in db.svc.requests)
     assert {"appendDimension":{"sheetId":92,"dimension":"COLUMNS","length":1}} in db.svc.requests
     faded=[request["repeatCell"] for request in db.svc.requests if "repeatCell" in request
-           and request["repeatCell"]["range"].get("startColumnIndex") == 1
+           and request["repeatCell"]["range"].get("startColumnIndex") == 2
            and request["repeatCell"]["range"].get("startRowIndex") == 3]
     assert faded and faded[0]["cell"]["userEnteredFormat"]["textFormat"]["italic"] is True
 
@@ -528,7 +528,7 @@ def test_date_serial_month_controls_are_normalized_and_keep_preview_semantics():
 
     db=SerialDB(); CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     row=db.replaced[0][0]
-    assert row[1:4] == ["2026-07", "2026-07", True]
+    assert row[2:5] == ["2026-07", "2026-07", True]
     assert _month_period("2026/07/01", 46204) == ("2026-07-01", "2026-07-31")
     assert _month_period(46204, "過去すべて") == ("", "")
 
@@ -550,8 +550,8 @@ def test_backfill_replacement_writes_month_controls_as_raw_text():
 
     db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
     db.ensure_sheet=lambda title, header: None
-    db._replace_backfill_rows("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I"], 4,
-                              [["条件", "2026-07", "2026-07", False, "", "", "", "", ""]], [2])
+    db._replace_backfill_rows("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I","J"], 5,
+                              [["条件", "食費\n外食", "2026-07", "2026-07", False, "", "", "", "", ""]], [2])
     assert db.svc.updates[0]["valueInputOption"] == "RAW"
 
 
