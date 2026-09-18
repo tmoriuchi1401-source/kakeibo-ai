@@ -61,6 +61,14 @@ def _month(value: object) -> str | None:
         except (OverflowError, ValueError):
             return None
     text = narrow_text(value)
+    # Values.get returns a date-formatted existing control as text.  It is
+    # still the same selected month, so normalize it before the generated UI
+    # is written back as a strict textual dropdown value.
+    for pattern in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, pattern).strftime("%Y-%m")
+        except ValueError:
+            pass
     if len(text) != 7 or text[4:5] != "-":
         return None
     try:

@@ -600,7 +600,10 @@ class SheetsDB:
         self.clear(f"{title}!A2:{chr(64 + len(header))}")
         if rows:
             self.svc.spreadsheets().values().update(
-                spreadsheetId=self.sid, range=f"{title}!A2", valueInputOption="USER_ENTERED",
+                # Month controls are text identifiers (YYYY-MM), never dates.
+                # USER_ENTERED reparses 2026-07 as a first-of-month serial,
+                # which would later leak into the dropdown source.
+                spreadsheetId=self.sid, range=f"{title}!A2", valueInputOption="RAW",
                 body={"values":rows},
             ).execute()
         self._configure_backfill_mobile_sheet(title, header, hidden_from, control_rows, ignored_start_rows)

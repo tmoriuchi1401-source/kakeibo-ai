@@ -522,15 +522,37 @@ def test_date_serial_month_controls_are_normalized_and_keep_preview_semantics():
             payload=CategoryBackfillUIPipeline._payload(self.rules[0], saved_rule=True)
             return ([
                 "条件・カテゴリ", "開始月", "終了月", "プレビューする", "種別", "ルールID", "revision", "条件JSON", "移行前期間",
-            ], [["旧", 46204, "2026-07", True, "保存済みルール", "CR-one", 1, payload, ""]])
+            ], [["旧", "2026/07/01", 46204, True, "保存済みルール", "CR-one", 1, payload, ""]])
         def category_rule_ui_rows(self): return []
         def replace_category_backfill_ui_rows(self, rows, header): self.replaced=(rows, header)
 
     db=SerialDB(); CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
     row=db.replaced[0][0]
     assert row[1:4] == ["2026-07", "2026-07", True]
-    assert _month_period(46204, "2026-07") == ("2026-07-01", "2026-07-31")
+    assert _month_period("2026/07/01", 46204) == ("2026-07-01", "2026-07-31")
     assert _month_period(46204, "過去すべて") == ("", "")
+
+
+def test_backfill_replacement_writes_month_controls_as_raw_text():
+    class Call:
+        def __init__(self, value): self.value=value
+        def execute(self): return self.value
+    class Service:
+        def __init__(self): self.updates=[]; self.requests=[]
+        def spreadsheets(self): return self
+        def values(self): return self
+        def get(self, **kwargs):
+            return Call({"sheets":[{"properties":{"sheetId":93,"title":"カテゴリ過去反映",
+                "gridProperties":{"columnCount":27}}}]})
+        def clear(self, **kwargs): return Call({})
+        def update(self, **kwargs): self.updates.append(kwargs); return Call({})
+        def batchUpdate(self, **kwargs): self.requests.extend(kwargs["body"]["requests"]); return Call({})
+
+    db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
+    db.ensure_sheet=lambda title, header: None
+    db._replace_backfill_rows("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I"], 4,
+                              [["条件", "2026-07", "2026-07", False, "", "", "", "", ""]], [2])
+    assert db.svc.updates[0]["valueInputOption"] == "RAW"
 
 
 def test_sheets_read_metadata_is_cached_and_only_429_is_retried():
