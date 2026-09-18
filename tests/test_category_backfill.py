@@ -462,7 +462,8 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
         def __init__(self): self.requests=[]
         def spreadsheets(self): return self
         def get(self, **kwargs):
-            return Call({"sheets":[{"properties":{"sheetId":92,"title":"カテゴリ過去反映"}}]})
+            return Call({"sheets":[{"properties":{"sheetId":92,"title":"カテゴリ過去反映",
+                "gridProperties":{"columnCount":26}}}]})
         def batchUpdate(self, **kwargs): self.requests.extend(kwargs["body"]["requests"]); return Call({})
 
     db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
@@ -502,6 +503,7 @@ def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_cond
                    "sheetId":92,"dimension":"COLUMNS","startIndex":0,"endIndex":4
                } and request["updateDimensionProperties"]["properties"] == {"hiddenByUser":False}
                for request in db.svc.requests)
+    assert {"appendDimension":{"sheetId":92,"dimension":"COLUMNS","length":1}} in db.svc.requests
     faded=[request["repeatCell"] for request in db.svc.requests if "repeatCell" in request
            and request["repeatCell"]["range"].get("startColumnIndex") == 1
            and request["repeatCell"]["range"].get("startRowIndex") == 3]

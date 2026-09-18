@@ -488,7 +488,16 @@ class SheetsDB:
         is_backfill=title == "カテゴリ過去反映"
         widths=(140,75,75,70) if is_backfill else (120,150,90,90)
         clear_start,clear_end=(1,4) if is_backfill else (2,3)
-        requests=[
+        requests=[]
+        if is_backfill:
+            # Z was the former helper's final column.  AA is the independent
+            # end-month helper, so extend only legacy-sized grids once before
+            # addressing AA; never grow the sheet on later refreshes.
+            column_count=sheet["properties"].get("gridProperties", {}).get("columnCount", 0)
+            if column_count < 27:
+                requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"COLUMNS",
+                    "length":27-column_count}})
+        requests += [
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":index,"endIndex":index+1},"properties":{"pixelSize":width},"fields":"pixelSize"}}
             for index,width in enumerate(widths)
         ] + [
