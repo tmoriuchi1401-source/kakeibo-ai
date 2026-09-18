@@ -524,15 +524,27 @@ class SheetsDB:
                 {"userEnteredValue":"='カテゴリ過去反映'!$AA$2:$AA$1000"}
             ]},"strict":True,"showCustomUi":True}
             month_pattern="^[0-9]{4}-(0[1-9]|1[0-2])$"
+            # FILTER must return normalized values, not the pre-normalized
+            # date serial.  ``TO_TEXT`` alone in REGEXMATCH only tests the
+            # display value; it does not change the values FILTER returns.
+            normalizer = "ARRAYFORMULA(IF(ISNUMBER(%s),TEXT(%s,\"yyyy-mm\"),TO_TEXT(%s)))"
+            home_raw = "'ホーム'!$I$3:$I$5001"
+            start_raw = "$B$2:$B$1000"
+            end_raw = "$C$2:$C$1000"
+            home_text = normalizer % (home_raw, home_raw, home_raw)
+            start_text = normalizer % (start_raw, start_raw, start_raw)
+            end_text = normalizer % (end_raw, end_raw, end_raw)
             start_formula=(
-                "=LET(home,FILTER('ホーム'!$I$3:$I$5001,REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\""
-                + month_pattern + "\")),current,IFERROR(FILTER($B$2:$B$1000,REGEXMATCH(TO_TEXT($B$2:$B$1000),\""
-                + month_pattern + "\")),\"\"),values,TOCOL({home;current},1),SORT(UNIQUE(values),1,TRUE))"
+                "=LET(home_text," + home_text + ",home,FILTER(home_text,REGEXMATCH(home_text,\""
+                + month_pattern + "\")),current_text," + start_text
+                + ",current,IFERROR(FILTER(current_text,REGEXMATCH(current_text,\"" + month_pattern
+                + "\")),\"\"),values,TOCOL({home;current},1),SORT(UNIQUE(values),1,TRUE))"
             )
             end_formula=(
-                "=LET(home,FILTER('ホーム'!$I$3:$I$5001,REGEXMATCH(TO_TEXT('ホーム'!$I$3:$I$5001),\""
-                + month_pattern + "\")),current,IFERROR(FILTER($C$2:$C$1000,REGEXMATCH(TO_TEXT($C$2:$C$1000),\""
-                + month_pattern + "\")),\"\"),values,TOCOL({home;current},1),{\"過去すべて\";SORT(UNIQUE(values),1,TRUE)})"
+                "=LET(home_text," + home_text + ",home,FILTER(home_text,REGEXMATCH(home_text,\""
+                + month_pattern + "\")),current_text," + end_text
+                + ",current,IFERROR(FILTER(current_text,REGEXMATCH(current_text,\"" + month_pattern
+                + "\")),\"\"),values,TOCOL({home;current},1),{\"過去すべて\";SORT(UNIQUE(values),1,TRUE)})"
             )
             requests.extend([
                 {"updateCells":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1,
