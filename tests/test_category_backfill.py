@@ -8,7 +8,7 @@ from app.category_backfill import (
     BACKFILL_REQUEST_SHEET, BACKFILL_TARGET_SHEET, BackfillSpec, CategoryBackfillPipeline,
 )
 from app.category_rules import CategoryRule
-from app.category_backfill_ui import CategoryBackfillUIPipeline, _period, condition_label
+from app.category_backfill_ui import CategoryBackfillUIPipeline, _month_period, _period, condition_label
 from app.sheets import SheetsDB
 
 
@@ -238,6 +238,70 @@ def test_month_range_and_changed_request_snapshot_require_a_new_preview():
     assert pipe.confirm("CB-4", expected_count=1) == {"state": "held", "reason": "request_snapshot_changed"}
 
 
+def test_start_end_month_periods_include_boundaries_and_all_history_ignores_start():
+    assert _month_period("2026-02", "2026-02") == ("2026-02-01", "2026-02-28")
+    assert _month_period("2024-02", "2024-02") == ("2024-02-01", "2024-02-29")
+    assert _month_period("2025-12", "2026-01") == ("2025-12-01", "2026-01-31")
+    assert _month_period("not-a-month", "過去すべて") == ("", "")
+    assert _month_period("2026-09", "2026-08") is None
+    assert _month_period("", "2026-08") is None
+    assert _month_period("2026-08", "invalid") is None
+
+
+def test_all_history_preview_uses_unbounded_fixed_period_and_confirmation_labels_it():
+    class ConfirmationDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.confirm=[]
+        def category_backfill_confirmation_rows(self): return self.confirm
+        def ensure_category_backfill_confirmation_sheet(self, header): pass
+        def clear(self, rng): self.confirm=[]
+        def append(self, sheet, rows):
+            if sheet == "カテゴリ過去反映確認": self.confirm.extend(rows)
+            else: super().append(sheet, rows)
+
+    db=ConfirmationDB()
+    pipeline=CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False, id_factory=lambda: "CB-all")
+    assert pipeline.preview(BackfillSpec(condition(), "", ""))["state"] == "previewed"
+    result=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh_confirmations()
+    assert result["requests"] == 2 and "過去すべて" in db.confirm[0][0]
+
+
+def test_legacy_periods_migrate_by_fixed_key_without_misreading_old_checkbox_as_end_month():
+    class MigrationDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.rules=[service_rule("CR-one", "請求名", ("食費", "外食"))]; self.replaced=[]
+        def category_backfill_ui_table(self):
+            payload=CategoryBackfillUIPipeline._payload(self.rules[0], saved_rule=True)
+            return (["条件・カテゴリ", "対象期間", "プレビューする", "種別", "ルールID", "revision", "条件JSON"],
+                    [["旧", "2026-04..2026-08", True, "保存済みルール", "CR-one", 1, payload]])
+        def category_rule_ui_rows(self): return []
+        def replace_category_backfill_ui_rows(self, rows, header): self.replaced=(rows, header)
+
+    db=MigrationDB(); result=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    assert result["conditions"] == 1
+    rows,header=db.replaced
+    assert header[:4] == ["条件・カテゴリ", "開始月", "終了月", "プレビューする"]
+    assert rows[0][1:4] == ["2026-04", "2026-08", True]
+    assert rows[0][5] == "CR-one" and rows[0][7]
+
+
+def test_non_month_aligned_legacy_period_is_retained_but_requires_new_unchecked_controls():
+    class MigrationDB(BackfillDB):
+        def __init__(self):
+            super().__init__(); self.rules=[service_rule("CR-one", "請求名", ("食費", "外食"))]; self.rows=[]
+        def category_backfill_ui_table(self):
+            payload=CategoryBackfillUIPipeline._payload(self.rules[0], saved_rule=True)
+            return (["条件・カテゴリ", "対象期間", "プレビューする", "種別", "ルールID", "revision", "条件JSON"],
+                    [["旧", "2026-04-02..2026-08-30", True, "保存済みルール", "CR-one", 1, payload]])
+        def category_rule_ui_rows(self): return []
+        def replace_category_backfill_ui_rows(self, rows, header): self.rows=rows
+
+    db=MigrationDB(); CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False).refresh()
+    assert db.rows[0][1:4] == ["", "", False]
+    assert db.rows[0][8] == "2026-04-02..2026-08-30"
+    assert "再設定待ち" in db.rows[0][0]
+
+
 def test_backfill_rejects_invalid_period_and_conflicting_active_rule():
     db = BackfillDB(); pipe = CategoryBackfillPipeline(db, preview_enabled=True, apply_enabled=False)
     assert pipe.preview(BackfillSpec(condition(), "2026-08-01oops", "2026-08-31")) == {"state": "held", "reason": "invalid_period"}
@@ -278,7 +342,7 @@ def test_grouped_unclassified_past_checkbox_is_independent_from_future_rule_save
     # The separate past action exposes a past-only condition, not a saved rule.
     db.ui[0][5] = True
     assert pipe.refresh()["conditions"] == 1
-    assert db.backfill_ui[0][3] == "表示中の条件（過去分のみ）"
+    assert db.backfill_ui[0][4] == "表示中の条件（過去分のみ）"
     assert db.rules == [] and db.category_updates == []
 
 
@@ -306,7 +370,7 @@ def test_preview_consumes_its_source_past_choice_by_fixed_condition_key():
     db.ui = [["条件", "未分類 1件", "食費", "外食", False, True,
               "group:one", "M-one", "2026-08-10", "PayPay", "service", snapshot]]
     pipe = CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
-    pipe.refresh(); db.backfill_ui[0][1] = "対象月:2026-08"; db.backfill_ui[0][2] = True
+    pipe.refresh(); db.backfill_ui[0][1:4] = ["2026-08", "2026-08", True]
     result = pipe.preview_checked()
     assert result["results"][0]["state"] == "previewed"
     assert db.consumed == [("group:one", "previewed")]
@@ -328,13 +392,13 @@ def test_backfill_ui_replacement_preserves_checked_period_without_append_rows():
 
     db=ReplacingDB(); pipe=CategoryBackfillUIPipeline(db, ui_enabled=True, apply_enabled=False)
     assert pipe.refresh()["conditions"] == 1
-    db.ui[0][1:3] = ["2026-01..2026-12", True]
+    db.ui[0][1:4] = ["2026-01", "2026-12", True]
     assert pipe.refresh()["conditions"] == 1
-    assert db.ui[0][1:3] == ["2026-01..2026-12", True]
+    assert db.ui[0][1:4] == ["2026-01", "2026-12", True]
     # A later row-count increase keeps the first fixed key's input in place.
     db.rules.append(service_rule("CR-two", "別の請求名", ("食費", "外食")))
     assert pipe.refresh()["conditions"] == 2
-    assert db.ui[0][1:3] == ["2026-01..2026-12", True]
+    assert db.ui[0][1:4] == ["2026-01", "2026-12", True]
     assert len(db.replacements) == 3
 
 
@@ -390,7 +454,7 @@ def test_sheets_backfill_control_render_clears_stale_boxes_and_marks_only_action
     assert all(item["rule"]["condition"]["type"] == "BOOLEAN" for item in validations[1:])
 
 
-def test_sheets_backfill_period_dropdown_is_rendered_only_for_condition_rows():
+def test_sheets_backfill_month_dropdowns_and_checkbox_are_rendered_only_for_condition_rows():
     class Call:
         def __init__(self, value): self.value=value
         def execute(self): return self.value
@@ -403,30 +467,41 @@ def test_sheets_backfill_period_dropdown_is_rendered_only_for_condition_rows():
 
     db=object.__new__(SheetsDB); db.sid="synthetic"; db.svc=Service()
     db.ensure_sheet=lambda title, header: None
-    db._configure_backfill_mobile_sheet("カテゴリ過去反映", ["A","B","C","D","E","F","G"], 3, [2, 4])
+    db._configure_backfill_mobile_sheet("カテゴリ過去反映", ["A","B","C","D","E","F","G","H","I"], 4, [2, 4], [4])
     validations=[request["setDataValidation"] for request in db.svc.requests if "setDataValidation" in request]
-    period=[item for item in validations if item["range"]["startColumnIndex"] == 1]
-    assert len(period) == 3
-    assert "rule" not in period[0] and period[0]["range"]["endRowIndex"] == 1000
-    assert [item["range"]["startRowIndex"] for item in period[1:]] == [1, 3]
+    start=[item for item in validations if item["range"]["startColumnIndex"] == 1]
+    end=[item for item in validations if item["range"]["startColumnIndex"] == 2]
+    checkbox=[item for item in validations if item["range"]["startColumnIndex"] == 3]
+    assert len(start) == 3 and len(end) == len(checkbox) == 2
+    assert "rule" not in start[0] and start[0]["range"]["endColumnIndex"] == 4
+    assert [item["range"]["startRowIndex"] for item in start[1:]] == [1, 3]
     assert all(item["rule"] == {
         "condition":{"type":"ONE_OF_RANGE","values":[
             {"userEnteredValue":"='カテゴリ過去反映'!$Z$2:$Z$1000"}
-        ]}, "strict":False, "showCustomUi":True,
-    } for item in period[1:])
+        ]}, "strict":True, "showCustomUi":True,
+    } for item in start[1:])
+    assert all(item["rule"]["condition"]["values"] == [
+        {"userEnteredValue":"='カテゴリ過去反映'!$AA$2:$AA$1000"}
+    ] for item in end[1:])
+    assert all(item["rule"]["condition"]["type"] == "BOOLEAN" for item in checkbox[1:])
     updates=[request["updateCells"] for request in db.svc.requests if "updateCells" in request]
     assert any(update["range"]["startColumnIndex"] == 25 and
                update["rows"][0]["values"][0]["userEnteredValue"] == {
-                   "stringValue":"過去反映・対象期間候補"
+                   "stringValue":"過去反映・開始月候補"
                }
                for update in updates)
-    formula=next(update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
-                 for update in updates if update["range"]["startRowIndex"] == 1)
-    assert '"対象月:"&months' in formula and 'years&"-01.."&years&"-12"' in formula
-    assert '"全期間"' in formula and "ホーム'!$I$3:$I$5001" in formula
+    formulas=[update["rows"][0]["values"][0]["userEnteredValue"]["formulaValue"]
+              for update in updates if update["range"]["startRowIndex"] == 1]
+    assert any("ホーム'!$I$3:$I$5001" in formula and "$B$2:$B$1000" in formula for formula in formulas)
+    assert any('"過去すべて"' in formula and "$C$2:$C$1000" in formula for formula in formulas)
     assert any(request.get("updateDimensionProperties",{}).get("range",{}).get("startIndex") == 25 and
+               request["updateDimensionProperties"]["range"]["endIndex"] == 27 and
                request["updateDimensionProperties"]["properties"] == {"hiddenByUser":True}
                for request in db.svc.requests)
+    faded=[request["repeatCell"] for request in db.svc.requests if "repeatCell" in request
+           and request["repeatCell"]["range"].get("startColumnIndex") == 1
+           and request["repeatCell"]["range"].get("startRowIndex") == 3]
+    assert faded and faded[0]["cell"]["userEnteredFormat"]["textFormat"]["italic"] is True
 
 
 def test_sheets_read_metadata_is_cached_and_only_429_is_retried():
