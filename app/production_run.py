@@ -36,7 +36,7 @@ def safe_source_error(error):
 
 
 # These are data dependencies, not simply a list of workflows to concatenate.
-# Card classification needs the latest Amazon orders; final posting waits for
+# Card monetary handling follows Amazon supplements and receipt import; final posting waits for
 # all import outcomes, including bank preview, before making global decisions.
 DEPENDENCIES = {
     "amazon": (),
@@ -52,6 +52,17 @@ DEPENDENCIES = {
     "expenses_refresh": ("auto_expense",),
 }
 COUNT_KEYS = frozenset({
+    "projection_months", "projection_rows", "projection_sheet_requests", "projection_sheet_cells",
+    "projection_drive_reads", "projection_drive_writes",
+    "daily_changed_blocks", "daily_write_requests",
+    "corrections_submitted", "corrections_applied", "corrections_failed", "corrections_pending",
+    "correction_form_ready", "correction_input_changed",
+    "money_reviews_submitted", "money_reviews_applied", "money_reviews_failed", "money_reviews_pending",
+    "coverage_submitted", "coverage_applied", "coverage_failed", "coverage_pending", "coverage_form_ready", "coverage_input_changed",
+    "money_review_form_ready", "money_review_input_changed",
+    "money_eligible", "money_posted", "money_linked", "money_review", "money_duplicate", "money_supplement", "money_transfer",
+    "money_canary_selected", "money_canary_verified", "money_canary_replay",
+    "money_notice_review",
     "medical_local_written",
     "found", "fetched", "new", "written", "written_purchases", "new_eligible",
     "already_present", "duplicate", "needs_review", "review", "withheld", "deferred",
@@ -98,7 +109,7 @@ def run_durable_source(store: DurableState, directory: Path,
 
 
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
-                   preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False) -> dict:
+                   preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False,canary_source: str = "amazon") -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -107,17 +118,18 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
     """
     if amazon_canary and receipts_only:
         raise StateError('conflicting_source_scopes')
+    if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and not amazon_canary):raise StateError("money_canary_source_invalid")
     outcomes = {}
     for source, dependencies in DEPENDENCIES.items():
         if receipts_only and source != 'receipts':
             continue
-        if amazon_canary and source != "amazon":
+        if amazon_canary and source != canary_source:
             continue
         started = monotonic()
         previous = (history or {}).get(source, {})
         outcome = {"status": "skipped", "error": "dependency_failed", "counts": {},
                    "last_success": previous.get("last_success"), "duration_seconds": 0.0}
-        if all(outcomes[name]["status"] == "success" for name in dependencies):
+        if amazon_canary or all(outcomes[name]["status"] == "success" for name in dependencies):
             try:
                 if source not in runners:
                     raise StateError("source_runner_missing")

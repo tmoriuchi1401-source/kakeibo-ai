@@ -54,6 +54,10 @@ def is_aupay_charge(merchant:str)->bool:
     return is_aupay_charge_merchant(merchant)
 
 def is_amazon(merchant:str)->bool:
+    from .amazon_money_runtime import money_enabled
+    if money_enabled():
+        from .amazon_money_mail import is_amazon_money_merchant
+        return is_amazon_money_merchant(merchant)
     return is_amazon_merchant(merchant)
 
 def _amazon_extended_eligible(*parts)->bool:
@@ -72,6 +76,8 @@ class AuPayCardPipeline:
     def __init__(self,db:SheetsDB): self.db=db
 
     def _amazon_candidates(self):
+        from .amazon_money_runtime import money_enabled
+        if money_enabled():return []
         rows=self.db.get("Amazon注文!A2:M")
         grouped={}
         for r in rows:
@@ -91,6 +97,8 @@ class AuPayCardPipeline:
     def _classify_amazon_details(
         self,date:str,amount:int,amazon:list[dict],*,allow_extended:bool=True,
     ):
+        from .amazon_money_runtime import money_enabled
+        if money_enabled():return "needs_review_amazon_money",[],None,None
         candidates=[x for x in amazon
                     if x["amount"]==amount and self._days(x["date"],date)<=7]
         if len(candidates)==1:
@@ -132,7 +140,7 @@ class AuPayCardPipeline:
         amazon=self._amazon_candidates()
         counts={"rows":len(tx),"aupay_charge":0,"amazon_matched":0,
                 "amazon_extended_matched":0,
-                "amazon_ambiguous":0,"amazon_unmatched":0,"other":0}
+                "amazon_ambiguous":0,"amazon_unmatched":0,"needs_review_amazon_money":0,"other":0}
         samples=[]
         for d in tx:
             if is_aupay_charge(d["merchant"]):
@@ -149,6 +157,7 @@ class AuPayCardPipeline:
                     if match_type=="extended": counts["amazon_extended_matched"]+=1
                 elif state=="amazon_needs_review":
                     counts["amazon_ambiguous"]+=1
+                elif state=="needs_review_amazon_money": counts[state]+=1
                 else:
                     counts["amazon_unmatched"]+=1
                 if len(samples)<5: samples.append({"card":d,"candidates":c[:5]})
@@ -164,7 +173,7 @@ class AuPayCardPipeline:
         amazon=self._amazon_candidates()
         rows=[]; stats={"source_rows":len(tx),"new":0,"unchanged":0,"aupay_charge":0,
                         "amazon_matched":0,"amazon_extended_matched":0,"amazon_needs_review":0,
-                        "amazon_unmatched":0,"unclassified_card":0}
+                        "amazon_unmatched":0,"needs_review_amazon_money":0,"unclassified_card":0}
         for d in tx:
             if d["import_id"] in existing:
                 stats["unchanged"]+=1; continue
@@ -198,6 +207,8 @@ class AuPayCardPipeline:
         return stats
 
     def reclassify_amazon(self):
+        from .amazon_money_runtime import money_enabled
+        if money_enabled():raise RuntimeError("amazon_order_processing_retired")
         amazon=self._amazon_candidates()
         rows=self.db.get("取込データ!A2:L")
         updates=[]

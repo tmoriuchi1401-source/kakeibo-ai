@@ -91,6 +91,9 @@ def category_for(tx: ImportTransaction, categories: set[tuple[str, str]]) -> tup
 def auto_expense_decisions(
     transactions: list[ImportTransaction], categories: set[tuple[str, str]],
 ) -> list[AutoExpenseDecision]:
+    from .amazon_money_runtime import money_enabled
+    from .amazon_money_mail import is_amazon_money_merchant
+    money_mode=money_enabled()
     receipt_candidates = {
         decision.transaction.import_id
         for decision in reconcile_transactions(transactions)
@@ -116,7 +119,11 @@ def auto_expense_decisions(
         if tx.status not in ELIGIBLE_STATUSES or tx.source not in PAYMENT_SOURCES:
             continue
         text = _combined_text(tx)
-        if _amazon_installment(text):
+        if money_mode and (is_amazon_money_merchant(tx.merchant) or _amazon_installment(text)):
+            decisions.append(AutoExpenseDecision(
+                tx,"review","needs_review_amazon_money","日常のAmazon金銭確認で確定情報と既存計上を確認",
+            ))
+        elif _amazon_installment(text):
             decisions.append(AutoExpenseDecision(
                 tx, "review", "needs_review_amazon_installment", "Amazon分割払いの重複確認が必要",
             ))

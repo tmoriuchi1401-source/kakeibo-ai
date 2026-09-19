@@ -14,7 +14,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .drive_run_state import DriveStateTransport, DurableState, StateBinding, StateError
-from .production_run import DEPENDENCIES, execute_serial, require_success, run_durable_source
+from .production_run import COUNT_KEYS, DEPENDENCIES, execute_serial, require_success, run_durable_source
 from .production_ledger import ProductionLedger
 
 
@@ -37,10 +37,12 @@ def verify_execution_boundary(env: dict, head: str) -> None:
         raise StateError("production_main_boundary_required")
 
 
-def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
-    if canary_target and (source != "amazon" or not apply or
-                          not re.fullmatch(r"amazon-order:[0-9a-f]{16}", canary_target)):
+def command(source: str, *, apply: bool, canary_target: str = "", money_canary: bool = False) -> list[str]:
+    if canary_target and (source not in {"amazon","aupay_card"} or not apply or
+                          not re.fullmatch(r"AM-[0-9a-f]{32}", canary_target)):
         raise StateError("amazon_canary_target_invalid")
+    if money_canary and source not in {"amazon","aupay_card"}:raise StateError("money_canary_source_invalid")
+    if money_canary and apply and not canary_target:raise StateError("money_canary_target_required")
     if source in {"receipts", "paypay"}:
         return [sys.executable, "-m", "app.production_source", source, "apply" if apply else "preview"]
     if source == "receipt_reimport":
@@ -51,11 +53,11 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
     if source == "amazon":
         args = cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
         if canary_target:
-            args += ["--apply-limit", "1", "--approved-target", canary_target,
-                     "--expected-event-rows", "1", "--expected-header-rows", "1"]
+            args += ["--apply-limit", "1", "--approved-target", canary_target]
         return args
     if source == "aupay_card":
-        return cli + ["card-gmail-recurring"] + ([] if apply else ["--dry-run"])
+        return cli + ["card-gmail-recurring"] + ([] if apply else ["--dry-run"]) + (
+            ["--money-canary"]+(["--money-target",canary_target] if canary_target else []) if money_canary or canary_target else [])
     if source == "bank":
         return cli + ["bank-pdf-recurring", "--apply" if apply else "--dry-run"]
     if source == "aupay_balance":
@@ -63,7 +65,7 @@ def command(source: str, *, apply: bool, canary_target: str = "") -> list[str]:
     return cli + [(COMMON_COMMANDS if apply else COMMON_PREVIEWS)[source]]
 
 
-def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> dict:
+def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", money_canary: bool = False) -> dict:
     if (source=='receipt_confirmation' and apply and env.get('MEDICAL_DERIVED_AI_POLICY')
             and not env.get('MEDICAL_PREPARE_DIR') and not env.get('MEDICAL_FINALIZE_ONLY')):
         from .medical_auto_posting import AUTO_POLICIES
@@ -115,7 +117,7 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             source == "receipt_reimport" and env.get("RECEIPT_REIMPORT_OPERATION") == "replay"):
         child_env.pop("GEMINI_API_KEY", None)
     try:
-        result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
+        result = subprocess.run(command(source, apply=apply, canary_target=canary_target,money_canary=money_canary), cwd=REPO, env=child_env,
                                 capture_output=True, text=True, encoding="utf-8", timeout=900)
     except subprocess.TimeoutExpired:
         raise StateError('source_command_timed_out') from None
@@ -185,9 +187,11 @@ def source_environment(source: str, directory: Path, env: dict) -> dict:
 
 
 def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
-             ledger: ProductionLedger | None = None, canary_target: str = "") -> dict:
+             ledger: ProductionLedger | None = None, canary_target: str = "", canary_source: str = "amazon", money_canary: bool = False) -> dict:
+    if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and not money_canary):raise StateError("money_canary_source_invalid")
+    if money_canary and apply and not canary_target:raise StateError("money_canary_target_required")
     if canary_target:
-        command("amazon", apply=apply, canary_target=canary_target)
+        command(canary_source, apply=apply, canary_target=canary_target,money_canary=money_canary)
         if bank_apply:
             raise StateError("canary_bank_apply_forbidden")
     def execute(source):
@@ -205,14 +209,20 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
         local = private / "state"
         state_env = {"amazon": "AMAZON_STATE_DIR", "aupay_card": "AUPAY_CARD_STATE_DIR", "bank": "BANK_PDF_STATE_DIR"}[source]
         prepared[state_env] = str(local)
-        extra = {"canary_target": canary_target} if source == "amazon" and canary_target else {}
+        extra = ({"canary_target": canary_target,"money_canary":True} if source==canary_source and (canary_target or money_canary) else {})
         return run_durable_source(store, local, lambda _path: invoke(source, apply=effective_apply, env=prepared, **extra), apply=effective_apply)
     def run(source):
         if not apply:
             return execute(source)
         if ledger is None:
             raise StateError("production_ledger_required")
-        ledger.begin(source, uuid4().hex)
+        # A projection stage has no accounting writer. Its own durable dirty
+        # markers make replay safe even after an ambiguous display/save result.
+        # Native accounting stages retain their existing pending-state gate.
+        projection_replay=(source=="expenses_refresh" and env.get("KAKEIBO_PROJECTION_FOLDER_ID")
+                           and ledger.value["sources"][source]["phase"]=="pending")
+        if not projection_replay:
+            ledger.begin(source, uuid4().hex)
         started = monotonic()
         try:
             result = execute(source)
@@ -225,6 +235,18 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    canary_source=getattr(args,"canary_source","amazon")
+    if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and args.scope!="amazon_canary"):
+        raise StateError("money_canary_source_invalid")
+    if args.scope == "daily":
+        if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
+                or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
+            raise StateError("daily_scope_other_source_forbidden")
+    if args.scope == "projection":
+        if args.bank_apply or args.amazon_target or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
+            raise StateError("projection_scope_other_source_forbidden")
+    if getattr(args,"projection_bootstrap",False) and (args.scope!="projection" or args.mode!="apply"):
+        raise StateError("projection_bootstrap_requires_isolated_apply")
     if args.scope in {'receipt_confirmation', 'receipts'} and (args.bank_apply or args.amazon_target):
         raise StateError('receipt_scope_other_source_forbidden')
     if args.scope == "receipt_reimport":
@@ -240,7 +262,7 @@ def validate_scope(args) -> None:
         if args.mode == "apply":
             if not args.amazon_target:
                 raise StateError("amazon_canary_target_required")
-            command("amazon", apply=True, canary_target=args.amazon_target)
+            command(canary_source, apply=True, canary_target=args.amazon_target,money_canary=True)
         elif args.amazon_target:
             raise StateError("preview_has_no_approved_write_target")
     elif args.amazon_target:
@@ -251,8 +273,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily"), default="all")
+    parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
+    parser.add_argument("--canary-source",choices=("amazon","aupay_card"),default="amazon")
     parser.add_argument("--receipt-store", default="")
     parser.add_argument("--receipt-manifest", default="")
     parser.add_argument("--receipt-operation", choices=("reanalyze","replay"), default="reanalyze")
@@ -265,6 +289,23 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope=="amazon_canary":
+            if env.get("GITHUB_EVENT_NAME")!="workflow_dispatch":raise StateError("money_canary_manual_required")
+            from .amazon_money_runtime import money_enabled
+            if not money_enabled(env):raise StateError("money_canary_migration_required")
+        if args.scope == "daily":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":raise StateError("daily_manual_scope_required")
+            from .daily_runtime import run_daily_requests
+            result=run_daily_requests(env,apply=args.mode=="apply")
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
+        if args.scope == "projection":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                raise StateError("projection_manual_scope_required")
+            from .projection_runtime import run_projection
+            result=run_projection(env,apply=args.mode=="apply",bootstrap=args.projection_bootstrap)
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
         if args.scope=='receipts' and env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
             raise StateError('receipt_manual_scope_required')
         if args.scope=='receipt_confirmation':
@@ -292,11 +333,17 @@ def main():
         ledger_service = drive_service() if args.mode == "apply" else read_only_drive_service()
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
+        daily_counts={}
+        if args.scope == "all":
+            from .daily_runtime import run_daily_requests
+            # The fixed-ID inbox is replayable independently of the native
+            # accounting stages. Their ledger/checkpoint gates are unchanged.
+            daily_counts=run_daily_requests(env,apply=args.mode=="apply")
         with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
-                               ledger=ledger, canary_target=args.amazon_target)
+                               ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary")
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
-                                    amazon_canary=args.scope == "amazon_canary", receipts_only=args.scope == "receipts")
+                                    amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,receipts_only=args.scope == "receipts")
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True
@@ -312,6 +359,8 @@ def main():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         report["mode"] = args.mode
+        if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
+            if key in COUNT_KEYS and type(value) is int and value>=0}
         report["scope"] = args.scope
         report["bank_mode"] = "not_run" if args.scope in {"amazon_canary", "receipts"} else "apply" if args.bank_apply else "preview"
     except Exception:

@@ -87,8 +87,40 @@ def test_canary_scope_rejects_missing_or_misplaced_approval(mode, scope, target,
 
 
 def test_canary_uses_existing_exact_target_and_one_purchase_bounds():
-    target = "amazon-order:" + "a" * 16
+    target = "AM-" + "a" * 32
     args = flow.command("amazon", apply=True, canary_target=target)
-    assert args[-8:] == ["--apply-limit", "1", "--approved-target", target,
-                         "--expected-event-rows", "1", "--expected-header-rows", "1"]
+    assert args[-4:] == ["--apply-limit", "1", "--approved-target", target]
     flow.validate_scope(SimpleNamespace(mode="preview", scope="amazon_canary", amazon_target="", bank_apply=False))
+
+
+@pytest.mark.parametrize("mode,scope,bank,target", [
+    ("preview","projection",False,""), ("apply","all",False,""),
+    ("apply","projection",True,""), ("apply","projection",False,"amazon-order:"+"a"*16),
+])
+def test_bootstrap_cannot_share_a_scope_with_accounting(mode,scope,bank,target):
+    with pytest.raises(StateError):
+        flow.validate_scope(SimpleNamespace(mode=mode,scope=scope,bank_apply=bank,amazon_target=target,
+                                           projection_bootstrap=True,receipt_store="",receipt_manifest=""))
+
+
+@pytest.mark.parametrize("flag,value",[("bank_apply",True),("amazon_target","target"),
+    ("receipt_manifest","a"*64),("receipt_store","private"),("projection_bootstrap",True)])
+def test_daily_scope_rejects_other_source_inputs(flag,value):
+    args=dict(scope="daily",mode="apply",bank_apply=False,amazon_target="",receipt_manifest="",receipt_store="",projection_bootstrap=False)
+    args[flag]=value
+    with pytest.raises(StateError,match="daily_scope_other_source_forbidden"):
+        flow.validate_scope(SimpleNamespace(**args))
+
+
+def test_isolated_daily_scope_runs_only_the_fixed_id_inbox(monkeypatch,capsys):
+    import json
+    seen=[]
+    monkeypatch.setattr(flow.sys,"argv",["production_flow","--scope","daily","--mode","apply"])
+    for key,value in dict(valid_env(),GITHUB_EVENT_NAME="workflow_dispatch").items():monkeypatch.setenv(key,value)
+    monkeypatch.setattr(flow.subprocess,"check_output",lambda *args,**kw:"a"*40)
+    monkeypatch.setattr("app.private_state_bindings.decode_environment",lambda env,**kw:(env,""))
+    monkeypatch.setattr("app.daily_runtime.run_daily_requests",lambda env,apply:seen.append(apply) or {"corrections_applied":1})
+    monkeypatch.setattr(flow,"assemble",lambda *args,**kw:pytest.fail("isolated daily cannot run intake"))
+    flow.main()
+    assert seen==[True]
+    assert json.loads(capsys.readouterr().out)=={"success":True,"scope":"daily","counts":{"corrections_applied":1}}

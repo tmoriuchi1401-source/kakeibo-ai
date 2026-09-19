@@ -45,7 +45,7 @@ def selected_category_pair(major: str, minor: str) -> tuple[str, str]:
     return major, minor
 
 
-def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
+def review_items(transactions: list[ImportTransaction], *, money_mode=False) -> list[ReviewItem]:
     items=[]
     for tx in transactions:
         status=tx.status
@@ -68,6 +68,8 @@ def review_items(transactions: list[ImportTransaction]) -> list[ReviewItem]:
             recommendation="Amazon注文履歴に一致なし。注文履歴の不足または請求内訳を確認"
         else:
             continue
+        if money_mode and (is_amazon(tx.merchant) or tx.source.lower().startswith("amazon")):
+            recommendation="日常画面のAmazon金銭確認で確定情報を確認"
         items.append(ReviewItem(tx,priority,recommendation))
     # High priority first, then newest date first, then stable import ID.
     def sort_key(item:ReviewItem):
@@ -82,8 +84,9 @@ class ReviewPipeline:
         self.db=db
 
     def preview(self)->dict:
+        from .amazon_money_runtime import money_enabled
         tx=parse_import_rows(self.db.get("取込データ!A2:L"))
-        items=review_items(tx)
+        items=review_items(tx,money_mode=money_enabled())
         candidates=self._candidate_rows(tx)
         result=self._summary(items)
         result.update(self._candidate_summary(candidates))
@@ -110,6 +113,8 @@ class ReviewPipeline:
                 f"{category}｜{summary}")
 
     def _candidate_rows(self,transactions:list[ImportTransaction]):
+        from .amazon_money_runtime import money_enabled
+        if money_enabled():return []
         orders=aggregate_amazon_orders(self.db.get("Amazon注文!A2:O"))
         generated=[]
         for tx in transactions:
@@ -134,24 +139,26 @@ class ReviewPipeline:
         }
 
     def refresh(self)->dict:
+        from .amazon_money_runtime import money_enabled
+        money_mode=money_enabled()
         tx=parse_import_rows(self.db.get("取込データ!A2:L"))
-        items=review_items(tx)
+        items=review_items(tx,money_mode=money_mode)
         generated=self._candidate_rows(tx)
         generated_by_card={item.import_id:result for item,result in generated}
         categories=self.db.categories()
         self.db.ensure_sheet("要確認",HEADERS["要確認"])
-        self.db.ensure_sheet("Amazon照合候補",HEADERS["Amazon照合候補"])
+        if not money_mode:self.db.ensure_sheet("Amazon照合候補",HEADERS["Amazon照合候補"])
         existing={r[0]:(list(r)+[""]*max(0,20-len(r)))[:20]
                   for r in self.db.get("要確認!A2:T") if r}
         old_candidates={}
         old_labels={}
-        for raw in self.db.get("Amazon照合候補!A2:V"):
+        for raw in ([] if money_mode else self.db.get("Amazon照合候補!A2:V")):
             row=list(raw)+[""]*max(0,19-len(raw)); row=row[:19]
             if row[0]:
                 old_candidates[str(row[0])]={"fingerprint":str(row[16]),"label":str(row[17])}
                 if row[17]: old_labels[str(row[17])]=str(row[0])
         self.db.clear("要確認!A2:T")
-        self.db.clear("Amazon照合候補!A2:V")
+        if not money_mode:self.db.clear("Amazon照合候補!A2:V")
         rows=[]
         candidate_rows=[]
         validation_options={}
@@ -196,13 +203,15 @@ class ReviewPipeline:
                 else:
                     selected_label=self._selection_label(current)
                     selection_state="選択済み"
+            # Legacy selections remain evidence for migration; no order lookup,
+            # regenerated candidates, or silent invalidation in monetary mode.
+            candidate_fields=old[15:20] if money_mode else [summary,result.total_candidate_count if result else 0,
+                         selected_label,selected_id,selection_state]
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
-                         tx.status,item.recommendation,tx.note]+manual+
-                        [summary,result.total_candidate_count if result else 0,
-                         selected_label,selected_id,selection_state])
+                         tx.status,item.recommendation,tx.note]+manual+candidate_fields)
             if labels: validation_options[len(rows)+1]=labels
         self.db.append("要確認",rows)
-        self.db.append("Amazon照合候補",candidate_rows)
+        if not money_mode:self.db.append("Amazon照合候補",candidate_rows)
         self.db.configure_review_validation(categories,validation_options)
         result=self._summary(items)
         result.update(self._candidate_summary(generated))
@@ -266,11 +275,12 @@ class ReviewApprovalPipeline:
         return requests,errors
 
     def preview(self)->dict:
+        from .amazon_money_runtime import money_enabled
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
         review_rows=self.db.get("要確認!A2:T")
         selected=sum(str((list(row)+[""]*10)[9]).strip()=="Amazon注文と照合"
                      for row in review_rows)
-        requests,errors=self._amazon_plan(imports,review_rows) if selected else ({},{})
+        requests,errors=self._amazon_plan(imports,review_rows) if selected and not money_enabled() else ({},{})
         conflicts=sum(any("more than once" in error for error in values)
                       for values in errors.values())
         return {"amazon_manual_selected":selected,"amazon_manual_valid":len(requests),
@@ -278,12 +288,14 @@ class ReviewApprovalPipeline:
                 "amazon_manual_would_match":len(requests)}
 
     def apply(self)->dict:
+        from .amazon_money_runtime import money_enabled
+        money_mode=money_enabled()
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
         by_id={tx.import_id:tx for tx in imports}
         categories=set(self.db.categories())
         expense_idx=self.db.expense_index()
         review_rows=self.db.get("要確認!A2:T")
-        amazon_selected=any(str((list(row)+[""]*10)[9]).strip()=="Amazon注文と照合"
+        amazon_selected=not money_mode and any(str((list(row)+[""]*10)[9]).strip()=="Amazon注文と照合"
                             for row in review_rows)
         amazon_requests,amazon_errors=self._amazon_plan(imports,review_rows) if amazon_selected else ({},{})
         import_updates=[]; expense_new=[]; expense_updates=[]; review_updates=[]
@@ -297,6 +309,10 @@ class ReviewApprovalPipeline:
             stats["requested"]+=1
             error=""
             tx=by_id.get(str(row[0]))
+            if money_mode and action!="保留" and (action=="Amazon注文と照合" or
+                    (tx is not None and (is_amazon(tx.merchant) or tx.source.lower().startswith("amazon")))):
+                row[14]="未反映: 日常画面のAmazon金銭確認で対応してください"
+                stats["held"]+=1;review_updates.append((row_num,row));continue
             if action not in self.ACTIONS: error="許可されていない判断です"
             elif action=="保留":
                 row[14]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue

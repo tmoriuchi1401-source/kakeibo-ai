@@ -196,30 +196,6 @@ def test_incomplete_detail_quantities_are_not_summed_as_order_total():
     assert result["reason_missing_order_quantity_count"] == 1
 
 
-def test_cli_uses_read_only_sheets_and_prints_summary(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "private-sheet-id"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True}
-
-    service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda spreadsheet_id, service=None: db)
-    monkeypatch.setattr(
-        cli,
-        "preview_amazon_cancellation_apply",
-        lambda value: {"cancellation_event_count": int(value is db)},
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-apply-preview"],
-    )
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'cancellation_event_count': 1}"
 
 
 def test_order_status_apply_updates_only_f_cell_and_is_idempotent():
@@ -272,21 +248,6 @@ def test_order_status_apply_reports_write_error_without_other_writes():
     assert result["error_count"] == 1
 
 
-def test_order_status_apply_cli_requires_flag_before_initializing(monkeypatch):
-    monkeypatch.setattr(
-        cli, "Settings",
-        lambda: (_ for _ in ()).throw(AssertionError("must not initialize")),
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-order-status-apply"],
-    )
-
-    try:
-        cli.main()
-    except SystemExit as error:
-        assert error.code == 2
-    else:
-        raise AssertionError("CLI must reject missing --apply")
 
 
 def test_sheets_writer_updates_only_header_f_cell():

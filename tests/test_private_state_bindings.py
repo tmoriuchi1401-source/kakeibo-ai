@@ -20,7 +20,7 @@ def test_ciphertext_environment_roundtrip_without_plaintext_export(key, monkeypa
     encrypted = {name: wrap(name, value, key) for name, value in values.items()}
     original = dict(encrypted)
     monkeypatch.setattr("app.settings.service_account_source", lambda: (None, {"private_key": key}))
-    target = "amazon-order:0123456789abcdef"
+    target = "AM-0123456789abcdef0123456789abcdef"
     decoded, decoded_target = decode_environment(encrypted, canary_target=wrap("AMAZON_TARGET", target, key))
     assert decoded == values and decoded_target == target and encrypted == original
     assert all(value not in json.dumps(encrypted) for value in values.values())
@@ -50,3 +50,10 @@ def test_missing_binding_stops_before_returning_partial_environment(key, monkeyp
 def test_invalid_canary_reference_cannot_be_wrapped(key):
     with pytest.raises(StateError, match="private_binding_value_invalid"):
         wrap("AMAZON_TARGET", "order-with-private-data", key)
+
+
+def test_projection_folder_uses_its_own_optional_encrypted_binding(key):
+    name="KAKEIBO_PROJECTION_FOLDER_ID"
+    encrypted=wrap(name,"synthetic-folder-id",key)
+    assert unwrap(name,encrypted,key)=="synthetic-folder-id"
+    assert name not in VARIABLES  # Existing installations keep their required set.

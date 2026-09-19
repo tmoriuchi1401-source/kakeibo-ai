@@ -71,6 +71,27 @@ def test_non_checkpoint_source_unknown_write_blocks_automatic_restart(setup, mon
     assert resumed.value["sources"]["aupay_balance"]["last_success"]
 
 
+def test_only_opted_in_derived_projection_resumes_pending_stage(setup, monkeypatch, tmp_path):
+    binding, drive, ledger = setup
+    calls = []
+    def source(name, **kwargs):
+        calls.append(name)
+        if len(calls) == 1:
+            raise RuntimeError("synthetic_projection_display_failure")
+        return {"projection_months": 1, "errors": 0}
+    monkeypatch.setattr("app.production_flow.invoke", source)
+    env={"KAKEIBO_PROJECTION_FOLDER_ID":"synthetic-encrypted-binding"}
+    with pytest.raises(RuntimeError):
+        assemble(env,tmp_path,apply=True,bank_apply=False,ledger=ledger)["expenses_refresh"]()
+    resumed=ProductionLedger(drive,binding)
+    with pytest.raises(StateError,match="reconciliation_required"):
+        assemble({},tmp_path,apply=True,bank_apply=False,ledger=resumed)["expenses_refresh"]()
+    assemble(env,tmp_path,apply=True,bank_apply=False,ledger=resumed)["expenses_refresh"]()
+    assert calls==["expenses_refresh","expenses_refresh"]
+    assert resumed.value["sources"]["expenses_refresh"]["phase"]=="ready"
+    assert all(v["last_success"] is None for k,v in resumed.value["sources"].items() if k!="expenses_refresh")
+
+
 def test_new_writes_require_durable_intent_before_invoking_source(setup, monkeypatch, tmp_path):
     _, drive, ledger = setup
     drive.fail_at = 1

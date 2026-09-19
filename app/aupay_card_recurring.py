@@ -176,6 +176,7 @@ def run_recurring_ingestion(
     authority_provider: ProtectedRecurringAuthorityProvider,
     state_dir, repo_root, now: datetime, dry_run: bool = False,
     sleeper: Callable[[float], None] | None = None,
+    money_canary: bool = False, money_target: str = "",
 ) -> dict[str, object]:
     """Collect, plan, and optionally apply exactly one bounded fresh batch."""
     policy = authority_provider.load()
@@ -196,13 +197,26 @@ def run_recurring_ingestion(
     journal = None
     execution = None
     try:
+        from .amazon_money_runtime import money_enabled,money_writer,run_money_records
+        monetary=money_writer(db) if money_enabled() else None
+        if money_target and not money_canary:raise RuntimeError("money_target_requires_canary")
+        if money_canary and monetary is None:raise RuntimeError("money_canary_migration_required")
+        money_records=[];money_notices=[]
+        money_args={"money_records":money_records,"money_notices":money_notices} if monetary is not None else {}
         transactions, collection = AuPayCardMailPipeline._collect(
             gmail_service, window.query_representation, policy.max_messages,
             sleeper=sleeper, request_interval=0 if sleeper is not None else 0.25,
+            **money_args,
         )
         summary.update(found=collection["found"], fetched=collection["fetched"])
         if not collection["collection_complete"]:
             raise RuntimeError("incremental_gmail_collection_incomplete")
+        if money_canary:
+            from .amazon_money_runtime import run_money_canary
+            summary.update(run_money_canary(monetary,money_records,dry_run=dry_run,target=money_target))
+            summary.update(status="dry_run_ready" if dry_run else "complete",checkpoint_advanced=False)
+            state.record(summary,advance_checkpoint=False)
+            return summary
         existing = db.get("取込データ!A2:L")
         plan = build_canonical_apply_plan(collection, reconcile_transactions(transactions, existing))
         statuses, amazon_review = _classify_candidates(plan, db)
@@ -216,8 +230,14 @@ def run_recurring_ingestion(
         )
         if len(statuses) > policy.max_batch_size:
             raise RuntimeError("new_eligible_exceeds_bounded_batch")
+        if monetary is not None:
+            from .amazon_money_notices import save_notices
+            summary.update(save_notices(monetary.store,money_notices,dry_run=dry_run))
+            summary.update(run_money_records(monetary,money_records,dry_run=dry_run,limit=policy.max_batch_size))
         if not statuses:
             summary["status"] = "dry_run_noop" if dry_run else "noop"
+            if dry_run and summary.get("money_eligible",0):summary["status"]="dry_run_ready"
+            if not dry_run and summary.get("money_posted",0):summary["status"]="complete"
             summary["journal_final"] = "not_needed"
             summary["lease_final"] = "not_needed"
             state.record(summary, advance_checkpoint=not dry_run)

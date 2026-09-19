@@ -18,13 +18,23 @@ on:
       scope:
         description: All stages or isolated receipts, receipt review, or Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily]
         default: all
         required: true
       amazon_target:
-        description: RSA-wrapped approved Amazon reference; only for canary apply
+        description: RSA-wrapped fixed AM money ID; only for canary apply
         type: string
         required: false
+      canary_source:
+        description: Confirmed-money authority used by amazon_canary
+        type: choice
+        options: [amazon, aupay_card]
+        default: amazon
+        required: false
+      projection_bootstrap:
+        description: Rebuild derived indexes/months from the ledger in isolated projection scope
+        type: boolean
+        default: false
       bank_apply:
         description: Separate approved bank apply (schedule always previews bank)
         type: boolean
@@ -72,6 +82,10 @@ jobs:
     env:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+      KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
+      KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
+      KAKEIBO_AMAZON_MONEY_MODE: ${{ vars.KAKEIBO_AMAZON_MONEY_MODE }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
@@ -129,9 +143,11 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install dependencies and existing OCR runtime
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Install existing OCR runtime
+        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' }}
         run: |
-          pip install -r requirements.txt
           pip install -r requirements-local-ocr.txt
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
@@ -145,6 +161,8 @@ jobs:
           MANUAL_MODE: ${{ inputs.mode || 'preview' }}
           MANUAL_SCOPE: ${{ inputs.scope || 'all' }}
           AMAZON_TARGET: ${{ inputs.amazon_target }}
+          CANARY_SOURCE: ${{ inputs.canary_source || 'amazon' }}
+          PROJECTION_BOOTSTRAP: ${{ inputs.projection_bootstrap || false }}
           CONFIRM: ${{ inputs.confirm }}
           BANK_APPLY: ${{ inputs.bank_apply || false }}
           RECEIPT_STORE: ${{ inputs.receipt_store }}
@@ -159,6 +177,8 @@ jobs:
             mode=apply
           else
             args+=(--scope "$MANUAL_SCOPE")
+            args+=(--canary-source "$CANARY_SOURCE")
+            if [[ "$PROJECTION_BOOTSTRAP" == true ]]; then args+=(--projection-bootstrap); fi
             if [[ "$MANUAL_SCOPE" == receipt_reimport ]]; then
               args+=(--receipt-store "$RECEIPT_STORE" --receipt-manifest "$RECEIPT_MANIFEST")
               args+=(--receipt-operation "$RECEIPT_OPERATION" --receipt-limit "$RECEIPT_LIMIT")

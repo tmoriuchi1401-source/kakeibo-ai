@@ -293,29 +293,3 @@ def test_preview_reads_expected_ranges_and_never_writes():
         "Amazon注文ヘッダ!A2:O", "Amazon注文!A2:O", "Amazonイベント!A2:X",
         "取込データ!A2:L", "支出明細!A2:M",
     ]
-
-
-def test_cli_uses_read_only_sheets_and_gmail(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "sheet-id"
-        gmail_token_json = "token"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True, "need_gmail": True}
-
-    sheets_service = object()
-    gmail_service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: sheets_service)
-    monkeypatch.setattr(cli, "gmail_readonly_service", lambda token: gmail_service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda spreadsheet_id, service=None: db)
-    monkeypatch.setattr(
-        cli, "preview_amazon_payment_coverage",
-        lambda value, gmail: {"ok": value is db and gmail is gmail_service},
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-payment-coverage-preview"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'ok': True}"

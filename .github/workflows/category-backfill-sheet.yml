@@ -22,10 +22,12 @@ concurrency:
 
 jobs:
   apply-sheet-confirmed-request:
-    if: ${{ github.ref == 'refs/heads/main' && vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' && vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true' && (vars.KAKEIBO_PROJECTION_FOLDER_ID == '' || github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
+      KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       # Preview and apply remain separate opt-ins. A preview never authorizes

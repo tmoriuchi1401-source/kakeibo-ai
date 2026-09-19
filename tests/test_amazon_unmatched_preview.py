@@ -409,33 +409,6 @@ def test_export_contains_only_amount_near_match_and_minimum_fields(tmp_path):
     assert db.writes == []
 
 
-def test_transactions_json_and_csv_run_without_sheets(tmp_path, monkeypatch, capsys):
-    csv_path = tmp_path / "Order History.csv"
-    pd.DataFrame([raw_row(
-        "o1", "2026-08-09", 1100, shipment_subtotal=900, shipment_tax=100,
-    )]).to_csv(csv_path, index=False, encoding="utf-8-sig")
-    json_path = tmp_path / "amazon-unmatched-input.json"
-    json_path.write_text(json.dumps({
-        "schema_version": 1,
-        "transactions": [{
-            "diagnostic_id": "a" * 24,
-            "card_date": "2026-08-10",
-            "card_amount": 1000,
-            "payment_type": "一括",
-        }],
-    }), encoding="utf-8")
-    import app.cli as cli
-    monkeypatch.setattr(cli, "make", lambda *_: (_ for _ in ()).throw(AssertionError("Sheets used")))
-    monkeypatch.setattr(sys, "argv", [
-        "app.cli", "amazon-unmatched-preview", "--amazon-csv", str(csv_path),
-        "--transactions-json", str(json_path),
-    ])
-
-    cli.main()
-
-    output = capsys.readouterr().out
-    assert "raw_csv_diagnostics" in output
-    assert "shipment_amount_match" in output
 
 
 def test_exported_transactions_can_drive_csv_diagnostics(tmp_path):

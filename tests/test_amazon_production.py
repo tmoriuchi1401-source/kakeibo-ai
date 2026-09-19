@@ -360,16 +360,10 @@ def test_canary_excludes_unrelated_events_without_losing_them_from_normal_apply(
     assert len(db.rows["取込データ"]) == len(db.rows["支出明細"]) == 1
 
 
-def test_workflow_connects_daily_recurring_after_canary():
+def test_old_workflow_is_retired_without_credentials_or_scheduled_writes():
     text = open(".github/workflows/amazon-daily-import.yml", encoding="utf-8").read()
     assert "workflow_dispatch:" in text
-    assert "schedule:" in text
-    assert "cron: '23 20 * * *'" in text
-    assert "amazon-production-preview" in text
-    assert "amazon-gmail-recurring --apply" in text
-    assert "amazon-gmail-recurring --dry-run" in text
-    assert "--approved-target" in text
-    assert "--expected-event-rows" in text
-    assert 'INITIAL_START="2026-09-12T12:26:44+09:00"' in text
-    assert "OVERLAP_SECONDS=7200" in text
+    assert "schedule:" not in text
+    assert "secrets." not in text and "actions/checkout" not in text
+    assert "python" not in text and "kakeibo-production" in text
     assert "cancel-in-progress: false" in text
