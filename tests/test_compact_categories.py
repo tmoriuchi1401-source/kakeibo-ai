@@ -251,6 +251,8 @@ def test_existing_workflow_roundtrip_reads_all_inputs_and_conflicts_preserve_edi
     assert service.requests == []
     assert state["workflow_values"][1040][2] == "食費｜食料品"
     # Rendering controls never writes a row-relative formula into the helper.
+    from types import SimpleNamespace
+    db.projection_store=lambda:SimpleNamespace(read=lambda key:{"months":{"2025-01":{},"2025-12":{}}})
     db._configure_category_workflow(blocks, db._workflow_positions(blocks))
     assert not any(q.get("updateCells", {}).get("range", {}).get("sheetId") == EXPENSE_CATEGORY_HELPER_ID
                    for q in service.requests)

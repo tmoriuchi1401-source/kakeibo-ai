@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-20 カテゴリ候補同期と年月候補の固定範囲依存を解消（本番未有効化）
+
+- 最新mainを再fetchして`c8ef626`、先行`8332e7e`のLinux CI `35454589475`全3job成功を確認。前工程は実装・push・CIまでのprogress。
+- 台帳の更新待ちが空でもカテゴリマスタの変更をprivate catalogへ同期する。既存ID/改名aliasと過去集計を保持し、未知の組は新ID、廃止分類はinactiveとする。改名/分割/統合を名称差分だけで推定しない。固定IDの本人向け管理入力は引き続き統合対象。
+- 既存daily applyで移行済み4列helperの変更行だけを同期し、変更なしは書込み0。候補増加時だけgridを延長し、カテゴリ操作C列/要確認L列の全行の入力規則を2,000行単位で取得・参照更新する。取得fieldはdataValidationだけで、機密表や本人入力のスカラーを読まない。入力/承認snapshot/過去分類は書き換えない。結果不明writeの自動retryなし、native一括write後readbackで確認する。
+- compact移行後の過去反映の年月候補を、summary全記録月と本人の現在の全開始/終了月から作るリテラル値へ置換。旧ホーム5,001行・入力1,000行の範囲とspill式に依存しない。1,201か月の候補・1,201行目の本人選択を保持し、必要な候補行だけgridを増やす。
+- 関連59件・分類/過去反映82件・追加後49件成功。Windows全回帰2,218件成功（97.97秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。日常受付統合/失敗要求一覧、カテゴリ管理入力、Amazon旧対応manifest/初期化/未解析確定通知/商品補足、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 固定金銭IDの限定試行を両sourceへ接続（本番未実行）
 
 - 先行`ce5f337`のLinux CI `35453681004`成功、mainは`c8ef626`を確認。前工程は実装・push・CIまでのprogress。

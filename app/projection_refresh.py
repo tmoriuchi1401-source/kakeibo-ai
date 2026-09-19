@@ -135,9 +135,15 @@ class ProjectionRefresh:
 
     def refresh(self, category_pairs):
         before_journal = self.journal.read()
+        before_catalog = self.store.read("catalog")
         if not (before_journal["ranges"] or before_journal["append"] or before_journal["months"]):
+            # Master-only edits must reach both views even without a ledger
+            # mutation. Preserve IDs/aliases and never reread historical rows.
+            if before_catalog is not None:
+                catalog = self._current_categories(load_catalog(before_catalog), category_pairs)
+                replace_document(self.store, "catalog", before_catalog, catalog_document(catalog))
             return {"projection_months": 0, "projection_rows": 0, "errors": 0}
-        before_index, before_catalog = self.store.read("index"), self.store.read("catalog")
+        before_index = self.store.read("index")
         before_summary = self.store.read("summary")
         if before_index is None or before_catalog is None or before_summary is None:
             raise ProjectionError("projection_bootstrap_required")

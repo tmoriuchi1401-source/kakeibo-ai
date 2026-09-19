@@ -87,6 +87,9 @@ def run_daily_requests(env,*,apply=False):
     projection=ProjectionRefresh(store,SheetsLedgerReader(source))
     # Refresh indexes for prior ledger writes before resolving any target ID.
     projection.refresh(source.categories())
+    from .compact_category_sync import sync_choices
+    from .projection_refresh import load_catalog
+    sync_choices(source,load_catalog(store.read("catalog")))
     inbox.apply_pending(limit=20)
     remaining=sum(item["state"] in {"queued","pending"} for item in inbox._requests()["requests"].values())
     submitted=daily.submit(source) if not remaining else {"corrections_submitted":0}

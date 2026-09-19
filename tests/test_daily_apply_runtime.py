@@ -29,6 +29,10 @@ def configured(monkeypatch):
     monkeypatch.setattr("app.daily_runtime.daily_from_environment",lambda *args,**kwargs:daily)
     monkeypatch.setattr("app.monthly_projection_sheets.SheetsLedgerReader",lambda db:reader)
     monkeypatch.setattr("app.projection_refresh.ProjectionRefresh",lambda *args:refresh)
+    from test_compact_category_sync import DB
+    from app.compact_category_sync import sync_choices
+    ledger.choice_db=DB()
+    monkeypatch.setattr("app.compact_category_sync.sync_choices",lambda db,catalog:sync_choices(ledger.choice_db,catalog))
     monkeypatch.setattr("app.daily_runtime.refresh_daily",lambda *args:{"daily_changed_blocks":0})
     env=dict(valid_env(),SPREADSHEET_ID="source",KAKEIBO_DAILY_CORRECTIONS_MODE="fixed-id-v1")
     return env,daily,grid,ledger,reader,refresh
@@ -53,6 +57,19 @@ def test_actual_form_to_canonical_to_changed_months_and_replay(monkeypatch):
     again=run_daily_requests(env,apply=True)
     assert again["corrections_applied"]==again["corrections_submitted"]==0
     assert len(ledger.calls)==1
+
+
+def test_master_change_syncs_migrated_choices_without_accounting_mutation(monkeypatch):
+    env,daily,grid,ledger,reader,refresh=configured(monkeypatch)
+    grid.put(68,2,False)
+    ledger.categories=lambda:[*PAIRS,("日用品","消耗品")]
+    run_daily_requests(env,apply=True)
+    assert ledger.calls==[] and reader.reads==[]
+    choices=ledger.choice_db.state["helper_values"]
+    assert choices[2][0]=="日用品｜消耗品" and choices[2][1].startswith("CAT-")
+    writes=len(ledger.choice_db.writes)
+    run_daily_requests(env,apply=True)
+    assert len(ledger.choice_db.writes)==writes and ledger.calls==[]
 
 
 def test_unknown_canonical_write_resumes_pending_even_if_form_is_unchecked(monkeypatch):

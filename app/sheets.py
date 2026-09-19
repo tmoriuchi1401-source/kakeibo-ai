@@ -633,6 +633,11 @@ class SheetsDB:
             ])
             if len(row)>3 and row[3] == "過去すべて":
                 requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.93,"green":0.93,"blue":0.93},"textFormat":{"foregroundColor":{"red":0.45,"green":0.45,"blue":0.45},"italic":True}}},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
+        if self._compact_category_helper():
+            from .compact_category_sync import backfill_month_choices
+            sheet=next(s for s in self._sheet_metadata()["sheets"] if s["properties"]["sheetId"]==sheet_id)
+            requests=backfill_month_choices(requests,sheet_id=sheet_id,title=CATEGORY_WORKFLOW_SHEET,rows=rows,
+                extent=sheet["properties"]["gridProperties"]["rowCount"],store=self.projection_store())
         return requests
 
     def _configure_category_workflow(self, blocks, positions):
