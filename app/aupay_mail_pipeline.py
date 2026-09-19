@@ -737,7 +737,7 @@ class AuPayCardMailPipeline:
 
     @classmethod
     def _collect(cls, service, query: str, max_results: int, *,
-                 sleeper=None, request_interval: float = 0.25, money_records=None) -> tuple[list[dict], dict]:
+                 sleeper=None, request_interval: float = 0.25, money_records=None, money_notices=None) -> tuple[list[dict], dict]:
         if max_results <= 0:
             raise ValueError("max_resultsは1以上にしてください")
         sleeper = sleeper or time.sleep
@@ -780,6 +780,13 @@ class AuPayCardMailPipeline:
                     ), sleeper=sleeper)
                     summary["gmail_retry_count"] += retries
                     raw_mime = _decode_gmail_raw(response.get("raw", ""))
+                    if money_records is not None:
+                        from .amazon_money_mail import card_money_outcome
+                        records,notice=card_money_outcome(raw_mime,gmail_id=gmail_message_id)
+                        money_records.extend(records)
+                        if notice is not None:
+                            if money_notices is None:raise RuntimeError("money_notice_sink_required")
+                            money_notices.append(notice)
                     parsed_result = parse_aupay_card_raw_partial(raw_mime)
                 except HttpError:
                     summary["needs_review"] += 1
@@ -801,12 +808,9 @@ class AuPayCardMailPipeline:
                     continue
                 parsed = parsed_result.reconciliation_inputs()
                 if money_records is not None:
-                    from .amazon_money_mail import card_money_from_mail,is_amazon_money_merchant
-                    if any(is_amazon_money_merchant(item["merchant"]) for item in parsed):
-                        records,_=card_money_from_mail(raw_mime,gmail_id=gmail_message_id)
-                        # A detail-like preliminary notice must not fall through
-                        # to the old Amazon/date+amount classifier.
-                        money_records.extend(records)
+                    from .amazon_money_mail import is_amazon_money_merchant
+                    # A preliminary or incomplete Amazon notice must not fall
+                    # through to the old date+amount classifier.
                     parsed=[item for item in parsed if not is_amazon_money_merchant(item["merchant"])]
                 if parsed:
                     summary["parsed_messages"] += 1

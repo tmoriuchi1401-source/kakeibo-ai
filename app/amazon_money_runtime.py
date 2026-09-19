@@ -89,27 +89,32 @@ def run_money_canary(writer,records,*,dry_run,target=""):
 
 
 def run_amazon_money_messages(writer,messages,*,dry_run,limit,canary_target=None):
-    from .amazon_money_mail import amazon_money_from_mail
-    records=[]
+    from .amazon_money_mail import amazon_money_outcome
+    from .amazon_money_notices import save_notices
+    records=[];notices=[]
     for message in messages:
-        record=amazon_money_from_mail(message.raw_mime,gmail_id=message.gmail_message_id)
+        record,notice=amazon_money_outcome(message.raw_mime,gmail_id=message.gmail_message_id)
         if record is not None:records.append(record)
+        if notice is not None:notices.append(notice)
+    notice_counts=save_notices(writer.store,notices,dry_run=dry_run or canary_target is not None)
     result=(run_money_canary(writer,records,dry_run=dry_run,target=canary_target)
             if canary_target is not None else run_money_records(writer,records,dry_run=dry_run,limit=limit))
-    return {**result,"event_rows_written":0,"header_rows_written":0,
+    return {**result,**notice_counts,"event_rows_written":0,"header_rows_written":0,
             "status":"dry_run_ready" if dry_run else "complete","failure":0}
 
 
 def money_review_items(store):
     from .daily_view import ReviewItem
+    from .amazon_money_notices import review_items
+    notices=review_items(store)
     book=store.read("money")
-    if book is None:return []
+    if book is None:return notices
     validate_book(book)
     labels={"confirmation_missing":"確定情報を確認", "payment_leg_unresolved":"支払元・混合払いを確認",
         "legacy_payment_identity_required":"旧計上との対応を確認", "legacy_unsettled_purchase_possible":"旧計上との重複の可能性",
         "refund_purchase_link_required":"返金の元購入を指定", "refund_purchase_link_invalid":"返金の関連先を確認",
         "refund_exceeds_purchase":"返金額と元購入を確認", "possible_resend_requires_identity":"再通知か別取引かを確認",
         "source_identity_already_imported":"既存取込との対応を確認", "existing_expense_identity_required":"既存支出との重複候補を確認"}
-    return [ReviewItem(identity,"Amazon金銭",f"{item.get('day','')} / {item.get('amount','')}円 / {item.get('account','')}\n"+labels.get(item.get("reason"),"金銭記録の情報を確認"),
+    return notices+[ReviewItem(identity,"Amazon金銭",f"{item.get('day','')} / {item.get('amount','')}円 / {item.get('account','')}\n"+labels.get(item.get("reason"),"金銭記録の情報を確認"),
         "反映待ち" if item["state"]=="pending" else "保留" if item.get("resolution",{}).get("action")=="hold" else "要確認",item.get("original_url",""))
         for identity,item in book["records"].items() if item["state"] in {"review","pending"}]

@@ -25,6 +25,7 @@ def test_explicit_separate_payment_posts_once_without_treating_same_amount_as_id
     store.data=json.loads(json.dumps(store.data))
     inbox.prepare(REQ,value.money_id,"separate")
     assert inbox.apply(REQ)["state"]=="applied"
+    assert inbox.read()["requests"][REQ]["state"]=="applied"
     assert len(ledger.rows["支出明細"])==1
     assert next(iter(ledger.rows["支出明細"].values()))[3]=="商品"
     assert inbox.apply(REQ)["state"]=="applied" and len(ledger.calls)==2

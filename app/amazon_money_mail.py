@@ -65,6 +65,9 @@ def amazon_money_from_mail(raw,*,gmail_id):
     content=subject+"\n"+text
     # Order confirmations, delivery, return requests and refund estimates do not
     # establish any monetary fact, even if they contain an amount.
+    if re.search(r"(?:返金が完了|返金処理が完了|お支払いが確定|請求が確定|お支払いが完了)"
+                 r"(?:していません|していない|しておりません|するまで|する予定|次第|予定)",content):
+        return None
     refunded=any(s in content for s in ("返金が完了","返金処理が完了","返金を処理しました","返金いたしました"))
     charged=any(s in content for s in ("お支払いが確定","請求が確定","請求確定のお知らせ","お支払いが完了"))
     if not (refunded or charged):return None
@@ -92,3 +95,25 @@ def amazon_money_from_mail(raw,*,gmail_id):
     return MoneyRecord("amazon",rfc,"Amazon／"+payment,reference,day,-amount if refunded else amount,
         kind,payment,True,order_id=order.group() if order else "",
         original_url="https://mail.google.com/mail/u/0/#all/"+gmail_id)
+
+
+def amazon_money_outcome(raw,*,gmail_id):
+    from .amazon_money_notices import notice,REASONS
+    try:return amazon_money_from_mail(raw,gmail_id=gmail_id),None
+    except MoneyError as error:
+        if str(error) not in REASONS:raise
+        return None,notice("amazon",gmail_id,raw,str(error))
+
+
+def card_money_outcome(raw,*,gmail_id):
+    from .amazon_money_notices import notice,REASONS
+    try:msg,subject,text=_message(raw,"kddi-fs.com")
+    except MoneyError:return [],None  # Existing card parser rejects the sender.
+    if ("【ご利用詳細】" not in subject or "au PAY カード" not in subject or "速報" in subject
+            or not is_amazon_money_merchant(text)):return [],None
+    try:
+        records,remaining=card_money_from_mail(raw,gmail_id=gmail_id)
+        return records,notice("au_pay_card",gmail_id,raw,"money_card_partial") if remaining else None
+    except (MoneyError,ValueError) as error:
+        reason=str(error) if str(error) in REASONS else "money_card_parse_failed"
+        return [],notice("au_pay_card",gmail_id,raw,reason)

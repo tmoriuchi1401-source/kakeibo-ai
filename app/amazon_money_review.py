@@ -12,8 +12,9 @@ from .projection_store import replace_document
 from .utils import now_jst_string
 
 ACTIONS={"保留":"hold","別の確定取引として計上":"separate","既存支出へ対応付け":"link",
-         "返金元を指定":"refund_link","自分用残高のチャージ":"transfer"}
+         "返金元を指定":"refund_link","自分用残高のチャージ":"transfer","通知を確認済みにする（記帳なし）":"acknowledge"}
 ERRORS={"money_review_changed":"対象の情報が変わりました。再確認してください。",
+    "money_notice_no_posting":"未解析通知は保留・確認済みだけ選べます。金額を推定して記帳はできません。",
     "money_review_target_invalid":"確認中の金銭IDを選んでください。",
     "money_review_confirmation_required":"確定情報が不足しています。原本を確認してください。",
     "money_review_action_invalid":"対応を選んでください。",
@@ -80,6 +81,10 @@ class MoneyReviews:
         if old:
             if any(old[k]!=v for k,v in payload.items()):raise MoneyError("money_review_request_reused")
             return deepcopy(old)
+        if money_id.startswith("MN-"):
+            from .amazon_money_notices import prepare_review
+            return prepare_review(self,request_id,payload,form_digest)
+        if action=="acknowledge":raise MoneyError("money_review_action_invalid")
         book=self.writer._book();entry=book["records"].get(money_id)
         if not entry or entry.get("state")!="review":raise MoneyError("money_review_target_invalid")
         record=record_from_entry(entry)
@@ -121,6 +126,9 @@ class MoneyReviews:
         before=self.read();item=deepcopy(before["requests"][request_id])
         if item["state"] in {"applied","failed"}:return item
         if item["state"] not in {"queued","pending"}:raise MoneyError("money_review_state_invalid")
+        if item["money_id"].startswith("MN-"):
+            from .amazon_money_notices import apply_review
+            return apply_review(self,request_id,before,item)
         book=self.writer._book();entry=book["records"].get(item["money_id"])
         installed=entry and entry.get("resolution")==item["resolution"]
         if not installed and (not entry or digest(entry)!=item["snapshot"]):
@@ -137,7 +145,7 @@ class MoneyReviews:
                     if fresh is not None and fresh!=alias:item.update(state="failed",error="money_review_changed")
                 if item["state"]!="failed":
                     item.update(state="pending",updated_at=now_jst_string())
-                    pending=deepcopy(before);pending["requests"][request_id]=item
+                    pending=deepcopy(before);pending["requests"][request_id]=deepcopy(item)
                     replace_document(self.store,"money-reviews",before,pending);before=pending
                     after=deepcopy(book);after["records"][item["money_id"]]["resolution"]=item["resolution"]
                     if alias:

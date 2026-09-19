@@ -62,6 +62,7 @@ COUNT_KEYS = frozenset({
     "money_review_form_ready", "money_review_input_changed",
     "money_eligible", "money_posted", "money_linked", "money_review", "money_duplicate", "money_supplement", "money_transfer",
     "money_canary_selected", "money_canary_verified", "money_canary_replay",
+    "money_notice_review",
     "medical_local_written",
     "found", "fetched", "new", "written", "written_purchases", "new_eligible",
     "already_present", "duplicate", "needs_review", "review", "withheld", "deferred",
