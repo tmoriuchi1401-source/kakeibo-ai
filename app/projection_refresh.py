@@ -51,7 +51,8 @@ def load_index(value):
 
 def month_document(projection):
     return {**asdict(projection), "category_amounts": [list(x) for x in projection.category_amounts],
-            "purchases": [{**asdict(p), "categories": list(p.categories)} for p in projection.purchases]}
+            "purchases": [{**asdict(p), "categories": list(p.categories), "expense_ids": list(p.expense_ids)}
+                          for p in projection.purchases]}
 
 
 def load_month(value):
@@ -59,7 +60,8 @@ def load_month(value):
         return None
     try:
         return MonthProjection(**{**value, "category_amounts": tuple(tuple(x) for x in value["category_amounts"]),
-            "purchases": tuple(Purchase(**{**p, "categories": tuple(p["categories"])}) for p in value["purchases"])})
+            "purchases": tuple(Purchase(**{**p, "categories": tuple(p["categories"]),
+                "expense_ids": tuple(p.get("expense_ids",()))}) for p in value["purchases"])})
     except (KeyError, TypeError, ValueError):
         raise ProjectionError("projection_month_invalid") from None
 

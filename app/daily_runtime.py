@@ -1,0 +1,51 @@
+"""Daily display binding for the existing validated Actions writer."""
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from .monthly_projection import ProjectionError
+
+
+def daily_from_environment(source_db,store,env=None):
+    from .private_state_bindings import unwrap
+    from .settings import service_account_source
+    from .sheets import SheetsDB
+    from .daily_sheets import DailySheets
+    env=os.environ if env is None else env
+    encrypted=env.get("KAKEIBO_DAILY_SPREADSHEET_ID","")
+    if not encrypted:return None
+    if store is None:raise ProjectionError("daily_projection_binding_required")
+    if (env.get("GITHUB_ACTIONS")!="true" or env.get("GITHUB_REF")!="refs/heads/main"
+            or env.get("GITHUB_REPOSITORY")!="tmoriuchi1401-source/kakeibo-ai"
+            or not env.get("KAKEIBO_VALIDATED_MAIN_SHA")
+            or env.get("GITHUB_SHA")!=env.get("KAKEIBO_VALIDATED_MAIN_SHA")):
+        raise ProjectionError("daily_validated_main_required")
+    path,info=service_account_source()
+    info=info or json.loads(Path(path).read_bytes())
+    sid=unwrap("KAKEIBO_DAILY_SPREADSHEET_ID",encrypted,info["private_key"])
+    if sid==source_db.sid:raise ProjectionError("daily_copy_required")
+    # Compare permission actors before copying financial output into the view.
+    source=store.service.files().get(fileId=source_db.sid,supportsAllDrives=True,
+        fields="permissions(id,type)").execute(num_retries=0)
+    target=store.service.files().get(fileId=sid,supportsAllDrives=True,
+        fields="mimeType,trashed,permissions(id,type)").execute(num_retries=0)
+    allowed={p["id"] for p in source.get("permissions",[]) if p.get("type") in {"user","group"}}
+    grants=target.get("permissions",[])
+    if (target.get("mimeType")!="application/vnd.google-apps.spreadsheet" or target.get("trashed")
+            or not grants or any(p.get("type") not in {"user","group"} or p.get("id") not in allowed for p in grants)):
+        raise ProjectionError("daily_sharing_mismatch")
+    return DailySheets(SheetsDB(sid),source_db.sid,store)
+
+
+def refresh_daily(source_db,store,env=None):
+    from .daily_sheets import read_existing_reviews
+    daily=daily_from_environment(source_db,store,env)
+    if daily is None:return {}
+    props=[s["properties"] for s in source_db._sheet_metadata().get("sheets",[])]
+    ledger=next((p for p in props if p["title"]=="支出明細"),None)
+    if ledger is None:raise ProjectionError("daily_ledger_missing")
+    now=datetime.now(ZoneInfo("Asia/Tokyo"))
+    return daily.refresh(current_month=now.strftime("%Y-%m"),updated_at=now.strftime("%Y-%m-%d %H:%M"),
+        reviews=read_existing_reviews(source_db),ledger_sheet_id=ledger["sheetId"])

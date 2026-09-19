@@ -248,3 +248,14 @@ def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_f
     assert len(page.rows)==100
     assert len(store.reads)==13 and all(key.startswith("month-") for key in store.reads)
     assert reader.reads==[]
+    # Continue the same 100k ledger through the actual daily renderer/adapter.
+    from app.daily_sheets import DailySheets
+    from test_daily_sheets import Grid
+    grid=Grid();daily=DailySheets(grid,"source",store)
+    daily.verify=lambda:None
+    store.reads.clear()
+    result=daily.refresh(current_month="2026-12",updated_at="synthetic",reviews=[],ledger_sheet_id=987)
+    assert result["daily_changed_blocks"]>0
+    assert reader.reads==[] and "index" not in store.reads
+    assert sum(key.startswith("month-") for key in store.reads)==13
+    assert daily.refresh(current_month="2026-12",updated_at="synthetic",reviews=[],ledger_sheet_id=987)["daily_changed_blocks"]==0

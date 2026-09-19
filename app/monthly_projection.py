@@ -237,6 +237,8 @@ class Purchase:
     item_count: int
     search_text: str
     original_ref: str
+    expense_ids: tuple[str, ...] = ()
+    ledger_row: int = 0
 
 
 @dataclass(frozen=True)
@@ -279,7 +281,8 @@ def rebuild_month(month: str, index: LedgerIndex, catalog: CategoryCatalog,
                                   sum(x.amount for x in lines),
                                   tuple(sorted({x.category_id for x in lines})), len(lines),
                                   " ".join(dict.fromkeys([lines[0].merchant, *(x.item for x in lines)])).casefold(),
-                                  lines[0].original_ref))
+                                  lines[0].original_ref, tuple(x.expense_id for x in lines),
+                                  index.by_id[lines[0].expense_id].row))
     purchases.sort(key=lambda x: (x.day, x.purchase_id), reverse=True)
     return MonthProjection(month, sum(categories.values()), sum(x.amount > 0 for x in purchases),
                            sum(x.amount < 0 for x in purchases), tuple(sorted(categories.items())), tuple(purchases))

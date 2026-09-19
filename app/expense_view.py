@@ -60,6 +60,8 @@ class ExpenseViewPipeline:
             from .projection_refresh import ProjectionRefresh
             reader=SheetsLedgerReader(self.db)
             result=ProjectionRefresh(store,reader).refresh(self.db.categories())
+            from .daily_runtime import refresh_daily
+            result.update(refresh_daily(self.db,store))
             return {**result,"refreshed":True,"projection_sheet_requests":reader.metrics.requests,
                     "projection_sheet_cells":reader.metrics.returned_cells}
         expenses=active_expenses(self.db.get("支出明細!A2:M"))

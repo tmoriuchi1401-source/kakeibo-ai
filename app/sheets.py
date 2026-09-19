@@ -195,6 +195,10 @@ class SheetsDB:
         return self._execute_sheet_read(
             lambda: self.svc.spreadsheets().values().get(spreadsheetId=self.sid,range=rng)
         ).get("values",[])
+    def get_raw(self,rng:str):
+        return self._execute_sheet_read(lambda:self.svc.spreadsheets().values().get(
+            spreadsheetId=self.sid,range=rng,valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="SERIAL_NUMBER")).get("values",[])
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         self._invalidate_expense_projection(sheet,append=True)
@@ -689,6 +693,16 @@ class SheetsDB:
                 for row_num,major,minor in rows
             ]},
         ).execute()
+    def update_expense_fields(self,row_num:int,cells:list[list]):
+        """Atomic field-only correction; immutable IDs/source/status excluded."""
+        if not cells:return
+        if row_num<2 or any(c not in {1,2,3,4,5,6,7,11} for c,_ in cells):
+            raise ValueError("expense_correction_field_invalid")
+        self._invalidate_expense_projection("支出明細",[(row_num,row_num)])
+        self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid,body={
+            "valueInputOption":"RAW","data":[
+                {"range":f"'支出明細'!{chr(65+c)}{row_num}","values":[[value]]} for c,value in cells
+            ]}).execute(num_retries=0)
     def _configure_backfill_mobile_sheet(self, title, header, hidden_from, control_rows, ignored_start_rows=()):
         """Render backfill controls only on the rows that can be actioned.
 

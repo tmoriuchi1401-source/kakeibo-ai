@@ -24,6 +24,8 @@ def run_projection(env, *, apply=False, bootstrap=False):
                 "projection_pending_months":len(journal["months"]),
                 "projection_pending_append":int(journal["append"])}
     result=(refresh.bootstrap(db.categories()) if bootstrap else refresh.refresh(db.categories()))
+    from .daily_runtime import refresh_daily
+    result.update(refresh_daily(db,store,env))
     return {**result,"projection_sheet_requests":reader.metrics.requests,
             "projection_sheet_cells":reader.metrics.returned_cells,
             "projection_drive_reads":store.metrics["reads"],"projection_drive_writes":store.metrics["writes"]}

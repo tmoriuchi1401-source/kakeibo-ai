@@ -21,7 +21,7 @@ VARIABLES = ("KAKEIBO_STATE_FOLDER_ID", "AMAZON_STATE_FILE_ID", "AUPAY_CARD_STAT
 
 
 def _padding(name):
-    if name not in (*VARIABLES, "AMAZON_TARGET", "RECEIPT_REIMPORT_FILE_ID", "KAKEIBO_PROJECTION_FOLDER_ID"):
+    if name not in (*VARIABLES, "AMAZON_TARGET", "RECEIPT_REIMPORT_FILE_ID", "KAKEIBO_PROJECTION_FOLDER_ID", "KAKEIBO_DAILY_SPREADSHEET_ID"):
         raise StateError("private_binding_name_invalid")
     return padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(),
                         label=("kakeibo-private-binding-v1:" + name).encode("ascii"))
