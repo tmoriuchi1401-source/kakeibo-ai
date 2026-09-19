@@ -111,11 +111,31 @@ HEADERS={
 }
 
 class SheetsDB:
-    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep):
+    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None):
         self.sid=spreadsheet_id; self.svc=service or sheets_service()
         self._read_sleeper=read_sleeper
         self._sheet_metadata_cache=None
         self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
+        self._projection_journal=projection_journal
+
+    def projection_store(self):
+        """Lazily use the configured private folder; reads create no state."""
+        journal=getattr(self,"_projection_journal",None)
+        if journal is None:
+            from .projection_store import ProjectionJournal, store_from_environment
+            store=store_from_environment(self.sid)
+            if store is None:return None
+            journal=ProjectionJournal(store)
+            self._projection_journal=journal
+        return journal.store
+
+    def _invalidate_expense_projection(self, sheet, ranges=(), *, append=False):
+        if sheet.strip("'") != "支出明細":return
+        store=self.projection_store()
+        if store is not None:
+            # Must finish before the accounting request. Nothing after the
+            # request clears this marker; derived refresh does the readback.
+            self._projection_journal.mark(ranges,append=append)
 
     def _read_metrics(self):
         if not hasattr(self, "_sheet_read_metrics"):
@@ -177,6 +197,7 @@ class SheetsDB:
         ).get("values",[])
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
+        self._invalidate_expense_projection(sheet,append=True)
         reply=self.svc.spreadsheets().values().append(
             spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",body={"values":rows},
@@ -218,9 +239,13 @@ class SheetsDB:
     def append_raw(self, sheet:str, rows:list[list]):
         """Append literal ledger values; do not interpret bank descriptions as formulas."""
         if not rows:return
+        self._invalidate_expense_projection(sheet,append=True)
         reply=self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="RAW",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
         if sheet == "支出明細":self._restore_expense_category_validation_for_append(reply)
     def clear(self,rng:str):
+        if rng.split("!")[0].strip("'")=="支出明細" and self.projection_store() is not None:
+            from .monthly_projection import ProjectionError
+            raise ProjectionError("ledger_clear_forbidden_use_status")
         self.svc.spreadsheets().values().clear(
             spreadsheetId=self.sid,range=rng,body={}
         ).execute()
@@ -290,14 +315,23 @@ class SheetsDB:
             spreadsheetId=self.sid,body={"requests":requests}
         ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
+        if row_num>=2:self._invalidate_expense_projection(sheet,[(row_num,row_num)])
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
     def set_raw_range(self, rng:str, rows:list[list]):
+        if rows and rng.split("!")[0].strip("'")=="支出明細":
+            match=re.fullmatch(r"'?(支出明細)'?![A-Z]+([0-9]+)(?::[A-Z]+[0-9]*)?",rng)
+            if not match:
+                from .monthly_projection import ProjectionError
+                raise ProjectionError("ledger_write_range_must_be_bounded")
+            start=int(match[2]);end=start+len(rows)-1
+            if end>=2:self._invalidate_expense_projection("支出明細",[(max(2,start),end)])
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=rng,
             valueInputOption="RAW",body={"values":rows}).execute(num_retries=0)
     def update_row_raw(self,sheet:str,row_num:int,row:list):
         self.set_raw_range(f"'{sheet}'!A{row_num}",[row])
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
         if not rows:return
+        self._invalidate_expense_projection(sheet,[(n,n) for n,_ in rows if n>=2])
         section={"カテゴリ自動分類":"rule", "カテゴリ過去反映":"backfill",
                  "カテゴリ過去反映確認":"confirm"}.get(sheet)
         if section and CATEGORY_WORKFLOW_SHEET in set(self.sheet_titles()):
@@ -648,6 +682,7 @@ class SheetsDB:
     def update_expense_categories(self, rows:list[tuple[int,str,str]]):
         """Backfill's sole ledger mutation: the existing F:G category cells."""
         if not rows: return
+        self._invalidate_expense_projection("支出明細",[(n,n) for n,_,_ in rows])
         self.svc.spreadsheets().values().batchUpdate(
             spreadsheetId=self.sid, body={"valueInputOption":"RAW", "data":[
                 {"range":f"支出明細!F{row_num}:G{row_num}", "values":[[major,minor]]}
@@ -813,7 +848,4 @@ class SheetsDB:
         if rows:
             statuses=[[r[12] if len(r)>12 and r[12] else "active"] for r in rows]
             if any(len(r)<=12 or not r[12] for r in rows):
-                self.svc.spreadsheets().values().update(
-                    spreadsheetId=self.sid,range="支出明細!M2",valueInputOption="RAW",
-                    body={"values":statuses}
-                ).execute()
+                self.set_raw_range("支出明細!M2",statuses)

@@ -43,10 +43,25 @@ class ExpenseViewPipeline:
     def __init__(self,db:SheetsDB): self.db=db
 
     def preview(self)->dict:
+        store=self.db.projection_store() if hasattr(self.db,"projection_store") else None
+        if store is not None:
+            from .projection_store import ProjectionJournal
+            journal=ProjectionJournal(store).read()
+            return {"projection_pending_ranges":len(journal["ranges"]),
+                    "projection_pending_months":len(journal["months"]),
+                    "projection_pending_append":journal["append"]}
         expenses=active_expenses(self.db.get("支出明細!A2:M"))
         return self._summary(expenses)
 
     def refresh(self)->dict:
+        store=self.db.projection_store() if hasattr(self.db,"projection_store") else None
+        if store is not None:
+            from .monthly_projection_sheets import SheetsLedgerReader
+            from .projection_refresh import ProjectionRefresh
+            reader=SheetsLedgerReader(self.db)
+            result=ProjectionRefresh(store,reader).refresh(self.db.categories())
+            return {**result,"refreshed":True,"projection_sheet_requests":reader.metrics.requests,
+                    "projection_sheet_cells":reader.metrics.returned_cells}
         expenses=active_expenses(self.db.get("支出明細!A2:M"))
         self.db.ensure_sheet("支出一覧",HEADERS["支出一覧"])
         meta=self.db.svc.spreadsheets().get(spreadsheetId=self.db.sid,fields='sheets(properties)').execute(num_retries=0)

@@ -66,7 +66,7 @@ class SheetsLedgerReader:
         if batch:
             yield from self._batch(batch)
 
-    def bootstrap_pages(self):
+    def row_count(self):
         # Always fetch fresh grid extent. There is no 5,000-row accounting cap.
         self.metrics.requests += 1
         meta = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
@@ -75,6 +75,9 @@ class SheetsLedgerReader:
                   if s["properties"]["title"] == "支出明細"]
         if len(sheets) != 1:
             raise ProjectionError("ledger_sheet_missing")
-        end = sheets[0]["gridProperties"]["rowCount"]
+        return sheets[0]["gridProperties"]["rowCount"]
+
+    def bootstrap_pages(self):
+        end = self.row_count()
         for first in range(2, end + 1, self.page_size):
             yield first, self(first, min(end, first + self.page_size - 1))

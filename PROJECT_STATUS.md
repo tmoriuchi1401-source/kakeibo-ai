@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-19 変更月集計の永続化と既存writerへの接続（本番未有効化）
+
+- 前turnは実装/バックアップ/検証を伴うprogress。最新origin/mainは再取得して`c8ef626`を確認。前turnの`d7be148`はLinux CI `35445328846`で成功した。
+- private Drive JSONのcatalog/index/journal/月別結果/summaryを実装。追記・行更新・カテゴリ更新の共通SheetsDB口で台帳書込み前に範囲を保存する。保存前の失敗は台帳を止め、台帳保存後は変更範囲を読戻して前後月を再生成する。旧月をjournalに保持するためindex保存後の停止でも回復できる。
+- 既存`expenses-refresh`と親Actionsへ接続。folderの暗号化Variableが未設定なら旧動作を維持。新しい集計専用scopeは既存production lock/main/SHA境界内で、read-only台帳→投影更新だけを行う。取込/OCR/銀行/Medical/Payroll処理を呼ばない。会計stageのcheckpoint/pendingゲートは維持し、派生集計stageだけを再実行可能にした。
+- 故障・再実行・writer先行marker・共有制限・境界の関連テストが成功。永続化を含む10万買い物/20万明細合成評価13.50秒、旧1件修正の正本読込1+1,668行、履歴は13か月のみ・正本/index読込0。これはfake transport計測であり本番のAPI/時間ではない。
+- 最終Windows全回帰2,020件成功（95.46秒）、compileall/diff-check成功。接続後のLinux CIはpush後に確認する。
+- このturnの実Google変更0。本番folder初期化、新日常ファイル/UI、修正受付、カテゴリhelper縮小、Amazon両経路切替、移行・実データcanary/replay・隔離復元は残る。全writer入口の最終監査は旧Amazon稼働コード削減と合わせて実施する。Goalは未完了。
+
 ### 2026-09-19 日常ファイル分離・Amazon金銭中心化のGoalに着手（本番未切替）
 
 - 最新main `c8ef626731cc8a941982a0d77b22e7ee4d88af31`から専用clone/branch `feat/ledger-daily-money`を作成。他Work・stashは変更していない。

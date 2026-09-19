@@ -50,3 +50,10 @@ def test_missing_binding_stops_before_returning_partial_environment(key, monkeyp
 def test_invalid_canary_reference_cannot_be_wrapped(key):
     with pytest.raises(StateError, match="private_binding_value_invalid"):
         wrap("AMAZON_TARGET", "order-with-private-data", key)
+
+
+def test_projection_folder_uses_its_own_optional_encrypted_binding(key):
+    name="KAKEIBO_PROJECTION_FOLDER_ID"
+    encrypted=wrap(name,"synthetic-folder-id",key)
+    assert unwrap(name,encrypted,key)=="synthetic-folder-id"
+    assert name not in VARIABLES  # Existing installations keep their required set.

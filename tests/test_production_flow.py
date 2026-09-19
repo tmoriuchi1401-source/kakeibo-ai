@@ -92,3 +92,13 @@ def test_canary_uses_existing_exact_target_and_one_purchase_bounds():
     assert args[-8:] == ["--apply-limit", "1", "--approved-target", target,
                          "--expected-event-rows", "1", "--expected-header-rows", "1"]
     flow.validate_scope(SimpleNamespace(mode="preview", scope="amazon_canary", amazon_target="", bank_apply=False))
+
+
+@pytest.mark.parametrize("mode,scope,bank,target", [
+    ("preview","projection",False,""), ("apply","all",False,""),
+    ("apply","projection",True,""), ("apply","projection",False,"amazon-order:"+"a"*16),
+])
+def test_bootstrap_cannot_share_a_scope_with_accounting(mode,scope,bank,target):
+    with pytest.raises(StateError):
+        flow.validate_scope(SimpleNamespace(mode=mode,scope=scope,bank_apply=bank,amazon_target=target,
+                                           projection_bootstrap=True,receipt_store="",receipt_manifest=""))

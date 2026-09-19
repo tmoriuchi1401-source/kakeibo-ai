@@ -212,7 +212,13 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
             return execute(source)
         if ledger is None:
             raise StateError("production_ledger_required")
-        ledger.begin(source, uuid4().hex)
+        # A projection stage has no accounting writer. Its own durable dirty
+        # markers make replay safe even after an ambiguous display/save result.
+        # Native accounting stages retain their existing pending-state gate.
+        projection_replay=(source=="expenses_refresh" and env.get("KAKEIBO_PROJECTION_FOLDER_ID")
+                           and ledger.value["sources"][source]["phase"]=="pending")
+        if not projection_replay:
+            ledger.begin(source, uuid4().hex)
         started = monotonic()
         try:
             result = execute(source)
@@ -225,6 +231,11 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    if args.scope == "projection":
+        if args.bank_apply or args.amazon_target or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
+            raise StateError("projection_scope_other_source_forbidden")
+    if getattr(args,"projection_bootstrap",False) and (args.scope!="projection" or args.mode!="apply"):
+        raise StateError("projection_bootstrap_requires_isolated_apply")
     if args.scope in {'receipt_confirmation', 'receipts'} and (args.bank_apply or args.amazon_target):
         raise StateError('receipt_scope_other_source_forbidden')
     if args.scope == "receipt_reimport":
@@ -251,7 +262,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection"), default="all")
+    parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--receipt-store", default="")
     parser.add_argument("--receipt-manifest", default="")
@@ -265,6 +277,13 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope == "projection":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                raise StateError("projection_manual_scope_required")
+            from .projection_runtime import run_projection
+            result=run_projection(env,apply=args.mode=="apply",bootstrap=args.projection_bootstrap)
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
         if args.scope=='receipts' and env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
             raise StateError('receipt_manual_scope_required')
         if args.scope=='receipt_confirmation':
