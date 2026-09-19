@@ -143,7 +143,29 @@ def expense_minor_category_validation_requests(start_row:int, end_row:int):
     ]
 
 
-def expense_category_validation_requests(*, minor_end_row:int=CAP+1):
+def expense_helper_formula(row):
+    # Empty provisioned rows must not FILTER the entire category master.
+    # INDEX + ROW stays aligned when values.append inserts ledger rows.
+    return ('=IFERROR(LET(major,INDEX(\'支出明細\'!F:F,ROW()),IF(major="","",'
+            'TRANSPOSE(UNIQUE(FILTER(カテゴリ!$B$2:$B,カテゴリ!$A$2:$A=major))))),"")')
+
+
+def expense_helper_growth_requests(helper, end_row):
+    """Grow only the owned helper; never shrink or alter existing values."""
+    current = helper['properties'].get('gridProperties', {}).get('rowCount', CAP+1)
+    if end_row <= current:
+        return []
+    required = max(1001, ((end_row-2)//1000+1)*1000+1)
+    sid = helper['properties']['sheetId']
+    return [
+        {'updateSheetProperties': {'properties': {'sheetId': sid, 'gridProperties': {'rowCount': required}}, 'fields': 'gridProperties.rowCount'}},
+        {'updateCells': {'range': grid(sid, current, required, 1, 2),
+            'rows': [{'values': [{'userEnteredValue': {'formulaValue': expense_helper_formula(n)}}]} for n in range(current+1, required+1)],
+            'fields': 'userEnteredValue'}},
+    ]
+
+
+def expense_category_validation_requests(*, minor_end_row:int=CAP+1, helper_end_row:int=CAP+1):
     """Restore the ledger's major → minor category dropdowns.
 
     Column A contains a formula-derived distinct major list.  Each B row is a
@@ -153,10 +175,7 @@ def expense_category_validation_requests(*, minor_end_row:int=CAP+1):
     relative-reference fill.  No category values are written or cleared.
     """
     helper, ledger = EXPENSE_CATEGORY_HELPER_ID, IDS["支出明細"]
-    minor_formula = lambda row: (
-        f'=IFERROR(TRANSPOSE(UNIQUE(FILTER(カテゴリ!$B$2:$B,'
-        f'カテゴリ!$A$2:$A=\'支出明細\'!F{row}))),"")'
-    )
+    minor_formula = expense_helper_formula
     rows = [
         {"values": [
             {"userEnteredValue": {"stringValue": "大カテゴリ候補（カテゴリから自動生成）"}},
@@ -170,12 +189,12 @@ def expense_category_validation_requests(*, minor_end_row:int=CAP+1):
         ]},
     ]
     rows.extend({"values": [{}, {"userEnteredValue": {"formulaValue": minor_formula(row)}}]}
-                for row in range(3, CAP+2))
+                for row in range(3, helper_end_row+1))
     return [
-        {"updateCells": {"range": grid(helper, 0, CAP+1, 0, 2), "rows": rows,
+        {"updateCells": {"range": grid(helper, 0, helper_end_row, 0, 2), "rows": rows,
             "fields": "userEnteredValue"}},
         {"updateSheetProperties": {"properties": {"sheetId": helper, "hidden": True}, "fields": "hidden"}},
-        {"setDataValidation": {"range": grid(ledger, 1, CAP+1, 5, 6), "rule": {
+        {"setDataValidation": {"range": grid(ledger, 1, helper_end_row, 5, 6), "rule": {
             "condition": {"type": "ONE_OF_RANGE", "values": [
                 {"userEnteredValue": f"='{EXPENSE_CATEGORY_HELPER_TITLE}'!$A$2:$A"}
             ]}, "strict": True, "showCustomUi": True,

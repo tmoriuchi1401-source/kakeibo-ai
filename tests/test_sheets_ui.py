@@ -334,7 +334,7 @@ def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
     expense_validation_restore = next(r["updateCells"] for r in backup["requests"]
                                       if "updateCells" in r
                                       and r["updateCells"]["range"]["sheetId"] == IDS["支出明細"])
-    assert expense_validation_restore["range"]["endRowIndex"] == CAP + 1
+    assert expense_validation_restore["range"]["endRowIndex"] == 1001
     assert expense_validation_restore["fields"] == "dataValidation"
     svc.batchUpdate(body=plan)
     svc.batchUpdate(body=backup)

@@ -383,6 +383,9 @@ def build_plan(meta):
             {"createDeveloperMetadata": {"developerMetadata": {"metadataKey": CATEGORY_UI_MARKER,
                 "metadataValue": VERSION, "visibility": "DOCUMENT", "location": {"sheetId": CATEGORY_UI_ID}}}}]
     expense_helper = by_title.get(EXPENSE_CATEGORY_HELPER_TITLE)
+    ledger_sheet = by_title['支出明細']
+    used_rows = ledger_sheet.get('usedRowCount', ledger_sheet['properties']['gridProperties']['rowCount'])
+    helper_rows = min(CAP+1, max(1001, ((max(2,used_rows)-2)//1000+1)*1000+1))
     if expense_helper:
         if expense_helper["properties"]["sheetId"] != EXPENSE_CATEGORY_HELPER_ID or not any(
             m.get("metadataKey") == EXPENSE_CATEGORY_HELPER_MARKER
@@ -391,9 +394,10 @@ def build_plan(meta):
         ):
             raise ValueError("Existing expense category helper is not owned by this configuration")
         gp = expense_helper["properties"]["gridProperties"]
-        if gp["rowCount"] < CAP+1 or gp["columnCount"] < EXPENSE_CATEGORY_HELPER_COLUMNS:
+        helper_rows = max(helper_rows, min(gp['rowCount'], CAP+1))
+        if gp["rowCount"] < helper_rows or gp["columnCount"] < EXPENSE_CATEGORY_HELPER_COLUMNS:
             req.append({"updateSheetProperties": {"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID,
-                "gridProperties": {"rowCount": max(gp["rowCount"], CAP+1),
+                "gridProperties": {"rowCount": max(gp["rowCount"], helper_rows),
                                    "columnCount": max(gp["columnCount"], EXPENSE_CATEGORY_HELPER_COLUMNS)}},
                 "fields": "gridProperties.rowCount,gridProperties.columnCount"}})
         if not any(m.get("metadataKey") == EXPENSE_CATEGORY_HELPER_MARKER and m.get("metadataValue") == VERSION
@@ -407,16 +411,16 @@ def build_plan(meta):
     else:
         req += [{"addSheet": {"properties": {"sheetId": EXPENSE_CATEGORY_HELPER_ID,
             "title": EXPENSE_CATEGORY_HELPER_TITLE, "hidden": True,
-            "gridProperties": {"rowCount": CAP+1, "columnCount": EXPENSE_CATEGORY_HELPER_COLUMNS}}}},
+            "gridProperties": {"rowCount": helper_rows, "columnCount": EXPENSE_CATEGORY_HELPER_COLUMNS}}}},
             {"createDeveloperMetadata": {"developerMetadata": {
                 "metadataKey": EXPENSE_CATEGORY_HELPER_MARKER, "metadataValue": VERSION,
                 "visibility": "DOCUMENT", "location": {"sheetId": EXPENSE_CATEGORY_HELPER_ID}}}}]
     ledger_grid = by_title["支出明細"]["properties"]["gridProperties"]
-    if ledger_grid["rowCount"] < CAP+1:
+    if ledger_grid["rowCount"] < helper_rows:
         # Pre-provisioned blank rows carry the validation into normal
         # INSERT_ROWS appends; this never changes an existing ledger value.
         req.append({"updateSheetProperties": {"properties": {"sheetId": IDS["支出明細"],
-            "gridProperties": {"rowCount": CAP+1}}, "fields": "gridProperties.rowCount"}})
+            "gridProperties": {"rowCount": helper_rows}}, "fields": "gridProperties.rowCount"}})
     if not home:
         req += [{"addSheet": {"properties": {"sheetId": HOME_ID, "title": "ホーム",
                     "gridProperties": {"rowCount": CAP+1, "columnCount": HOME_COLUMNS,
@@ -460,7 +464,8 @@ def build_plan(meta):
     # are covered by SheetsDB.append after a normal import, avoiding a huge
     # one-shot batch of unused per-row rules.
     req.extend(expense_category_validation_requests(
-        minor_end_row=min(by_title["支出明細"]["properties"]["gridProperties"]["rowCount"], CAP+1)
+        minor_end_row=min(by_title["支出明細"]["properties"]["gridProperties"]["rowCount"], helper_rows),
+        helper_end_row=helper_rows,
     ))
     preconditions = [{"sheetId": s["properties"]["sheetId"], "title": s["properties"]["title"],
         "index": s["properties"]["index"], "hidden": s["properties"].get("hidden", False),

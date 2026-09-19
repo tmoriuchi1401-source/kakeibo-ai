@@ -192,3 +192,10 @@ fixtureで、requestの対象範囲、API schema/field masks、再実行、ホ�
 
 API仕様確認: [Sheets requests](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/request)、
 [LET](https://support.google.com/docs/answer/13190535?hl=en)、[QUERY](https://support.google.com/docs/answer/3093343?hl=en)。
+# 補助シートの容量と計算負荷
+
+カテゴリ候補の補助シートは、入力済みの支出行数に応じて1,000行単位で用意します。通常取込・RAW取込で容量を超えたときは補助行を追加し、新しい支出行のプルダウンを設定します。UI再設定では、使用行数を読み取って容量を決めるため、縮小済みの補助シートを無条件に5,001行へ戻しません。
+
+小カテゴリの式は `INDEX(...,ROW())` で同じ行の大カテゴリを参照し、行挿入による参照ずれを防ぎます。大カテゴリが空欄の行ではカテゴリマスタの検索を行いません。取引値・カテゴリの選択値は変更しません。
+
+既存ファイルの空き行を縮小する場合は、削除範囲の値・数式・メモ・参照元を読み取ってから実施します。通常のUI設定は既存行を縮小しません。

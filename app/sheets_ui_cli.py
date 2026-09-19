@@ -30,6 +30,12 @@ def read_metadata(service):
         raise ValueError("UI header read incomplete")
     for sheet, values in zip(grid_sheets, result["valueRanges"]):
         sheet["header"] = (values.get("values") or [[]])[0]
+    ledger = next((s for s in grid_sheets if s['properties']['title'] == '支出明細'), None)
+    if ledger:
+        last = ledger['properties']['gridProperties']['rowCount']
+        used = service.spreadsheets().values().get(spreadsheetId=SPREADSHEET_ID,
+            range=f"'支出明細'!A1:A{last}", valueRenderOption='UNFORMATTED_VALUE').execute().get('values', [])
+        ledger['usedRowCount'] = len(used)
     home = next((s for s in grid_sheets if s["properties"]["sheetId"] == HOME_ID), None)
     if home:
         inputs = service.spreadsheets().values().batchGet(
@@ -129,10 +135,11 @@ def capture_restore(service, meta, plan):
             "fields": "gridProperties.frozenRowCount"}})
         if title == "支出明細":
             observed = raw.get("data", [{}])[0].get("rowData", [])
-            # The install plan grows the ledger through CAP+1.  Clear the
+            # The install plan may grow the ledger. Clear the
             # rules in its newly-created blank rows too; otherwise a restore
             # would leave category validation behind beyond the original grid.
-            validation_n = CAP + 1
+            validation_n = max([n] + [r['updateSheetProperties']['properties'].get('gridProperties', {}).get('rowCount', n)
+                for r in plan['requests'] if r.get('updateSheetProperties', {}).get('properties', {}).get('sheetId') == sid])
             validation_rows = []
             for row in range(validation_n):
                 cells = observed[row].get("values", []) if row < len(observed) else []
