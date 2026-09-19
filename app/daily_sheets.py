@@ -199,4 +199,5 @@ def read_existing_reviews(db):
                     detail=str(row[7])
                 url=f"https://docs.google.com/spreadsheets/d/{db.sid}/edit#gid={p['sheetId']}&range=A{first+offset}"
                 result.append(ReviewItem(title+":"+str(row[0]),title,detail,status,url))
-    return result
+    from .daily_category_reviews import read_category_reviews
+    return result + read_category_reviews(db, metadata)
