@@ -200,7 +200,7 @@ compact移行後の過去反映の年月候補は、保存済みsummaryの全記
 
 Google desktopでカテゴリ操作の移行後/復元後を視覚確認。旧C列は結合カテゴリに対して狭く折り返すため、日常受付への統合時に調整する。これは本番切替後やスマホ実機の確認ではない。今回のGoogle mutationは隔離コピー1件、ラベル変更2回、移行/復元batch各1回。本番台帳・原backup・共有・フラグは変更0。金銭book/未完了intentの復元、新金銭の本番canaryと切替は別途検証する。
 
-## 固定IDのカテゴリ管理受付（実フォーム未設置）
+## 固定IDのカテゴリ管理受付（実日常試作へ設置済み・本番未接続）
 
 日常の設定B90:B93に操作・元分類・新しい分類名・送信を設け、F90の固定REQ IDへ結び付ける。改名は同じCAT IDと旧名aliasを保持。分割は1親から複数の新ID、統合は複数親から1新IDを作り、親/結果IDを保存する。どちらも元カテゴリと既存ルールを残し、過去明細を自動で振り替えない。この動作はフォーム内にも明記する。新規追加も同じ入口とする。設定のカテゴリ一覧は50件でページ分けする。
 
@@ -208,4 +208,6 @@ Google desktopでカテゴリ操作の移行後/復元後を視覚確認。旧C�
 
 private `category-requests`へcatalog/masterのbefore/afterを先に保存し、pending→master→catalog→helper→appliedの順に反映する。結果不明時は同じ要求のbefore/afterを再読込して再開し、新IDやマスタ行を重複追加しない。pending中のprojection更新/再生成は停止し、既存daily stageが要求を回復してから投影を更新する。queuedの競合は失敗として全期間の確認へ表示し、部分反映後の第三者変更はpendingのまま停止する。本人入力の変更とack結果不明も既存フォームと同じ方式で保持する。
 
-本番mode・実日常ファイルの設置は未実施。旧分類ルール/レシート承認の入口統合は別途残る。切替時は新documentもprivate backup/復元対象に含める。単独で旧catalogへ戻すと追加済みマスタ名に新IDが付くため、復旧はwriter排他下で対応するcatalog/master/requestの組を戻す。
+本番modeは未設定。旧分類ルール/レシート承認の入口統合は別途残る。切替時は新documentもprivate backup/復元対象に含める。単独で旧catalogへ戻すと追加済みマスタ名に新IDが付くため、復旧はwriter排他下で対応するcatalog/master/requestの組を戻す。
+
+2026-09-20、所有者限定の[既存日常試作](https://docs.google.com/spreadsheets/d/1MPx2E_rWPb4P567gZvdbeCyuH8uF23g3uVjdX6tyj3k/edit)へ金銭/通知対応、coverage、カテゴリ管理の3フォームを設置した。metadata/markerと既存入力を読み直し、予約範囲が空欄で制約なしと確認して108 requestsを一括適用。108セル・6入力規則・3新markerを検証し、既存支出修正フォームは全値/書式/規則が不変。6タブ/12,630セルを維持している。Google desktopの100%表示で3フォームを確認し、ラベル2箇所のみ短縮して再検証した。内容変更2batch、置換0件の限定metadata probe 1call。before/after/最終readbackはGit対象外の`.private/daily-forms-*.json`へ保存。共有・本番接続・送信・正本更新は行っていない。実カテゴリ候補/一覧と月候補は実projection初期化後にrendererが設定する。

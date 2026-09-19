@@ -123,7 +123,7 @@ class Coverage:
 
 
 def install_requests(source_id,*,current_month):
-    rows=[["取込状況の変更","月ごとの経路・口座"],["開始月",current_month],["終了月",current_month],
+    rows=[["取込状況","月ごとの経路・口座"],["開始月",current_month],["終了月",current_month],
           ["経路",""],["口座",""],["状況","未確認"],["送信",False],["反映状況","未送信"],["最終更新",""],
           ["案内","完了は原本との照合後に選択。利用していない月は対象外。最大120か月をまとめて指定できます。"]]
     requests=[cells("設定",10,rows,width=3),cells("設定",11,[["REQ-"+uuid4().hex]],left=5,width=1),
