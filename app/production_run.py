@@ -55,6 +55,7 @@ COUNT_KEYS = frozenset({
     "projection_months", "projection_rows", "projection_sheet_requests", "projection_sheet_cells",
     "projection_drive_reads", "projection_drive_writes",
     "daily_changed_blocks", "daily_write_requests",
+    "money_eligible", "money_posted", "money_linked", "money_review", "money_duplicate", "money_supplement", "money_transfer",
     "medical_local_written",
     "found", "fetched", "new", "written", "written_purchases", "new_eligible",
     "already_present", "duplicate", "needs_review", "review", "withheld", "deferred",

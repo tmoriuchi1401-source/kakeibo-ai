@@ -36,6 +36,7 @@ def test_refresh_uses_actual_ledger_tab_id_and_never_submits(monkeypatch):
     daily=Mock();daily.refresh.return_value={"daily_changed_blocks":0}
     monkeypatch.setattr("app.daily_runtime.daily_from_environment",lambda *args:daily)
     monkeypatch.setattr("app.daily_sheets.read_existing_reviews",lambda db:[])
+    monkeypatch.setattr("app.amazon_money_runtime.money_review_items",lambda store:[])
     source=Mock();source._sheet_metadata.return_value={"sheets":[{"properties":{"title":"支出明細","sheetId":987}}]}
     assert refresh_daily(source,object(),{})=={"daily_changed_blocks":0}
     assert daily.refresh.call_args.kwargs["ledger_sheet_id"]==987

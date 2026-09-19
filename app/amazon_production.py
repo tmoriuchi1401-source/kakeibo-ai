@@ -483,6 +483,20 @@ def run_amazon_recurring(
     messages, complete = fetch_bounded_amazon_messages(
         gmail_service, window, policy.max_messages,
     )
+    from .amazon_money_runtime import money_enabled,money_writer,run_amazon_money_messages
+    if money_enabled():
+        if not complete:raise RuntimeError("amazon_gmail_collection_incomplete")
+        if any(v is not None for v in (approved_reference,expected_event_rows,expected_header_rows)):
+            raise RuntimeError("legacy_order_canary_forbidden_in_money_mode")
+        if apply_limit is not None and not 1<=apply_limit<=policy.max_purchases:
+            raise RuntimeError("amazon_apply_limit_exceeds_authority")
+        result=run_amazon_money_messages(money_writer(db),messages,dry_run=dry_run,
+            limit=apply_limit or policy.max_purchases)
+        summary={"schema_version":1,"run_id":str(uuid4()),"source_window_start":window.start.isoformat(),
+                 "source_window_end":window.end.isoformat(),"source_timezone":window.timezone_name,
+                 "found":len(messages),"fetched":len(messages),"checkpoint_advanced":not dry_run,**result}
+        state.record(summary,advance_checkpoint=not dry_run)
+        return summary
     plan = build_amazon_write_plan(messages, db, window=window, collection_complete=complete)
     original_purchase_count = len(plan.purchases)
     run_id = str(uuid4())

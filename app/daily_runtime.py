@@ -41,6 +41,7 @@ def daily_from_environment(source_db,store,env=None):
 
 def refresh_daily(source_db,store,env=None):
     from .daily_sheets import read_existing_reviews
+    from .amazon_money_runtime import money_review_items
     daily=daily_from_environment(source_db,store,env)
     if daily is None:return {}
     props=[s["properties"] for s in source_db._sheet_metadata().get("sheets",[])]
@@ -48,4 +49,4 @@ def refresh_daily(source_db,store,env=None):
     if ledger is None:raise ProjectionError("daily_ledger_missing")
     now=datetime.now(ZoneInfo("Asia/Tokyo"))
     return daily.refresh(current_month=now.strftime("%Y-%m"),updated_at=now.strftime("%Y-%m-%d %H:%M"),
-        reviews=read_existing_reviews(source_db),ledger_sheet_id=ledger["sheetId"])
+        reviews=read_existing_reviews(source_db)+money_review_items(store),ledger_sheet_id=ledger["sheetId"])

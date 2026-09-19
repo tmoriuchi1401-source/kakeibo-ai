@@ -196,9 +196,14 @@ def run_recurring_ingestion(
     journal = None
     execution = None
     try:
+        from .amazon_money_runtime import money_enabled,money_writer,run_money_records
+        monetary=money_writer(db) if money_enabled() else None
+        money_records=[]
+        money_args={"money_records":money_records} if monetary is not None else {}
         transactions, collection = AuPayCardMailPipeline._collect(
             gmail_service, window.query_representation, policy.max_messages,
             sleeper=sleeper, request_interval=0 if sleeper is not None else 0.25,
+            **money_args,
         )
         summary.update(found=collection["found"], fetched=collection["fetched"])
         if not collection["collection_complete"]:
@@ -216,8 +221,12 @@ def run_recurring_ingestion(
         )
         if len(statuses) > policy.max_batch_size:
             raise RuntimeError("new_eligible_exceeds_bounded_batch")
+        if monetary is not None:
+            summary.update(run_money_records(monetary,money_records,dry_run=dry_run,limit=policy.max_batch_size))
         if not statuses:
             summary["status"] = "dry_run_noop" if dry_run else "noop"
+            if dry_run and summary.get("money_eligible",0):summary["status"]="dry_run_ready"
+            if not dry_run and summary.get("money_posted",0):summary["status"]="complete"
             summary["journal_final"] = "not_needed"
             summary["lease_final"] = "not_needed"
             state.record(summary, advance_checkpoint=not dry_run)

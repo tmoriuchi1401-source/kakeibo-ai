@@ -737,7 +737,7 @@ class AuPayCardMailPipeline:
 
     @classmethod
     def _collect(cls, service, query: str, max_results: int, *,
-                 sleeper=None, request_interval: float = 0.25) -> tuple[list[dict], dict]:
+                 sleeper=None, request_interval: float = 0.25, money_records=None) -> tuple[list[dict], dict]:
         if max_results <= 0:
             raise ValueError("max_resultsは1以上にしてください")
         sleeper = sleeper or time.sleep
@@ -800,6 +800,14 @@ class AuPayCardMailPipeline:
                         sleeper(request_interval)
                     continue
                 parsed = parsed_result.reconciliation_inputs()
+                if money_records is not None:
+                    from .amazon_money_mail import card_money_from_mail,is_amazon_money_merchant
+                    if any(is_amazon_money_merchant(item["merchant"]) for item in parsed):
+                        records,_=card_money_from_mail(raw_mime,gmail_id=gmail_message_id)
+                        # A detail-like preliminary notice must not fall through
+                        # to the old Amazon/date+amount classifier.
+                        money_records.extend(records)
+                    parsed=[item for item in parsed if not is_amazon_money_merchant(item["merchant"])]
                 if parsed:
                     summary["parsed_messages"] += 1
                 summary["parsed_transactions"] += len(parsed)
