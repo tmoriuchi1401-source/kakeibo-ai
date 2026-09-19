@@ -84,6 +84,26 @@ class ProjectionRefresh:
     def _save(self, key, value):
         replace_document(self.store, key, self.store.read(key), value)
 
+    def _save_month(self, projection):
+        window = getattr(self.store, "cache_months", None)
+        if window is None or projection.month in window:
+            self._save("month-" + projection.month, month_document(projection))
+
+    def _cache_fill(self, summary):
+        window = getattr(self.store, "cache_months", None)
+        if window is None:
+            return set()
+        anchor = summary.get("cache_month")
+        if not anchor:
+            return set(window)
+        from .monthly_projection import shift_month
+        previous = {shift_month(anchor, -n) for n in range(13)}
+        return set(window) - previous
+
+    def _cache_anchor(self, summary):
+        if getattr(self.store, "cache_months", None) is not None:
+            summary["cache_month"] = self.store.current_month
+
     def bootstrap(self, category_pairs):
         """Explicit migration/rebuild while holding the existing writer lock.
 
@@ -107,15 +127,18 @@ class ProjectionRefresh:
         # Mark every month before updating any projection: a partial rebuild is
         # visibly unfinished. Repeating bootstrap uses the same catalog IDs.
         old_summary = self.store.read("summary") or {"months": {}, "coverage": {}, "required_routes": []}
-        months = sorted(set(index.by_month) | set(old_summary["months"]))
+        months = sorted(set(index.by_month) | set(old_summary["months"]) | set(getattr(self.store,"cache_months",())))
         self._save("journal", {"generation": (self.store.read("journal") or empty_journal())["generation"] + 1,
                                "ranges": [], "append": True, "months": months})
         summary = deepcopy(old_summary)
         for month in months:
             projection = rebuild_month(month, index, catalog,
                 lambda first, last: [observed.get(n, []) for n in range(first, last + 1)])
-            self._save("month-" + month, month_document(projection))
-            summary["months"][month] = totals(projection)
+            self._save_month(projection)
+            # Empty cache slots are not proof of completed zero-spend months.
+            if month in index.by_month or month in old_summary["months"]:
+                summary["months"][month] = totals(projection)
+        self._cache_anchor(summary)
         self._save("index", index_document(index))
         self._save("summary", summary)
         before = self.journal.read()
@@ -140,7 +163,9 @@ class ProjectionRefresh:
         require_settled(self.store)
         before_journal = self.journal.read()
         before_catalog = self.store.read("catalog")
-        if not (before_journal["ranges"] or before_journal["append"] or before_journal["months"]):
+        before_summary = self.store.read("summary") if getattr(self.store,"cache_months",None) is not None else None
+        cache_fill = self._cache_fill(before_summary or {})
+        if not (before_journal["ranges"] or before_journal["append"] or before_journal["months"] or cache_fill):
             # Master-only edits must reach both views even without a ledger
             # mutation. Preserve IDs/aliases and never reread historical rows.
             if before_catalog is not None:
@@ -148,12 +173,12 @@ class ProjectionRefresh:
                 replace_document(self.store, "catalog", before_catalog, catalog_document(catalog))
             return {"projection_months": 0, "projection_rows": 0, "errors": 0}
         before_index = self.store.read("index")
-        before_summary = self.store.read("summary")
+        before_summary = before_summary if before_summary is not None else self.store.read("summary")
         if before_index is None or before_catalog is None or before_summary is None:
             raise ProjectionError("projection_bootstrap_required")
         index, catalog = load_index(before_index), load_catalog(before_catalog)
         catalog = self._current_categories(catalog, category_pairs)
-        dirty = set(before_journal["months"])
+        dirty = set(before_journal["months"]) | cache_fill
         ranges = list(before_journal["ranges"])
         if before_journal["append"]:
             first = max(index.by_row, default=1) + 1
@@ -178,8 +203,10 @@ class ProjectionRefresh:
         summary = deepcopy(before_summary)
         for month in sorted(dirty):
             projection = rebuild_month(month, index, catalog, self.reader)
-            self._save("month-" + month, month_document(projection))
-            summary["months"][month] = totals(projection)
+            self._save_month(projection)
+            if month in index.by_month or month in before_summary["months"] or month not in cache_fill:
+                summary["months"][month] = totals(projection)
+        self._cache_anchor(summary)
         replace_document(self.store, "index", before_index, index_document(index))
         replace_document(self.store, "summary", before_summary, summary)
         replace_document(self.store, "journal", pending, {**empty_journal(), "generation": pending["generation"] + 1})
@@ -187,4 +214,10 @@ class ProjectionRefresh:
 
     def read_month(self, month):
         month_key(month)
+        window = getattr(self.store,"cache_months",None)
+        if window is not None and month not in window:
+            # Writer-side historical lookup only. Daily rendering reads the
+            # 13 cache files directly and never invokes this ledger fallback.
+            return rebuild_month(month, load_index(self.store.read("index")),
+                load_catalog(self.store.read("catalog")), self.reader)
         return load_month(self.store.read("month-" + month))

@@ -113,7 +113,14 @@ class DailySheets:
         catalog=load_catalog(self.store.read("catalog"))
         summary=self.store.read("summary")
         if summary is None:raise ProjectionError("projection_bootstrap_required")
-        requests=render_requests(read_month=lambda month:load_month(self.store.read("month-"+month)),
+        cached=getattr(self.store,"cache_months",None) is not None
+        if cached and summary.get("cache_month")!=current_month:
+            raise ProjectionError("projection_cache_refresh_required")
+        def read_month(month):
+            value=self.store.read("month-"+month)
+            if cached and value is None:raise ProjectionError("projection_cache_refresh_required")
+            return load_month(value)
+        requests=render_requests(read_month=read_month,
             summary=summary,catalog=catalog,current_month=current_month,source_id=self.source_id,
             controls=controls,reviews=reviews,updated_at=updated_at,
             ledger_sheet_id=ledger_sheet_id)

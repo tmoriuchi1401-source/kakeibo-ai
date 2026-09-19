@@ -20,7 +20,7 @@ def money_writer(db,env=None):
     if store is None:raise MoneyError("money_projection_binding_required")
     validate_book(store.read("money"))
     from .monthly_projection_sheets import SheetsLedgerReader
-    from .projection_refresh import ProjectionRefresh,load_month
+    from .projection_refresh import ProjectionRefresh
     from .projection_store import ProjectionJournal
     from .monthly_projection import shift_month
     from datetime import date
@@ -36,7 +36,7 @@ def money_writer(db,env=None):
             if not can_refresh:raise MoneyError("money_projection_refresh_required")
             ProjectionRefresh(store,reader).refresh(db.categories())
         for month in [shift_month(record.day[:7],offset) for offset in (-1,0,1)]:
-            projection=load_month(store.read("month-"+month))
+            projection=ProjectionRefresh(store,reader).read_month(month)
             if projection is None:continue
             for purchase in projection.purchases:
                 merchant=purchase.merchant.upper()

@@ -221,7 +221,8 @@ def test_new_invalidation_during_refresh_is_not_cleared():
     assert store.data["journal"]["append"]
 
 
-def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_for_daily_view():
+@pytest.mark.parametrize("rolling", [False, True])
+def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_for_daily_view(rolling):
     rows=[]
     for number in range(100_000):
         month=f"{2017+number%120//12:04d}-{number%12+1:02d}"
@@ -229,7 +230,13 @@ def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_f
             item=row(f"p-{number}-{part}",month+"-01",amount)
             item[10]=f"p-{number}"
             rows.append(item)
-    store,reader,refresh=initialized(rows)
+    if rolling:
+        from app.projection_cache import RollingProjectionStore
+        store,reader=RollingProjectionStore(Store(),current_month="2026-12"),Reader(rows)
+        refresh=ProjectionRefresh(store,reader);refresh.bootstrap(PAIRS)
+        store.writes.clear();store.reads.clear();reader.reads.clear()
+    else:
+        store,reader,refresh=initialized(rows)
     summaries=store.data["summary"]["months"]
     assert len(summaries)==120
     assert sum(m["amount"] for m in summaries.values())==10_000_000
@@ -246,7 +253,8 @@ def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_f
     page=history_page(refresh.read_month,current_month="2026-12",page_size=100)
     assert page.total==10_829
     assert len(page.rows)==100
-    assert len(store.reads)==13 and all(key.startswith("month-") for key in store.reads)
+    prefix="cache-" if rolling else "month-"
+    assert len(store.reads)==13 and all(key.startswith(prefix) for key in store.reads)
     assert reader.reads==[]
     # Continue the same 100k ledger through the actual daily renderer/adapter.
     from app.daily_sheets import DailySheets
@@ -257,5 +265,5 @@ def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_f
     result=daily.refresh(current_month="2026-12",updated_at="synthetic",reviews=[],ledger_sheet_id=987)
     assert result["daily_changed_blocks"]>0
     assert reader.reads==[] and "index" not in store.reads
-    assert sum(key.startswith("month-") for key in store.reads)==13
+    assert sum(key.startswith(prefix) for key in store.reads)==13
     assert daily.refresh(current_month="2026-12",updated_at="synthetic",reviews=[],ledger_sheet_id=987)["daily_changed_blocks"]==0
