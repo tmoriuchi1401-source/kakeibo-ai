@@ -19,6 +19,30 @@ class Drive:
         self.payload = value
 
 
+@pytest.mark.parametrize('fail', [False, True])
+def test_receipts_scope_only_runs_and_changes_receipts_ledger(setup, monkeypatch, tmp_path, fail):
+    from copy import deepcopy
+    _, drive, ledger = setup
+    before = deepcopy(ledger.value['sources'])
+    calls = []
+    def source(name, **kwargs):
+        calls.append(name)
+        if fail:
+            raise StateError('source_command_timed_out')
+        return {'written': 2, 'failure': 0}
+    monkeypatch.setattr('app.production_flow.invoke', source)
+    result = execute_serial(assemble({}, tmp_path, apply=True, bank_apply=False, ledger=ledger),
+                            history=before, receipts_only=True)
+    assert calls == ['receipts']
+    assert set(result['sources']) == {'receipts'}
+    assert result['success'] is (not fail)
+    assert ledger.value['sources']['receipts']['phase'] == ('pending' if fail else 'ready')
+    assert all(ledger.value['sources'][k] == v for k, v in before.items() if k != 'receipts')
+    if fail:
+        execute_serial(assemble({}, tmp_path, apply=True, bank_apply=False, ledger=ledger), receipts_only=True)
+        assert calls == ['receipts']  # Unknown writes require reconciliation, never an automatic retry.
+
+
 @pytest.fixture
 def setup():
     binding = StateBinding("production_run", "sheet", "private-folder", "ledger-file")

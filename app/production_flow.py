@@ -225,7 +225,7 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
-    if args.scope=='receipt_confirmation' and (args.bank_apply or args.amazon_target):
+    if args.scope in {'receipt_confirmation', 'receipts'} and (args.bank_apply or args.amazon_target):
         raise StateError('receipt_scope_other_source_forbidden')
     if args.scope == "receipt_reimport":
         if args.bank_apply or args.amazon_target:
@@ -251,7 +251,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts"), default="all")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--receipt-store", default="")
     parser.add_argument("--receipt-manifest", default="")
@@ -265,6 +265,8 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope=='receipts' and env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
+            raise StateError('receipt_manual_scope_required')
         if args.scope=='receipt_confirmation':
             if env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':raise StateError('confirmation_manual_scope_required')
             result=invoke('receipt_confirmation',apply=args.mode=='apply',env=env)
@@ -294,7 +296,7 @@ def main():
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
                                ledger=ledger, canary_target=args.amazon_target)
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
-                                    amazon_canary=args.scope == "amazon_canary")
+                                    amazon_canary=args.scope == "amazon_canary", receipts_only=args.scope == "receipts")
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True
@@ -311,7 +313,7 @@ def main():
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         report["mode"] = args.mode
         report["scope"] = args.scope
-        report["bank_mode"] = "not_run" if args.scope == "amazon_canary" else "apply" if args.bank_apply else "preview"
+        report["bank_mode"] = "not_run" if args.scope in {"amazon_canary", "receipts"} else "apply" if args.bank_apply else "preview"
     except Exception:
         report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
     rendered = json.dumps(report, ensure_ascii=True, sort_keys=True)

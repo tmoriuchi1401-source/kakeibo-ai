@@ -14,6 +14,13 @@ def valid_env():
             "KAKEIBO_VALIDATED_MAIN_SHA": "a" * 40}
 
 
+@pytest.mark.parametrize('bank,target,manifest', [(True, '', ''), (False, 'amazon-order:'+'a'*16, ''), (False, '', 'a'*64)])
+def test_receipts_scope_rejects_unrelated_authorities(bank, target, manifest):
+    with pytest.raises(StateError):
+        flow.validate_scope(SimpleNamespace(scope='receipts', mode='apply', bank_apply=bank,
+                                          amazon_target=target, receipt_manifest=manifest, receipt_store=''))
+
+
 @pytest.mark.parametrize("key,value", [("GITHUB_REF", "refs/heads/feature"), ("GITHUB_ACTIONS", "false"),
     ("KAKEIBO_PRODUCTION_ENABLED", ""), ("KAKEIBO_VALIDATED_MAIN_SHA", "b" * 40),
     ("GITHUB_SHA", "b" * 40), ("GITHUB_REPOSITORY", "fork/repo")])

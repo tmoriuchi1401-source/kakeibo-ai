@@ -16,9 +16,9 @@ on:
         type: string
         required: false
       scope:
-        description: All stages or isolated one-purchase Amazon canary
+        description: All stages or isolated receipts, receipt review, or Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts]
         default: all
         required: true
       amazon_target:
