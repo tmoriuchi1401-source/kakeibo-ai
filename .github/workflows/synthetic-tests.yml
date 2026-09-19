@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      KAKEIBO_OCR_MODEL_DIR: ${{ runner.temp }}/kakeibo-ocr-models
+      KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-ocr-models
     steps:
       - uses: actions/checkout@v4
         with:
