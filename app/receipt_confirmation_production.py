@@ -77,12 +77,8 @@ def sync_review_visibility(review):
         if hidden.get(n,False)!=hide:
             requests.append({'updateDimensionProperties':{'range':{'sheetId':sid,'dimension':'ROWS','startIndex':n-1,'endIndex':n},
                 'properties':{'hiddenByUser':hide},'fields':'hiddenByUser'}})
-        kind=review.items[key]['kind']
-        choices=(['保留'] if kind=='intake' else [x for x in CHOICES if
-                  (('医療' not in x) if kind=='normal' else x not in {'既存値を維持','候補明細で確定'})])
-        if not row[12] or row[12] in choices:
-            requests.append({'setDataValidation':{'range':{'sheetId':sid,'startRowIndex':n-1,'endRowIndex':n,'startColumnIndex':12,'endColumnIndex':13},
-                'rule':{'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':x} for x in choices]},'strict':True,'showCustomUi':True}}})
+    from .receipt_confirmation_ui import dropdown_requests
+    requests.extend(dropdown_requests(review,sid,rows))
     if requests:db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
 
 
