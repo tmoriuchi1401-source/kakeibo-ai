@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-20 固定金銭IDの限定試行を両sourceへ接続（本番未実行）
+
+- 先行`ce5f337`のLinux CI `35453681004`成功、mainは`c8ef626`を確認。前工程は実装・push・CIまでのprogress。
+- 既存親Actionsの`amazon_canary`でAmazon/au PAYカードの確定元を選び、既存RSA bindingで指定した固定金銭ID 1件だけを処理する。注文IDによる旧試行を置換し、手動dispatch・金銭mode・main/検証SHA境界・production lock・native pendingの停止を維持する。
+- 両sourceで試行後も走査checkpointを進めず、対象外取引を次の通常処理へ残す。他source・共通後処理・日常受付・OCRは実行しない。指定ID不在/競合、未確定/混合払い、補足/振替/旧計上対応だけの対象は新規記帳の試行にしない。
+- 初回とreplayで正式な取込/支出の固定ID・日付・金額・active状態を読み戻し、台帳変更や欠落を追加ゼロの成功としない。append結果不明ではnative pendingを保持し、親実行で自動再試行しない。
+- 親Actions→実CLI→共有Sheetsの合成統合で両sourceの非0記帳・イベント/注文ヘッダ増加0・replay追加0・他source state不変を確認。対象外金銭と通常カード取引の後続取込、台帳変更時停止も確認。Windows全回帰2,209件成功（100.10秒）、追加した手動/mode境界2ケースを含む関連66件成功、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、本番main/共有/mode変更0。実book/旧計上対応manifest/未解析確定通知/商品補足、カテゴリ同期/日常受付統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 旧Amazon CLI/専用Actionsを廃止（本番main未反映）
 
 - 最新mainを再fetchして`c8ef626`、先行`52bdc95`のLinux CI `35452885269`成功を確認。前工程は実装・push・CIまでのprogress。

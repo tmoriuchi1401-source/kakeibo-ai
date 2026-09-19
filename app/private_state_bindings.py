@@ -28,7 +28,7 @@ def _padding(name):
 
 
 def _valid(name, value):
-    pattern = r"amazon-order:[0-9a-f]{16}" if name == "AMAZON_TARGET" else r"[A-Za-z0-9_-]{10,150}"
+    pattern = r"AM-[0-9a-f]{32}" if name == "AMAZON_TARGET" else r"[A-Za-z0-9_-]{10,150}"
     if not isinstance(value, str) or not re.fullmatch(pattern, value):
         raise StateError("private_binding_value_invalid")
 

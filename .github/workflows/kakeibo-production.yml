@@ -22,8 +22,14 @@ on:
         default: all
         required: true
       amazon_target:
-        description: RSA-wrapped approved Amazon reference; only for canary apply
+        description: RSA-wrapped fixed AM money ID; only for canary apply
         type: string
+        required: false
+      canary_source:
+        description: Confirmed-money authority used by amazon_canary
+        type: choice
+        options: [amazon, aupay_card]
+        default: amazon
         required: false
       projection_bootstrap:
         description: Rebuild derived indexes/months from the ledger in isolated projection scope
@@ -140,7 +146,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' }}
+        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update
@@ -155,6 +161,7 @@ jobs:
           MANUAL_MODE: ${{ inputs.mode || 'preview' }}
           MANUAL_SCOPE: ${{ inputs.scope || 'all' }}
           AMAZON_TARGET: ${{ inputs.amazon_target }}
+          CANARY_SOURCE: ${{ inputs.canary_source || 'amazon' }}
           PROJECTION_BOOTSTRAP: ${{ inputs.projection_bootstrap || false }}
           CONFIRM: ${{ inputs.confirm }}
           BANK_APPLY: ${{ inputs.bank_apply || false }}
@@ -170,6 +177,7 @@ jobs:
             mode=apply
           else
             args+=(--scope "$MANUAL_SCOPE")
+            args+=(--canary-source "$CANARY_SOURCE")
             if [[ "$PROJECTION_BOOTSTRAP" == true ]]; then args+=(--projection-bootstrap); fi
             if [[ "$MANUAL_SCOPE" == receipt_reimport ]]; then
               args+=(--receipt-store "$RECEIPT_STORE" --receipt-manifest "$RECEIPT_MANIFEST")

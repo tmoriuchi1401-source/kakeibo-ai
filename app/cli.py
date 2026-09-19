@@ -167,6 +167,8 @@ def main():
     cgr.add_argument("--audit-key-file",default=os.getenv("AUPAY_CARD_AUDIT_KEY_FILE", ""))
     cgr.add_argument("--authority-file",default=os.getenv("AUPAY_CARD_RECURRING_AUTHORITY_FILE", ""))
     cgr.add_argument("--dry-run",action="store_true")
+    cgr.add_argument("--money-canary",action="store_true")
+    cgr.add_argument("--money-target",default="")
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
     aci=sub.add_parser("aupay-csv-import"); aci.add_argument("csv")
     ce=sub.add_parser("card-eml-import"); ce.add_argument("eml")
@@ -858,6 +860,7 @@ def main():
         ))
     elif args.cmd=="card-gmail-recurring":
         try:
+            if args.money_target and not args.money_canary:raise RuntimeError("money_target_requires_canary")
             s=Settings(); s.validate(need_gmail=True,need_sheet=True)
             if not args.state_dir or not args.audit_key_file or not args.authority_file:
                 raise RuntimeError("recurring_state_and_authority_paths_required")
@@ -880,6 +883,7 @@ def main():
                 authority_provider=authority_provider,state_dir=state_dir,
                 repo_root=repo_root,now=datetime.now(ZoneInfo("Asia/Tokyo")),
                 dry_run=args.dry_run,
+                **({"money_canary":True,"money_target":args.money_target} if args.money_canary else {}),
             )
         except Exception as exc:
             result={

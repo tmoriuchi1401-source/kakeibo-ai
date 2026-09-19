@@ -87,10 +87,9 @@ def test_canary_scope_rejects_missing_or_misplaced_approval(mode, scope, target,
 
 
 def test_canary_uses_existing_exact_target_and_one_purchase_bounds():
-    target = "amazon-order:" + "a" * 16
+    target = "AM-" + "a" * 32
     args = flow.command("amazon", apply=True, canary_target=target)
-    assert args[-8:] == ["--apply-limit", "1", "--approved-target", target,
-                         "--expected-event-rows", "1", "--expected-header-rows", "1"]
+    assert args[-4:] == ["--apply-limit", "1", "--approved-target", target]
     flow.validate_scope(SimpleNamespace(mode="preview", scope="amazon_canary", amazon_target="", bank_apply=False))
 
 

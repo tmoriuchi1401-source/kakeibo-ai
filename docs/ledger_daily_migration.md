@@ -126,8 +126,18 @@ sourceの変更月indexを回復→既存queued/pendingを最大20件回復→�
 
 注文/発送/取消/返品状態・イベント再解析・注文ヘッダ・旧注文照合を扱うCLI 35個を削除し、直接起動する旧Gmail診断2入口も認証前に終了する。専用Actions 20個を削除。`amazon-daily-import.yml`は過去cache/runの参照を保つためファイル名だけ残し、schedule・checkout・secrets・Python実行を持たない案内に置き換えた。旧データのオフライン読解・移行照合に使える関数と回帰テストは保持するが、日常の稼働入口からは呼ばない。旧コマンドを記載した過去の手順書より、この廃止契約を優先する。
 
-唯一の現行Amazon CLI `amazon-gmail-recurring`は`confirmed-v1`未設定なら認証前に停止し、旧注文計上へfallbackしない。main統合時は既存親scheduler/writerを排他停止した切替区間で、money book初期化とmode有効化をセットにする必要がある。旧注文canaryを金銭modeで流用せず、固定金銭IDを対象にする新canaryは残作業。
+唯一の現行Amazon CLI `amazon-gmail-recurring`は`confirmed-v1`未設定なら認証前に停止し、旧注文計上へfallbackしない。main統合時は既存親scheduler/writerを排他停止した切替区間で、money book初期化とmode有効化をセットにする必要がある。旧注文canaryを金銭modeで流用せず、以下の固定金銭ID canaryへ置き換える。
 
 money modeの共通reconciliationはAmazonの注文・レシート・決済を日付/金額/店舗の類似で除外しない。汎用自動計上や低頻度のカードCSV入口に残るAmazonは、確定元/旧計上対応を確認する状態へ送る。注文表は読まず、金銭IDのある確認受付へ移すmanifest/旧確認の解決を後続で行う。通常のカード/レシート照合、銀行の既存資産形成・引落しauthorityは維持する。
 
 廃止CLIの従来実行を要求する23テストを、35入口すべての認証・write前拒否テストへ置き換えた。ドメイン解析の回帰テストは残している。親Actions→実CLI→共有Sheets adapterの合成統合は確定ギフト残高請求へ更新し、イベント/注文ヘッダ増加0、非0金銭記帳とreplay追加0を確認。ここでの結果は合成transportであり、非0本番canary完了の証明ではない。
+
+## 固定金銭IDの限定試行（2026-09-20、本番未実行）
+
+既存の親Actions `scope=amazon_canary`を使い、`canary_source=amazon`または`aupay_card`で確定金額の正式元を選ぶ。scope名は既存のまま、注文番号の対象指定は廃止する。手動dispatch・`confirmed-v1`・main/検証SHA一致・既存production lockを必要とし、通常のrun ledgerとnative checkpointのpending判定を維持する。OCR・日常受付・他source・共通後処理は実行しない。
+
+previewは件数だけを返す。applyの`amazon_target`には、既存SA公開鍵による`AMAZON_TARGET` bindingで包んだ固定`AM-`金銭IDを渡す。平文IDや金額をActionsの公開結果へ出さない。指定IDが見つからない、同IDの金銭情報が競合する、未確定・混合払い・振替・補足のみ・旧計上への対応のみの場合は新規記帳の試行として扱わず停止する。確定1件または同じ記帳済み1件のreplayだけを扱う。
+
+両sourceとも試行ではメール走査checkpointを進めない。対象外の金銭・通常カード取引はそのまま残り、次の通常処理で取り込む。初回は既存MoneyWriterの全列readback後に、金銭bookと正式な取込/支出の固定ID・日付・金額・active状態を確認する。replayでも正式台帳を読み直し、変更・欠落があれば追加ゼロの成功として扱わない。結果不明のappendではnative pendingを保持し、次の親実行から自動的に再試行しない。
+
+親Actions→実CLI→共有Sheets adapterの合成統合で、Amazonギフト残高とカード確定詳細の両経路の非0記帳・イベント/注文ヘッダ増加0・replay追加0・他source state不変を確認した。対象外取引を後続の通常処理で取り込めること、台帳変更時の停止、append結果不明時のpending維持も検証した。実金銭book/移行manifestの初期化と切替後に、非0本番readback・replay追加0を別途確認する。

@@ -20,7 +20,7 @@ def test_ciphertext_environment_roundtrip_without_plaintext_export(key, monkeypa
     encrypted = {name: wrap(name, value, key) for name, value in values.items()}
     original = dict(encrypted)
     monkeypatch.setattr("app.settings.service_account_source", lambda: (None, {"private_key": key}))
-    target = "amazon-order:0123456789abcdef"
+    target = "AM-0123456789abcdef0123456789abcdef"
     decoded, decoded_target = decode_environment(encrypted, canary_target=wrap("AMAZON_TARGET", target, key))
     assert decoded == values and decoded_target == target and encrypted == original
     assert all(value not in json.dumps(encrypted) for value in values.values())

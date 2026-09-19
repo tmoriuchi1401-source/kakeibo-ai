@@ -64,13 +64,38 @@ def run_money_records(writer,records,*,dry_run,limit):
     return writer.apply(pending,limit=limit)
 
 
-def run_amazon_money_messages(writer,messages,*,dry_run,limit):
+def run_money_canary(writer,records,*,dry_run,target=""):
+    """One exact monetary ID; never advances a source checkpoint."""
+    import re
+    if target and not re.fullmatch(r"AM-[0-9a-f]{32}",target):raise MoneyError("money_canary_target_invalid")
+    if not target:
+        if not dry_run:raise MoneyError("money_canary_target_required")
+        return run_money_records(writer,records,dry_run=True,limit=1)
+    matches=[r for r in records if r.money_id==target]
+    if not matches:raise MoneyError("money_canary_target_not_found")
+    if len({r.fingerprint for r in matches})!=1:raise MoneyError("money_canary_target_conflict")
+    record=matches[0]
+    if not dry_run and hasattr(writer,"prepare"):writer.prepare()
+    book=writer._book()
+    decision=writer._decision(record,book)
+    posted=book["records"].get(target,{}).get("state")=="posted"
+    if decision.action not in {"post","resume"} and not (decision.action=="duplicate" and posted):
+        raise MoneyError("money_canary_not_postable")
+    if dry_run:return {"money_eligible":int(decision.action in {"post","resume"}),"money_canary_selected":1,
+        "money_canary_replay":int(posted),"money_posted":0,"expense_rows_written":0,"import_rows_written":0}
+    result=writer.apply([record],limit=1)
+    writer.verify_posted(record)
+    return {**result,"money_canary_selected":1,"money_canary_verified":1,"money_canary_replay":int(posted)}
+
+
+def run_amazon_money_messages(writer,messages,*,dry_run,limit,canary_target=None):
     from .amazon_money_mail import amazon_money_from_mail
     records=[]
     for message in messages:
         record=amazon_money_from_mail(message.raw_mime,gmail_id=message.gmail_message_id)
         if record is not None:records.append(record)
-    result=run_money_records(writer,records,dry_run=dry_run,limit=limit)
+    result=(run_money_canary(writer,records,dry_run=dry_run,target=canary_target)
+            if canary_target is not None else run_money_records(writer,records,dry_run=dry_run,limit=limit))
     return {**result,"event_rows_written":0,"header_rows_written":0,
             "status":"dry_run_ready" if dry_run else "complete","failure":0}
 

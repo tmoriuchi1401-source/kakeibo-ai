@@ -34,6 +34,8 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert inputs["scope"]["default"] == "all"
     assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily"]
     assert inputs["projection_bootstrap"]["default"] == "false"
+    assert inputs["canary_source"]["options"]==["amazon","aupay_card"]
+    assert inputs["canary_source"]["default"]=="amazon"
     assert inputs["receipt_operation"]["options"] == ["reanalyze", "replay"]
     assert inputs["receipt_limit"]["default"] == "1"
     assert inputs["receipt_limit"]["options"] == ["1", "2", "3"]
@@ -52,6 +54,7 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     ocr=next(step for step in job["steps"] if step.get("name")=="Install existing OCR runtime")
     assert "inputs.scope != 'projection'" in ocr["if"]
     assert "inputs.scope != 'daily'" in ocr["if"]
+    assert "inputs.scope != 'amazon_canary'" in ocr["if"]
 
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():

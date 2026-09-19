@@ -93,6 +93,21 @@ class MoneyWriter:
         book=self._book()
         return [self._decision(record,book) for record in records]
 
+    def verify_posted(self,record):
+        """Verify canonical money on a canary replay, not just a saved flag."""
+        entry=self._book()["records"].get(record.money_id,{})
+        if entry.get("state")!="posted" or entry.get("fingerprint")!=record.fingerprint:
+            raise MoneyError("money_canary_posting_unconfirmed")
+        imported=self.ledger.find("取込データ",12,{record.money_id}).get(record.money_id)
+        expected={0:record.money_id,3:record.reference,4:record.day,6:record.amount,7:record.account,
+                  8:"canonical_amazon_money",9:record.money_id,10:record.fingerprint}
+        if imported is None or any(imported[k]!=v for k,v in expected.items()):raise MoneyError("money_canary_import_changed")
+        ids=set(entry.get("expense_ids",[]));rows=self.ledger.find("支出明細",13,ids)
+        from .monthly_projection import _yen
+        if (not ids or set(rows)!=ids or sum(_yen(r[4]) for r in rows.values())!=record.amount
+                or any(r[1]!=record.day or r[10]!=record.money_id or r[12] not in {"","active"} for r in rows.values())):
+            raise MoneyError("money_canary_expense_changed")
+
     def apply(self,records,*,limit):
         if not 1<=limit<=100:raise MoneyError("money_batch_limit_invalid")
         if len(records)>limit:raise MoneyError("money_batch_limit_exceeded")
