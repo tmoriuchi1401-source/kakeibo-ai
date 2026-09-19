@@ -6,7 +6,7 @@ precedes either ledger append; ambiguous appends are resolved by fixed IDs.
 from copy import deepcopy
 from dataclasses import asdict, replace
 
-from .amazon_money import MoneyError, decide, expense_rows, validate_book
+from .amazon_money import MoneyError, decide, expense_rows, validate_book, source_alias
 from .projection_store import replace_document
 from .utils import now_jst_string
 
@@ -46,6 +46,13 @@ class MoneyWriter:
 
     def _decision(self,record,book):
         decision=decide(record,book)
+        if decision.action=="linked":
+            alias=book["aliases"][source_alias(record)]
+            expected=alias.get("expense_amounts",{})
+            found=self.ledger.find("支出明細",13,set(decision.expense_ids))
+            if (set(expected)!=set(decision.expense_ids) or set(found)!=set(expected)
+                    or any(found[key][4]!=amount or found[key][12] not in {"","active"} for key,amount in expected.items())):
+                return replace(decision,action="review",reason="legacy_ledger_binding_changed",expense_ids=())
         if decision.action=="post":
             if self.ledger.find("取込データ",12,{record.source_id}):
                 return replace(decision,action="review",reason="source_identity_already_imported",expense_ids=())

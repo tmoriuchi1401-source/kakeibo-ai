@@ -129,8 +129,17 @@ def test_legacy_order_is_not_reposted_and_exact_alias_preserves_past_values():
     value=record(order_id="old-order")
     assert writer.apply([value],limit=10)["money_review"]==1
     assert ledger.calls==[]
-    store.data["money"]["aliases"][source_alias(value)]={"fingerprint":value.fingerprint,"expense_ids":["existing"]}
+    ledger.rows["支出明細"]["existing"]=["existing","2025-01-01","Amazon","本人の商品",1000,"本人分類","本人小分類","card","Amazon","","old-order","","active"]
+    store.data["money"]["aliases"][source_alias(value)]={"fingerprint":value.fingerprint,"expense_ids":["existing"],"expense_amounts":{"existing":1000}}
     assert writer.apply([value],limit=10)["money_linked"]==1 and ledger.calls==[]
+
+
+def test_legacy_alias_cannot_claim_missing_or_changed_canonical_expense():
+    store,ledger,writer=setup();value=record()
+    store.data["money"]["aliases"][source_alias(value)]={"fingerprint":value.fingerprint,"expense_ids":["missing"],"expense_amounts":{"missing":1000}}
+    assert writer.apply([value],limit=1)["money_review"]==1
+    assert store.data["money"]["records"][value.money_id]["reason"]=="legacy_ledger_binding_changed"
+    assert ledger.calls==[]
 
 
 def test_unlinked_legacy_exposure_and_pre_cutover_records_require_identity():
