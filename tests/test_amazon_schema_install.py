@@ -175,14 +175,3 @@ def test_empty_existing_header_is_initialized_without_touching_data_rows():
 
     assert _entry(summary, "initialized_headers") == (1, ["Amazonイベント"])
     assert service.sheets["Amazonイベント"]["rows"] == rows
-
-
-def test_cli_runs_dedicated_installer(monkeypatch, capsys):
-    db = object()
-    monkeypatch.setattr(cli, "make", lambda require_gemini: (None, db, None))
-    monkeypatch.setattr(cli, "install_amazon_schema", lambda value: {"ok": value is db})
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-schema-install"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'ok': True}"

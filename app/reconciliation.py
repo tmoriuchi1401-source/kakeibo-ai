@@ -229,6 +229,14 @@ def reconcile_transactions(
     transactions: list[ImportTransaction],
     store_aliases: dict[str, str] | None = None,
 ) -> list[ReconcileDecision]:
+    from .amazon_money_runtime import money_enabled
+    from .amazon_money_mail import is_amazon_money_merchant
+    money_mode=money_enabled()
+    if money_mode:
+        # Monetary identity requires explicit linking; date/amount/store
+        # similarity must never exclude an Amazon receipt or payment.
+        transactions=[tx for tx in transactions if not (
+            is_amazon_money_merchant(tx.merchant) or tx.source.lower().startswith("amazon"))]
     store_aliases = store_aliases or {}
     receipts = [
         tx for tx in transactions
@@ -282,6 +290,7 @@ def reconcile_transactions(
                 "一致候補が複数、または同じレシートを複数取引が参照",
             ))
 
+    if money_mode:return decisions
     amazon_orders = [
         tx for tx in transactions
         if tx.source == "Amazon" and tx.status == "canonical_amazon"

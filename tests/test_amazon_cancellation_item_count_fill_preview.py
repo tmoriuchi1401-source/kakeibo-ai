@@ -205,34 +205,6 @@ def test_preview_reads_only_and_counts_safe_fill_and_skips():
     assert result["reason_safe_item_count_fill_count"] == 1
 
 
-def test_cli_uses_read_only_services(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "sheet"
-        gmail_token_json = "token"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True, "need_gmail": True}
-
-    sheets_service = object()
-    gmail_service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: sheets_service)
-    monkeypatch.setattr(cli, "gmail_readonly_service", lambda token: gmail_service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda sid, service: db)
-    monkeypatch.setattr(
-        cli, "preview_amazon_cancellation_item_count_fills",
-        lambda gmail, sheets: {"would_fill_item_count": int(
-            gmail is gmail_service and sheets is db
-        )},
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-item-count-fill-preview"],
-    )
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'would_fill_item_count': 1}"
 
 
 def test_apply_updates_only_item_count_and_is_idempotent():
@@ -278,20 +250,3 @@ def test_apply_reports_write_failure_without_other_cell_writes():
     assert db.writes == []
     assert result["updated_item_count_count"] == 0
     assert result["error_count"] == 1
-
-
-def test_apply_cli_requires_explicit_flag_before_initializing(monkeypatch):
-    monkeypatch.setattr(
-        cli, "Settings",
-        lambda: (_ for _ in ()).throw(AssertionError("must not initialize")),
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-item-count-fill-apply"],
-    )
-
-    try:
-        cli.main()
-    except SystemExit as error:
-        assert error.code == 2
-    else:
-        raise AssertionError("CLI must reject missing --apply")

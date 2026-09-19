@@ -56,7 +56,7 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():
     all_workflows = workflows()
-    for name in ("amazon-daily-import.yml", "aupay-card-recurring-production.yml", "bank-pdf-recurring.yml", "process-receipts.yml"):
+    for name in ("aupay-card-recurring-production.yml", "bank-pdf-recurring.yml", "process-receipts.yml"):
         job = next(iter(all_workflows[name]["jobs"].values()))
         assert "vars.KAKEIBO_LEGACY_DISABLED != 'true'" in job["if"]
 

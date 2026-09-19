@@ -164,28 +164,3 @@ def test_preview_samples_are_limited_to_five_and_summary_is_order_independent():
     assert len(forward["samples"]["new_header_candidate_order_ids"]) == 5
     assert len(forward["samples"]["conflict_order_ids"]) == 5
     assert len(forward["samples"]["missing_order_id_event_types"]) == 5
-
-
-def test_cli_uses_read_only_sheets_service_and_prints_preview(monkeypatch, capsys):
-    read_service = object()
-    db = object()
-
-    class FakeSettings:
-        spreadsheet_id = "sheet-id"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True}
-
-    monkeypatch.setattr(cli, "Settings", FakeSettings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: read_service)
-    monkeypatch.setattr(
-        cli, "SheetsDB",
-        lambda spreadsheet_id, service: db
-        if spreadsheet_id == "sheet-id" and service is read_service else None,
-    )
-    monkeypatch.setattr(cli, "preview_amazon_order_headers", lambda value: {"ok": value is db})
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-order-header-preview"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'ok': True}"

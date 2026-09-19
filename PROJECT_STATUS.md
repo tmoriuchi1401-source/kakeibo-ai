@@ -22,6 +22,16 @@
 
 ## 1. Last verified
 
+### 2026-09-20 旧Amazon CLI/専用Actionsを廃止（本番main未反映）
+
+- 最新mainを再fetchして`c8ef626`、先行`52bdc95`のLinux CI `35452885269`成功を確認。前工程は実装・push・CIまでのprogress。
+- 注文/発送/返品状態追跡・イベント再解析・注文照合等のCLI 35個を削除し、直接起動する旧Gmail診断2入口も認証前に終了。専用Actions 20個を削除。旧`amazon-daily-import.yml`は過去cache/run参照を保つ案内だけにし、schedule・secrets・checkout・Python実行を撤去した。
+- 現行Amazon CLIは`confirmed-v1`未移行なら認証前に停止し、旧注文計上にfallbackしない。main統合とmode/金銭book初期化は排他切替の同じ工程で実施する。ライブラリの旧解析関数・回帰テストは旧データの移行照合用に保持し、日常CLIの稼働経路から除去。
+- money modeの共通reconciliationからAmazonの類似日付/金額/店舗による注文・レシート・カード除外を外した。汎用自動計上とカードCSV入口の未確定/旧対応不明Amazonは金銭確認へ送る。カードCSVは注文表を読まず、通常カード/レシート照合・銀行authorityは保持する。旧Amazon確認行から金銭IDへの実対応と未処理の解決はmanifest工程に残る。
+- 廃止CLIの実行を要求する23テストを35入口の認証/write前拒否へ置換。親Actions→実CLI→共有Sheetsの合成統合を確定ギフト残高請求へ更新し、非0記帳・イベント/注文ヘッダ増加0・replay追加0を確認。旧注文canaryは金銭modeで拒否し、固定金銭IDの新canaryは未実装。
+- 関連124件、直接起動診断を含む97件、更新した統合/廃止50件が成功。最終Windows全回帰2,193件成功（98.08秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- 今回の実Google変更0、本番main/共有/mode変更0。稼働中の旧イベントの退避・新旧writerの実排他切替は未実施。旧対応manifest/初期化/未解析確定通知/保存済み商品補足、新money canary、カテゴリ同期/日常受付統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 口座・経路別coverage受付と完了ゼロ月を接続（本番未有効化）
 
 - 最新mainを再fetchして`c8ef626`、先行`b0a7923`のLinux CI `35452121704`成功を確認。前工程は実装・push・CI成功までのprogress。

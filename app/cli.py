@@ -8,7 +8,6 @@ from .sheets import SheetsDB
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_pipeline import ReceiptPipeline
-from .amazon_pipeline import AmazonPipeline
 from .drive_receipts import process_inbox
 from .drive_receipts import normalize_folder_id
 from .drive_paypay import DrivePayPayPipeline
@@ -41,65 +40,18 @@ from .bank_finalization import (
     BankFinalizationPipeline,
     validate_bank_finalization_canary,
 )
-from .amazon_installment import AmazonInstallmentPipeline
-from .amazon_csv_diagnostics import diagnose_amazon_csv_amounts
-from .amazon_unmatched import (
-    AmazonUnmatchedPreview,
-    export_amazon_unmatched_input,
-    load_amazon_unmatched_input,
-)
-from .amazon_email import parse_amazon_email
 from .amazon_gmail_preview import gmail_readonly_service
-from .amazon_gmail_storage import import_amazon_gmail_events
-from .amazon_daily_import import run_amazon_daily_import
-from .amazon_cancellation_return_preview import preview_amazon_cancellation_returns
-from .amazon_cancellation_order_id_diagnose import diagnose_amazon_cancellation_order_ids
-from .amazon_cancellation_scope_diagnose import diagnose_amazon_cancellation_scopes
-from .amazon_cancellation_quantity_preview import preview_amazon_cancellation_quantities
-from .amazon_cancellation_quantity_ambiguity_diagnose import (
-    diagnose_amazon_cancellation_quantity_ambiguity,
-)
-from .amazon_review_preview import preview_amazon_reviews
-from .amazon_review_schema_install import install_amazon_review_schema
-from .amazon_status_sync_preview import preview_amazon_status_sync
-from .amazon_cancellation_apply_preview import (
-    apply_amazon_cancellation_order_statuses,
-    preview_amazon_cancellation_apply,
-)
-from .amazon_cancellation_reconciliation_preview import (
-    preview_amazon_cancellation_reconciliation,
-)
-from .amazon_payment_coverage_preview import preview_amazon_payment_coverage
-from .payment_coverage_status_preview import preview_payment_coverage_status
 from .payment_coverage_manifest import preview_payment_coverage_manifests
-from .amazon_cancellation_item_count_fill_preview import (
-    apply_amazon_cancellation_item_count_fills,
-    preview_amazon_cancellation_item_count_fills,
-)
-from .amazon_event_reparse_preview import (
-    apply_amazon_event_reparse,
-    preview_amazon_event_reparse,
-)
-from .amazon_event_matching import AmazonEventMatchingPipeline
-from .amazon_order_header_preview import preview_amazon_order_headers
-from .amazon_schema_install import install_amazon_schema
-from .amazon_shipping import AmazonShippingBackfillPipeline
-from .drive_amazon_shipping import DriveAmazonShippingPipeline
 from .google_clients import (
     drive_service,
     read_only_drive_service,
     read_only_sheets_service,
-    shipping_backfill_drive_service,
-    shipping_backfill_sheets_service,
 )
 from .aupay_card_batch import ProtectedRecurringAuthorityProvider
 from .aupay_card_production import ProtectedAuditKeyProvider
 from .aupay_card_recurring import SqliteRecurringRunState, run_recurring_ingestion
 from .amazon_production import (
     ProtectedAmazonAuthorityProvider,
-    build_amazon_write_plan,
-    fetch_bounded_amazon_messages,
-    fixed_amazon_window,
     run_amazon_recurring,
 )
 from .payroll_statement_parser import preview_payroll_file
@@ -199,15 +151,8 @@ def main():
             "--source-classification", choices=("medical", "payroll", "sensitive_unknown"),
             help="Preserve known sensitive source provenance; never permits external AI",
         )
-    a=sub.add_parser("amazon"); a.add_argument("csv")
-    ab=sub.add_parser("amazon-baseline"); ab.add_argument("csv")
-    asp=sub.add_parser("amazon-shipping-backfill-preview"); asp.add_argument("csv")
-    asa=sub.add_parser("amazon-shipping-backfill"); asa.add_argument("csv")
-    sub.add_parser("amazon-shipping-backfill-drive-preview")
-    sub.add_parser("amazon-shipping-backfill-drive-apply")
     cp=sub.add_parser("card-preview"); cp.add_argument("csv")
     ci=sub.add_parser("card-import"); ci.add_argument("csv")
-    sub.add_parser("card-amazon-reclassify")
     pp=sub.add_parser("paypay-preview"); pp.add_argument("csv")
     pi=sub.add_parser("paypay-import"); pi.add_argument("csv")
     ae=sub.add_parser("aupay-eml"); ae.add_argument("eml")
@@ -265,16 +210,6 @@ def main():
     bank_finalize.add_argument("--approved-target",required=True)
     bank_finalize.add_argument("--expected-head",required=True)
     bank_finalize.add_argument("--apply",action="store_true")
-    sub.add_parser("amazon-installment-preview")
-    sub.add_parser("amazon-installment-apply")
-    sub.add_parser("amazon-event-match")
-    sub.add_parser("amazon-order-header-preview")
-    sub.add_parser("amazon-schema-install")
-    sub.add_parser("amazon-gmail-import")
-    sub.add_parser("amazon-daily-import")
-    appv=sub.add_parser("amazon-production-preview")
-    appv.add_argument("--lookback-days",type=int,default=30)
-    appv.add_argument("--max-results",type=int,default=50)
     agr=sub.add_parser("amazon-gmail-recurring")
     agr.add_argument("--state-dir",default=os.getenv("AMAZON_STATE_DIR", ""))
     agr.add_argument("--authority-file",default=os.getenv("AMAZON_RECURRING_AUTHORITY_FILE", ""))
@@ -286,36 +221,9 @@ def main():
     agr_mode=agr.add_mutually_exclusive_group(required=True)
     agr_mode.add_argument("--dry-run",action="store_true")
     agr_mode.add_argument("--apply",action="store_true")
-    sub.add_parser("amazon-cancellation-return-preview")
-    sub.add_parser("amazon-cancellation-order-id-diagnose")
-    sub.add_parser("amazon-cancellation-scope-diagnose")
-    sub.add_parser("amazon-cancellation-quantity-preview")
-    sub.add_parser("amazon-cancellation-quantity-ambiguity-diagnose")
-    sub.add_parser("amazon-review-preview")
-    sub.add_parser("amazon-review-schema-install")
-    sub.add_parser("amazon-status-sync-preview")
-    sub.add_parser("amazon-cancellation-apply-preview")
-    sub.add_parser("amazon-cancellation-reconciliation-preview")
-    sub.add_parser("amazon-payment-coverage-preview")
-    sub.add_parser("payment-coverage-status-preview")
     pcm=sub.add_parser("payment-coverage-manifest-preview")
     pcm.add_argument("--paypay-csv",action="append",default=[])
     pcm.add_argument("--au-pay-card-csv",action="append",default=[])
-    acosa=sub.add_parser("amazon-cancellation-order-status-apply")
-    acosa.add_argument("--apply",action="store_true")
-    sub.add_parser("amazon-cancellation-item-count-fill-preview")
-    acicfa=sub.add_parser("amazon-cancellation-item-count-fill-apply")
-    acicfa.add_argument("--apply",action="store_true")
-    sub.add_parser("amazon-event-reparse-preview")
-    aera=sub.add_parser("amazon-event-reparse-apply")
-    aera.add_argument("--apply",action="store_true")
-    aup=sub.add_parser("amazon-unmatched-preview")
-    aup.add_argument("--amazon-csv")
-    aup.add_argument("--transactions-json")
-    aue=sub.add_parser("amazon-unmatched-export")
-    aue.add_argument("--output",required=True)
-    aep=sub.add_parser("amazon-email-preview")
-    aep.add_argument("eml")
     dr=sub.add_parser("drive-receipts")
     dr.add_argument("--source-classification", choices=("medical", "payroll", "sensitive_unknown"))
     sub.add_parser("drive-paypay-preview")
@@ -913,46 +821,10 @@ def main():
             print({"status":"privacy_blocked","gemini_allowed":False})
         else:
             print(result.model_dump())
-    elif args.cmd=="amazon":
-        s,db,ai=make(); print(AmazonPipeline(db,ai,category_rule_auto_apply_enabled=s.category_rule_auto_apply_enabled).import_csv(args.csv))
-    elif args.cmd=="amazon-baseline":
-        s,db,_=make(False); print(AmazonPipeline(db,None,category_rule_auto_apply_enabled=s.category_rule_auto_apply_enabled).import_csv(args.csv,baseline=True))
-    elif args.cmd=="amazon-shipping-backfill-preview":
-        s,db,_=make(False); print(AmazonShippingBackfillPipeline(db).preview(args.csv))
-    elif args.cmd=="amazon-shipping-backfill":
-        s,db,_=make(False); print(AmazonShippingBackfillPipeline(db).apply(args.csv))
-    elif args.cmd=="amazon-shipping-backfill-drive-preview":
-        s=Settings()
-        s.validate(need_sheet=True)
-        if not s.amazon_order_history_folder_id:
-            raise RuntimeError("未設定: AMAZON_ORDER_HISTORY_FOLDER_ID")
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        result=DriveAmazonShippingPipeline(
-            s.amazon_order_history_folder_id,db,read_only_drive_service(),
-        ).preview()
-        for key in ("csv_file","csv_rows","matched_amazon_rows",
-                    "would_update_ship_date","would_update_shipment_count",
-                    "ambiguous","unmatched"):
-            print(f"{key}={result[key]}")
-    elif args.cmd=="amazon-shipping-backfill-drive-apply":
-        s=Settings()
-        s.validate(need_sheet=True)
-        if not s.amazon_order_history_folder_id:
-            raise RuntimeError("未設定: AMAZON_ORDER_HISTORY_FOLDER_ID")
-        db=SheetsDB(s.spreadsheet_id,service=shipping_backfill_sheets_service())
-        result=DriveAmazonShippingPipeline(
-            s.amazon_order_history_folder_id,db,shipping_backfill_drive_service(),
-        ).apply()
-        for key in ("csv_file","csv_rows","matched_amazon_rows",
-                    "would_update_ship_date","would_update_shipment_count",
-                    "ambiguous","unmatched","updated_rows"):
-            print(f"{key}={result[key]}")
     elif args.cmd=="card-preview":
         s,db,_=make(False); print(AuPayCardPipeline(db).preview(args.csv))
     elif args.cmd=="card-import":
         s,db,_=make(False); print(AuPayCardPipeline(db).import_csv(args.csv))
-    elif args.cmd=="card-amazon-reclassify":
-        s,db,_=make(False); print(AuPayCardPipeline(db).reclassify_amazon())
     elif args.cmd=="paypay-preview":
         print(PayPayPipeline().preview(args.csv))
     elif args.cmd=="paypay-import":
@@ -1137,48 +1009,10 @@ def main():
         ).apply(
             tuple(args.source_identity),
         ),ensure_ascii=False,sort_keys=True))
-    elif args.cmd=="amazon-installment-preview":
-        s,db,_=make(False); print(AmazonInstallmentPipeline(db).preview())
-    elif args.cmd=="amazon-installment-apply":
-        s,db,ai=make(True); print(AmazonInstallmentPipeline(db,ai).apply())
-    elif args.cmd=="amazon-event-match":
-        s,db,_=make(False); print(AmazonEventMatchingPipeline(db).apply())
-    elif args.cmd=="amazon-order-header-preview":
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_order_headers(db))
-    elif args.cmd=="amazon-schema-install":
-        s,db,_=make(False); print(install_amazon_schema(db))
-    elif args.cmd=="amazon-gmail-import":
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id)
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(import_amazon_gmail_events(service,db))
-    elif args.cmd=="amazon-daily-import":
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id)
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(run_amazon_daily_import(service,db))
-    elif args.cmd=="amazon-production-preview":
-        if not (1 <= args.lookback_days <= 370):
-            p.error("--lookback-days must be between 1 and 370")
-        if not (1 <= args.max_results <= 100):
-            p.error("--max-results must be between 1 and 100")
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        now=datetime.now(ZoneInfo("Asia/Tokyo")).replace(microsecond=0)
-        from datetime import timedelta
-        window=fixed_amazon_window(now-timedelta(days=args.lookback_days),now)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        messages,complete=fetch_bounded_amazon_messages(service,window,args.max_results)
-        result=build_amazon_write_plan(
-            messages,db,window=window,collection_complete=complete,
-        ).anonymized()
-        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
-        if not complete:
-            raise SystemExit(1)
     elif args.cmd=="amazon-gmail-recurring":
         try:
+            from .amazon_money_runtime import money_enabled
+            if not money_enabled():raise RuntimeError("amazon_money_migration_required")
             s=Settings(); s.validate(need_gmail=True,need_sheet=True)
             if not args.state_dir or not args.authority_file:
                 raise RuntimeError("amazon_state_and_authority_paths_required")
@@ -1225,106 +1059,10 @@ def main():
                 handle.write(rendered+"\n```\n")
         if result.get("failure"):
             raise SystemExit(1)
-    elif args.cmd=="amazon-cancellation-return-preview":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_cancellation_returns(service,db=db))
-    elif args.cmd=="amazon-cancellation-order-id-diagnose":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(diagnose_amazon_cancellation_order_ids(service,db))
-    elif args.cmd=="amazon-cancellation-scope-diagnose":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(diagnose_amazon_cancellation_scopes(service,db))
-    elif args.cmd=="amazon-cancellation-quantity-preview":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_cancellation_quantities(service,db))
-    elif args.cmd=="amazon-cancellation-quantity-ambiguity-diagnose":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(diagnose_amazon_cancellation_quantity_ambiguity(service,db))
-    elif args.cmd=="amazon-review-preview":
-        s=Settings(); s.validate(need_gmail=True,need_sheet=True)
-        service=gmail_readonly_service(s.gmail_token_json)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_reviews(service,db))
-    elif args.cmd=="amazon-review-schema-install":
-        s,db,_=make(False); print(install_amazon_review_schema(db))
-    elif args.cmd=="amazon-status-sync-preview":
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_status_sync(db))
-    elif args.cmd=="amazon-cancellation-apply-preview":
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_cancellation_apply(db))
-    elif args.cmd=="amazon-cancellation-reconciliation-preview":
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_amazon_cancellation_reconciliation(db))
-    elif args.cmd=="amazon-payment-coverage-preview":
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(preview_amazon_payment_coverage(db,service))
-    elif args.cmd=="payment-coverage-status-preview":
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        print(preview_payment_coverage_status(db))
     elif args.cmd=="payment-coverage-manifest-preview":
         print(preview_payment_coverage_manifests(
             paypay_csvs=args.paypay_csv, au_pay_card_csvs=args.au_pay_card_csv,
         ))
-    elif args.cmd=="amazon-cancellation-order-status-apply":
-        if not args.apply:
-            p.error("amazon-cancellation-order-status-apply requires --apply")
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(s.spreadsheet_id)
-        print(apply_amazon_cancellation_order_statuses(db))
-    elif args.cmd=="amazon-cancellation-item-count-fill-preview":
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(preview_amazon_cancellation_item_count_fills(service,db))
-    elif args.cmd=="amazon-cancellation-item-count-fill-apply":
-        if not args.apply:
-            p.error("amazon-cancellation-item-count-fill-apply requires --apply")
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id)
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(apply_amazon_cancellation_item_count_fills(service,db))
-    elif args.cmd=="amazon-event-reparse-preview":
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id,service=read_only_sheets_service())
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(preview_amazon_event_reparse(service,db))
-    elif args.cmd=="amazon-event-reparse-apply":
-        if not args.apply:
-            p.error("amazon-event-reparse-apply requires --apply")
-        s=Settings(); s.validate(need_sheet=True,need_gmail=True)
-        db=SheetsDB(s.spreadsheet_id)
-        service=gmail_readonly_service(s.gmail_token_json)
-        print(apply_amazon_event_reparse(service,db))
-    elif args.cmd=="amazon-unmatched-preview":
-        if args.transactions_json:
-            if not args.amazon_csv:
-                p.error("--transactions-jsonには--amazon-csvが必要です")
-            transactions=load_amazon_unmatched_input(args.transactions_json)
-            print({"raw_csv_diagnostics":diagnose_amazon_csv_amounts(args.amazon_csv,transactions)})
-        else:
-            s,db,_=make(False); print(AmazonUnmatchedPreview(db).preview(args.amazon_csv))
-    elif args.cmd=="amazon-unmatched-export":
-        s,db,_=make(False); print(export_amazon_unmatched_input(db,args.output))
-    elif args.cmd=="amazon-email-preview":
-        with open(args.eml,"rb") as f:
-            print(parse_amazon_email(f.read()).anonymized())
     elif args.cmd=="drive-receipts":
         s,db,ai=make(False); s.validate(need_drive=True)
         print_drive_receipt_results(

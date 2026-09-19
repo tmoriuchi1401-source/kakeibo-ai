@@ -90,17 +90,8 @@ def preview_amazon_gmail_search(service) -> dict:
 
 
 def main() -> int:
-    token_json = os.getenv("GOOGLE_GMAIL_TOKEN_JSON", "").strip()
-    if not token_json:
-        print(json.dumps({"gmail_token_status": "missing"}))
-        return 1
-    try:
-        result = preview_amazon_gmail_search(gmail_readonly_service(token_json))
-    except GmailPreviewAuthError as exc:
-        print(json.dumps({"error": str(exc)}))
-        return 1
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0
+    print(json.dumps({"error":"amazon_order_processing_retired"}))
+    return 1
 
 
 if __name__ == "__main__":

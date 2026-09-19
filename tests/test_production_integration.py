@@ -173,10 +173,10 @@ class Drive:
         return Request(update)
 
 
-def raw_mail(subject, body, identity):
+def raw_mail(subject, body, identity, sender="no-reply@amazon.co.jp"):
     mail = EmailMessage()
     mail["Subject"], mail["Message-ID"] = subject, f"<{identity}@example.invalid>"
-    mail["From"], mail["Date"] = "no-reply@amazon.co.jp", "Sun, 13 Sep 2026 10:00:00 +0900"
+    mail["From"], mail["Date"] = sender, "Sun, 13 Sep 2026 10:00:00 +0900"
     mail.set_content(body)
     return base64.urlsafe_b64encode(mail.as_bytes()).decode().rstrip("=")
 
@@ -188,11 +188,11 @@ class Gmail:
     def list(self, **kwargs): return Request(lambda: {"messages": [{"id": self.source}]})
     def get(self, **kwargs):
         if self.source == "amazon":
-            value = {"raw": raw_mail("Amazon.co.jp ご注文の確認",
-                "注文番号: 123-1234567-1234567\n注文日: 2026年9月13日\n注文合計: 1,500円\n支払い方法: Visa\n商品点数: 2", "amazon")}
+            value = {"raw": raw_mail("お支払いが確定",
+                "請求金額: 1500円\n支払い方法: ギフトカード\n決済ID: synthetic-payment", "amazon")}
         elif self.source == "aupay_card":
             value = {"raw": raw_mail("【ご利用詳細】au PAY カード",
-                "▼カード情報\nau PAY カード\n本会員さま ご利用分\n\nNo.001--------\n▼ご利用日\n2026年9月13日\n▼ご利用金額\n1,200円\n▼ご利用先\n合成カード店舗\n", "card")}
+                "▼カード情報\nau PAY カード\n本会員さま ご利用分\n\nNo.001--------\n▼ご利用日\n2026年9月13日\n▼ご利用金額\n1,200円\n▼ご利用先\n合成カード店舗\n", "card", "info@kddi-fs.com")}
         else:
             body = "au PAY ご利用のお知らせ\n■利用店舗\n合成残高店舗\n■種別\n支払\n■利用日時\n2026年9月13日(日) 12:34:56\n■支払金額\n1,234円\n■伝票番号\n123456789012\n"
             value = {"payload": {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(body.encode()).decode()}}}
@@ -219,7 +219,12 @@ def integrated(monkeypatch, tmp_path):
     csv = ("取引日,出金金額（円）,入金金額（円）,海外出金金額,通貨,変換レート（円）,利用国,取引内容,取引先,取引方法,支払い区分,利用者,取引番号\n"
            "2026/09/13 12:34,900,,,,,,支払い,合成PayPay店舗,PayPay残高,一回払い,本人,TX-SYNTHETIC\n")
     add_file("paypay-fixture", PAYPAY, "text/csv", csv.encode("utf-8-sig"), "fixture.csv")
-    env = {"SPREADSHEET_ID": SID, "KAKEIBO_STATE_FOLDER_ID": STATE}
+    env = {"SPREADSHEET_ID": SID, "KAKEIBO_STATE_FOLDER_ID": STATE,"KAKEIBO_AMAZON_MONEY_MODE":"confirmed-v1"}
+    from app.amazon_money import empty_book
+    from app.amazon_money_writer import MoneyWriter,MoneyLedger
+    from test_projection_refresh import Store
+    money_store=Store();money_store.data["money"]=empty_book(cutover_day="2026-09-01",legacy={})
+    monkeypatch.setattr("app.amazon_money_runtime.money_writer",lambda db,*args:MoneyWriter(money_store,MoneyLedger(db)))
     bindings = {}
     for source, native in flow.STATE_SOURCES.items():
         identity = f"{source}-state"
@@ -326,7 +331,8 @@ def test_shared_transport_cli_preview_apply_and_replay(integrated):
     result = f.run(True)
     assert result["success"], (result, f.failures)
     assert f.calls == list(flow.DEPENDENCIES) * 2
-    assert result["sources"]["amazon"]["counts"]["written_purchases"] == 1
+    assert result["sources"]["amazon"]["counts"]["money_posted"] == 1
+    assert len(f.rows["Amazonイベント"])==len(f.rows["Amazon注文ヘッダ"])==1
     assert result["sources"]["receipts"]["counts"]["written"] == 1
     assert result["sources"]["aupay_card"]["counts"]["written"] == 1
     assert result["sources"]["aupay_balance"]["counts"]["new"] == 1
@@ -376,28 +382,19 @@ def test_real_source_state_corruption_stops_dependents_and_keeps_independent_imp
     assert json.loads(f.payloads["ledger"])["sources"]["amazon"]["phase"] == "pending"
 
 
-def test_isolated_amazon_canary_writes_four_rows_then_readonly_replay(integrated):
+def test_old_order_canary_is_rejected_after_money_cutover(integrated):
     f = integrated
     original = deepcopy(f.payloads)
     target = "amazon-order:" + hashlib.sha256(b"123-1234567-1234567").hexdigest()[:16]
     result = f.run(True, canary=True, target=target)
-    assert result["success"], (result, f.failures)
+    assert not result["success"]
     assert f.calls == ["amazon"] and set(result["sources"]) == {"amazon"}
-    counts = result["sources"]["amazon"]["counts"]
-    for key in ("written_purchases", "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written"):
-        assert counts[key] == 1
-    assert counts["write_requests"] == 4
-    assert len(f.swrites) == 4 and f.ai_calls == []
+    assert f.swrites == [] and f.ai_calls == []
     for identity in ("aupay_card-state", "bank-state", "receipt-fixture", "private-fixture", "paypay-fixture"):
         assert original[identity] == f.payloads[identity]
     ledger = json.loads(f.payloads["ledger"])
     assert all(item["last_success"] is None for source, item in ledger["sources"].items() if source != "amazon")
-    remote, writes = deepcopy(f.payloads), (len(f.swrites), len(f.dwrites))
-    preview = f.run(False, canary=True)
-    assert preview["success"]
-    assert preview["sources"]["amazon"]["counts"]["eligible_purchases"] == 0
-    assert preview["sources"]["amazon"]["counts"]["new_event_rows"] == 0
-    assert f.payloads == remote and writes == (len(f.swrites), len(f.dwrites))
+    assert validate(f.payloads["amazon-state"],f.bindings["amazon"])["phase"]=="pending"
 
 
 def test_canary_target_drift_has_no_accounting_writes(integrated):

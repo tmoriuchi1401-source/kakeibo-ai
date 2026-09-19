@@ -148,16 +148,3 @@ def test_second_install_is_idempotent_no_op():
 def test_existing_review_schema_remains_unchanged():
     assert HEADERS["要確認"] == EXISTING_REVIEW_HEADERS
     assert "Amazon要確認" not in HEADERS
-
-
-def test_cli_runs_only_dedicated_installer(monkeypatch, capsys):
-    db = object()
-    monkeypatch.setattr(cli, "make", lambda require_gemini: (None, db, None))
-    monkeypatch.setattr(
-        cli, "install_amazon_review_schema", lambda value: {"ok": value is db},
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-review-schema-install"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'ok': True}"
