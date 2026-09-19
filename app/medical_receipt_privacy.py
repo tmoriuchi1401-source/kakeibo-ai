@@ -391,7 +391,44 @@ class _StructuredLabelMatch:
 
 
 def _matched_signals(text: str, signals: tuple[str, ...]) -> set[str]:
-    return {signal for signal in signals if signal in text}
+    # OCR often inserts spaces between Japanese characters. Do not stitch
+    # unrelated lines into positive retail evidence.
+    return {signal for signal in signals if re.search(
+        r'[^\S\r\n]*'.join(re.escape(c) for c in signal), text, re.IGNORECASE
+    )}
+
+
+def _structured_retail_evidence(text: str) -> bool:
+    """Require independent sale/tax/payment evidence, not a merchant allowlist.
+
+    Called only after medical/payroll/ambiguous-sensitive checks. A receipt
+    title, a tax ID, a date, or a payment amount alone is never sufficient.
+    """
+    compact = re.sub(r'[^\S\r\n]+', '', text).lower()
+    money = re.search(r'(?:[¥\\][0-9][0-9,]*|[0-9][0-9,]*円)', compact)
+    payment = any(s in compact for s in (
+        '現金', 'お釣り', '釣銭', '決済', 'aupay', 'paypay', 'クレジット', '電子マネー',
+    ))
+    parking = any(s in compact for s in ('駐車場', '駐車料金', 'パーキング'))
+    parking_time = any(s in compact for s in ('入庫', '出庫', '駐車時間'))
+    parking_receipt = ('領収書' in compact or '領収証' in compact) and '駐車料金' in compact
+    parking_amount = re.search(r'(?:駐車料金|受領金額|現金|決済)[^\n0-9]{0,8}[0-9][0-9,]*', compact)
+    if parking and (parking_time or parking_receipt) and parking_amount and (payment or '受領金額' in compact):
+        return True
+    if not money:
+        return False
+    tax = bool(re.search(r'(?:8|10)%(?:[^\n]{0,8})(?:対象|税)|(?:税)[^\n]{0,8}(?:8|10)%', compact))
+    subtotal = '小計' in compact
+    sale = '取引内容売上' in compact or '買上点数' in compact
+    dated = bool(re.search(r'20[0-9]{2}(?:年|/|-)[0-9]{1,2}(?:月|/|-)[0-9]{1,2}', compact))
+    item_lines = sum(bool(re.search(r'[一-龯ぁ-ゖァ-ヺ]{3,}[^\n]*[¥\\][0-9]', line))
+                     for line in compact.splitlines()
+                     if not any(label in line for label in (
+                         '税', '計', '決済', '支払', '現金', '釣', '預', '利用', '合計',
+                     )))
+    # Itemised retail slips (including cropped store headers) have tax rates,
+    # a subtotal/sale marker and an independent method/change/payment marker.
+    return tax and payment and (subtotal or sale or (dated and item_lines >= 2))
 
 
 def classify_receipt_text(text: str | None) -> ClassificationDecision:
@@ -404,8 +441,9 @@ def classify_receipt_text(text: str | None) -> ClassificationDecision:
     if not normalized.strip():
         return ClassificationDecision(classification="sensitive_unknown", reason_code="empty_text")
 
-    medical = _matched_signals(normalized, _MEDICAL_SIGNALS)
-    payroll = _matched_signals(normalized, _PAYROLL_SIGNALS)
+    sensitive_text = re.sub(r'\s+', '', normalized)
+    medical = _matched_signals(sensitive_text, _MEDICAL_SIGNALS)
+    payroll = _matched_signals(sensitive_text, _PAYROLL_SIGNALS)
     medical_confirmed = bool(medical.intersection(_MEDICAL_STRONG_SIGNALS)) or len(medical) >= 2
     payroll_confirmed = bool(payroll.intersection(_PAYROLL_STRONG_SIGNALS)) or len(payroll) >= 2
 
@@ -427,7 +465,7 @@ def classify_receipt_text(text: str | None) -> ClassificationDecision:
             else "payroll_multiple_signals"
         )
         return ClassificationDecision(classification="payroll", reason_code=reason)
-    ambiguous_sensitive = _matched_signals(normalized, _AMBIGUOUS_SENSITIVE_SIGNALS)
+    ambiguous_sensitive = _matched_signals(sensitive_text, _AMBIGUOUS_SENSITIVE_SIGNALS)
     if medical or payroll or ambiguous_sensitive:
         return ClassificationDecision(
             classification="sensitive_unknown", reason_code="sensitive_signal_insufficient"
@@ -435,7 +473,7 @@ def classify_receipt_text(text: str | None) -> ClassificationDecision:
 
     anchors = _matched_signals(normalized, _NORMAL_RECEIPT_ANCHORS)
     transactions = _matched_signals(normalized, _NORMAL_TRANSACTION_SIGNALS)
-    if anchors and transactions:
+    if (anchors and transactions) or _structured_retail_evidence(normalized):
         return ClassificationDecision(classification="normal", reason_code="normal_receipt_evidence")
     return ClassificationDecision(
         classification="sensitive_unknown", reason_code="insufficient_evidence"
