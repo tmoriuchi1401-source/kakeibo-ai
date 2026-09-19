@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-19 日常ファイル分離・Amazon金銭中心化のGoalに着手（本番未切替）
+
+- 最新main `c8ef626731cc8a941982a0d77b22e7ee4d88af31`から専用clone/branch `feat/ledger-daily-money`を作成。他Work・stashは変更していない。
+- 実Sheetsは31タブ、確保2,273,539セル（カテゴリhelper 1,001,000）。nativeバックアップ1ファイル作成、31タブのgrid構成一致、コピーownerのみを読戻し確認。元台帳の変更0、既存共有/本番フラグ変更0。最終排他スナップショットと復元確認は未実施。
+- `monthly_projection.py`とbounded Sheets readerを実装。月の再計算・置換、前後月更新、固定カテゴリID/改名alias、買い物単位13か月履歴、完了経路/口座が揃う月だけの前年比。既存writerへの接続・永続化・新日常Googleファイル・Amazon経路切替は未完了で、本番有効化していない。
+- 既存合成1,965件成功。新規17件（10年/10万買い物/20万明細、失敗再実行、年越し、本人分類保持、返金、bounded読込を含む）成功。Linux CIはまだ未確認。実Googleの軽量化後セル数/実行時間/API量は未測定。
+- 観測した本番成功run `35429733480`のSHAは`099dea08d07db4fef1fa30a18ea5d4a5d5953636`。最新mainと異なり、承認SHAも未取得。一致・切替成功とは扱わない。
+- 全残作業と実装契約は[移行記録](docs/ledger_daily_migration.md)。Goalを継続し、移行・Linux検証・限定非0件反映・再実行追加0・通常運用・隔離復元・最終SHA照合まで進める。スマホ実機も未確認。
+
 ### 2026-09-18 カテゴリ専用runnerの読み取り429修正と表示限定確認
 
 - **コード修正:** [PR #22](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/22) を通常マージし、main `74a1be9` へ統合。期間候補ヘッダZ1はSheets APIの`ExtendedValue.stringValue`で書き、Z2の`formulaValue`とB列dropdown条件の参照式文字列はそれぞれ既存の正しい型のまま維持する。カテゴリUIの同一プロセス内metadata再利用、確認画面の要求ID単位一括読込、429だけを1/2/4秒で有限再試行するread-only retryを追加した。400等は即時失敗し、write/applyの再試行は行わない。
