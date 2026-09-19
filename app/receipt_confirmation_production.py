@@ -133,6 +133,7 @@ def execute(env,apply):
         gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical else {}))
         if gate.classification=='medical':
             review.observe_medical(source,folder);counts['medical_detected']+=1
+            review.resolve_intake_kind(source,folder,gate)
             if env.get('MEDICAL_PREPARE_DIR'):
                 from .medical_candidate_preparation import prepare
                 from .receipt_confirmation import review_id
@@ -160,6 +161,7 @@ def execute(env,apply):
                     packet['crop_file']=path.name
                 medical_plans.append(packet)
         elif gate.classification=='normal' and gate.gemini_allowed:
+            review.resolve_intake_kind(source,folder,gate)
             if env.get('RECEIPT_SCAN_PLAN'):
                 directory=Path(env['RECEIPT_SCAN_PLAN']).parent
                 original=directory/(sha256(f['id'].encode()).hexdigest()+'.bin')

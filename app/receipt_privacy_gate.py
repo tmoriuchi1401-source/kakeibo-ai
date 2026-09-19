@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Literal, Self
+import unicodedata
 
 from pydantic import (
     BaseModel,
@@ -187,6 +188,31 @@ def evaluate_receipt_privacy(
         extracted.structured_tokens if extracted.status == "extracted" else (),
         observation_complete=extracted.observation_complete and extracted.status == "extracted",
     )
+
+    from .medical_receipt_privacy import _NORMAL_RECEIPT_ANCHORS, _NORMAL_TRANSACTION_SIGNALS
+    original_text = unicodedata.normalize('NFKC', extracted.text or '')
+    original_normal_evidence = (any(s in original_text for s in _NORMAL_RECEIPT_ANCHORS)
+                                and any(s in original_text for s in _NORMAL_TRANSACTION_SIGNALS))
+    structural_normal = (preview.classification == 'normal'
+                         and not original_normal_evidence)
+    if ((structural_normal or (preview.classification == 'sensitive_unknown'
+            and preview.reason_code in {'insufficient_evidence', 'sensitive_signal_insufficient'}
+            )) and extracted.status == 'extracted' and extracted.observation_complete):
+        from .receipt_classification_ocr import reread_classification
+
+        decision = reread_classification(content, mime_type, extracted.text)
+        if decision is not None:
+            if decision.classification == 'medical':
+                # Re-reading establishes kind only. Never invent payment fields
+                # or pair enhanced text with the original OCR's coordinates.
+                preview = ReceiptPrivacyPreview(classification='medical', status='needs_review',
+                    reason_code='no_candidate', candidate_count=0, category='医療費')
+            else:
+                preview = ReceiptPrivacyPreview(classification=decision.classification,
+                    status='not_applicable', reason_code=decision.reason_code, candidate_count=0)
+        elif structural_normal:
+            preview = ReceiptPrivacyPreview(classification='sensitive_unknown', status='not_applicable',
+                reason_code='insufficient_evidence', candidate_count=0)
 
     # Source provenance is a restriction, never an authorization. OCR cannot
     # downgrade an already-sensitive source, and a caller-supplied normal value

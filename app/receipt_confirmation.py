@@ -137,6 +137,23 @@ class ReceiptConfirmation:
                 item=deepcopy(old);item.update(status='closed_machine',reason='受付保留の対象外になりました。原本・記帳は変更していません。')
                 self.save_item(key,item)
 
+    def resolve_intake_kind(self, source, folder_id, gate):
+        """Retire an exact-version kind question without granting posting authority."""
+        if gate.classification not in {'normal','medical'}:return False
+        key=review_id('intake',source);old=self.items.get(key)
+        if not old or old['status']!='waiting' or any(old['inputs']):return False
+        live=self.ui_rows().get(key)
+        if live and any(live[1][7:15]):return False
+        self.verify_source(source,folder_id)
+        if self.ui_rows().get(key)!=live:return False
+        item=deepcopy(old)
+        item.update(status='closed_machine',gate={'classification':gate.classification,
+            'reason':gate.reason_code,'extraction':gate.extraction_status},
+            reason=('種類を自動識別：一般の買物・利用明細。通常の取込処理へ。' if gate.classification=='normal'
+                    else '種類を自動識別：医療。専用の医療確認行へ。')+'この判定ではAI送信・記帳を行っていません。')
+        self.save_item(key,item)
+        return True
+
     def needs_attention(self,key):
         item=self.items[key]
         if item['status'] in {'waiting','pending'}:return True
