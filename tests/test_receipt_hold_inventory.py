@@ -129,7 +129,7 @@ def test_fifteen_intake_rows_use_one_bounded_write_and_reconcile_lost_response()
     assert review.review_counts()['intake_review_pending']==15
 
 
-def test_hiding_history_changes_only_row_visibility_and_action_validation():
+def test_hiding_history_changes_only_ui_metadata():
     from app.receipt_confirmation_production import sync_review_visibility
     review,store,db,verify,source=medical()
     db.rows[TITLE][0][14]='owner note';review.capture_inputs()
@@ -143,7 +143,8 @@ def test_hiding_history_changes_only_row_visibility_and_action_validation():
         def batchUpdate(self,**kw):calls.extend(kw['body']['requests']);return Request({})
     db.sid='synthetic';db.svc=SimpleNamespace(spreadsheets=lambda:Sheets())
     sync_review_visibility(review)
-    hides=[r['updateDimensionProperties'] for r in calls if 'updateDimensionProperties' in r]
+    hides=[r['updateDimensionProperties'] for r in calls if 'updateDimensionProperties' in r and r['updateDimensionProperties']['range']['dimension']=='ROWS']
     assert len(hides)==1 and hides[0]['range']['startIndex']==1
-    assert all(set(r)<={'updateDimensionProperties','setDataValidation'} for r in calls)
+    assert all(set(r)<={'updateDimensionProperties','setDataValidation','repeatCell'} for r in calls)
+    assert all('userEnteredValue' not in r.get('repeatCell',{}).get('fields','') for r in calls)
     assert db.rows==values and db.rows[TITLE][0][14]=='owner note'
