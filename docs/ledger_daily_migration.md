@@ -47,7 +47,7 @@ Drive保存前にfolderと対象JSONの共有主体が元台帳の既存主体�
 1. 基準値・保存済みID/月別/種別別集計・本人入力/未解決のprivate inventory。既存Actionsの時間/読み書き量、承認SHA、共通writer状態を再確認。
 2. 接続したcatalog/index/dirty月を本番用private folderで初期化し、全writer入口を最終点検する。旧Amazon専用manual workflow等は切替時に停止/削除するため、現段階の共通hookだけで全本番入口を保証したとはしない。通常の取込/カテゴリ修正から投影readbackまでの実データ受入を行う。
 3. 作成済みnative日常試作（6タブ/12,630セル/ownerのみ）を既存実行主体へ必要最小限で共有。固定ID修正の実装を本番stageへ接続し、既存受付を一本化する。coverageの経路/口座入力とカテゴリ操作を統合する。現状は表示writerのみopt-in接続、submitは未接続。入力保持/競合/結果不明復旧は合成検証済み。
-4. 共通の小さいカテゴリ候補へ全参照元を置換。旧巨大helperの参照解消を確認してUIだけ縮小。正本は削除しない。
+4. 実装済みの`CompactCategoryMigration`を、日常修正受付と台帳の自由編集保護の切替と同じ排他区間で実行。全参照監査→最新入力再照合→一括移行→内容/入力規則読戻し。catalog更新時の共通候補同期と過去反映年月候補の旧ホーム依存解消を接続する。正本値は変更しない。
 5. 接続済みのAmazon/card共通money modeへ、旧計上IDとの固定対応と最新差分manifestを渡して同時切替する。保存済み商品補足、確認中の金銭例外の固定ID本人判断を接続。旧専用workflow/注文同期・発送照合・手動注文照合を停止/削減し、イベントを退避する。現時点の本番は旧挙動のまま。新modeの基礎writerは31件の関連合成テスト済みだが、この項目全体の完了ではない。
 6. 新旧writer排他の下で最終backup/差分照合/移行を行う。隔離コピーで復元。既存CI・Linux・10万件の実transport計測・失敗復旧・入力保持を確認。
 7. 検証済みmain/承認/実行SHAを一致させ、非0件の限定本番反映・読戻し・replay追加0を確認。通常運用へ切替。実機スマホ未確認事項は一度にまとめて報告。
@@ -79,3 +79,13 @@ nativeコピー1ファイルを作成し、コピー内の旧31タブを6タブ�
 money modeはまだ未設定。初期化済みの移行bookなしでは起動を拒否。今後、旧Amazon/カード/レシートの全既存IDと月別/種別別金額、未解決の本人入力を排他snapshotから対応付け、確認例外の受付と旧writer停止を接続してから本番へ切り替える。解析できない確定通知の確認行化、混合払いのleg判断、既存商品の補足は次工程。新規OCR/AI再解析は行わない。
 
 旧計上aliasには`expense_ids`と`expense_amounts`（元明細ごとの金額snapshot）を持たせ、関連付け直前に正式台帳の実在/金額/active状態を再照合する。分割請求を旧購入の全明細へ関連付ける場合も、元明細を変更せず、その請求のfingerprintでaliasを固定する。aliasが古い場合は再計上も上書きもせず確認へ戻す。`8b9691a`のLinux CI `35448972181`成功、alias読戻し追加後の関連32件成功。
+
+## 共通カテゴリ候補の実装（2026-09-19、本番未移行）
+
+`compact_categories.py`の`CompactCategoryMigration.plan(catalog)`はfresh metadataと全gridの数式/入力規則だけを最大26,000セル単位で監査する。通常の台帳・医療・給与のscalar値は読まない。helper自身はアプリ所有markerで確認し、外部セル・named range/metadataに未知の参照があれば停止。カテゴリ操作A:Lと要確認Aの固定IDは全行をboundedに読み、行数上限で選択済み入力を取りこぼさない。
+
+`apply(plan,catalog)`は同じsnapshotを再照合してから、helper縮小、literal候補、参照規則、分類操作C/Dの変換を一つのbatchUpdateにまとめる。支出明細の値はrequestへ含めない。分類操作のチェックや承認snapshot・要確認の本人入力を維持し、読戻しで全入力・固定ID・候補・dropdown参照を検証する。結果不明の自動retryはなく、次の明示実行ではversion 2を読み、既に変換済みの選択を二重変換しない。
+
+このadapter単独はwriter lockや本人入力の凍結を取得しない。Sheetsにcell CASはないので、切替工程が共通lock・本人入力の凍結・native backupを先に成立させる。日常の固定ID修正受付と正式台帳編集保護も同時に切替える。旧UI installer/restoreはversion 2を検出すると停止し、古い巨大matrixへ戻さない。復旧は隔離nativeコピーで確認してから行う。
+
+現行56候補なら4×57=228セル（旧1,001,000セル）になる。inactiveの旧分類はcatalog/正本に残し、新規選択肢からのみ除外する。合成検証では2候補で12セル、1,050選択入力/7,001行参照/途中入力変更/応答不明/replayを確認。実Googleの移行は0件。日常ファイルの候補は同じcatalogを用いる別ファイルの投影であり、IMPORTRANGEは使わない。カテゴリ追加/改名時のhelper同期と、過去反映の旧ホーム由来の年月候補は次工程で接続する。

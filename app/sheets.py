@@ -173,6 +173,10 @@ class SheetsDB:
     def _invalidate_sheet_metadata(self):
         self._sheet_metadata_cache=None
 
+    def _compact_category_helper(self):
+        from .compact_categories import compact_helper
+        return compact_helper(self._sheet_metadata())
+
     def sheet_titles(self):
         meta=self._sheet_metadata()
         return [s["properties"]["title"] for s in meta["sheets"]]
@@ -290,6 +294,20 @@ class SheetsDB:
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
              "startColumnIndex":12,"endColumnIndex":13}}},
         ]
+        from .compact_categories import compact_helper, category_condition
+        compact = compact_helper(meta)
+        if compact:
+            # Retain only existing review rows; never populate blank grid tails.
+            sheet = next(s for s in meta["sheets"] if s["properties"]["sheetId"] == sheet_id)
+            extent = sheet["properties"]["gridProperties"]["rowCount"]
+            last = 1
+            for first in range(2, extent + 1, 2000):
+                ids = self.get_raw(f"'要確認'!A{first}:A{min(extent, first + 1999)}")
+                last = max(last, max((first+i for i, row in enumerate(ids) if row and row[0]), default=1))
+            requests[2]["setDataValidation"]["rule"]["condition"] = category_condition(compact)
+            for request in requests:
+                body = next(iter(request.values()))
+                body["range"]["endRowIndex"] = max(2, last)
         for row_num,options in (amazon_options_by_row or {}).items():
             if options:
                 requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,
@@ -339,15 +357,18 @@ class SheetsDB:
         section={"カテゴリ自動分類":"rule", "カテゴリ過去反映":"backfill",
                  "カテゴリ過去反映確認":"confirm"}.get(sheet)
         if section and CATEGORY_WORKFLOW_SHEET in set(self.sheet_titles()):
+            prior=getattr(self,"_category_workflow_last_read",None)
             blocks=self._category_workflow_blocks()
+            self._check_category_workflow_input(prior)
             start=self._workflow_positions(blocks)[section]["start"]
             data=[{"range":f"{CATEGORY_WORKFLOW_SHEET}!A{start+row_num-2}",
-                   "values":[self._workflow_physical_row(section, row)]}
+                   "values":[self._workflow_physical_row(section, row, compact=bool(self._compact_category_helper()))]}
                   for row_num,row in rows]
             self.svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=self.sid,
                 body={"valueInputOption":"RAW","data":data}
             ).execute()
+            self._category_workflow_last_read=None
             return
         data=[{"range":f"{sheet}!A{row_num}","values":[row]} for row_num,row in rows]
         self.svc.spreadsheets().values().batchUpdate(
@@ -459,17 +480,25 @@ class SheetsDB:
         return {"rule": list(UI_HEADERS), "backfill": list(BACKFILL_UI_HEADERS),
                 "confirm": list(BACKFILL_CONFIRM_HEADERS)}
 
+    def _check_category_workflow_input(self, prior):
+        if prior is not None and self._compact_category_helper() and prior != self._category_workflow_last_read:
+            from .monthly_projection import ProjectionError
+            raise ProjectionError("category_workflow_input_changed")
+
     @staticmethod
-    def _workflow_logical_row(section, physical):
+    def _workflow_logical_row(section, physical, *, compact=False):
         cells=list(physical)+[""]*max(0, 12-len(physical))
         if section == "backfill":
             return cells[:5]+cells[6:11]
         if section == "confirm":
             return cells[:4]+[cells[6]]
+        if compact:
+            from .compact_categories import logical_rule_row
+            return logical_rule_row(cells)
         return cells[:12]
 
     @staticmethod
-    def _workflow_physical_row(section, logical):
+    def _workflow_physical_row(section, logical, *, compact=False, header=False):
         cells=list(logical)
         def checkbox(value):
             text=str(value).strip().upper()
@@ -484,6 +513,9 @@ class SheetsDB:
             return cells[:4]+["", "", cells[4]]+[""]*5
         cells += [""]*max(0, 12-len(cells))
         cells[4]=checkbox(cells[4]); cells[5]=checkbox(cells[5])
+        if compact:
+            from .compact_categories import physical_rule_row
+            return physical_rule_row(cells, header=header)
         return cells[:12]
 
     def _category_workflow_blocks(self):
@@ -498,7 +530,18 @@ class SheetsDB:
             legacy["confirm"]=(defaults["confirm"], self.get("カテゴリ過去反映確認!A2:E")
                                if "カテゴリ過去反映確認" in titles else [])
             return legacy
-        values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+        compact=bool(self._compact_category_helper())
+        if compact:
+            sheet=next(s for s in self._sheet_metadata()["sheets"]
+                       if s["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+            extent=sheet["properties"]["gridProperties"]["rowCount"]
+            values=[]
+            for first in range(1,extent+1,1000):
+                last=min(extent,first+999)
+                page=self.get_raw(f"'{CATEGORY_WORKFLOW_SHEET}'!A{first}:L{last}")
+                values.extend(page+[[] for _ in range(last-first+1-len(page))])
+        else:
+            values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
         markers={key: next((index for index,row in enumerate(values)
                             if row and row[0] == marker), None)
                  for key,marker in CATEGORY_WORKFLOW_MARKERS.items()}
@@ -516,8 +559,13 @@ class SheetsDB:
             rows=[]
             for row in values[marker+2:end]:
                 if any(str(value).strip() for value in row):
-                    rows.append(self._workflow_logical_row(key, row))
+                    rows.append(self._workflow_logical_row(key, row, compact=compact))
+            if compact and key == "rule":
+                header=defaults[key]
             blocks[key]=(header, rows)
+        if compact:
+            from .compact_categories import digest
+            self._category_workflow_last_read=digest(values)
         return blocks
 
     def _ensure_category_workflow_sheet(self):
@@ -596,7 +644,7 @@ class SheetsDB:
             requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"COLUMNS","length":27-column_count}})
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":6}}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":sheet["properties"]["gridProperties"]["rowCount"] if self._compact_category_helper() else 1000,"startColumnIndex":0,"endColumnIndex":6}}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":25},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":2}},"fields":"gridProperties.frozenRowCount"}},
@@ -609,11 +657,16 @@ class SheetsDB:
             ]
         rule_position=positions["rule"]
         if helper and rule_position["count"]:
-            from .sheets_ui_actions import expense_helper_growth_requests
-            growth=expense_helper_growth_requests(helper,rule_position['start']+rule_position['count']-1)
-            requests.extend(growth)
-            if growth:self._invalidate_sheet_metadata()
-            requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
+            compact=self._compact_category_helper()
+            if compact:
+                from .compact_categories import controls
+                requests.extend(controls(sheet_id,compact,rule_position["start"],rule_position["count"]))
+            else:
+                from .sheets_ui_actions import expense_helper_growth_requests
+                growth=expense_helper_growth_requests(helper,rule_position['start']+rule_position['count']-1)
+                requests.extend(growth)
+                if growth:self._invalidate_sheet_metadata()
+                requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
         backfill_position=positions["backfill"]
         requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))
         confirm_position=positions["confirm"]
@@ -630,17 +683,38 @@ class SheetsDB:
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
 
     def _replace_category_workflow_section(self, section, rows, header):
-        blocks=self._category_workflow_blocks(); blocks[section]=(list(header), [list(row) for row in rows])
+        prior=getattr(self,"_category_workflow_last_read",None)
+        blocks=self._category_workflow_blocks()
+        self._check_category_workflow_input(prior)
+        blocks[section]=(list(header), [list(row) for row in rows])
         self._ensure_category_workflow_sheet(); positions=self._workflow_positions(blocks)
         values=[]
+        compact=bool(self._compact_category_helper())
         for key in ("rule", "backfill", "confirm"):
             block_header,block_rows=blocks[key]
             values.append([CATEGORY_WORKFLOW_MARKERS[key]])
-            values.append(self._workflow_physical_row(key, block_header))
-            values.extend(self._workflow_physical_row(key, row) for row in block_rows)
+            values.append(self._workflow_physical_row(key, block_header, compact=compact, header=True))
+            values.extend(self._workflow_physical_row(key, row, compact=compact) for row in block_rows)
             values.append([""])
-        self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
-        self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
+        if compact:
+            # Atomic values replacement, including stale tail clearing. No
+            # intermediate blank input surface and no 1,000-row truncation.
+            from .compact_categories import _cells
+            sheet=next(s for s in self._sheet_metadata()["sheets"] if s["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+            extent=sheet["properties"]["gridProperties"]["rowCount"]
+            sheet_id=sheet["properties"]["sheetId"]
+            requests=[]
+            if len(values)>extent:
+                requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)-extent}})
+            request=_cells(sheet_id,1,0,values,12)
+            request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values))
+            requests.append(request)
+            self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+            self._invalidate_sheet_metadata()
+            self._category_workflow_last_read=None
+        else:
+            self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+            self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
         self._configure_category_workflow(blocks, positions)
 
     def ensure_category_rule_ui_sheet(self, header):
@@ -670,6 +744,7 @@ class SheetsDB:
                     {"range": f"{CATEGORY_WORKFLOW_SHEET}!F{row_num}", "values": [[False]]},
                 ],
             }).execute()
+            self._category_workflow_last_read=None
             return True
         return False
     def ensure_category_backfill_sheets(self):
