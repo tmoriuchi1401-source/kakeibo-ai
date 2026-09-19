@@ -1,0 +1,94 @@
+name: Initialize ledger daily money state
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect a frozen ledger and matching backup before initialization
+        type: choice
+        options: [inspect, initialize, key-info]
+        default: inspect
+        required: true
+      expected_sha:
+        description: Exact Linux-tested main commit
+        type: string
+        required: true
+      cutover_day:
+        description: Fixed cutover day in YYYY-MM-DD (unused for key-info)
+        type: string
+        required: false
+      backup:
+        description: RSA-wrapped native backup ID, label KAKEIBO_MIGRATION_BACKUP_ID
+        type: string
+        required: false
+      manifest_sha256:
+        description: Exact digest returned by inspect (required for initialize)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  migrate:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.sha == inputs.expected_sha &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
+      (inputs.operation == 'key-info' || (
+        vars.KAKEIBO_PRODUCTION_ENABLED != 'true' &&
+        vars.KAKEIBO_SCHEDULE_ENABLED != 'true' &&
+        vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+        vars.KAKEIBO_AMAZON_MONEY_MODE == '' &&
+        vars.KAKEIBO_DAILY_CORRECTIONS_MODE == ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+      KAKEIBO_AMAZON_MONEY_MODE: ${{ vars.KAKEIBO_AMAZON_MONEY_MODE }}
+      KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
+      KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Require normal logging before credentials
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - name: Verify tested checkout before dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+          test "$GITHUB_SHA" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing dependencies
+        run: pip install -r requirements.txt
+      - name: Inspect or initialize precreated money documents
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          MIGRATION_OPERATION: ${{ inputs.operation }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          MIGRATION_CUTOVER_DAY: ${{ inputs.cutover_day }}
+          MIGRATION_BACKUP: ${{ inputs.backup }}
+          MIGRATION_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+          test "$GITHUB_SHA" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+          python -m app.ledger_daily_migration "$MIGRATION_OPERATION" --expected-sha "$EXPECTED_SHA"

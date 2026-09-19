@@ -257,3 +257,17 @@ slotは年月通番mod13で決まり、payloadにも実年月を保持する。�
 切替時は既存正本の実行主体だけを必要最小限で共有し、encrypted folder bindingを設定する。復元対象はこの固定24ファイル、正本の対象範囲、日常の本人入力。slot単体を古い月へ戻した状態で日常表示を再開せず、journal/index/summaryと整合するbackup組を戻すか、正本からprojectionを再生成する。金銭book/未完了intentの復元検証と実SAによるbootstrapは未完了。
 
 実装`c57b787`のLinux CI `35475867145`は全3job成功。既存SAへのfolder共有は自動承認レビューが明示的な受取人/権限/範囲の承認不足として拒否したため未実行で、日常ファイルと合わせてユーザーへ確認中。承認までは共有を別経路で再試行しない。Google公開証明書だけで接続用binding候補をprivateに準備したが、証明書が2つあるため本番で使う公開鍵fingerprintとの照合が必要。秘密鍵の取得や候補の推測適用は行わず、GitHub変数も未設定。
+
+## 金銭状態の手動移行ジョブ（2026-09-20、本番未実行）
+
+`ledger-daily-migration.yml`は既存`kakeibo-production`排他を使い、手動の`key-info / inspect / initialize`だけを提供する。定期実行・新規認証・source CLI呼出しは追加しない。mainのcheckout・event SHA・expected SHA・validated SHAの一致をPythonでも確認し、debug logging時はcredentialを使うstepより前に停止する。使うSecretsは既存SAと正本IDだけで、Gmail/AI/銀行の認証を注入しない。
+
+1. Linuxで検証したmainをvalidated SHAへ設定した後、`key-info`を実行する。既存SA秘密鍵から公開部分のDER SHA256だけを返し、Google公開証明書の同じfingerprintと照合する。秘密鍵・公開鍵の本文・IDをログへ出さず、GoogleへのAPI呼出しもしない。複数の公開証明書から推測で選ばない。
+2. 対象writerを停止して処理完了を確認し、最新native backupを作る。`inspect / initialize`には`KAKEIBO_PRODUCTION_ENABLED`と`KAKEIBO_SCHEDULE_ENABLED`がtrueでないこと、`KAKEIBO_LEGACY_DISABLED=true`、money/correctionsの新modeが空欄であることが必要。カテゴリ専用workflowも同じ排他を使い、処理間の本人入力変更はsnapshot照合で検出する。バックアップに既存SAからの読取権限が必要だが、共有は既存正本の許可範囲内に限定する。
+3. `cutover_day`と、既存鍵で`KAKEIBO_MIGRATION_BACKUP_ID`ラベルに暗号化したbackup IDを渡して`inspect`する。異なるnative Sheet・非公開の既存共有先subsetを検査し、正本とbackupの支出明細A:M/取込データA:Lを最新gridから2,000行単位で全読込みする。固定ID、金額、日付、状態、分類、本人メモを含む全値が一致することを確認する。行順と末尾空欄だけは正規化する。医療/給与タブ、原本画像、旧イベント本文は読まない。
+4. `inspect`が返した`manifest_sha256`を同じ入力の`initialize`へ渡す。digestは移行manifest・切替日・特定backupのidentityへ結び付く。変更があれば書込み前に停止。既存CSV分割払いの確定済み固定targetだけを再利用し、未証明の旧照合は通知へ、未対応の旧購入はopenへ残す。未対応の負額明細があれば停止し、返金の同一性を推測しない。
+5. 書込先は事前作成済み`money-migration / money-notices / money`の3文書だけ。migration intentと通知を保存/readbackしてからbookを初期化する。正本とbackupには常に読取り専用Sheets credentialを使い、支出/取込の追加行は0。保存結果不明は同じ入力で再実行し、既存intentから再開する。bookが稼働後に変化していれば再初期化しない。本人の通知保留・確認済みや他inboxの未完了要求は保持する。
+
+出力は成功可否・操作名・manifest digest・初期化件数と支出/取込書込み0だけ。例外は既知の短いcodeへ限定し、API応答・実ID・金額・明細・manifest本体をログやartifactへ出さない。処理後にも正本とbackupを再照合し、遅い変更があれば成功にしない。保存済みintentの自動削除や正本ロールバックは行わない。
+
+これは金銭初期化の実行経路であり、正本のカテゴリ縮小・編集保護・旧イベント退避・projection bootstrap・private要求の隔離復元・非0本番canary/replay・定期運用切替はそれぞれ残る。実本番の初期化成功を、合成検証や対象0件の実行で代用しない。

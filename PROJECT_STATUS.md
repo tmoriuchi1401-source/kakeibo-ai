@@ -22,6 +22,16 @@
 
 ## 1. Last verified
 
+### 2026-09-20 金銭移行を既存排他の手動Actionsへ接続（本番未実行）
+
+- 最新mainを再fetchして`c8ef626`。前工程の進捗commit `d9f5b92`はLinux CI `35476370335`全3job成功。共有の明示的な確認は未回答で、前工程で拒否された共有を再試行していない。本工程の実Google変更0、本番フラグ/main変更0。
+- `ledger-daily-migration.yml`と`app.ledger_daily_migration`を追加。既存`kakeibo-production`排他・手動main・expected/event/checkout/validated SHA一致を使用し、定期runnerや新認証は追加しない。Secretsは既存SAと正本IDだけ。debug時と未検証checkoutはcredential使用前に停止する。
+- `key-info`は既存SA鍵の公開部分のfingerprintだけを返し、Google公開証明書の複数候補から正しいbinding鍵を選ぶ経路を用意した。秘密鍵/ID/金額の出力やGoogle API呼出しはない。実Actionsによる照合はmain統合後に実施する。
+- `inspect / initialize`はproduction/schedule停止、旧writer停止、新money/corrections mode未設定を必須にする。別native backupの共有範囲を検査し、正本とbackupの支出A:M/取込A:Lを全期間・有限範囲で比較する。本人分類/メモ/状態/固定IDを含む差異、特定backup/切替日/manifestのdigest変更があれば書込み前に停止。処理後にも正本とbackupを再照合する。
+- 初期化の書込先は事前作成済みmoney-migration / money-notices / moneyだけで、Sheetsは常に読取り専用。保存済みCSVの確定固定targetを再利用し、未証明の旧照合/未対応購入は確認へ残す。intent先行・読戻し・保存結果不明からの再開・稼働bookの再初期化拒否・本人の保留と他inboxのpending保持を検証した。
+- 関連108件成功、Windows全回帰2,443件成功（114.25秒）。その後にbackupの処理後再照合を追加し、移行テスト50件成功。本番factoryを通した合成接続でも24事前作成ファイルのうち3個だけを更新し、新規ファイル/正本書込み0、replay追加更新0を確認。compile/diff-check成功。新実装のLinux CIはpush後に確認する。
+- Goal継続中。共有承認、実鍵照合/接続設定、排他下の最新backup/移行、金銭/未完了要求の実Google隔離復元、main/承認/実行SHA一致、非0本番canary/readback/replay0と定期運用切替、スマホ実機確認が残る。
+
 ### 2026-09-20 集計を事前作成ファイルと13か月キャッシュへ変更（本番未接続）
 
 - 最新mainを再fetch。前工程`d3fdc66`の商品補足はLinux CI `35474940927`全3job成功まで完了。既存実行主体は委任なしのSAで、正本はMy Driveにあるため、通常処理で月ごとのJSONファイルを新規作成する前提を除去した。追加認証・共有先・サービス契約は設けない。
