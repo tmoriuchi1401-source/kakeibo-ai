@@ -45,7 +45,9 @@ def money_writer(db,env=None):
                         and abs((date.fromisoformat(purchase.day)-date.fromisoformat(record.day)).days)<=7):
                     return True
         return False
-    writer=MoneyWriter(store,MoneyLedger(db),possible_duplicates=possible)
+    from .amazon_money_products import SavedProducts
+    writer=MoneyWriter(store,MoneyLedger(db),possible_duplicates=possible,
+        product_details=SavedProducts(db,auto_apply=env.get("CATEGORY_RULE_AUTO_APPLY_ENABLED","false").strip().lower() in {"1","true","yes","on"}))
     writer.prepare=prepare
     return writer
 

@@ -6,7 +6,7 @@ precedes either ledger append; ambiguous appends are resolved by fixed IDs.
 from copy import deepcopy
 from dataclasses import asdict, replace
 
-from .amazon_money import MoneyError, decide, expense_rows, validate_book, source_alias
+from .amazon_money import MoneyError, MoneyItem, decide, expense_rows, validate_book, source_alias
 from .projection_store import replace_document
 from .utils import now_jst_string
 
@@ -40,9 +40,10 @@ class MoneyLedger:
 
 
 class MoneyWriter:
-    def __init__(self,store,ledger,possible_duplicates=None):
+    def __init__(self,store,ledger,possible_duplicates=None,product_details=None):
         self.store,self.ledger=store,ledger
         self.possible_duplicates=possible_duplicates or (lambda record:False)
+        self.product_details=product_details or (lambda record:())
 
     def _decision(self,record,book):
         decision=decide(record,book)
@@ -77,11 +78,23 @@ class MoneyWriter:
                     if ids & set(other.get("expense_ids",[])):refunded-=prior["amount"]
                 if total is None or refunded-record.amount>total:
                     return replace(decision,action="review",reason="refund_exceeds_purchase",expense_ids=())
+                # A full refund has an exact allocation from its verified
+                # original expense IDs. Partial refunds keep the money amount
+                # without guessing which products were returned.
+                if not record.items and -record.amount==total and all(_yen(row[4])>0 for row in found.values()):
+                    record=replace(record,items=tuple(MoneyItem(row[3],-_yen(row[4]),row[5],row[6])
+                        for key,row in sorted(found.items())))
             if self.ledger.find("取込データ",12,{record.source_id}):
                 return replace(decision,action="review",reason="source_identity_already_imported",expense_ids=())
             resolution=book["records"].get(record.money_id,{}).get("resolution",{})
             if self.possible_duplicates(record) and resolution.get("action")!="separate":
                 return replace(decision,action="review",reason="existing_expense_identity_required",expense_ids=())
+            if not record.items:
+                record=replace(record,items=self.product_details(record))
+            # Only item allocation changes; financial identity and authority
+            # remain the adapter's original facts. Pending intent rows are
+            # already frozen, so resume/duplicate never re-read product data.
+            decision=decide(record,book)
         return decision
 
     def _book(self):
