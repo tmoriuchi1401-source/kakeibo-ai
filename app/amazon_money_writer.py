@@ -54,9 +54,33 @@ class MoneyWriter:
                     or any(found[key][4]!=amount or found[key][12] not in {"","active"} for key,amount in expected.items())):
                 return replace(decision,action="review",reason="legacy_ledger_binding_changed",expense_ids=())
         if decision.action=="post":
+            if record.kind=="refund":
+                origin=(book["legacy"].get(decision.related_id[7:],{}) if decision.related_id.startswith("legacy:")
+                        else book["records"].get(decision.related_id,{}))
+                ids=set(origin.get("expense_ids",[]))
+                found=self.ledger.find("支出明細",13,ids)
+                alias=book["aliases"].get(origin.get("source","")+":"+origin.get("source_id",""),{})
+                expected=alias.get("expense_amounts")
+                from .monthly_projection import _yen,ProjectionError
+                try:total=sum(_yen(row[4]) for row in found.values())
+                except ProjectionError:total=None
+                if (not ids or set(found)!=ids or any(row[12] not in {"","active"} for row in found.values())
+                        or (any(found[k][4]!=expected.get(k) for k in ids) if expected is not None else total!=origin.get("amount"))):
+                    return replace(decision,action="review",reason="refund_origin_ledger_changed",expense_ids=())
+                # A legacy purchase and its split-charge aliases share one
+                # canonical balance, even when the refund selects different IDs.
+                refunded=0
+                for key,prior in book["records"].items():
+                    if key==record.money_id or prior.get("kind")!="refund" or prior.get("state") not in {"pending","posted","linked"}:continue
+                    related=prior.get("related_id","")
+                    other=(book["legacy"].get(related[7:],{}) if related.startswith("legacy:") else book["records"].get(related,{}))
+                    if ids & set(other.get("expense_ids",[])):refunded-=prior["amount"]
+                if total is None or refunded-record.amount>total:
+                    return replace(decision,action="review",reason="refund_exceeds_purchase",expense_ids=())
             if self.ledger.find("取込データ",12,{record.source_id}):
                 return replace(decision,action="review",reason="source_identity_already_imported",expense_ids=())
-            if self.possible_duplicates(record):
+            resolution=book["records"].get(record.money_id,{}).get("resolution",{})
+            if self.possible_duplicates(record) and resolution.get("action")!="separate":
                 return replace(decision,action="review",reason="existing_expense_identity_required",expense_ids=())
         return decision
 
@@ -80,12 +104,14 @@ class MoneyWriter:
             if decision.action=="duplicate":stats["money_duplicate"]+=1;continue
             previous=before["records"].get(record.money_id)
             if (decision.action=="review" and previous and previous.get("state")=="review"
-                    and previous.get("reason")==decision.reason):
+                    and previous.get("reason")==decision.reason and previous.get("confirmed")==record.confirmed):
                 stats["money_review"]+=1;continue
             if decision.action=="resume":
                 intent=before["records"][record.money_id]
             else:
-                intent={k:v for k,v in asdict(record).items() if k not in {"items","confirmed"}}
+                intent={k:v for k,v in asdict(record).items() if k!="items"}
+                if previous and previous.get("resolution"):intent["resolution"]=deepcopy(previous["resolution"])
+                if decision.action=="review":intent["items"]=[asdict(item) for item in record.items]
                 intent.update(fingerprint=record.fingerprint,state="pending" if decision.action=="post" else decision.action,
                     reason=decision.reason,expense_ids=list(decision.expense_ids),related_id=decision.related_id,
                     updated_at=now_jst_string())

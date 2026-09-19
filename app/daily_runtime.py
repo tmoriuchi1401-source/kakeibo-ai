@@ -77,14 +77,17 @@ def run_daily_requests(env,*,apply=False):
     inbox=DailyCorrections(store,source)
     before=inbox._requests()["requests"]
     pending=sum(item["state"] in {"queued","pending"} for item in before.values())
+    from .daily_money_review import run_money_reviews
     if not apply:
-        return {"corrections_pending":pending,"correction_form_ready":int(daily.form()[0][7] is True)}
+        return {"corrections_pending":pending,"correction_form_ready":int(daily.form()[0][7] is True),
+                **run_money_reviews(daily,source,env,apply=False)}
     projection=ProjectionRefresh(store,SheetsLedgerReader(source))
     # Refresh indexes for prior ledger writes before resolving any target ID.
     projection.refresh(source.categories())
     inbox.apply_pending(limit=20)
     remaining=sum(item["state"] in {"queued","pending"} for item in inbox._requests()["requests"].values())
     submitted=daily.submit(source) if not remaining else {"corrections_submitted":0}
+    money_counts=run_money_reviews(daily,source,env,apply=True)
     projection.refresh(source.categories())
     # A failure here does not lose the intent or trigger a second ledger write.
     output=refresh_daily(source,store,env)
@@ -95,7 +98,7 @@ def run_daily_requests(env,*,apply=False):
     for state in ("applied","failed"):
         counts["corrections_"+state]=sum(item["state"]==state and before.get(key,{}).get("state")!=state
                                        for key,item in after.items())
-    return {**counts,**output}
+    return {**counts,**money_counts,**output}
 
 
 def refresh_daily(source_db,store,env=None):

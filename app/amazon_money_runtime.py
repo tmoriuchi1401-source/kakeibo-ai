@@ -85,6 +85,6 @@ def money_review_items(store):
         "refund_purchase_link_required":"返金の元購入を指定", "refund_purchase_link_invalid":"返金の関連先を確認",
         "refund_exceeds_purchase":"返金額と元購入を確認", "possible_resend_requires_identity":"再通知か別取引かを確認",
         "source_identity_already_imported":"既存取込との対応を確認", "existing_expense_identity_required":"既存支出との重複候補を確認"}
-    return [ReviewItem(identity,"Amazon金銭",labels.get(item.get("reason"),"金銭記録の情報を確認"),
-        "反映待ち" if item["state"]=="pending" else "要確認",item.get("original_url",""))
+    return [ReviewItem(identity,"Amazon金銭",f"{item.get('day','')} / {item.get('amount','')}円 / {item.get('account','')}\n"+labels.get(item.get("reason"),"金銭記録の情報を確認"),
+        "反映待ち" if item["state"]=="pending" else "保留" if item.get("resolution",{}).get("action")=="hold" else "要確認",item.get("original_url",""))
         for identity,item in book["records"].items() if item["state"] in {"review","pending"}]

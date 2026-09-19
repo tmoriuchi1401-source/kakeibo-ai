@@ -275,6 +275,9 @@ class SheetsDB:
             ).execute()
     def configure_review_validation(self, categories:list[tuple[str,str]],
                                     amazon_options_by_row:dict[int,list[str]]|None=None):
+        from .amazon_money_runtime import money_enabled
+        actions=["支出として計上","重複として除外","レシートと統合","保留"]
+        if not money_enabled():actions.insert(3,"Amazon注文と照合")
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]=="要確認")
@@ -288,7 +291,7 @@ class SheetsDB:
              "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
              "fields":"userEnteredFormat.numberFormat"}},
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
-                 ["支出として計上","重複として除外","レシートと統合","Amazon注文と照合","保留"]]}),
+                 actions]}),
             rule(11,12,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
                  for x in combined_category_options(categories)]}),
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,

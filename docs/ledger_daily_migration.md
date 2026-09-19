@@ -99,3 +99,15 @@ sourceの変更月indexを回復→既存queued/pendingを最大20件回復→�
 `daily_edit_cutover.cutover_requests`はcompact候補が移行済みのsourceだけを対象に、支出明細A:Mの全行（将来追記を含む）を既存実行SA用に保護し、アプリ所有の旧カテゴリ修正リンクを日常確認フォームへ置換、daily ID hashをsource metadataへ記録する。canonicalの値を変更せず、Drive共有やscopeを拡張しない。runtimeもfresh metadataでこれらの前提を毎回確認する。Googleでは所有者の保護変更能力を除去できないため、所有者による明示的な保護解除は別の管理操作になる。実migrationではwriter/本人入力排他・最新native backupの下で実行し、保護/リンク/markerを読戻してからmodeを有効化する。
 
 現時点のGoogle保護・marker・共有・modeの実変更は0。daily inbox単独の接続を、money例外やcoverageを含む全確認受付の完成とは扱わない。失敗した過去要求の一覧/解決操作も統合確認の次工程に含める。
+
+## Amazon金銭例外の受付（2026-09-20、本番未有効化）
+
+`amazon_money_review.MoneyReviews`はprivate `money-reviews` documentへ固定REQ IDで本人判断を保存する。対象の金銭ID/fingerprint・最新review状態・正式台帳との対応を検査し、queued→pending→applied/failedで回復する。保留・別の確定取引・既存支出対応・返金元指定・自分用チャージを扱う。未確定や混合払いの内訳不足を強制計上する機能ではない。負の旧明細への対応は元購入bindingを持つ移行manifestで扱い、このフォームでは推定しない。
+
+既存支出への対応付けは元の明細集合・全値fingerprintを再読込し、同じ明細集合への分割請求の対応額を合算する。対応付けだけで台帳を更新しない。返金元の台帳金額/activeと、旧計上ID・分割請求IDが同じ正式支出を指す場合の累積返金上限を確認する。日常修正で金額が変わっていた場合は旧bookの金額で押し切らない。
+
+フォームは確認A80:D88とJ81のtokenを使い、通常rendererは値を書かない。新しい日常コピーには初期設置する。既存コピーは`upgrade_requests`がsource binding・marker・予約領域の空欄を確認し、切替時のlock/backupの下でnative一括設置と読戻しを行う。実prototypeへの適用はまだ0件。既存daily stageからmoney mode有効時だけ未完了intentを回復し、新フォームを受理、変更月投影と表示を更新する。原本リンク/金額等はprivate日常表示だけに載せ、親Actionsには件数のみを渡す。
+
+新modeでは旧注文照合候補の読込・再生成を止め、旧本人選択/メモを保持する。旧画面からのAmazonの計上・除外・統合・注文照合を保留し、金銭確認へ案内する。他のレシート承認は維持する。注文同期/専用workflow全入口の停止、未解析確定通知の確認行化、保存済み商品補足、旧対応manifestは引き続き移行前の必須作業。
+
+関連83件でJSON readback、intent保存前後失敗、片側の台帳append後失敗、再実行追加0、入力保持、保留の再取得、旧候補へのアクセス0、通常レシート承認、分割対応と過剰返金の拒否を確認。全回帰2,142件成功後に返金上限と保存失敗の5ケースを追加した。

@@ -131,7 +131,8 @@ def install_copy_requests(source_id,target_id,old_sheet_ids,*,current_month):
         "fields":"userEnteredFormat(backgroundColor,wrapStrategy)"}})
     requests.append({"createDeveloperMetadata":{"developerMetadata":{"metadataKey":OWNED_MARKER,
         "metadataValue":sha256(source_id.encode()).hexdigest(),"visibility":"DOCUMENT","location":{"spreadsheet":True}}}})
-    return [r for r in requests if r]+layout_requests()
+    from .daily_money_review import install_requests
+    return [r for r in requests if r]+layout_requests()+install_requests(source_id)
 
 
 def layout_requests():
@@ -220,6 +221,8 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
                      dropdown("確認",3,1,range(1,pages+1))])
     rows=[[r.title[:70],r.detail[:180],link(r.url,"開く →"),r.status,r.fixed_id] for r in shown]
     requests.append(cells("確認",7,rows+[[""]*5 for _ in range(PAGE_SIZE-len(rows))],width=5))
+    monetary=[r.fixed_id for r in shown if r.title=="Amazon金銭" and r.fixed_id.startswith("AM-")]
+    if monetary:requests.append(dropdown("確認",81,1,monetary,strict=False))
     # Renderer never touches B61:B68 or J61, even when filters/page change.
     home_month=controls.get("home_month",current_month)
     home=summary.get("months",{}).get(home_month)

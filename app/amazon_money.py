@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import date
 import hashlib
 import json
+import re
 
 
 class MoneyError(RuntimeError):
@@ -52,6 +53,7 @@ class MoneyRecord:
         return digest([self.source,self.account,self.reference,self.day,self.amount,self.kind,self.payment])
 
     def validate(self):
+        if type(self.confirmed) is not bool:raise MoneyError("money_confirmation_invalid")
         if not self.source_id or not self.reference or not self.account:
             raise MoneyError("money_identity_missing")
         try:
@@ -101,36 +103,44 @@ def decide(record,book):
     def result(action,reason,ids=(),related=""):
         return MoneyDecision(record,action,reason,tuple(ids),related)
     old=book["records"].get(record.money_id)
+    resolution={}
     if old:
         if old["fingerprint"]!=record.fingerprint:raise MoneyError("money_identity_conflict")
         if old["state"] in {"posted","linked","transfer","supplement"}:
             return result("duplicate","already_recorded",old.get("expense_ids",()),old.get("related_id",""))
         if old["state"]=="pending":return result("resume","posting_pending",old["expense_ids"],old.get("related_id",""))
         if old["state"]!="review":raise MoneyError("money_state_invalid")
+        resolution=old.get("resolution",{})
+        if resolution and (resolution.get("fingerprint")!=record.fingerprint
+                or not re.fullmatch(r"REQ-[a-f0-9]{32}",resolution.get("request_id",""))):
+            raise MoneyError("money_resolution_binding_invalid")
+        if resolution.get("action")=="hold":return result("review",old["reason"])
     alias=book["aliases"].get(source_alias(record))
     if alias:
         if alias["fingerprint"]!=record.fingerprint:raise MoneyError("money_alias_conflict")
         return result("linked","verified_existing_identity",alias["expense_ids"],alias.get("related_id",""))
     if not record.confirmed:return result("review","confirmation_missing")
+    if resolution.get("action")=="transfer":return result("transfer","confirmed_own_balance_funding")
     if record.kind=="transfer":return result("transfer","own_balance_funding")
     if record.source=="amazon" and record.payment=="card":
         return result("supplement","card_issuer_is_authority")
     if record.payment in {"mixed","unknown"}:return result("review","payment_leg_unresolved")
     if record.source=="au_pay_card" and record.payment!="card":
         return result("review","authority_payment_mismatch")
-    if record.day<book["cutover_day"]:
+    separate=resolution.get("action")=="separate"
+    if record.day<book["cutover_day"] and not separate:
         return result("review","before_cutover_identity_required")
     if record.kind=="purchase":
-        if record.source=="au_pay_card" and any(v.get("kind")=="transfer" and v.get("amount")==record.amount
+        if not separate and record.source=="au_pay_card" and any(v.get("kind")=="transfer" and v.get("amount")==record.amount
             and abs((date.fromisoformat(v["day"])-date.fromisoformat(record.day)).days)<=7 for v in book["records"].values()):
             return result("review","balance_funding_identity_required")
         legacy=book["legacy"].get(record.order_id)
-        if legacy:
+        if legacy and not separate:
             # Same order/amount is not sufficient for linking a split charge.
             return result("review","legacy_payment_identity_required")
-        if not record.order_id and any(x["state"]=="open" for x in book["legacy"].values()):
+        if not separate and not record.order_id and any(x["state"]=="open" for x in book["legacy"].values()):
             return result("review","legacy_unsettled_purchase_possible")
-    related=record.related_id
+    related=resolution.get("related_id",record.related_id)
     if record.kind=="refund":
         if not related and record.order_id:
             matches=[k for k,v in book["records"].items() if v.get("order_id")==record.order_id
@@ -157,7 +167,7 @@ def decide(record,book):
         and not (record.source=="au_pay_card" and record.reference.rpartition(":")[2].isdigit()
                  and str(v.get("reference","")).rpartition(":")[2].isdigit()
                  and str(v.get("reference","")).rpartition(":")[0]==record.reference.rpartition(":")[0])]
-    if possible and record.reference.startswith("message:"):
+    if possible and record.reference.startswith("message:") and not separate:
         return result("review","possible_resend_requires_identity",related=related)
     details=record.items
     if not details or sum(i.amount for i in details)!=record.amount:
