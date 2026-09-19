@@ -97,15 +97,19 @@ def run_durable_source(store: DurableState, directory: Path,
 
 
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
-                   preview: bool = False, amazon_canary: bool = False) -> dict:
+                   preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
     unless all its prerequisites succeeded. A post-processing failure remains a
     failure even if another independent display refresh succeeds.
     """
+    if amazon_canary and receipts_only:
+        raise StateError('conflicting_source_scopes')
     outcomes = {}
     for source, dependencies in DEPENDENCIES.items():
+        if receipts_only and source != 'receipts':
+            continue
         if amazon_canary and source != "amazon":
             continue
         started = monotonic()
