@@ -14,7 +14,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .drive_run_state import DriveStateTransport, DurableState, StateBinding, StateError
-from .production_run import DEPENDENCIES, execute_serial, require_success, run_durable_source
+from .production_run import COUNT_KEYS, DEPENDENCIES, execute_serial, require_success, run_durable_source
 from .production_ledger import ProductionLedger
 
 
@@ -231,6 +231,10 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    if args.scope == "daily":
+        if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
+                or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
+            raise StateError("daily_scope_other_source_forbidden")
     if args.scope == "projection":
         if args.bank_apply or args.amazon_target or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
             raise StateError("projection_scope_other_source_forbidden")
@@ -262,7 +266,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily"), default="all")
     parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--receipt-store", default="")
@@ -277,6 +281,12 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope == "daily":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":raise StateError("daily_manual_scope_required")
+            from .daily_runtime import run_daily_requests
+            result=run_daily_requests(env,apply=args.mode=="apply")
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
         if args.scope == "projection":
             if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
                 raise StateError("projection_manual_scope_required")
@@ -311,6 +321,12 @@ def main():
         ledger_service = drive_service() if args.mode == "apply" else read_only_drive_service()
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
+        daily_counts={}
+        if args.scope == "all":
+            from .daily_runtime import run_daily_requests
+            # The fixed-ID inbox is replayable independently of the native
+            # accounting stages. Their ledger/checkpoint gates are unchanged.
+            daily_counts=run_daily_requests(env,apply=args.mode=="apply")
         with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
                                ledger=ledger, canary_target=args.amazon_target)
@@ -331,6 +347,8 @@ def main():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         report["mode"] = args.mode
+        if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
+            if key in COUNT_KEYS and type(value) is int and value>=0}
         report["scope"] = args.scope
         report["bank_mode"] = "not_run" if args.scope in {"amazon_canary", "receipts"} else "apply" if args.bank_apply else "preview"
     except Exception:

@@ -46,7 +46,7 @@ Drive保存前にfolderと対象JSONの共有主体が元台帳の既存主体�
 
 1. 基準値・保存済みID/月別/種別別集計・本人入力/未解決のprivate inventory。既存Actionsの時間/読み書き量、承認SHA、共通writer状態を再確認。
 2. 接続したcatalog/index/dirty月を本番用private folderで初期化し、全writer入口を最終点検する。旧Amazon専用manual workflow等は切替時に停止/削除するため、現段階の共通hookだけで全本番入口を保証したとはしない。通常の取込/カテゴリ修正から投影readbackまでの実データ受入を行う。
-3. 作成済みnative日常試作（6タブ/12,630セル/ownerのみ）を既存実行主体へ必要最小限で共有。固定ID修正の実装を本番stageへ接続し、既存受付を一本化する。coverageの経路/口座入力とカテゴリ操作を統合する。現状は表示writerのみopt-in接続、submitは未接続。入力保持/競合/結果不明復旧は合成検証済み。
+3. 作成済みnative日常試作（6タブ/12,630セル/ownerのみ）を既存実行主体へ必要最小限で共有。接続済みの固定ID修正stageを、実正本の保護・紐付けmarker・旧編集リンク移行後に有効化する。coverageの経路/口座入力とカテゴリ操作・金銭例外受付を統合する。input保持/競合/結果不明復旧は合成検証済み、本番modeは未設定。
 4. 実装済みの`CompactCategoryMigration`を、日常修正受付と台帳の自由編集保護の切替と同じ排他区間で実行。全参照監査→最新入力再照合→一括移行→内容/入力規則読戻し。catalog更新時の共通候補同期と過去反映年月候補の旧ホーム依存解消を接続する。正本値は変更しない。
 5. 接続済みのAmazon/card共通money modeへ、旧計上IDとの固定対応と最新差分manifestを渡して同時切替する。保存済み商品補足、確認中の金銭例外の固定ID本人判断を接続。旧専用workflow/注文同期・発送照合・手動注文照合を停止/削減し、イベントを退避する。現時点の本番は旧挙動のまま。新modeの基礎writerは31件の関連合成テスト済みだが、この項目全体の完了ではない。
 6. 新旧writer排他の下で最終backup/差分照合/移行を行う。隔離コピーで復元。既存CI・Linux・10万件の実transport計測・失敗復旧・入力保持を確認。
@@ -89,3 +89,13 @@ money modeはまだ未設定。初期化済みの移行bookなしでは起動を
 このadapter単独はwriter lockや本人入力の凍結を取得しない。Sheetsにcell CASはないので、切替工程が共通lock・本人入力の凍結・native backupを先に成立させる。日常の固定ID修正受付と正式台帳編集保護も同時に切替える。旧UI installer/restoreはversion 2を検出すると停止し、古い巨大matrixへ戻さない。復旧は隔離nativeコピーで確認してから行う。
 
 現行56候補なら4×57=228セル（旧1,001,000セル）になる。inactiveの旧分類はcatalog/正本に残し、新規選択肢からのみ除外する。合成検証では2候補で12セル、1,050選択入力/7,001行参照/途中入力変更/応答不明/replayを確認。実Googleの移行は0件。日常ファイルの候補は同じcatalogを用いる別ファイルの投影であり、IMPORTRANGEは使わない。カテゴリ追加/改名時のhelper同期と、過去反映の旧ホーム由来の年月候補は次工程で接続する。
+
+## 日常修正stage（2026-09-20、本番未有効化）
+
+`run_daily_requests`は`fixed-id-v1`設定時だけ既存親Actionsのall処理前に呼ばれる。別のnative source checkpointには追加せず、既存のcorrections intentを復旧単位にする。manual `scope=daily`は同じlock/main/承認SHA境界内で修正と派生表示だけを実行し、他経路入力・projection bootstrapを拒否、OCR準備も起動しない。projection scopeは従来どおり正本read-onlyでsubmitしない。
+
+sourceの変更月indexを回復→既存queued/pendingを最大20件回復→フォームの新要求を受理→変更前後の月を再生成→日常表示、の順で処理する。フォームには先に反映待ちを表示し、保存成功後にチェック解除・新token・結果/更新時刻を一括ackする。台帳応答不明、intent更新失敗、ack応答不明、表示更新失敗のいずれも保存済み要求と台帳を読戻し、同じ台帳更新を重ねない。保存済み要求をcheckbox解除だけで破棄しない。新しい本人入力は保持し、旧要求のack時に新規要求として勝手に送信しない。
+
+`daily_edit_cutover.cutover_requests`はcompact候補が移行済みのsourceだけを対象に、支出明細A:Mの全行（将来追記を含む）を既存実行SA用に保護し、アプリ所有の旧カテゴリ修正リンクを日常確認フォームへ置換、daily ID hashをsource metadataへ記録する。canonicalの値を変更せず、Drive共有やscopeを拡張しない。runtimeもfresh metadataでこれらの前提を毎回確認する。Googleでは所有者の保護変更能力を除去できないため、所有者による明示的な保護解除は別の管理操作になる。実migrationではwriter/本人入力排他・最新native backupの下で実行し、保護/リンク/markerを読戻してからmodeを有効化する。
+
+現時点のGoogle保護・marker・共有・modeの実変更は0。daily inbox単独の接続を、money例外やcoverageを含む全確認受付の完成とは扱わない。失敗した過去要求の一覧/解決操作も統合確認の次工程に含める。

@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from uuid import uuid4
 
-from .daily_corrections import DailyCorrections
+from .daily_corrections import DailyCorrections, INPUT_ERRORS
 from .daily_view import (SHEETS, OWNED_MARKER, STATE_LABELS, ReviewItem, cells, render_requests)
 from .monthly_projection import ProjectionError
 from .projection_refresh import load_catalog, load_month
@@ -119,22 +119,34 @@ class DailySheets:
         """Called only by apply, never by display refresh."""
         self.verify()
         values,token=self.form()
-        if values[7] is not True:return {"corrections_submitted":0}
-        expense_id=str(values[0]).split("｜",1)[0].strip()
-        changes={name:value for name,value in zip(["date","amount","category_label","merchant","item","note"],values[1:7]) if value!=""}
-        if "category_label" in changes:
-            label=changes.pop("category_label")
-            choices=[c for c in load_catalog(self.store.read("catalog")).categories if c.active and c.label==label]
-            if len(choices)!=1:raise ProjectionError("correction_category_invalid")
-            changes["category_id"]=choices[0].category_id
         inbox=DailyCorrections(self.store,source_db)
         old=inbox._requests()["requests"].get(token)
-        changed_submission=bool(old and (old["expense_id"]!=expense_id or old["changes"]!=changes))
-        if not changed_submission:inbox.prepare(token,expense_id,changes)
+        if values[7] is not True and not old:return {"corrections_submitted":0}
+        expense_id=str(values[0]).split("｜",1)[0].strip()
+        new_submission=old is None
+        form_digest=sha256(json.dumps(values[:7],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        changed_submission=bool(old and old.get("form_digest")!=form_digest)
+        if not old:
+            try:
+                changes={name:value for name,value in zip(["date","amount","category_label","merchant","item","note"],values[1:7]) if value!=""}
+                if "category_label" in changes:
+                    label=changes.pop("category_label")
+                    choices=[c for c in load_catalog(self.store.read("catalog")).categories if c.active and c.label==label]
+                    if len(choices)!=1:raise ProjectionError("correction_category_invalid")
+                    changes["category_id"]=choices[0].category_id
+                old=inbox.prepare(token,expense_id,changes,form_digest=form_digest)
+            except ProjectionError as error:
+                if str(error) not in INPUT_ERRORS:raise
+                old=inbox.reject(token,expense_id,str(error),form_digest=form_digest)
+        if old["state"] in {"queued","pending"}:
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,body={"requests":[
+                cells("確認",69,[[STATE_LABELS[old["state"]]],[old["updated_at"]]],left=1,width=1)
+            ]}).execute(num_retries=0)
         result=inbox.apply(token)
         # A new edit during processing keeps its text/checkbox/token intact.
-        if self.form()!=(values,token):return {"corrections_submitted":1,"correction_input_changed":1}
+        if self.form()!=(values,token):return {"corrections_submitted":int(new_submission),"correction_input_changed":1}
         state=STATE_LABELS[result["state"]]+("・変更した入力は未送信です" if changed_submission else "")
+        if result.get("error") in INPUT_ERRORS:state+="・"+INPUT_ERRORS[result["error"]]
         updates=[cells("確認",69,[[state],[result["updated_at"]]],left=1,width=1),
                  cells("確認",68,[[False]],left=1,width=1),
                  cells("確認",61,[["REQ-"+uuid4().hex]],left=9,width=1)]
@@ -142,7 +154,7 @@ class DailySheets:
         ack=self.read_ranges(["'確認'!B69:B70","'確認'!B68:B68","'確認'!J61:J61"])
         expected=[[[state],[result["updated_at"]]],[[False]],[[entered(updates[2]["updateCells"]["rows"][0]["values"][0])]]]
         if ack!=expected:raise ProjectionError("correction_ack_readback_failed")
-        return {"corrections_submitted":1,"corrections_applied":int(result["state"]=="applied"),
+        return {"corrections_submitted":int(new_submission),"corrections_applied":int(result["state"]=="applied"),
                 "corrections_failed":int(result["state"]=="failed")}
 
 

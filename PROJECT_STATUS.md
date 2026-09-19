@@ -22,6 +22,16 @@
 
 ## 1. Last verified
 
+### 2026-09-20 日常の固定ID修正を既存Actionsへ接続（本番未有効化）
+
+- 最新mainをfetchして`c8ef626`、先行`c094480`のLinux CI `35450033345`成功を確認。前工程は実装・検証・push済みのprogress。
+- `KAKEIBO_DAILY_CORRECTIONS_MODE=fixed-id-v1`を既存親Actionsへ接続。all実行の取込前に独立した固定ID修正を処理し、manual `scope=daily`でも修正→変更月集計→日常表示だけを実行できる。新しいschedulerは追加しない。projection表示専用scopeから修正submitを呼ばず、native取込stageのcheckpoint/pending再実行制限も変更しない。
+- 日常フォームと正本の紐付けmarker、compact候補、正本A:M全行の実行SA専用の保護を検証してから有効化。旧「カテゴリ対応」の台帳セル編集リンクを日常フォームへ置換し、保護とmarkerを一括設定する移行request builderも追加。通常表示から保護・共有を変更しない。Googleの仕様上、所有者による保護変更能力は残る。
+- 修正intentを先に保存し、反映待ち・反映済み・失敗と更新時刻を表示。日付/金額/カテゴリの入力不正は本文を残して理由を表示し、取込全体を恒久停止しない。処理中のフォーム変更、カテゴリ改名後の旧要求、checkbox解除後に残った結果不明の要求も、元の固定ID intentとして回復する。
+- 関連78件成功。実form adapter→台帳→旧/新月の再集計、同じ要求の再実行追加write0、台帳応答不明・待ち状態表示失敗・最終表示失敗からの復旧、未切替/保護不足の拒否、preview write0、入力保持を検証。既存runnerを動かさずdaily scopeだけ実行できることも合成テストで確認。
+- Windows全回帰2,119件成功（97.44秒）。保護rangeのGoogle既定0省略を正規化した後の関連14件も成功。compileall/diff-check成功。最新commitのLinux CIはpush後に確認する。
+- 実Google変更0、共有/本番mode設定0。日常ファイルは準備中のまま。実行主体共有、projection初期化、編集保護/旧入口置換の実移行、金銭例外/coverage入力、カテゴリ同期、旧Amazonの停止と固定対応manifest、非0本番canary/replay・隔離復元・SHA一致は残る。Goal継続中。
+
 ### 2026-09-19 共通カテゴリ候補への移行実装（実Google未適用）
 
 - 先行`82334ed`のLinux CI `35449106041`成功を確認。専用branchで実装を継続し、本番設定は変更していない。

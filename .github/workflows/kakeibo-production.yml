@@ -18,7 +18,7 @@ on:
       scope:
         description: All stages or isolated receipts, receipt review, or Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily]
         default: all
         required: true
       amazon_target:
@@ -78,6 +78,7 @@ jobs:
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
       KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
+      KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
       KAKEIBO_AMAZON_MONEY_MODE: ${{ vars.KAKEIBO_AMAZON_MONEY_MODE }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -139,7 +140,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ inputs.scope != 'projection' }}
+        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update

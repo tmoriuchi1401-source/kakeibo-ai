@@ -90,11 +90,12 @@ def test_submission_ack_preserves_input_and_repeated_poll_does_not_write():
     assert values[:7]==["a","",80,"","","",""] and values[7] is False
     assert token!=REQUEST and len(ledger.calls)==1
     assert daily.submit(ledger)=={"corrections_submitted":0}
-    assert len(grid.writes)==1
+    assert len(grid.writes)==2
 
 
 def test_unknown_ack_response_cannot_resubmit_accounting():
-    daily,grid,ledger,reader=daily_setup();grid.fail_after=True
+    daily,grid,ledger,reader=daily_setup()
+    grid.on_write=lambda:setattr(grid,"fail_after",len(grid.writes)==2)
     with pytest.raises(RuntimeError):daily.submit(ledger)
     assert daily.submit(ledger)=={"corrections_submitted":0}
     assert len(ledger.calls)==1
@@ -119,6 +120,36 @@ def test_daily_never_targets_the_canonical_workbook():
     grid=Grid()
     with pytest.raises(ProjectionError,match="daily_copy_required"):
         DailySheets(grid,grid.sid,None)
+
+
+@pytest.mark.parametrize("row,value,message", [(62,"wrong","日付"),(63,"wrong","整数"),(64,"不存在","カテゴリ")])
+def test_invalid_input_is_preserved_and_reported_without_stopping_later_runs(row,value,message):
+    daily,grid,ledger,reader=daily_setup()
+    grid.put(row,2,value)
+    result=daily.submit(ledger)
+    assert result["corrections_failed"]==1 and ledger.calls==[]
+    assert daily.form()[0][row-61]==value
+    assert message in grid.data[(SHEETS["確認"][0],68,1)]
+    assert daily.form()[0][7] is False
+    assert daily.submit(ledger)=={"corrections_submitted":0}
+
+
+def test_form_changes_after_catalog_rename_do_not_reinterpret_old_approval():
+    daily,grid,ledger,reader=daily_setup()
+    label=daily.store.data["catalog"]["categories"][0]
+    grid.put(64,2,label["major"]+"｜"+label["minor"])
+    original=ledger.update_expense_fields
+    def changed(position,patch):
+        original(position,patch)
+        daily.store.data["catalog"]["categories"][0]["minor"]="新しい名前"
+        grid.put(63,2,90)
+    ledger.update_expense_fields=changed
+    assert daily.submit(ledger)["correction_input_changed"]==1
+    # Old form label is no longer an active choice. The old request must still
+    # be acknowledged; no attempt to reinterpret its category is allowed.
+    daily.submit(ledger)
+    assert daily.form()[0][2]==90 and daily.form()[0][7] is False
+    assert len(ledger.calls)==1
 
 
 def test_all_period_reviews_are_bounded_and_medical_inputs_are_not_read():

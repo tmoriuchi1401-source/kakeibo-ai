@@ -16,6 +16,15 @@ from .projection_store import replace_document
 
 
 FIELDS={"date":1,"merchant":2,"item":3,"amount":4,"note":11}
+INPUT_ERRORS={"correction_fields_invalid":"変更内容を入力してください。",
+    "correction_category_invalid":"カテゴリを候補から選び直してください。",
+    "correction_text_invalid":"文字数・入力形式を確認してください。",
+    "invalid_ledger_date":"日付を確認してください。","invalid_ledger_amount":"金額を整数で入力してください。",
+    "correction_expense_not_found":"対象の支出IDが見つかりません。",
+    "correction_identity_changed":"対象の支出を選び直してください。",
+    "correction_expense_inactive":"この支出は修正対象外です。",
+    "latest_values_changed":"元の値が変わりました。内容を確認して再送信してください。",
+    "category_changed":"カテゴリが変わりました。選び直してください。"}
 
 
 def stamp():
@@ -44,7 +53,7 @@ class DailyCorrections:
         if row[12] not in ("","active"):raise ProjectionError("correction_expense_inactive")
         return number,row[:13]
 
-    def prepare(self, request_id, expense_id, changes):
+    def prepare(self, request_id, expense_id, changes,*,form_digest=None):
         if not re.fullmatch(r"REQ-[a-f0-9]{32}",request_id):
             raise ProjectionError("correction_request_id_invalid")
         if not expense_id or not changes or not set(changes)<=set(FIELDS)|{"category_id"}:
@@ -79,6 +88,20 @@ class DailyCorrections:
         item={"expense_id":expense_id,"changes":deepcopy(changes),"before":fingerprint(row),
               "after":fingerprint(after),"cells":[[c,after[c]] for c in sorted(set(fields))],
               "category_pair":category_pair,"state":"queued","created_at":now,"updated_at":now,"error":""}
+        if form_digest is not None:item["form_digest"]=form_digest
+        inbox["requests"][request_id]=item
+        replace_document(self.store,"corrections",before,inbox)
+        return deepcopy(item)
+
+    def reject(self,request_id,expense_id,error,*,form_digest):
+        if error not in INPUT_ERRORS or not re.fullmatch(r"REQ-[a-f0-9]{32}",request_id):
+            raise ProjectionError("correction_rejection_invalid")
+        before=self.store.read("corrections")
+        inbox=self._requests()
+        if request_id in inbox["requests"]:raise ProjectionError("correction_request_reused")
+        now=stamp()
+        item={"expense_id":expense_id[:200],"changes":{},"state":"failed","error":error,
+              "created_at":now,"updated_at":now,"form_digest":form_digest}
         inbox["requests"][request_id]=item
         replace_document(self.store,"corrections",before,inbox)
         return deepcopy(item)
@@ -129,10 +152,12 @@ class DailyCorrections:
         replace_document(self.store,"corrections",before,after)
         return item
 
-    def apply_pending(self):
+    def apply_pending(self,*,limit=20):
+        if type(limit) is not int or not 1<=limit<=100:raise ProjectionError("correction_limit_invalid")
         result={"corrections_applied":0,"corrections_failed":0}
         for key,item in self._requests()["requests"].items():
             if item["state"] not in {"queued","pending"}:continue
+            if sum(result.values())>=limit:break
             outcome=self.apply(key)
             result["corrections_applied" if outcome["state"]=="applied" else "corrections_failed"]+=1
         return result

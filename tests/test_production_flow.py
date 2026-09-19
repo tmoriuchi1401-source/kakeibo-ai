@@ -102,3 +102,26 @@ def test_bootstrap_cannot_share_a_scope_with_accounting(mode,scope,bank,target):
     with pytest.raises(StateError):
         flow.validate_scope(SimpleNamespace(mode=mode,scope=scope,bank_apply=bank,amazon_target=target,
                                            projection_bootstrap=True,receipt_store="",receipt_manifest=""))
+
+
+@pytest.mark.parametrize("flag,value",[("bank_apply",True),("amazon_target","target"),
+    ("receipt_manifest","a"*64),("receipt_store","private"),("projection_bootstrap",True)])
+def test_daily_scope_rejects_other_source_inputs(flag,value):
+    args=dict(scope="daily",mode="apply",bank_apply=False,amazon_target="",receipt_manifest="",receipt_store="",projection_bootstrap=False)
+    args[flag]=value
+    with pytest.raises(StateError,match="daily_scope_other_source_forbidden"):
+        flow.validate_scope(SimpleNamespace(**args))
+
+
+def test_isolated_daily_scope_runs_only_the_fixed_id_inbox(monkeypatch,capsys):
+    import json
+    seen=[]
+    monkeypatch.setattr(flow.sys,"argv",["production_flow","--scope","daily","--mode","apply"])
+    for key,value in dict(valid_env(),GITHUB_EVENT_NAME="workflow_dispatch").items():monkeypatch.setenv(key,value)
+    monkeypatch.setattr(flow.subprocess,"check_output",lambda *args,**kw:"a"*40)
+    monkeypatch.setattr("app.private_state_bindings.decode_environment",lambda env,**kw:(env,""))
+    monkeypatch.setattr("app.daily_runtime.run_daily_requests",lambda env,apply:seen.append(apply) or {"corrections_applied":1})
+    monkeypatch.setattr(flow,"assemble",lambda *args,**kw:pytest.fail("isolated daily cannot run intake"))
+    flow.main()
+    assert seen==[True]
+    assert json.loads(capsys.readouterr().out)=={"success":True,"scope":"daily","counts":{"corrections_applied":1}}
