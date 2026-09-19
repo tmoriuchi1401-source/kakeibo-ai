@@ -22,6 +22,16 @@
 
 ## 1. Last verified
 
+### 2026-09-20 実Google隔離コピーでカテゴリ移行・復元を確認（本番変更なし）
+
+- 前工程は実対応manifest準備・旧確認引継ぎの実装とCI成功までのprogress。検証コードは`4f3c8d8`、Linux CI `35458142501`全3job成功を再確認し、mainを再fetchした。
+- 変更前native backupから所有者だけの隔離コピーを作成。31タブ・2,273,539セルを保持し、全参照を116有限範囲で監査した。医療/給与は数式・入力規則だけでscalar値を取得せず、既知のhelper参照6,245箇所だけと確認。候補表と変更対象入力/規則をprivate退避して13 native requestsを一括適用。
+- 実Googleでhelper 1,001,000→228セル、全体2,273,539→1,272,767セルを確認。56カテゴリ、本人入力/固定ID/承認snapshotを保持し、移行後169規則とhelper値を読戻し一致。支出553行・取込1,976行は移行前後の全値が一致した。これは旧backup時点の件数で、現行正本の554/1,979と混同しない。
+- 同じ隔離コピーへ56 native requestsで復元。helper全39分割のuserEnteredValue/dataValidation/userEnteredFormat、支出F:Gの6,077規則、要確認L:Mの5,706規則、カテゴリ操作A:L全入力/規則、31タブmetadata（検証済みラベルへの改名前）が退避内容と完全一致。支出/取込の全値も再一致し、helper/全体セル数は元へ戻った。private退避・復元payload・比較証拠はGit対象外に保存。
+- Google desktopで移行後/復元後のカテゴリ操作を確認。既存の狭いC列では結合カテゴリが折り返されるため、日常入口統合時の表示調整を残す。本番やスマホの最終画面確認ではない。
+- この工程の実Google mutationは隔離コピー作成1・検証ラベル変更2・移行batch1・復元batch1の計5、すべて隔離対象。本番/原backup/共有/mode変更0。コード変更なしのため全回帰は繰り返さず、先行Windows2,307件とLinux成功に加えて上記実Google readbackを検証結果とする。
+- [隔離復元確認済みコピー](https://docs.google.com/spreadsheets/d/1xmYR3xib-xsAtTrg7x40XoqLQdm0V2BrLOFuCo58vV8/edit)。これはカテゴリ移行の復元証拠であり、今後の全本番切替・新money記帳・projection/private intent復元の完了証拠ではない。日常入口/カテゴリ管理、商品補足、実初期化/切替・非0canary/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 実Amazon対応プレビューと旧照合例外の引継ぎ準備（本番未適用）
 
 - mainを再fetchして`c8ef626`、先行`8f09786`のLinux CI `35457488439`全3job成功を確認。前工程は対応表/初期化APIの実装・push・CIまでのprogress。

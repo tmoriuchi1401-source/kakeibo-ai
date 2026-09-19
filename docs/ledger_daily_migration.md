@@ -189,3 +189,13 @@ compact移行後の過去反映の年月候補は、保存済みsummaryの全記
 旧`matched_amazon`には注文候補への照合だけで正式支出の対応を証明できない取込があった。実121件（CSV30・メール91、うち10件の旧targetも正式支出IDには存在しない）を、固定MN ID・取込ID・fingerprint・台帳参照の移行通知としてmanifestへ保持する。金銭額やGmailのRFC IDを推定せず、元の取込状態も変更しない。初期化は既存`money-notices`へ通知を保存/readbackした後にmoney bookを作る。日常の共通確認受付で保留・確認済みを扱い、再初期化で本人判断を消さない。通知確認からの自動記帳は行わない。
 
 実book/通知のDrive初期化、Google入力フォームの更新、writer切替は未実施。古い照合状態から自動計上へ昇格させず、正式支出との同一性が未確認の例外を日常画面へ残すための準備である。
+
+## 実Googleのカテゴリ移行・隔離復元（2026-09-20）
+
+変更前native backupを別の所有者限定ファイルへコピーし、既存writerに登録しない隔離環境で`4f3c8d8`の`migration_plan`を適用した。metadataと全116範囲の数式/入力規則監査、カテゴリマスタ、本人入力を読み、6,245参照が既知の範囲だけであることを確認。医療/給与のscalar値は取得していない。コピー上のhelperは1,001,000→228セル、全体は2,273,539→1,272,767セルとなり、移行後169規則・候補値・本人入力の保持を読戻しで確認した。
+
+復元は同じ隔離ファイルIDへ行った。拡張する旧helper寸法を先に戻し、退避したuserEnteredValue/dataValidation/userEnteredFormatを戻す。カテゴリ操作C:Fの値/規則、支出F:Gと要確認L:Mの規則、helperの旧version markerを同じnative batchで戻す。正本の支出・取込値を更新するrequestは含めない。隔離検証では56 requestsが完了し、helper39範囲の全native fields、支出6,077規則・要確認5,706規則、カテゴリ操作全入力、metadataが元と一致した。支出553行・取込1,976行の全値は移行後と復元後の両方で一致した。
+
+退避payloadと比較結果は`.private/isolated-category-*.json`に保存し、Gitに含めない。実本番rollbackでも、writer排他・最新の対象限定退避を前提に、同じ範囲/fieldだけを戻す必要がある。今回の復元payloadはこの旧backup由来の隔離コピー専用であり、現行正本へそのまま適用しない。隔離コピーは[復元確認済み](https://docs.google.com/spreadsheets/d/1xmYR3xib-xsAtTrg7x40XoqLQdm0V2BrLOFuCo58vV8/edit)として非公開で保持した。
+
+Google desktopでカテゴリ操作の移行後/復元後を視覚確認。旧C列は結合カテゴリに対して狭く折り返すため、日常受付への統合時に調整する。これは本番切替後やスマホ実機の確認ではない。今回のGoogle mutationは隔離コピー1件、ラベル変更2回、移行/復元batch各1回。本番台帳・原backup・共有・フラグは変更0。金銭book/未完了intentの復元、新金銭の本番canaryと切替は別途検証する。
