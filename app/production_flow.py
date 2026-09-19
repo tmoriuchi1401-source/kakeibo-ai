@@ -80,6 +80,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             scan['written']=final['written']
             scan['medical_pending']=final['medical_pending']
             scan['medical_auto_written']=final.get('medical_auto_written',0)
+            for name in ('review_pending','normal_review_pending','medical_review_pending','intake_review_pending'):
+                if name in final:scan[name]=final[name]
             return scan
     if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
         raise StateError('receipt_confirmation_binding_required')
@@ -96,7 +98,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
             result['medical_detected']=scan['medical_detected']
             result['confirmed_written']=scan['written']
-            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held','medical_auto_written'):
+            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held','medical_auto_written',
+                         'review_pending','normal_review_pending','medical_review_pending','intake_review_pending'):
                 if name in scan:result[name]=scan[name]
             return result
     # Child stdout/stderr can contain legacy filenames, totals and API errors.

@@ -49,7 +49,7 @@ def in_scope(source, value, policy):
 
 def owner_blocked(source,value):
     # A metadata/version change must not erase an owner's hold on this file.
-    return any(x['kind']=='medical' and x['source']['source_id']==source['source_id']
+    return any(x['kind'] in {'medical','intake'} and x['source']['source_id']==source['source_id']
         and (any(x['inputs']) or x.get('require_reconfirm') or x['status']=='closed_user')
         for x in value['confirmation_items'].values())
 
