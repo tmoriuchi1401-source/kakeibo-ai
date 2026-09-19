@@ -62,6 +62,7 @@ COUNT_KEYS = frozenset({
     "income_created", "deposit_imports_created", "planned_income_writes", "planned_deposit_imports",
     "income_existing", "planned_deposit_reviews", "deposit_reviews_saved", "income_review_pending", "bounded_rows",
     "medical_ai_requests", "medical_ai_reused", "medical_ai_candidates", "medical_ai_held",
+    "review_pending", "normal_review_pending", "medical_review_pending", "intake_review_pending",
 })
 
 

@@ -37,10 +37,11 @@ class DB:
     def update_row_raw(self,title,n,row):self.rows[title][n-2]=deepcopy(row);self.writes+=1
     def set_raw_range(self,rng,values):
         pos=re.search(r'!([A-Z]+)(\d+)',rng);col=ord(pos[1])-65;n=int(pos[2])-2
-        while len(self.rows[TITLE])<=n:self.rows[TITLE].append([])
-        row=self.rows[TITLE][n]
-        row.extend(['']*max(0,16-len(row)))
-        row[col:col+len(values[0])]=values[0]
+        for offset,value in enumerate(values):
+            while len(self.rows[TITLE])<=n+offset:self.rows[TITLE].append([])
+            row=self.rows[TITLE][n+offset]
+            row.extend(['']*max(0,16-len(row)))
+            row[col:col+len(value)]=value
 
 
 def medical():
@@ -337,17 +338,19 @@ def test_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(mon
     monkeypatch.setattr(runtime,'ReimportStore',lambda *a:store)
     monkeypatch.setattr('app.sheets.SheetsDB',lambda *a,**k:db)
     monkeypatch.setattr(runtime,'configure_ui',lambda db:None)
+    monkeypatch.setattr(runtime,'sync_review_visibility',lambda review:None)
     gate=Mock(side_effect=lambda payload,*a,**kw:SimpleNamespace(classification='sensitive_unknown' if payload==b'unknown' else payload.decode(),gemini_allowed=payload==b'normal'))
     monkeypatch.setattr(runtime,'evaluate_receipt_privacy',gate)
     env={'RECEIPT_CONFIRMATION_BINDING':json.dumps({'file':'cipher','manifest':'synthetic'}),'KAKEIBO_STATE_FOLDER_ID':'synthetic-folder','RECEIPT_SCAN_PLAN':str(tmp_path/'plan.json')}
     result=runtime.execute(env,True)
     assert result['medical_detected']==result['medical_pending']==result['blocked']==1
-    assert len(db.rows[TITLE])==1 and db.rows[TITLE][0][7:15]==['']*8
+    assert len(db.rows[TITLE])==2 and all(row[7:15]==['']*8 for row in db.rows[TITLE])
+    assert result['review_pending']==2 and result['intake_review_pending']==1
     plan=json.loads((tmp_path/'plan.json').read_text())
     assert [s['source_id'] for s in plan['sources']]==['normal']
     assert list(tmp_path.glob('*.bin'))[0].read_bytes()==b'normal'
     runtime.execute(env,True)
-    assert len(db.rows[TITLE])==1 and not db.rows['支出明細']
+    assert len(db.rows[TITLE])==2 and not db.rows['支出明細']
 
 
 def test_medical_runtime_rejects_any_ai_key_before_google_calls():

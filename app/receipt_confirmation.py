@@ -43,7 +43,7 @@ class ReceiptConfirmation:
     def __init__(self, store, db, verify_source):
         self.store,self.db,self.verify_source=store,db,verify_source
         for key,item in self.items.items():
-            if (item.get('kind') not in {'normal','medical'} or key!=review_id(item['kind'],item['source'])
+            if (item.get('kind') not in {'normal','medical','intake'} or key!=review_id(item['kind'],item['source'])
                     or item.get('status') not in {'waiting','pending','applied','closed_machine','closed_user','superseded'}
                     or len(item.get('inputs',[]))!=8):
                 raise StateError('confirmation_store_invalid')
@@ -90,6 +90,67 @@ class ReceiptConfirmation:
             reason='原本の支払日・発行施設・本人の実支払額を入力。候補は未確定',inputs=['']*8))
         return True
 
+    def resolve_general_without_writes(self):
+        """Close redundant questions only; never change receipt/import/expense rows."""
+        from .receipt_review_policy import manual_expense_already_recorded
+        tables=self.tables();categories=self.db.categories();closed=0
+        for key,old in list(self.items.items()):
+            if old['kind']!='normal' or old['status']!='waiting' or any(old['inputs']):continue
+            if old.get('error') or old.get('require_reconfirm'):continue
+            try:self.verify_source(old['source'],old['folder_id'])
+            except StateError as error:
+                if str(error)!='confirmation_source_changed':raise
+                continue  # Changed originals keep their question; never close from stale evidence.
+            live=self.ui_rows().get(key)
+            if live and (any(live[1][7:15]) or live[1][:2]+live[1][3:7]!=old.get('presentation')):continue
+            sid=old['source']['source_id'];parsed=self._parsed(old)
+            if manual_expense_already_recorded(sid,parsed,**tables,categories=categories):
+                reason='既存の本人判断による手動計上を維持。候補明細は追加しません。'
+            elif digest(target_snapshot(tables,sid))==digest(old['before']) and accounting_equal_keeping_labels(sid,parsed,**tables,categories=categories):
+                reason='同一原本・日付・金額・明細・分類が一致。店舗表記と商品名の空白差は既存値を維持。'
+            else:continue
+            # Re-read before closing in case the owner began typing during reads.
+            latest=self.ui_rows().get(key)
+            if latest!=live:continue
+            item=deepcopy(old);item.update(status='closed_machine',reason=reason)
+            self.save_item(key,item);closed+=1
+        return closed
+
+    def observe_intake_hold(self,source,folder_id,gate):
+        """Record only safe gate metadata; no OCR text, AI candidate or write authority."""
+        key=review_id('intake',source)
+        if key in self.items:return False
+        for old_key,old in list(self.items.items()):
+            if old['kind']=='intake' and old['source']['source_id']==source['source_id'] and old['status']=='waiting':
+                item=deepcopy(old);item.update(status='superseded',reason='原本の版が変更。新しい受付行を確認。')
+                self.save_item(old_key,item)
+        self.save_item(key,dict(kind='intake',source=source,folder_id=folder_id,status='waiting',
+            reason='種類を判定できずAI未送信。原本を見て、本人メモに「一般の買物／医療／対象外」のいずれかを記入。読めない画像だけ再撮影。',
+            gate={'classification':gate.classification,'reason':getattr(gate,'reason_code','insufficient_evidence'),
+                  'extraction':getattr(gate,'extraction_status','unknown')},inputs=['']*8))
+        return True
+
+    def finish_intake_scan(self,blocked_sources):
+        for key,old in list(self.items.items()):
+            if old['kind']=='intake' and old['status']=='waiting' and old['source']['source_id'] not in blocked_sources:
+                if any(old['inputs']):continue
+                item=deepcopy(old);item.update(status='closed_machine',reason='受付保留の対象外になりました。原本・記帳は変更していません。')
+                self.save_item(key,item)
+
+    def needs_attention(self,key):
+        item=self.items[key]
+        if item['status'] in {'waiting','pending'}:return True
+        if item['status']=='superseded':
+            # Keep an unresolved changed-source warning until a successor exists.
+            return not any(k!=key and x['kind']==item['kind'] and x['source']['source_id']==item['source']['source_id']
+                           and x['status']!='superseded' for k,x in self.items.items())
+        return False
+
+    def review_counts(self):
+        active=[x for k,x in self.items.items() if self.needs_attention(k)]
+        return {'review_pending':len(active),
+                **{kind+'_review_pending':sum(x['kind']==kind for x in active) for kind in ('normal','medical','intake')}}
+
     def ui_rows(self):
         if TITLE not in self.db.sheet_titles():return {}
         if self.db.get(f"'{TITLE}'!1:1") != [HEADERS]:
@@ -103,19 +164,23 @@ class ReceiptConfirmation:
         return rows
 
     def _write_new_ui_row(self, row):
+        self._write_new_ui_rows([row])
+
+    def _write_new_ui_rows(self, rows):
+        if not rows:return
         # values.append can infer a table above/beside the intended data and
         # INSERT_ROWS can displace the header. Keep every existing row in place.
         self.ui_rows()
         occupied=self.db.get(f"'{TITLE}'!A2:P")
         n=len(occupied)+2
-        target=f"'{TITLE}'!A{n}:P{n}"
+        target=f"'{TITLE}'!A{n}:P{n+len(rows)-1}"
         if any(cell != '' for cells in self.db.get(target) for cell in cells):
             raise StateError('confirmation_new_row_occupied')
         def matches():
             actual=self.db.get(target)
-            return len(actual)==1 and actual[0]+['']*max(0,16-len(actual[0]))==row
+            return len(actual)==len(rows) and [r+['']*max(0,16-len(r)) for r in actual]==rows
         try:
-            self.db.set_raw_range(target,[row])
+            self.db.set_raw_range(target,rows)
         except Exception:
             # A lost response is not permission to repeat the write.
             if not matches():
@@ -237,6 +302,11 @@ class ReceiptConfirmation:
                 item=deepcopy(old);item['status']='applied';self.save_item(key,item);continue
             if old['status']!='waiting':continue
             action=str(old['inputs'][5]);item=deepcopy(old)
+            if old['kind']=='intake':
+                if action not in {'','保留'}:
+                    item['error']='受付保留の行では計上しません。判断は保留に戻し、本人メモに原本の種類を記入してください。'
+                    self.save_item(key,item)
+                continue
             if item.get('require_reconfirm'):continue
             if action in {'','保留'}:continue
             try:
@@ -314,34 +384,46 @@ class ReceiptConfirmation:
             raise StateError('confirmation_sheet_header_mismatch')
         self.db.ensure_sheet(TITLE,HEADERS)
         existing=self.ui_rows()
+        tables=self.tables();categories=self.db.categories()
+        new_rows=[]
         # INSERT_ROWS may shift displayed rows. Finish every positional update
         # before appending so captured row numbers cannot target a new identity.
         for key,item in sorted(self.items.items(),key=lambda pair:pair[0] not in existing):
             if item['status']=='closed_machine' and key not in existing:continue
             medical=item['kind']=='medical'
-            if medical:
+            if item['kind']=='intake':
+                prior='未記帳（この受付から会計行は追加しません）'
+                candidate='AI未送信・候補なし。種類の回答だけではAI送信・計上しません。医療は専用確認、対象外は受信フォルダ外で保管。患者名・病名・診療内容は入力不要。'
+            elif medical:
                 prior='本人未確定（入力値はH:O）'
                 values=item.get('medical_candidates',{})
                 if values:
                     candidate='【未確定候補】\n日付（非AI）: '+str(values.get('date') or '不足')+'\n施設（非AI）: '+str(values.get('issuer') or '不足')+'\n実支払額（画像AI）: '+str(values.get('amount_yen') or '不足')+'\nカテゴリ候補: '+str(values.get('category') or '不足')+'\n'+str(values.get('review_message',''))
                 else:candidate='候補なし。患者名・病名・診療内容は入力不要'
             else:
-                r=self.store.value['records'][item['source']['source_id']];a=r['parsed'];h=item['before']['receipt_rows'][0]
-                prior=f'{h[1]} / {h[2]} / {h[3]} / {h[4]}\n'+ '\n'.join(f'{x[3]}: {x[4]} ({x[5]}｜{x[6]})' for x in item['before']['expense_rows'])
+                r=self.store.value['records'][item['source']['source_id']];a=r['parsed']
+                current=target_snapshot(tables,item['source']['source_id'])
+                h=current['receipt_rows'][0] if current['receipt_rows'] else item['before']['receipt_rows'][0]
+                prior=f'{h[1]} / {h[2]} / {h[3]} / {h[4]}\n'+ '\n'.join(f'{x[3]}: {x[4]} ({x[5]}｜{x[6]})' for x in current['expense_rows'])
                 candidate=f'{a["date"]} / {a["merchant"]} / {a["total"]} / {a["payment_method"]}\n'+'\n'.join(f'{x["name"]}: {x["amount"]} ({x["major_category"]}｜{x["minor_category"]})' for x in a['items'])
             state={'waiting':'未確認','pending':'確定待ち','applied':'反映済み','closed_user':'変更不要（本人判断）','closed_machine':'変更不要（機械判断）','superseded':'原本変更・再確認'}[item['status']]
             if item['status']=='waiting' and any(item.get('inputs',[])):state='入力中' if not item['inputs'][5] else '確定待ち'
             if item.get('error'):state='要再確認'
             if item['status']=='applied' and item.get('decision_origin')=='automatic':state='自動反映済み'
             reason=item['reason']
+            if item['kind']=='normal' and item['status']=='waiting':
+                from .receipt_review_policy import general_review_guidance
+                reason=general_review_guidance(item['source']['source_id'],self._parsed(item),**tables,categories=categories)
+            if item['status']=='superseded' and not self.needs_attention(key):reason='同じ原本の新しい確認行あり。この旧行への追加判断は不要。'
             if item.get('automatic_hold') and item['status']=='waiting':
                 from .medical_auto_posting import HOLD_TEXT
                 reason='自動保留: '+HOLD_TEXT.get(item['automatic_hold'],'安全な匿名化・記帳条件を確認できません。本人確認は任意です。')
+                reason+=' 原本を確認し、候補が正しければ「候補で医療費を確定」。不足・誤りだけH:Kへ入力。判断できなければ保留。'
             if state=='自動反映済み':
                 reason='機械検証・反映内容の読戻し済み。本人の操作は不要です。'
                 prior='自動検証済み（本人入力H:Oは保持）'
                 candidate=candidate.replace('【未確定候補】','【自動反映内容】',1)
-            managed=[key,'医療' if medical else '一般',state,'https://drive.google.com/file/d/'+item['source']['source_id']+'/view',reason,prior,candidate]
+            managed=[key,'医療' if medical else '受付保留' if item['kind']=='intake' else '一般',state,'https://drive.google.com/file/d/'+item['source']['source_id']+'/view',reason,prior,candidate]
             presentation=managed[:2]+managed[3:7]
             if item.get('presentation')!=presentation:
                 item=deepcopy(item);item['presentation']=presentation;self.save_item(key,item)
@@ -352,5 +434,6 @@ class ReceiptConfirmation:
                 result=item.get('error','') or ('確認内容を読戻し済み' if item['status']=='applied' else '')
                 if row[15]!=result:self.db.set_raw_range(f"'{TITLE}'!P{n}",[[result]])
             else:
-                self._write_new_ui_row(managed+item.get('inputs',['']*8)+[item.get('error','')])
+                new_rows.append(managed+item.get('inputs',['']*8)+[item.get('error','')])
+        self._write_new_ui_rows(new_rows)
         return len(self.ui_rows())

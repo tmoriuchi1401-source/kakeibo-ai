@@ -16,10 +16,10 @@ from .utils import canonical_hash
 
 def accounting_equal_keeping_labels(source_id: str, parsed: ReceiptResult, *,
                                    receipt_rows, import_rows, expense_rows, review_rows, categories) -> bool:
-    """Close only merchant-label differences for an already identity-bound original.
+    """Keep merchant labels and insignificant product spacing on a fixed original.
 
     The caller must separately verify the manifest's source ID/version/hash.
-    Do not normalize products, categories, money, payment methods or links.
+    Product letters/numbers, categories, money, payment methods and links must agree.
     """
     from copy import deepcopy
     tables = deepcopy(dict(receipt_rows=receipt_rows, import_rows=import_rows,
@@ -30,7 +30,11 @@ def accounting_equal_keeping_labels(source_id: str, parsed: ReceiptResult, *,
     for r in tables["import_rows"]:
         if len(r)>5 and r[0]==iid: r[5]=parsed.merchant
     for r in tables["expense_rows"]:
-        if len(r)>10 and r[9]==rid and r[10]==iid: r[2]=parsed.merchant
+        if len(r)>10 and r[9]==rid and r[10]==iid:
+            r[2]=parsed.merchant
+            for index,item in enumerate(parsed.items,1):
+                if r[0]==f'{rid}-{index:02d}' and ''.join(str(r[3]).split())==''.join(item.name.split()):
+                    r[3]=item.name
     comparison=compare_receipt(source_id,parsed,**tables,categories=categories)
     return set(comparison.reasons)<= {"linked_payment_requires_review"}
 
