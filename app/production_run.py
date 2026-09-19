@@ -14,6 +14,18 @@ from uuid import uuid4
 from .drive_run_state import DurableState, StateError
 
 
+SAFE_SOURCE_ERRORS = frozenset({
+    'confirmation_sheet_header_mismatch', 'confirmation_unknown_ui_identity',
+    'confirmation_duplicate_ui_identity', 'confirmation_missing_ui_identity',
+    'confirmation_new_row_occupied', 'confirmation_new_row_write_unknown',
+    'confirmation_new_row_readback_mismatch', 'source_reconciliation_required',
+})
+
+
+def safe_source_error(error):
+    return str(error) if isinstance(error, StateError) and str(error) in SAFE_SOURCE_ERRORS else 'source_execution_failed'
+
+
 # These are data dependencies, not simply a list of workflows to concatenate.
 # Card classification needs the latest Amazon orders; final posting waits for
 # all import outcomes, including bank preview, before making global decisions.
@@ -101,10 +113,10 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 outcome.update(status="success", error="", counts=counts)
                 if not preview:
                     outcome["last_success"] = datetime.now(timezone.utc).isoformat()
-            except Exception:
+            except Exception as error:
                 # Exception text may contain a document name, account ID or API
                 # response. The safe parent summary deliberately never includes it.
-                outcome.update(status="failed", error="source_execution_failed")
+                outcome.update(status="failed", error=safe_source_error(error))
         outcome["duration_seconds"] = round(monotonic() - started, 3)
         outcomes[source] = outcome
     return {"schema": 1, "success": all(item["status"] == "success" for item in outcomes.values()),

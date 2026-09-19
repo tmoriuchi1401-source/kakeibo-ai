@@ -26,6 +26,8 @@ class DB:
     def get(self,rng):
         title=rng.split('!')[0].strip("'")
         if rng.endswith('1:1'):return [self.headers[title]]
+        bounded=re.search(r'!A(\d+):P(\d+)$',rng)
+        if bounded:return deepcopy(self.rows.get(title,[])[int(bounded[1])-2:int(bounded[2])-1])
         return deepcopy(self.rows.get(title,[]))
     def ensure_sheet(self,title,headers):self.rows.setdefault(title,[]);self.headers[title]=headers
     def append_raw(self,title,rows):
@@ -35,6 +37,7 @@ class DB:
     def update_row_raw(self,title,n,row):self.rows[title][n-2]=deepcopy(row);self.writes+=1
     def set_raw_range(self,rng,values):
         pos=re.search(r'!([A-Z]+)(\d+)',rng);col=ord(pos[1])-65;n=int(pos[2])-2
+        while len(self.rows[TITLE])<=n:self.rows[TITLE].append([])
         row=self.rows[TITLE][n]
         row.extend(['']*max(0,16-len(row)))
         row[col:col+len(values[0])]=values[0]
@@ -76,10 +79,7 @@ def test_render_updates_existing_rows_before_append_can_shift_their_positions():
     # Serialized key order can put a new row before an already displayed row.
     items=store.value['confirmation_items']
     store.value['confirmation_items']={new_key:items[new_key],old_key:items[old_key]}
-    def insert_before_old(title,rows):
-        assert title==TITLE
-        db.rows[title][0:0]=deepcopy(rows)
-    db.append_raw=insert_before_old
+    db.append_raw=Mock(side_effect=AssertionError('UI must not use table-inferred append'))
     service.render()
     displayed={r[0]:r for r in db.rows[TITLE]}
     assert set(displayed)=={old_key,new_key}
@@ -88,6 +88,61 @@ def test_render_updates_existing_rows_before_append_can_shift_their_positions():
     assert displayed[new_key][2]=='未確認' and displayed[new_key][7:15]==['']*8
     service.render()
     assert len(db.rows[TITLE])==2 and not db.rows['支出明細']
+    db.append_raw.assert_not_called()
+    assert db.headers[TITLE]==HEADERS
+    assert db.rows[TITLE][0][0]==old_key and db.rows[TITLE][1][0]==new_key
+
+
+def test_displaced_header_stops_before_capturing_or_overwriting_user_inputs():
+    service,store,db,verify,source=medical()
+    first=deepcopy(db.rows[TITLE][0]);db.headers[TITLE]=first;db.rows[TITLE][0]=HEADERS
+    before=deepcopy(store.value)
+    with pytest.raises(StateError,match='confirmation_sheet_header_mismatch'):
+        service.capture_inputs()
+    with pytest.raises(StateError,match='confirmation_sheet_header_mismatch'):
+        service.render()
+    assert store.value==before and db.headers[TITLE]==first and db.rows[TITLE][0]==HEADERS
+
+
+def test_new_ui_row_preserves_anonymous_owner_input_and_ambiguous_write():
+    service,store,db,verify,source=medical()
+    db.rows[TITLE].append(['']*14+['Owner note'])
+    service.observe_medical(dict(source,version='2'),'synthetic-folder')
+    with pytest.raises(StateError,match='confirmation_missing_ui_identity'):service.render()
+    assert db.rows[TITLE][-1][14]=='Owner note'
+    db.rows[TITLE].pop()
+    original=db.set_raw_range;calls=[]
+    def lost_response(rng,values):
+        calls.append(rng);original(rng,values)
+        if rng.endswith('A3:P3'):raise OSError('private response text')
+    db.set_raw_range=lost_response
+    service.render()
+    assert calls.count(f"'{TITLE}'!A3:P3")==1 and len(db.rows[TITLE])==2
+
+
+def test_new_ui_row_accepts_sheets_omitting_trailing_blank_cells():
+    service,store,db,verify,source=medical();original=db.get
+    def trimmed(rng):
+        result=original(rng)
+        for row in result:
+            while row and row[-1]=='':row.pop()
+        return result
+    db.get=trimmed
+    service.observe_medical(dict(source,version='2'),'synthetic-folder')
+    service.render()
+    assert len(db.rows[TITLE])==2 and db.headers[TITLE]==HEADERS
+
+
+@pytest.mark.parametrize('code,expected',[
+    ('confirmation_sheet_header_mismatch','confirmation_sheet_header_mismatch'),
+    ('private data','source_command_failed'),
+    ({'private':'data'},'source_command_failed'),
+])
+def test_confirmation_child_errors_only_propagate_known_codes(monkeypatch,code,expected):
+    import json
+    monkeypatch.setattr(production_flow.subprocess,'run',lambda *args,**kwargs:SimpleNamespace(returncode=1,stdout=json.dumps({'error':code})))
+    with pytest.raises(StateError,match='^'+expected+'$'):
+        production_flow.invoke('receipt_confirmation',apply=True,env={})
 
 
 def test_medical_confirm_post_readback_restart_replay_no_duplicate():
