@@ -126,6 +126,22 @@ def test_rename_keeps_id_and_historical_split_does_not_remap(catalog):
         catalog.rename("other", "食費", "食料品")
 
 
+def test_migration_preserves_unknown_and_blank_historical_categories(catalog):
+    pairs = [("旧分類", "本人分類"), ("", ""), ("食費", "食料品")]
+    migrated = catalog.include_historical(pairs)
+    assert len(migrated.categories) == 4
+    assert all(not c.active for c in migrated.categories[2:])
+    assert migrated.include_historical(pairs).categories == migrated.categories
+    old = row("historical")
+    old[5:7] = ["旧分類", "本人分類"]
+    assert parse_line(old, migrated).category_id == migrated.resolve(*old[5:7])
+    assert old[5:7] == ["旧分類", "本人分類"]
+    empty = row("blank")
+    empty[5:7] = ["", ""]
+    assert parse_line(empty, migrated).category_id == migrated.resolve("", "")
+    assert empty[5:7] == ["", ""]
+
+
 def test_coverage_requires_both_years_every_account_and_excludes_current(catalog):
     amounts = {f"{year}-{month:02d}": value for year, value in [(2025, 100), (2026, 150)]
                for month in range(1, 10)}

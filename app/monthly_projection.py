@@ -69,7 +69,7 @@ class Category:
 
     @property
     def label(self) -> str:
-        return f"{self.major}｜{self.minor}"
+        return f"{self.major or '未設定'}｜{self.minor or '未設定'}"
 
 
 class CategoryCatalog:
@@ -84,7 +84,8 @@ class CategoryCatalog:
         self.by_name: dict[tuple[str, str], str] = {}
         ids = set()
         for item in self.categories:
-            if not item.category_id or item.category_id in ids or not item.major or not item.minor:
+            if (not item.category_id or item.category_id in ids
+                    or (item.active and (not item.major or not item.minor))):
                 raise ProjectionError("invalid_category_catalog")
             ids.add(item.category_id)
             for name in ((item.major, item.minor), *item.aliases):
@@ -102,6 +103,16 @@ class CategoryCatalog:
             return self.by_name[(major, minor)]
         except KeyError:
             raise ProjectionError("category_requires_mapping") from None
+
+    def include_historical(self, pairs: Iterable[tuple[str, str]]) -> CategoryCatalog:
+        """Explicit migration: preserve old/blank pairs outside today's master.
+
+        These IDs remain readable in history but are not new input candidates.
+        Persist the returned catalog once; never regenerate IDs on refresh.
+        """
+        additions = [Category("CAT-" + uuid4().hex, major, minor, active=False)
+                     for major, minor in dict.fromkeys(pairs) if (major, minor) not in self.by_name]
+        return CategoryCatalog((*self.categories, *additions))
 
     def rename(self, category_id: str, major: str, minor: str) -> CategoryCatalog:
         if category_id not in {x.category_id for x in self.categories}:
