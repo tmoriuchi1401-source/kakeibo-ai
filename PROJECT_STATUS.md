@@ -29,7 +29,8 @@
 - `key-info`は既存SA鍵の公開部分のfingerprintだけを返し、Google公開証明書の複数候補から正しいbinding鍵を選ぶ経路を用意した。秘密鍵/ID/金額の出力やGoogle API呼出しはない。実Actionsによる照合はmain統合後に実施する。
 - `inspect / initialize`はproduction/schedule停止、旧writer停止、新money/corrections mode未設定を必須にする。別native backupの共有範囲を検査し、正本とbackupの支出A:M/取込A:Lを全期間・有限範囲で比較する。本人分類/メモ/状態/固定IDを含む差異、特定backup/切替日/manifestのdigest変更があれば書込み前に停止。処理後にも正本とbackupを再照合する。
 - 初期化の書込先は事前作成済みmoney-migration / money-notices / moneyだけで、Sheetsは常に読取り専用。保存済みCSVの確定固定targetを再利用し、未証明の旧照合/未対応購入は確認へ残す。intent先行・読戻し・保存結果不明からの再開・稼働bookの再初期化拒否・本人の保留と他inboxのpending保持を検証した。
-- 関連108件成功、Windows全回帰2,443件成功（114.25秒）。その後にbackupの処理後再照合を追加し、移行テスト50件成功。本番factoryを通した合成接続でも24事前作成ファイルのうち3個だけを更新し、新規ファイル/正本書込み0、replay追加更新0を確認。compile/diff-check成功。新実装のLinux CIはpush後に確認する。
+- 関連108件成功、Windows全回帰2,443件成功（114.25秒）。その後にbackupの処理後再照合を追加し、移行テスト50件成功。本番factoryを通した合成接続でも24事前作成ファイルのうち3個だけを更新し、新規ファイル/正本書込み0、replay追加更新0を確認。compile/diff-check成功。実装`203d7b2`のLinux CI `35476909686`全3job成功を確認した。
+- 日常試作をブラウザの390×844px/100%で視覚確認。ホーム、履歴の検索/ページ、確認一覧、支出修正の固定ID/日付/金額/分類/送信/結果、推移の年/分類選択が左側に表示された。カテゴリdropdownを開き、選択変更せず閉じた。長文・右側の列・実データ入りの表示は未検証で、Google Sheetsスマホ実機の確認とは区別する。値/書式/規則を変更せず、確認後viewportを元へ戻した。
 - Goal継続中。共有承認、実鍵照合/接続設定、排他下の最新backup/移行、金銭/未完了要求の実Google隔離復元、main/承認/実行SHA一致、非0本番canary/readback/replay0と定期運用切替、スマホ実機確認が残る。
 
 ### 2026-09-20 集計を事前作成ファイルと13か月キャッシュへ変更（本番未接続）
