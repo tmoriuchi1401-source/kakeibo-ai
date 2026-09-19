@@ -60,7 +60,7 @@ class MoneyWriter:
                 ids=set(origin.get("expense_ids",[]))
                 found=self.ledger.find("支出明細",13,ids)
                 alias=book["aliases"].get(origin.get("source","")+":"+origin.get("source_id",""),{})
-                expected=alias.get("expense_amounts")
+                expected=alias.get("expense_amounts",origin.get("expense_amounts"))
                 from .monthly_projection import _yen,ProjectionError
                 try:total=sum(_yen(row[4]) for row in found.values())
                 except ProjectionError:total=None

@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-20 旧Amazon計上の対応表と金銭book初期化（実データ未適用）
+
+- mainは`c8ef626`、先行`5a83602`のLinux CI `35456638673`全3job成功を確認。前工程は要求状態集約の実装・push・CIまでのprogress。
+- `amazon_money_migration`に2,000行単位の最新全行reader・private manifest・初期化APIを追加。正本の支出/取込2表だけを読み、source binding、全行snapshot、月/取引種別件数・金額、旧支出/取込IDと金額・状態・fingerprintを固定する。Medical/Payroll/旧イベント本文は読まない。置換済み合計は記録を保持して集計対象から外し、過去日付/分類/本人メモを変えない。
+- 確定adapterの金銭recordと旧取込ID・既存target/商品キーによる固定対応だけを採用。日付/同額の類似照合を再実行しない。商品明細の全集合に対する分割請求の合計が揃えばsettled、未対応はopenのままとして後日請求を保留する。既存マイナス支出は確定元と元購入の対応を必須にし、累積返金上限へ引き継ぐ。旧明細の金額配分が変わっていれば合計同額でも新返金を確認へ回す。
+- 既存writer lock/最新backup/旧writer停止を前提に、manifest保存前と保存後に台帳を再照合してbookを初期化。結果不明は同manifestで回復し、既存の稼働bookや別manifestを上書きしない。初期化は正本支出/取込書込み0、replayはprivate document書込みも0。API段階で、実切替への接続・実対応データの準備は未実施。
+- Windows全回帰2,292件成功（100.44秒）、追加4ケースを含む関連81件成功。5,000行超・2010年・分割請求・旧返金・本人入力変更・別source・保存前後失敗・既存book保護を検証。compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。実manifest生成とsource原本の対応、保存済み商品補足、日常入口/カテゴリ管理統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 全期間の要求状態・失敗確認を集約（本番未有効化）
 
 - 最新mainは`c8ef626`、先行`599591b`のLinux CI `35456080326`全3job成功を確認。前工程は実装・push・CIまでのprogress。
