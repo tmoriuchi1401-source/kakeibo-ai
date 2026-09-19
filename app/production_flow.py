@@ -110,6 +110,14 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
     result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
                             capture_output=True, text=True, encoding="utf-8", timeout=900)
     if result.returncode != 0:
+        if source == "receipt_confirmation":
+            from .production_run import SAFE_SOURCE_ERRORS
+            try:
+                code=json.loads(result.stdout).get("error")
+            except (ValueError,AttributeError):
+                code=None
+            if isinstance(code,str) and code in SAFE_SOURCE_ERRORS:
+                raise StateError(code)
         if source == "receipt_reimport":
             try:
                 code=json.loads(result.stdout).get("error")

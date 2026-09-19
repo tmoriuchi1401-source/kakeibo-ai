@@ -92,12 +92,37 @@ class ReceiptConfirmation:
 
     def ui_rows(self):
         if TITLE not in self.db.sheet_titles():return {}
+        if self.db.get(f"'{TITLE}'!1:1") != [HEADERS]:
+            raise StateError('confirmation_sheet_header_mismatch')
         rows={}
         for n,row in enumerate(self.db.get(f"'{TITLE}'!A2:P"),2):
-            if not row or not row[0]:continue
+            if not row or not any(x != '' for x in row):continue
+            if not row[0]:raise StateError('confirmation_missing_ui_identity')
             if row[0] in rows:raise StateError('confirmation_duplicate_ui_identity')
             rows[row[0]]=(n,list(row)+['']*max(0,16-len(row)))
         return rows
+
+    def _write_new_ui_row(self, row):
+        # values.append can infer a table above/beside the intended data and
+        # INSERT_ROWS can displace the header. Keep every existing row in place.
+        self.ui_rows()
+        occupied=self.db.get(f"'{TITLE}'!A2:P")
+        n=len(occupied)+2
+        target=f"'{TITLE}'!A{n}:P{n}"
+        if any(cell != '' for cells in self.db.get(target) for cell in cells):
+            raise StateError('confirmation_new_row_occupied')
+        def matches():
+            actual=self.db.get(target)
+            return len(actual)==1 and actual[0]+['']*max(0,16-len(actual[0]))==row
+        try:
+            self.db.set_raw_range(target,[row])
+        except Exception:
+            # A lost response is not permission to repeat the write.
+            if not matches():
+                raise StateError('confirmation_new_row_write_unknown') from None
+        if not matches():
+            raise StateError('confirmation_new_row_readback_mismatch')
+        self.ui_rows()  # Verify the header and unique identities after writing.
 
     def capture_inputs(self):
         for key,(_,row) in self.ui_rows().items():
@@ -327,5 +352,5 @@ class ReceiptConfirmation:
                 result=item.get('error','') or ('確認内容を読戻し済み' if item['status']=='applied' else '')
                 if row[15]!=result:self.db.set_raw_range(f"'{TITLE}'!P{n}",[[result]])
             else:
-                self.db.append_raw(TITLE,[managed+item.get('inputs',['']*8)+[item.get('error','')]])
+                self._write_new_ui_row(managed+item.get('inputs',['']*8)+[item.get('error','')])
         return len(self.ui_rows())

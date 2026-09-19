@@ -168,7 +168,8 @@ def main():
         verify_execution_boundary(env,head)
         if len(sys.argv)!=2 or sys.argv[1] not in {'preview','apply'}:raise StateError('confirmation_mode_invalid')
         print(json.dumps(execute(env,sys.argv[1]=='apply'),sort_keys=True))
-    except Exception:
-        print(json.dumps({'failure':1,'error':'receipt_confirmation_failed'}));raise SystemExit(1)
+    except Exception as error:
+        from .production_run import safe_source_error
+        print(json.dumps({'failure':1,'error':safe_source_error(error)}));raise SystemExit(1)
 
 if __name__=='__main__':main()

@@ -68,3 +68,18 @@ def test_preview_never_writes_durable_state():
         def commit(self, directory): raise AssertionError("preview write")
     assert run_durable_source(Store(), "synthetic", lambda _path: {"written": 0}, apply=False) == {"written": 0}
     assert calls == ["restore"]
+
+
+@pytest.mark.parametrize('message,expected',[
+    ('confirmation_sheet_header_mismatch','confirmation_sheet_header_mismatch'),
+    ('confirmation_unknown_ui_identity','confirmation_unknown_ui_identity'),
+    ('private document or API response','source_execution_failed'),
+    ('confirmation_unknown_ui_identity private data','source_execution_failed'),
+])
+def test_only_exact_allowlisted_state_codes_reach_summary(message,expected):
+    calls=[];sources=runners(calls)
+    def fail():raise StateError(message)
+    sources['receipts']=fail
+    report=execute_serial(sources)
+    assert report['sources']['receipts']['error']==expected
+    assert 'private' not in json.dumps(report)
