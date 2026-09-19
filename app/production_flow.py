@@ -87,6 +87,10 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
         with tempfile.TemporaryDirectory(prefix='receipt-intake-',dir=env.get('RUNNER_TEMP')) as directory:
             prepared=dict(env,RECEIPT_SCAN_PLAN=str(Path(directory)/'plan.json'))
             scan=invoke('receipt_confirmation',apply=True,env=prepared)
+            # Validate the intake contract before the ordinary receipt writer.
+            if any(type(scan.get(key)) is not int or scan[key] < 0 for key in
+                   ('found','medical_pending','blocked','medical_detected','written')):
+                raise StateError('receipt_intake_summary_invalid')
             result=invoke('receipts',apply=True,env=prepared)
             result['found']=scan['found']
             result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
@@ -107,10 +111,13 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
     if source not in {"receipts", "receipt_reimport"} or not apply or (
             source == "receipt_reimport" and env.get("RECEIPT_REIMPORT_OPERATION") == "replay"):
         child_env.pop("GEMINI_API_KEY", None)
-    result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
-                            capture_output=True, text=True, encoding="utf-8", timeout=900)
+    try:
+        result = subprocess.run(command(source, apply=apply, canary_target=canary_target), cwd=REPO, env=child_env,
+                                capture_output=True, text=True, encoding="utf-8", timeout=900)
+    except subprocess.TimeoutExpired:
+        raise StateError('source_command_timed_out') from None
     if result.returncode != 0:
-        if source == "receipt_confirmation":
+        if source in {"receipt_confirmation", "receipts", "paypay"}:
             from .production_run import SAFE_SOURCE_ERRORS
             try:
                 code=json.loads(result.stdout).get("error")

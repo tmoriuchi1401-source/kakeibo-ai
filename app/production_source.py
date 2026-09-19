@@ -15,6 +15,25 @@ from .settings import Settings
 from .sheets import SheetsDB
 
 
+def source_error_code(error):
+    """Emit fixed diagnostic codes, never API responses or document values."""
+    from google.genai.errors import APIError
+    from googleapiclient.errors import HttpError
+    from .production_run import safe_source_error
+    if isinstance(error, APIError):
+        from .receipt_reimport_production import error_code
+        return error_code(error)
+    if isinstance(error, HttpError):
+        if error.resp.status in (401,403):return 'google_api_auth_rejected'
+        if error.resp.status==429:return 'google_api_quota_rejected'
+        return 'google_api_request_failed'
+    if isinstance(error, RuntimeError) and str(error) in {
+            'receipt_preflight_source_changed','receipt_preflight_content_changed',
+            'receipt_inbox_collection_incomplete','receipt_preflight_required'}:
+        return str(error)
+    return safe_source_error(error)
+
+
 def receipts(settings, *, apply: bool) -> dict:
     settings.validate(need_drive=True, need_sheet=True)
     db = SheetsDB(settings.spreadsheet_id, service=None if apply else read_only_sheets_service())
@@ -94,8 +113,8 @@ def main():
     result = {"failure": 1}
     try:
         result = {"receipts": receipts, "paypay": paypay}[args.source](Settings(), apply=args.mode == "apply")
-    except Exception:
-        pass  # Raw API errors/OCR values are never emitted to Actions logs.
+    except Exception as error:
+        result['error'] = source_error_code(error)
     print(json.dumps(result, sort_keys=True))
     if result.get("failure") or result.get("failed_files"):
         raise SystemExit(1)
