@@ -105,7 +105,7 @@ def render_single_page(payload, mime):
 
 def tokens(image, psm=6):
     import pytesseract
-    data=pytesseract.image_to_data(image,lang='jpn+eng',config=f'--psm {psm}',output_type=pytesseract.Output.DICT)
+    data=pytesseract.image_to_data(image,lang='jpn+eng',config=f'--psm {psm}',timeout=30,output_type=pytesseract.Output.DICT)
     return [dict(text=str(t),box=(int(data['left'][i]),int(data['top'][i]),
         int(data['left'][i]+data['width'][i]),int(data['top'][i]+data['height'][i])),
         confidence=float(data['conf'][i]),line=(data['block_num'][i],data['par_num'][i],data['line_num'][i]))
@@ -239,7 +239,7 @@ def verify_cell_pixels(image, *, observations=None, glyphs=None, classify_nonpay
             raise AnonymizationHold('payment_label_not_verified')
         pos+=len(compact(token['text']))
     if glyphs is None:
-        raw=pytesseract.image_to_boxes(image,lang='jpn+eng',config=f'--psm {psm}')
+        raw=pytesseract.image_to_boxes(image,lang='jpn+eng',config=f'--psm {psm}',timeout=30)
         glyphs=[]
         for row in raw.splitlines():
             char,left,bottom,right,top,_=row.split()

@@ -76,8 +76,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
                 MEDICAL_CROP_ATTESTATION_KEY=base64.b64encode(os.urandom(32)).decode())
             scan=invoke(source,apply=True,env=prepared)
             scan.update(run_prepared(prepared,directory))
-            final=invoke(source,apply=True,env=dict(env,MEDICAL_FINALIZE_ONLY='true'))
-            scan['written']=final['written']
+            final=invoke(source,apply=True,env=dict(env,MEDICAL_FINALIZE_ONLY='true',MEDICAL_LOCAL_WRITTEN=str(scan.get('medical_local_written',0))))
+            scan['written']=scan.get('written',0)+final['written']
             scan['medical_pending']=final['medical_pending']
             scan['medical_auto_written']=final.get('medical_auto_written',0)
             for name in ('review_pending','normal_review_pending','medical_review_pending','intake_review_pending'):
@@ -98,7 +98,7 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "") -> d
             result['needs_review']=result.get('needs_review',0)+scan['medical_pending']+scan['blocked']
             result['medical_detected']=scan['medical_detected']
             result['confirmed_written']=scan['written']
-            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held','medical_auto_written',
+            for name in ('medical_ai_requests','medical_ai_reused','medical_ai_candidates','medical_ai_held','medical_auto_written','medical_local_written',
                          'review_pending','normal_review_pending','medical_review_pending','intake_review_pending'):
                 if name in scan:result[name]=scan[name]
             return result

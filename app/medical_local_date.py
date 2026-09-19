@@ -21,6 +21,28 @@ def receipt_date(observations):
     the posting decision. Birth/treatment/deadline dates cannot supply it.
     """
     groups=defaultdict(list)
+    vertical=[]
+    # Printed forms often put 発行日 above its value, in the same column.
+    # Associate one exact role and one complete date only; never borrow a
+    # nearby birth/treatment date or cross an intervening text row.
+    labels=[t for t in observations if compact(t['text']) in ROLES]
+    for token in observations:
+        if not PATTERN.fullmatch(compact(token['text'])):continue
+        b=token['box'];choices=[]
+        for label in labels:
+            a=label['box'];h=max(a[3]-a[1],b[3]-b[1])
+            if (0<=b[1]-a[3]<=1.5*h and abs((a[0]+a[2]-b[0]-b[2])/2)<=max(a[2]-a[0],b[2]-b[0])*.3
+                and not any(t is not label and t is not token and a[3]<t['box'][1]<b[1]
+                            and max(a[0],t['box'][0])<min(a[2],t['box'][2]) for t in observations)):
+                choices.append(label)
+        if len(choices)!=1:continue
+        label=choices[0]
+        # Validate the lexical date/role through the same parser below. The
+        # virtual same-line geometry is used only after original adjacency.
+        if min(label['confidence'],token['confidence'])<70:continue
+        a=label['box'];joined=dict(token,text=label['text']+token['text'],
+            confidence=min(label['confidence'],token['confidence']),box=(a[0],a[1],a[0]+max(a[2]-a[0],b[2]-b[0]),a[3]))
+        vertical.append([joined])
     for token in observations:groups[tuple(token['line'])].append(token)
     # Also join separate OCR cells on the same baseline, within a bounded gap.
     rows=[]
@@ -30,7 +52,7 @@ def receipt_date(observations):
         if row is None:rows.append([cy,h,[token]])
         else:row[2].append(token)
     candidates={};parsed_count=0;rejected=defaultdict(int)
-    for group in list(groups.values())+[r[2] for r in rows]:
+    for group in list(groups.values())+[r[2] for r in rows]+vertical:
         ordered=sorted(group,key=lambda t:t['box'][0]);text='';owners=[]
         for token in ordered:
             part=compact(token['text']);text+=part;owners.extend([token]*len(part))

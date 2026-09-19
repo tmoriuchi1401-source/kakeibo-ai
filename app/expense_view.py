@@ -49,10 +49,17 @@ class ExpenseViewPipeline:
     def refresh(self)->dict:
         expenses=active_expenses(self.db.get("支出明細!A2:M"))
         self.db.ensure_sheet("支出一覧",HEADERS["支出一覧"])
+        meta=self.db.svc.spreadsheets().get(spreadsheetId=self.db.sid,fields='sheets(properties)').execute(num_retries=0)
+        sheet=next(s['properties'] for s in meta['sheets'] if s['properties']['title']=='支出一覧')
+        required=len(expenses)+1
+        if sheet['gridProperties']['rowCount']<required:
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,body={'requests':[
+                {'updateSheetProperties':{'properties':{'sheetId':sheet['sheetId'],'gridProperties':{'rowCount':required}},
+                    'fields':'gridProperties.rowCount'}}]}).execute(num_retries=0)
         self.db.clear("支出一覧!A2:J")
         rows=[[x.date.replace("-","/"),x.merchant,x.item_name,x.amount,x.major_category,
                x.minor_category,x.payment_method,x.source,x.note,x.expense_id] for x in expenses]
-        self.db.append("支出一覧",rows)
+        if rows:self.db.set_raw_range(f"'支出一覧'!A2:J{len(rows)+1}",rows)
         self.db.format_date_column("支出一覧",0)
         result=self._summary(expenses); result["refreshed"]=True
         return result

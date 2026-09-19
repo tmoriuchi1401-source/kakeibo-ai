@@ -56,10 +56,15 @@ def receipts(settings, *, apply: bool) -> dict:
                 counts["needs_review"] += 1
             elif status == "skipped" and result.get("reason") == "already_imported":
                 counts["unchanged"] += 1
+            elif status == 'deferred':
+                counts['deferred']=counts.get('deferred',0)+1
             else:
                 counts["failure"] += 1
             if result.get("medical_shadow_status") == "handoff_failed":
                 counts["failure"] += 1
+        if counts['written']:
+            from .expense_view import ExpenseViewPipeline
+            ExpenseViewPipeline(db).refresh()
         return counts
     # Read-only preview inspects identities and the existing local privacy gate.
     # AI extraction/write counts cannot be promised before the approved AI run.

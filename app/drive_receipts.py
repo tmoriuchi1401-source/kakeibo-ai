@@ -57,7 +57,19 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
             data=download_drive_file(f["id"])
         source_policy = ({"known_source_classification": known_source_classification}
                          if known_source_classification is not None else {})
-        res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
+        try:
+            res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
+        except Exception as error:
+            from google.genai.errors import APIError
+            # These errors originate from extraction, before accounting starts.
+            # Preserve the inbox for the next scheduled run. Never catch a
+            # Sheets/Drive write error or reset an uncertain accounting write.
+            if isinstance(error,APIError) and getattr(error,'code',None) in {429,503}:
+                remaining=[x for x in files[files.index(f):] if is_supported_receipt_mime(x['mimeType'])
+                           and (approved is None or x['id'] in approved)]
+                results.extend((x['name'],{'status':'deferred','reason':'ai_temporarily_unavailable'}) for x in remaining)
+                break
+            raise
         results.append((f["name"],res))
         if processed_folder_id and should_archive_result(res):
             prev=",".join(f.get("parents",[]))

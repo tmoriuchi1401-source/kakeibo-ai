@@ -15,6 +15,17 @@ VALIDATIONS={VALIDATION,'whitespace_text_region_positive_glyphs_complete_ink',
              'tolerant_ruled_cell_positive_glyphs_complete_ink','adjacent_ruled_cells_positive_glyphs_complete_ink',
              'ruled_separator_text_fields_positive_glyphs_complete_ink'}
 HOLD_TEXT={
+    'local_ocr_unavailable':'ローカル読取を利用できず保留しました。画像は未送信です。',
+    'local_fields_incomplete':'日付・施設名・区分のいずれかを読み取れず保留しました。',
+    'local_digits_disagree':'2種類のローカルOCRで支払額が一致せず保留しました。',
+    'local_digits_unavailable':'金額の再照合ができず保留しました。',
+    'payment_pair_ambiguous':'支払額と見出しの対応が一意でないため保留しました。',
+    'payment_amount_conflict':'複数の支払額が一致せず保留しました。',
+    'payment_qualifier_present':'取消・返金・分割等の記載があるため保留しました。',
+    'payment_label_missing':'実支払額の見出しを確認できず保留しました。',
+    'payment_label_uncertain':'支払額の見出しの読取が不確かです。',
+    'payment_digits_uncertain':'支払額の数字の読取が不確かです。',
+    'paid_receipt_missing':'1件の領収証であることを確認できず保留しました。',
     'owner_input_or_decision':'本人の入力・判断を保持しています。',
     'candidate_missing_or_changed':'現在の原本に対応する候補がありません。',
     'analysis_not_complete':'画像解析が完了していません。',
@@ -135,7 +146,7 @@ def possible_duplicate(parsed,tables):
     return any(x.classification!='different' for x in compare_payments(parsed,tables,days=31,unknown_dates=True))
 
 
-def apply_automatic(review, *, identity_key, policy):
+def apply_automatic(review, *, identity_key, policy, write_limit=WRITE_LIMIT):
     if policy not in AUTO_POLICIES:return 0
     written=0
     for key,old in list(review.items.items()):
@@ -147,7 +158,7 @@ def apply_automatic(review, *, identity_key, policy):
         parsed,reason=decide(old,review.store.value,review.db.categories(),identity_key)
         item=deepcopy(old)
         if parsed is not None:
-            if written>=WRITE_LIMIT:reason='automatic_run_limit';parsed=None
+            if written>=write_limit:reason='automatic_run_limit';parsed=None
             elif possible_duplicate(parsed,review.tables()):reason='possible_existing_payment';parsed=None
         if parsed is None:
             if item.get('automatic_hold')!=reason:

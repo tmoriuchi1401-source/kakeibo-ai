@@ -271,3 +271,38 @@ def test_drive_transport_has_fixed_target_and_no_retry(setup):
     service.files().get().execute.return_value["parents"] = ["family-inbox"]
     with pytest.raises(StateError, match="target_mismatch"):
         transport.read()
+
+
+@pytest.mark.parametrize('status',[429,500,502,503,504])
+def test_state_read_retries_transient_response_only(setup,monkeypatch,status):
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    monkeypatch.setattr('time.sleep',lambda _:None)
+    binding,_,_=setup;service=MagicMock()
+    service.files().get().execute.return_value={'parents':[binding.folder_id],'mimeType':'application/json'}
+    request=service.files().get_media().execute
+    request.side_effect=[HttpError(Response({'status':status}),b'private error'),b'recovered']
+    assert DriveStateTransport(service,binding).read()==b'recovered'
+    assert request.call_count==2 and service.files().update.call_count==0
+
+
+@pytest.mark.parametrize('status',[400,401,403,404])
+def test_state_read_does_not_retry_permanent_response(setup,status):
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    binding,_,_=setup;service=MagicMock()
+    service.files().get().execute.side_effect=HttpError(Response({'status':status}),b'private error')
+    with pytest.raises(StateError,match='^state_drive_read_failed$'):DriveStateTransport(service,binding).read()
+    assert service.files().get().execute.call_count==1
+
+
+def test_state_read_timeout_is_bounded_and_write_remains_single_attempt(setup,monkeypatch):
+    monkeypatch.setattr('time.sleep',lambda _:None)
+    binding,_,_=setup;service=MagicMock()
+    service.files().get().execute.return_value={'parents':[binding.folder_id],'mimeType':'application/json','capabilities':{'canEdit':True}}
+    service.files().get_media().execute.side_effect=TimeoutError()
+    with pytest.raises(StateError,match='state_drive_read_failed'):DriveStateTransport(service,binding).read()
+    assert service.files().get_media().execute.call_count==3
+    service.files().update().execute.side_effect=TimeoutError()
+    with pytest.raises(StateError,match='state_drive_write_unknown'):DriveStateTransport(service,binding).write(b'payload')
+    assert service.files().update().execute.call_count==1
