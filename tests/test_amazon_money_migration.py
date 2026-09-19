@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.amazon_money import MoneyError, decide, source_alias
-from app.amazon_money_migration import MigrationReader, build_manifest, initialize
+from app.amazon_money_migration import MigrationReader, build_manifest, initialize, statement_bindings
 from app.amazon_money_writer import MoneyWriter
 from app.monthly_projection import ProjectionError
 from test_amazon_money import Ledger, record
@@ -274,3 +274,84 @@ def test_zero_value_legacy_rows_are_preserved_but_do_not_claim_a_payment():
     result = manifest(raw)
     assert result["book"]["legacy"] == {} and result["legacy_expenses"]["old"]["amount"] == 0
     assert result["ledger_totals"] == {"2026-08:zero": {"count": 1, "amount": 0}}
+
+
+def statement_fixture():
+    raw, _ = fixture()
+    raw["imports"] = []
+    for number, amount in enumerate([300, 400, 300], 1):
+        value = record(source_id="aupaycard:" + str(number) * 24, amount=amount, day="2026-08-03")
+        row = imported(value, status="matched_amazon_installment")
+        row[10] = str(number) * 64
+        raw["imports"].append(row)
+    return raw
+
+
+def test_saved_statement_installments_reuse_exact_targets_and_settle_once():
+    raw = statement_fixture()
+    before = deepcopy(raw)
+    bindings = statement_bindings(raw)
+    result = manifest(raw, bindings)
+    assert len(bindings) == 3 and result["book"]["legacy"]["order"]["state"] == "settled"
+    assert all(b["record"].reference.startswith("statement:aupaycard:") for b in bindings)
+    assert raw == before
+    store = Store()
+    initialize(store, lambda: raw, result, cutover_day=DAY, bindings=statement_bindings(raw))
+    writes = list(store.writes)
+    initialize(store, lambda: raw, result, cutover_day=DAY, bindings=statement_bindings(raw))
+    assert writes == store.writes
+    # An unrelated mail identity cannot consume a statement alias by similarity.
+    assert decide(record(order_id="order"), result["book"]).action == "review"
+
+
+@pytest.mark.parametrize("column,value", [(0, "aupaycard-mail:unknown"), (3, "other-source"),
+    (9, "missing-target"), (10, "bad-hash"), (6, -100), (11, "会員=;"),
+    (11, "会員=本会員; 会員=家族会員")])
+def test_invalid_statement_identity_or_target_does_not_invent_binding(column, value):
+    raw = statement_fixture()
+    raw["imports"][0][column] = value
+    with pytest.raises(MoneyError, match="money_migration_statement"):
+        statement_bindings(raw)
+
+
+def test_old_similarity_match_without_canonical_target_not_promoted():
+    raw = statement_fixture()
+    for row in raw["imports"]:
+        row[8], row[9] = "matched_amazon", ""
+    assert statement_bindings(raw) == []
+    result = manifest(raw)
+    assert result["counts"]["open_groups"] == 1 and len(result["notices"]) == 3
+
+
+def test_old_unproven_match_appears_in_common_review_without_invented_money():
+    from app.amazon_money_runtime import money_review_items
+    from app.amazon_money_review import MoneyReviews
+    raw = statement_fixture()
+    for row in raw["imports"]:
+        row[8], row[9] = "matched_amazon", ""
+    raw["imports"][0][0] = "aupaycard-mail:" + "a" * 24 + ":001"
+    result, store, ledger = manifest(raw), Store(), Ledger()
+    initialize(store, lambda: raw, result, cutover_day=DAY)
+    assert len(money_review_items(store)) == 3 and store.data["money"]["records"] == {}
+    identity = result["notices"][0]["notice_id"]
+    inbox = MoneyReviews(MoneyWriter(store, ledger))
+    req = "REQ-" + "a" * 32
+    inbox.prepare(req, identity, "acknowledge")
+    inbox.apply(req)
+    assert len(money_review_items(store)) == 2 and ledger.calls == []
+    before = deepcopy(store.data)
+    initialize(store, lambda: raw, result, cutover_day=DAY)
+    assert store.data == before
+
+
+@pytest.mark.parametrize("after_save", [False, True])
+def test_legacy_notice_save_failure_precedes_book_and_recovers(after_save):
+    raw, _ = fixture()
+    raw["imports"][0][9] = ""
+    result, store = manifest(raw), Store()
+    store.fail_key, store.after_save = "money-notices", after_save
+    with pytest.raises(RuntimeError):
+        initialize(store, lambda: raw, result, cutover_day=DAY)
+    assert "money" not in store.data
+    initialize(store, lambda: raw, result, cutover_day=DAY)
+    assert len(store.data["money-notices"]["notices"]) == 1

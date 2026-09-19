@@ -12,7 +12,8 @@ from .amazon_money import MoneyError, digest
 from .projection_store import replace_document
 from .utils import now_jst_string
 
-REASONS={"money_confirmed_amount_missing":"確定通知の金額を確認",
+REASONS={"money_legacy_posting_unverified":"旧カード照合の正式支出への対応を確認",
+    "money_confirmed_amount_missing":"確定通知の金額を確認",
     "money_date_missing":"確定日を確認", "money_date_invalid":"確定日を確認",
     "money_message_id_missing":"通知の識別情報を確認",
     "money_card_parse_failed":"確定カード通知の明細を確認",
@@ -53,7 +54,8 @@ def save_notices(store,notices,*,dry_run):
 
 def review_items(store):
     from .daily_view import ReviewItem
-    return [ReviewItem(identity,"Amazon通知の確認",REASONS.get(item["reason"],"原本を確認"),
+    return [ReviewItem(identity,"旧Amazon取込の確認" if item.get("source")=="legacy_import" else "Amazon通知の確認",
+        REASONS.get(item["reason"],"原本を確認")+("\n取込ID: "+item["source_id"] if item.get("source")=="legacy_import" else ""),
         "保留" if item["state"]=="held" else "要確認",item["original_url"])
         for identity,item in read_notices(store)["notices"].items() if item["state"] in {"open","held"}]
 

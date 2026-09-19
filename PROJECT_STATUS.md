@@ -22,6 +22,15 @@
 
 ## 1. Last verified
 
+### 2026-09-20 実Amazon対応プレビューと旧照合例外の引継ぎ準備（本番未適用）
+
+- mainを再fetchして`c8ef626`、先行`8f09786`のLinux CI `35457488439`全3job成功を確認。前工程は対応表/初期化APIの実装・push・CIまでのprogress。
+- 実Googleのmetadataと有限範囲全読込で、支出554行・取込1,979行、Amazon有効旧支出6行・マイナス0行を確認。実データ・対応bindings・manifest・リハーサル結果はGit対象外の`.private/`だけに保存し、実ID/金額をGit/ログへ出していない。切替日はプレビュー値で、実切替前の最新backup/再照合が必要。
+- 保存済みカードCSV取込の旧分割払い3件は、固定targetが正式支出1件を指し、合計も一致。既存解析済み取込を再利用する`statement_bindings`で1groupを対応済み、残る注文合計5groupをopenとして準備。CSV ID/元ID/hash/会員情報/有効target/正額を検査し、別のメールへ日付/同額aliasを作らない。元の日付/分類/本人入力は不変。
+- 旧`matched_amazon`121件（CSV30・メール91）は正式支出への固定対応が確認できない。10件の旧targetも正式支出IDには存在しない。固定MN ID・取込ID・fingerprint・台帳リンクの通知としてmanifestへ保持し、初期化時に既存`money-notices`へ保存/readbackする処理を追加。金銭額/RFC IDを推定せず、旧取込を変更せず、共通確認で保留/確認済みを受け付ける。本人判断はreplayで保持し、通知確認から記帳しない。
+- 実snapshotを使うローカルmemoryリハーサルは3 private document相当・旧支出6件・対応済み金銭3件・通知121件を保持、台帳書込み0、replay追加write0。これはGoogle書込み/隔離native復元の証明ではない。関連88件、Windows全回帰2,307件成功（100.03秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。実book/通知初期化、保存済み商品補足、日常入口/カテゴリ管理統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 旧Amazon計上の対応表と金銭book初期化（実データ未適用）
 
 - mainは`c8ef626`、先行`5a83602`のLinux CI `35456638673`全3job成功を確認。前工程は要求状態集約の実装・push・CIまでのprogress。

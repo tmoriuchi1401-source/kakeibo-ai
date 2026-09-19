@@ -10,7 +10,7 @@ from datetime import date
 import hashlib
 import re
 
-from .amazon_money import MoneyError, digest, empty_book, source_alias, validate_book
+from .amazon_money import MoneyError, MoneyRecord, digest, empty_book, source_alias, validate_book
 from .aupay_card_contract import is_amazon_merchant
 from .monthly_projection import _date, _yen
 from .projection_store import replace_document
@@ -85,6 +85,42 @@ def _anchor(imported, rows, record):
     if len(keys) == 1 and "A-" + hashlib.sha256(keys[0].strip().encode()).hexdigest()[:24] in ids:
         return
     raise MoneyError("money_migration_binding_missing")
+
+
+def statement_bindings(raw):
+    """Reuse saved, already-linked statement imports; never post a new charge.
+
+    CSV identities differ from Gmail identities. Preserve that distinction:
+    this does not create aliases for a different notification with similar
+    date/amount. Unlinked or merely similarity-matched imports are not promoted.
+    """
+    snapshot = _snapshot(raw)
+    groups, targets = {}, {}
+    for identity, row in snapshot["expenses"].items():
+        if _amazon(row) and row[12] in {"", "active"} and _yen(row[4]) > 0:
+            group = _group(row)
+            groups.setdefault(group, []).append(identity)
+            targets[identity] = group
+    result = []
+    for identity, row in snapshot["imports"].items():
+        if row[2] != "au PAYカード" or row[8] != "matched_amazon_installment":
+            continue
+        # Only the fixed-target, previously applied installment contract. Old
+        # matched_amazon rows often refer to an unmaterialized order candidate.
+        if (not re.fullmatch(r"aupaycard:[0-9a-f]{24}", identity)
+                or not re.fullmatch(r"[0-9a-f]{64}", str(row[10]))
+                or row[3] != identity or row[9] not in targets or _yen(row[6]) <= 0):
+            raise MoneyError("money_migration_statement_binding_invalid")
+        members = re.findall(r"(?:^|;\s*)会員=([^;]+)", str(row[11]))
+        if len(members) != 1 or not members[0].strip():
+            raise MoneyError("money_migration_statement_account_missing")
+        group = targets[row[9]]
+        record = MoneyRecord(source="au_pay_card", source_id=identity,
+            account="au PAYカード／" + members[0].strip(), reference="statement:" + identity,
+            day=_date(row[4]), amount=_yen(row[6]), kind="purchase", payment="card", confirmed=True,
+            order_id=group if not group.startswith("expense:") else "")
+        result.append({"record": record, "expense_ids": sorted(groups[group])})
+    return result
 
 
 def build_manifest(raw, *, cutover_day, bindings=()):
@@ -182,8 +218,21 @@ def build_manifest(raw, *, cutover_day, bindings=()):
         if amount == legacy[key]["amount"]:
             legacy[key]["state"] = "settled"
     validate_book(book)
+    # A historical "matched" status may point only to an old order candidate,
+    # not to a canonical expense. Preserve these exceptions in the existing
+    # notice inbox instead of silently treating them as paid/posted money.
+    bound_sources = {entry["source_id"] for entry in book["records"].values()}
+    notices = []
+    for identity, row in imports.items():
+        if row[2] != "au PAYカード" or row[8] != "matched_amazon" or identity in bound_sources:
+            continue
+        notices.append({"notice_id": "MN-" + digest(["legacy_import", raw["spreadsheet_id"], identity])[:32],
+            "source": "legacy_import", "source_id": identity, "fingerprint": digest(row),
+            "reason": "money_legacy_posting_unverified",
+            "original_url": "https://docs.google.com/spreadsheets/d/" + raw["spreadsheet_id"] + "/edit"})
     return {"schema": 1, "source_binding": snapshot["source_binding"],
         "snapshot": digest(snapshot), "book": book, "ledger_totals": totals,
+        "notices": sorted(notices, key=lambda n: n["notice_id"]),
         "legacy_expenses": {k: {"fingerprint": digest(r), "amount": _yen(r[4]),
             "day": _date(r[1]), "status": r[12], "import_id": r[10]} for k, r in selected.items()},
         "legacy_imports": {k: {"fingerprint": digest(r), "amount": _yen(r[6]),
@@ -210,6 +259,8 @@ def initialize(store, reader, manifest, *, cutover_day, bindings=()):
     if current is not None and (before is None or current != manifest["book"]):
         raise MoneyError("money_migration_book_exists")
     replace_document(store, "money-migration", before, deepcopy(manifest))
+    from .amazon_money_notices import save_notices
+    save_notices(store, manifest["notices"], dry_run=False)
     # Catch input edits or a concurrent writer between the snapshot and intent.
     if digest(_snapshot(reader())) != manifest["snapshot"]:
         raise MoneyError("money_migration_snapshot_changed")
