@@ -79,11 +79,14 @@ def run_daily_requests(env,*,apply=False):
     pending=sum(item["state"] in {"queued","pending"} for item in before.values())
     from .daily_money_review import run_money_reviews
     from .daily_coverage import run_coverage
+    from .daily_category_management import run_categories
     current_month=datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m")
     if not apply:
         return {"corrections_pending":pending,"correction_form_ready":int(daily.form()[0][7] is True),
                 **run_money_reviews(daily,source,env,apply=False),
+                **run_categories(daily,source,apply=False),
                 **run_coverage(daily,apply=False,current_month=current_month)}
+    category_counts=run_categories(daily,source,apply=True)
     projection=ProjectionRefresh(store,SheetsLedgerReader(source))
     # Refresh indexes for prior ledger writes before resolving any target ID.
     projection.refresh(source.categories())
@@ -105,7 +108,7 @@ def run_daily_requests(env,*,apply=False):
     for state in ("applied","failed"):
         counts["corrections_"+state]=sum(item["state"]==state and before.get(key,{}).get("state")!=state
                                        for key,item in after.items())
-    return {**counts,**money_counts,**coverage_counts,**output}
+    return {**counts,**money_counts,**coverage_counts,**category_counts,**output}
 
 
 def refresh_daily(source_db,store,env=None):

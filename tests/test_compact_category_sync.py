@@ -102,7 +102,7 @@ def test_master_only_change_updates_catalog_without_reading_ledger_index_or_tota
     current=load_catalog(store.data["catalog"])
     assert current.resolve(*PAIRS[0])==current.resolve("食費","食品")==identity
     assert current.resolve("日用品","消耗品")!=identity
-    assert reader.reads==[] and set(store.reads)<={"journal","catalog"}
+    assert reader.reads==[] and set(store.reads)<={"category-requests","journal","catalog"}
     assert store.data["month-2010-01"]==original and store.writes==["catalog"]
     store.writes.clear();refresh.refresh(pairs);assert store.writes==[]
 

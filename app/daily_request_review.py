@@ -11,11 +11,11 @@ from .amazon_money import MoneyError,digest
 from .projection_store import replace_document
 from .utils import now_jst_string
 
-KINDS={"corrections":"支出修正","money-reviews":"金銭・通知の確認","coverage":"取込状況"}
+KINDS={"corrections":"支出修正","money-reviews":"金銭・通知の確認","coverage":"取込状況","category-requests":"カテゴリ管理"}
 
 
 def parts(reference):
-    match=re.fullmatch(r"RQ-(corrections|money-reviews|coverage):(REQ-[a-f0-9]{32})",reference)
+    match=re.fullmatch(r"RQ-(corrections|money-reviews|coverage|category-requests):(REQ-[a-f0-9]{32})",reference)
     if not match:raise MoneyError("request_review_target_invalid")
     return match.groups()
 
@@ -33,13 +33,15 @@ def review_items(store,daily_id):
     from .daily_corrections import INPUT_ERRORS
     from .daily_coverage import ERRORS as COVERAGE_ERRORS
     from .amazon_money_review import ERRORS as MONEY_ERRORS
+    from .category_management import ERRORS as CATEGORY_ERRORS
     documents={key:requests(store,key) for key in KINDS}
     acknowledged={(r.get("money_id"),r.get("snapshot")) for r in documents["money-reviews"].values()
         if r.get("action")=="acknowledge_failure" and r.get("state")=="applied"}
-    labels={"corrections":INPUT_ERRORS,"money-reviews":MONEY_ERRORS,"coverage":COVERAGE_ERRORS}
+    labels={"corrections":INPUT_ERRORS,"money-reviews":MONEY_ERRORS,"coverage":COVERAGE_ERRORS,"category-requests":CATEGORY_ERRORS}
     result=[]
     for kind,values in documents.items():
         title,row=("設定",11) if kind=="coverage" else ("確認",61 if kind=="corrections" else 81)
+        if kind=="category-requests":title,row="設定",90
         url=f"https://docs.google.com/spreadsheets/d/{daily_id}/edit#gid={SHEETS[title][0]}&range=B{row}"
         for token,item in values.items():
             state=item.get("state")

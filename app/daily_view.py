@@ -133,7 +133,8 @@ def install_copy_requests(source_id,target_id,old_sheet_ids,*,current_month):
         "metadataValue":sha256(source_id.encode()).hexdigest(),"visibility":"DOCUMENT","location":{"spreadsheet":True}}}})
     from .daily_money_review import install_requests
     from .daily_coverage import install_requests as coverage_install
-    return [r for r in requests if r]+layout_requests()+install_requests(source_id)+coverage_install(source_id,current_month=current_month)
+    from .daily_category_management import install_requests as category_install
+    return [r for r in requests if r]+layout_requests()+install_requests(source_id)+coverage_install(source_id,current_month=current_month)+category_install(source_id)
 
 
 def layout_requests():
@@ -247,6 +248,9 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
     requests.extend(trend_requests(summary,catalog,current_month,controls,updated_at))
     from .daily_coverage import render_requests as coverage_render
     if controls.get("coverage_enabled"):requests.extend(coverage_render(summary,current_month,controls))
+    if controls.get("category_management_enabled"):
+        from .daily_category_management import render_requests as category_render
+        requests.extend(category_render(catalog,controls))
     for title,start,count,width in [("履歴",11,len(page.rows),3),("確認",7,len(shown),4)]:
         if count:
             requests.append({"repeatCell":{"range":grid(title,start,start+count-1,0,width),"cell":{"userEnteredFormat":{

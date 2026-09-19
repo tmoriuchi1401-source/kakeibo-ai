@@ -83,7 +83,7 @@ def test_changed_month_only_values_persist_and_idle_refresh_reads_no_ledger():
     store.reads.clear()
     assert refresh.refresh(PAIRS)["projection_months"] == 0
     assert reader.reads == []
-    assert store.reads == ["journal", "catalog"]
+    assert store.reads == ["category-requests", "journal", "catalog"]
 
 
 @pytest.mark.parametrize("fail_key", ["month-2025-12", "month-2026-01", "index", "summary"])

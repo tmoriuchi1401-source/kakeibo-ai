@@ -15,7 +15,7 @@
 
 `monthly_projection.py`は既存支出明細A:Mのactive行だけから買い物・月・カテゴリ金額を再生成する。receipt/取込IDを買い物のidentityに使い、ヘッダ総額を加算しない。既存のsuperseded行は除く。返金は独立の金銭identityで負の支出、値引き明細は買い物内に留める。ID重複、不正金額、未知カテゴリ、読み取り中の変更は黙って0にしない。
 
-カテゴリはUUIDを一度割り当てる。改名は同IDと旧名aliasを保持する。分割・統合は新IDと旧IDの廃止を明示し、過去分類の自動置換はしない。catalog/index/小さい更新待ちjournal/月別結果/長期summaryをprivate Drive JSONへ保存する実装を追加した。実ファイルの初期化はまだ行っていない。
+カテゴリはUUIDを一度割り当てる。改名は同IDと旧名aliasを保持する。分割・統合は新IDと親IDの対応を明示し、元分類と承認済みルールを残す。過去分類の自動置換はしない。catalog/index/小さい更新待ちjournal/月別結果/長期summaryをprivate Drive JSONへ保存する実装を追加した。実ファイルの初期化はまだ行っていない。
 
 初期indexは正本のbounded pageから再生成可能。通常は更新前後の月をdirtyとして、その月の物理行ヒントを固定IDとfingerprintで再検証する。変更のないobserveはdirtyを増やさない。月結果は差額加算せず置換する。表示・集計保存失敗の再実行は会計writerを呼ばない。
 
@@ -199,3 +199,13 @@ compact移行後の過去反映の年月候補は、保存済みsummaryの全記
 退避payloadと比較結果は`.private/isolated-category-*.json`に保存し、Gitに含めない。実本番rollbackでも、writer排他・最新の対象限定退避を前提に、同じ範囲/fieldだけを戻す必要がある。今回の復元payloadはこの旧backup由来の隔離コピー専用であり、現行正本へそのまま適用しない。隔離コピーは[復元確認済み](https://docs.google.com/spreadsheets/d/1xmYR3xib-xsAtTrg7x40XoqLQdm0V2BrLOFuCo58vV8/edit)として非公開で保持した。
 
 Google desktopでカテゴリ操作の移行後/復元後を視覚確認。旧C列は結合カテゴリに対して狭く折り返すため、日常受付への統合時に調整する。これは本番切替後やスマホ実機の確認ではない。今回のGoogle mutationは隔離コピー1件、ラベル変更2回、移行/復元batch各1回。本番台帳・原backup・共有・フラグは変更0。金銭book/未完了intentの復元、新金銭の本番canaryと切替は別途検証する。
+
+## 固定IDのカテゴリ管理受付（実フォーム未設置）
+
+日常の設定B90:B93に操作・元分類・新しい分類名・送信を設け、F90の固定REQ IDへ結び付ける。改名は同じCAT IDと旧名aliasを保持。分割は1親から複数の新ID、統合は複数親から1新IDを作り、親/結果IDを保存する。どちらも元カテゴリと既存ルールを残し、過去明細を自動で振り替えない。この動作はフォーム内にも明記する。新規追加も同じ入口とする。設定のカテゴリ一覧は50件でページ分けする。
+
+既存ルールと商品分類はカテゴリ名を参照しているため、正本のカテゴリマスタA:Bは旧名を互換用に残し、新しい名前だけ末尾へ追記する。最新gridを2,000行ずつ読み、入力前snapshotとの比較、必要時だけgrid延長、A:Bだけの一括write/readbackを行う。既存行、C列以降、ルール、支出は変更しない。compact helperにはcatalogの現名称だけを出すので、旧名と新名を重複候補として並べない。
+
+private `category-requests`へcatalog/masterのbefore/afterを先に保存し、pending→master→catalog→helper→appliedの順に反映する。結果不明時は同じ要求のbefore/afterを再読込して再開し、新IDやマスタ行を重複追加しない。pending中のprojection更新/再生成は停止し、既存daily stageが要求を回復してから投影を更新する。queuedの競合は失敗として全期間の確認へ表示し、部分反映後の第三者変更はpendingのまま停止する。本人入力の変更とack結果不明も既存フォームと同じ方式で保持する。
+
+本番mode・実日常ファイルの設置は未実施。旧分類ルール/レシート承認の入口統合は別途残る。切替時は新documentもprivate backup/復元対象に含める。単独で旧catalogへ戻すと追加済みマスタ名に新IDが付くため、復旧はwriter排他下で対応するcatalog/master/requestの組を戻す。

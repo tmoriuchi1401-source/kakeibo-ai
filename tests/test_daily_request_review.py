@@ -29,8 +29,8 @@ def test_all_period_requests_are_paged_with_stable_ids_and_safe_error_labels():
     for kind in KINDS:
         store.data[kind]={"requests":{f"REQ-{i:032x}":failure() for i in range(53)}}
     items=review_items(store,"daily")
-    assert len(items)==159 and len({x.fixed_id for x in items})==159
-    assert review_page(items,4)[1:]==(159,4) and len(review_page(items,4)[0])==9
+    assert len(items)==212 and len({x.fixed_id for x in items})==212
+    assert review_page(items,5)[1:]==(212,5) and len(review_page(items,5)[0])==12
     assert "2018-01-01" in items[0].detail
     assert "元の値が変わりました" in items[0].detail
     assert all("/d/daily/" in item.url for item in items)

@@ -90,6 +90,8 @@ class ProjectionRefresh:
         This is the only full ledger scan. IDs from a previous catalog survive a
         rebuild. Historical/blank labels remain inactive choices, never edits.
         """
+        from .category_management import require_settled
+        require_settled(self.store)
         old_catalog = self.store.read("catalog")
         catalog = load_catalog(old_catalog) if old_catalog else CategoryCatalog.bootstrap(category_pairs)
         catalog = self._current_categories(catalog, category_pairs)
@@ -134,6 +136,8 @@ class ProjectionRefresh:
         return CategoryCatalog((*existing, *additions.categories))
 
     def refresh(self, category_pairs):
+        from .category_management import require_settled
+        require_settled(self.store)
         before_journal = self.journal.read()
         before_catalog = self.store.read("catalog")
         if not (before_journal["ranges"] or before_journal["append"] or before_journal["months"]):

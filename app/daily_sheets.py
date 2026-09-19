@@ -48,14 +48,14 @@ class DailySheets:
         return [b.get("values",[]) for b in blocks]
 
     def controls(self,current_month):
-        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4","'設定'!B22:B23","'推移'!B145:B145"])
+        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4","'設定'!B22:B23","'推移'!B145:B145","'設定'!B101:B101"])
         def val(block,row,default):
             value=blocks[block][row][0] if len(blocks[block])>row and blocks[block][row] else default
             return default if value=="" else value
         return {"month":val(0,0,"直近13か月"),"category":val(0,1,"すべて"),"search":val(0,2,""),
                 "page":val(0,3,1),"review_page":val(1,0,1),"home_month":val(2,0,current_month),
                 "trend_year":val(3,0,current_month[:4]),"trend_category":val(3,1,"すべて"),
-                "coverage_month":val(4,0,current_month),"coverage_page":val(4,1,1),"breakdown_page":val(5,0,1)}
+                "coverage_month":val(4,0,current_month),"coverage_page":val(4,1,1),"breakdown_page":val(5,0,1),"category_page":val(6,0,1)}
 
     def update_outputs(self,requests):
         titles={spec[0]:title for title,spec in SHEETS.items()}
@@ -101,8 +101,10 @@ class DailySheets:
     def refresh(self,*,current_month,updated_at,reviews,ledger_sheet_id=None):
         self.verify()
         from .daily_coverage import CoverageForm
+        from .daily_category_management import CategoryForm
         controls=self.controls(current_month)
         controls["coverage_enabled"]=CoverageForm(self).installed()
+        controls["category_management_enabled"]=CategoryForm(self).installed()
         catalog=load_catalog(self.store.read("catalog"))
         summary=self.store.read("summary")
         if summary is None:raise ProjectionError("projection_bootstrap_required")
