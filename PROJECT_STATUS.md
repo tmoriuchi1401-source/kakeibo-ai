@@ -22,6 +22,14 @@
 
 ## 1. Last verified
 
+### 2026-09-20 全期間の要求状態・失敗確認を集約（本番未有効化）
+
+- 最新mainは`c8ef626`、先行`599591b`のLinux CI `35456080326`全3job成功を確認。前工程は実装・push・CIまでのprogress。
+- 支出修正・金銭/通知確認・取込状況の既存inboxからqueued/pending/failedを全期間で日常確認へ集約。要求元と固定REQ IDの組で識別し、安全な日本語理由・最終更新・元フォームへのリンクを表示する。2018年を含む159件を全4ページで確認。表示は入力/台帳/indexを書き換えない。
+- 共通確認フォームに「失敗を確認済みにする（再実行なし）」を接続。最新の失敗snapshotへ本人判断を結び付け、既存REQ inboxへ保存する。元の失敗要求・本人入力・coverage・台帳・native checkpointを変更せず、再実行もしない。内容が後から変われば一覧へ戻す。pending/queuedや金銭IDの解除に流用できない。
+- 同じinbox内の失敗と別inboxの失敗、保存前後の結果不明、最新snapshot競合、同IDの要求元間分離、入力保持、再実行の台帳書込み0を確認。関連87件、Windows全回帰2,262件成功（100.87秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。旧分類/レシート承認の入口統合・カテゴリ管理入力、Amazon旧対応manifest/初期化/保存済み商品補足、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
 ### 2026-09-20 未解析の確定通知を日常確認へ接続（本番未有効化）
 
 - 最新mainは`c8ef626`、先行`4506a5a`のLinux CI `35455274644`成功を確認。前工程は実装・push・CIまでのprogress。

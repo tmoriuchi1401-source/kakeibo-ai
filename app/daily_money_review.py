@@ -12,9 +12,9 @@ MARKER="kakeibo_daily_money_form_v1"
 
 def install_requests(source_id):
     """For a fresh daily copy or an explicitly checked blank upgrade range."""
-    rows=[["Amazonの金銭確認","原本を確認して対応を選びます"],["対象（金銭ID・通知ID）",""],["対応",""],
+    rows=[["確認事項への対応","原本・元のフォームを確認して対応を選びます"],["対象（金銭・通知・要求ID）",""],["対応",""],
           ["返金元の金銭ID",""],["既存の支出ID",""],["送信",False],["反映状況","未送信"],["最終更新",""],
-          ["案内","支出IDはカンマ区切り。混合払い・未確定は直接計上できません。MN通知は保留・確認済みだけで記帳しません。"]]
+          ["案内","支出IDはカンマ区切り。未確定・MN通知・RQ要求から記帳できません。失敗の確認済みは再実行しません。"]]
     requests=[cells("確認",80,rows,width=4),cells("確認",81,[["REQ-"+uuid4().hex]],left=9,width=1),
         dropdown("確認",82,1,list(ACTIONS)),
         {"setDataValidation":{"range":grid("確認",85,85,1,2),"rule":{
@@ -82,6 +82,8 @@ class DailyMoneyForm:
         result=self.inbox.apply(token)
         if self.form()!=(values,token):return {"money_reviews_submitted":int(new),"money_review_input_changed":1}
         label=STATE_LABELS[result["state"]]
+        if result["state"]=="applied" and result.get("action")=="acknowledge_failure":
+            label="確認済み（再実行なし）"
         if changed:label+="・変更した入力は未送信です"
         if result.get("error") in ERRORS:label+="・"+ERRORS[result["error"]]
         token="REQ-"+uuid4().hex

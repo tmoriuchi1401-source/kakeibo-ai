@@ -12,8 +12,11 @@ from .projection_store import replace_document
 from .utils import now_jst_string
 
 ACTIONS={"保留":"hold","別の確定取引として計上":"separate","既存支出へ対応付け":"link",
-         "返金元を指定":"refund_link","自分用残高のチャージ":"transfer","通知を確認済みにする（記帳なし）":"acknowledge"}
+         "返金元を指定":"refund_link","自分用残高のチャージ":"transfer","通知を確認済みにする（記帳なし）":"acknowledge",
+         "失敗を確認済みにする（再実行なし）":"acknowledge_failure"}
 ERRORS={"money_review_changed":"対象の情報が変わりました。再確認してください。",
+    "request_review_target_invalid":"確認一覧の失敗した要求IDを選んでください。",
+    "request_review_no_retry":"失敗の確認済みだけ選べます。再送信する場合は元のフォームで最新の内容を確認してください。",
     "money_notice_no_posting":"未解析通知は保留・確認済みだけ選べます。金額を推定して記帳はできません。",
     "money_review_target_invalid":"確認中の金銭IDを選んでください。",
     "money_review_confirmation_required":"確定情報が不足しています。原本を確認してください。",
@@ -81,6 +84,10 @@ class MoneyReviews:
         if old:
             if any(old[k]!=v for k,v in payload.items()):raise MoneyError("money_review_request_reused")
             return deepcopy(old)
+        if money_id.startswith("RQ-"):
+            from .daily_request_review import prepare
+            return prepare(self,request_id,payload,form_digest)
+        if action=="acknowledge_failure":raise MoneyError("request_review_target_invalid")
         if money_id.startswith("MN-"):
             from .amazon_money_notices import prepare_review
             return prepare_review(self,request_id,payload,form_digest)
@@ -126,6 +133,9 @@ class MoneyReviews:
         before=self.read();item=deepcopy(before["requests"][request_id])
         if item["state"] in {"applied","failed"}:return item
         if item["state"] not in {"queued","pending"}:raise MoneyError("money_review_state_invalid")
+        if item["money_id"].startswith("RQ-"):
+            from .daily_request_review import apply
+            return apply(self,request_id,before,item)
         if item["money_id"].startswith("MN-"):
             from .amazon_money_notices import apply_review
             return apply_review(self,request_id,before,item)

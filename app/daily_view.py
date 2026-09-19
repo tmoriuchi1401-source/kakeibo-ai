@@ -223,6 +223,7 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
     rows=[[r.title[:70],r.detail[:180],link(r.url,"開く →"),r.status,r.fixed_id] for r in shown]
     requests.append(cells("確認",7,rows+[[""]*5 for _ in range(PAGE_SIZE-len(rows))],width=5))
     monetary=[r.fixed_id for r in shown if r.title in {"Amazon金銭","Amazon通知の確認"} and r.fixed_id.startswith(("AM-","MN-"))]
+    monetary += [r.fixed_id for r in shown if r.fixed_id.startswith("RQ-") and r.status=="失敗"]
     if monetary:requests.append(dropdown("確認",81,1,monetary,strict=False))
     # Renderer never touches B61:B68 or J61, even when filters/page change.
     home_month=controls.get("home_month",current_month)
