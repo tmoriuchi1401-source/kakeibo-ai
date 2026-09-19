@@ -19,6 +19,15 @@ SAFE_SOURCE_ERRORS = frozenset({
     'confirmation_duplicate_ui_identity', 'confirmation_missing_ui_identity',
     'confirmation_new_row_occupied', 'confirmation_new_row_write_unknown',
     'confirmation_new_row_readback_mismatch', 'source_reconciliation_required',
+    'source_command_failed', 'source_result_invalid', 'source_reported_failure',
+    'source_command_timed_out', 'receipt_intake_summary_invalid',
+    'ledger_invalid', 'ledger_changed_since_read', 'ledger_readback_failed',
+    'state_drive_read_failed', 'state_drive_write_unknown', 'state_save_readback_mismatch',
+    'receipt_preflight_source_changed', 'receipt_preflight_content_changed',
+    'receipt_inbox_collection_incomplete', 'receipt_preflight_required',
+    'gemini_auth_rejected', 'gemini_quota_rejected', 'gemini_api_or_model_rejected',
+    'gemini_result_invalid', 'gemini_transport_unknown', 'gemini_request_failed_unknown',
+    'google_api_auth_rejected', 'google_api_quota_rejected', 'google_api_request_failed',
 })
 
 
