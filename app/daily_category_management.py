@@ -97,6 +97,7 @@ def upgrade_requests(daily):
 
 
 def render_requests(catalog,controls):
+    from .daily_choices import page_dropdown
     active=[c for c in catalog.categories if c.active]
     pages=max(1,(len(active)+49)//50);page=min(pages,max(1,int(controls.get("category_page",1))))
     shown=active[(page-1)*50:page*50]
@@ -104,6 +105,7 @@ def render_requests(catalog,controls):
     req=[cells("設定",102,[["全カテゴリ",len(active),f"{page}/{pages}ページ"]],width=3),
         cells("設定",103,[["カテゴリ","固定ID",""]],width=3),
         cells("設定",104,rows+[[""]*3 for _ in range(50-len(rows))],width=3),
-        dropdown("設定",101,1,range(1,pages+1))]
-    if active:req.append(dropdown("設定",91,1,[c.label+"【"+c.category_id+"】" for c in active],strict=False))
+        page_dropdown("設定",101,1,page,pages)]
+    if shown:req.append(dropdown("設定",91,1,[c.label+"【"+c.category_id+"】" for c in shown],strict=False))
+    else:req.append({"setDataValidation":{"range":grid("設定",91,91,1,2)}})
     return req

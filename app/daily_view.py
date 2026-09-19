@@ -134,7 +134,8 @@ def install_copy_requests(source_id,target_id,old_sheet_ids,*,current_month):
     from .daily_money_review import install_requests
     from .daily_coverage import install_requests as coverage_install
     from .daily_category_management import install_requests as category_install
-    return [r for r in requests if r]+layout_requests()+install_requests(source_id)+coverage_install(source_id,current_month=current_month)+category_install(source_id)
+    from .daily_choices import install_requests as choices_install
+    return [r for r in requests if r]+layout_requests()+install_requests(source_id)+coverage_install(source_id,current_month=current_month)+category_install(source_id)+choices_install(source_id)
 
 
 def layout_requests():
@@ -196,13 +197,12 @@ def coverage_status(summary,month):
 
 
 def render_requests(*,read_month,summary,catalog,current_month,source_id,controls,reviews,updated_at,ledger_sheet_id=None):
+    from .daily_choices import category_id, page_dropdown, render_requests as choice_requests
     labels={c.category_id:c.label for c in catalog.categories}
     selected=controls.get("month","直近13か月")
     selected="" if selected=="直近13か月" else selected
     category_label=controls.get("category","すべて")
-    matched=[c.category_id for c in catalog.categories if c.label==category_label]
-    if category_label!="すべて" and len(matched)!=1:raise ValueError("daily_category_selection_changed")
-    category="" if category_label=="すべて" else (matched[0] if len(matched)==1 else "invalid-category")
+    category="" if category_label=="すべて" else category_id(catalog,category_label)
     page=history_page(read_month,current_month=current_month,selected_month=selected,category_id=category,
                       search=str(controls.get("search","")),page=int(controls.get("page",1)),page_size=PAGE_SIZE)
     requests=[cells("履歴",7,[[page.total,f"{page.page}/{page.pages}ページ"]],width=3),
@@ -215,12 +215,12 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
         description=" / ".join(labels.get(c,"未分類") for c in p.categories)
         rows.append([p.day+"\n"+p.merchant[:40],link(url,f"{description}\n商品{p.item_count}点・詳細 →"),p.amount,p.purchase_id])
         for expense_id in p.expense_ids:
-            if len(choices)<500:choices.append(f"{expense_id}｜{p.day} {p.merchant[:24]}")
+            choices.append(f"{expense_id}｜{p.day} {p.merchant[:24]}")
     requests.append(cells("履歴",11,rows+[[""]*4 for _ in range(PAGE_SIZE-len(rows))],width=4))
-    requests.append(dropdown("履歴",6,1,range(1,page.pages+1)))
+    requests.append(page_dropdown("履歴",6,1,page.page,page.pages))
     shown,total,pages=review_page(reviews,int(controls.get("review_page",1)))
     requests.extend([cells("確認",2,[["最終更新",updated_at]],width=3),cells("確認",4,[["全未解決",total,f"{pages}ページ"]],width=3),
-                     dropdown("確認",3,1,range(1,pages+1))])
+                     page_dropdown("確認",3,1,controls.get("review_page",1),pages)])
     rows=[[r.title[:70],r.detail[:180],link(r.url,"開く →"),r.status,r.fixed_id] for r in shown]
     requests.append(cells("確認",7,rows+[[""]*5 for _ in range(PAGE_SIZE-len(rows))],width=5))
     monetary=[r.fixed_id for r in shown if r.title in {"Amazon金銭","Amazon通知の確認"} and r.fixed_id.startswith(("AM-","MN-"))]
@@ -233,18 +233,7 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
                      cells("ホーム",4,[["記録済み支出",home["amount"] if home else "未集計"],
                      ["買い物件数",home["purchase_count"] if home else "未集計"],["確認が必要",total],
                      ["最終更新",updated_at]],width=3)])
-    candidates=[c for c in catalog.categories if c.active]
-    options=["すべて",*[c.label for c in catalog.categories]]
-    helper=[[label, next((c.category_id for c in catalog.categories if c.label==label),""),"",""] for label in options]
-    helper=helper+[[""]*4 for _ in range(max(0,len(choices)-len(helper)))]
-    for i,choice in enumerate(choices):helper[i][3]=choice
-    if len(helper)>999:raise ValueError("daily_candidate_page_required")
-    # Clear only the small owned helper rectangle, never input form values.
-    requests.append(cells("_候補",2,helper+[[""]*4 for _ in range(999-len(helper))],width=4))
-    requests.extend([dropdown("履歴",4,1,source=f"='_候補'!$A$2:$A${len(options)+1}"),
-                     dropdown("推移",4,1,source=f"='_候補'!$A$2:$A${len(options)+1}")])
-    if candidates:requests.append(dropdown("確認",64,1,[c.label for c in candidates]))
-    if choices:requests.append(dropdown("確認",61,1,source=f"='_候補'!$D$2:$D${len(choices)+1}",strict=False))
+    requests.extend(choice_requests(catalog,choices,controls))
     requests.extend(trend_requests(summary,catalog,current_month,controls,updated_at))
     from .daily_coverage import render_requests as coverage_render
     if controls.get("coverage_enabled"):requests.extend(coverage_render(summary,current_month,controls))
@@ -262,10 +251,9 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
 
 
 def trend_requests(summary,catalog,current_month,controls,updated_at):
+    from .daily_choices import category_id,page_dropdown
     label=controls.get("trend_category","すべて")
-    ids=[c.category_id for c in catalog.categories if c.label==label]
-    if label!="すべて" and len(ids)!=1:raise ValueError("daily_category_selection_changed")
-    category=None if label=="すべて" else (ids[0] if len(ids)==1 else "invalid-category")
+    category=None if label=="すべて" else category_id(catalog,label)
     months=summary.get("months",{})
     amounts={m:(v["amount"] if category is None else dict(v["category_amounts"]).get(category,0)) for m,v in months.items()}
     coverage={(m,route):status for m,states in summary.get("coverage",{}).items() for route,status in states.items()}
@@ -294,7 +282,7 @@ def trend_requests(summary,catalog,current_month,controls,updated_at):
     page=min(pages,max(1,int(controls.get("breakdown_page",1))))
     breakdown=breakdown[(page-1)*150:page*150]
     return [cells("推移",2,[["最終更新",updated_at]],width=3),cells("推移",7,annual,width=3),
-            cells("推移",145,[["内訳ページ"]],width=1),dropdown("推移",145,1,range(1,pages+1)),
+            cells("推移",145,[["内訳ページ"]],width=1),page_dropdown("推移",145,1,page,pages),
             cells("推移",146,[["全カテゴリ",total,f"{page}/{pages}ページ"]],width=3),
             cells("推移",19,[["年月・取込状況","記録済み金額","買い物件数"]],width=3),
             cells("推移",20,monthly,width=3),cells("推移",149,[[selected_year+"年の内訳","記録済み金額"]],width=3),

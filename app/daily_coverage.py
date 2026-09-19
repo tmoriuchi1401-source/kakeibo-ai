@@ -196,6 +196,7 @@ def upgrade_requests(daily,*,current_month):
 
 
 def render_requests(summary,current_month,controls):
+    from .daily_choices import page_dropdown
     month=str(controls.get("coverage_month",current_month));month_key(month)
     page=max(1,int(controls.get("coverage_page",1)))
     routes=summary.get("coverage_routes",{})
@@ -205,7 +206,7 @@ def render_requests(summary,current_month,controls):
     rows=[[v["route"],v["account"],labels.get(states.get(k),"未確認")] for k,v in sorted(routes.items())][(page-1)*50:page*50]
     months=[shift_month(current_month,-i) for i in range(120)]
     requests=[cells("設定",24,[["全経路・口座",len(routes),f"{page}/{pages}ページ"]],width=3),cells("設定",25,[["経路","口座","状況"]],width=3),
-        cells("設定",26,rows+[[""]*3 for _ in range(50-len(rows))],width=3),dropdown("設定",23,1,range(1,pages+1)),
+        cells("設定",26,rows+[[""]*3 for _ in range(50-len(rows))],width=3),page_dropdown("設定",23,1,page,pages),
         dropdown("設定",22,1,months,strict=False),dropdown("設定",11,1,months,strict=False),dropdown("設定",12,1,months,strict=False)]
     if rows:
         requests.extend([{"repeatCell":{"range":grid("設定",25,25+len(rows)),"cell":{"userEnteredFormat":{"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(wrapStrategy,verticalAlignment)"}},

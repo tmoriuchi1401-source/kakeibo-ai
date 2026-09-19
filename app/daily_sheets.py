@@ -48,14 +48,17 @@ class DailySheets:
         return [b.get("values",[]) for b in blocks]
 
     def controls(self,current_month):
-        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4","'設定'!B22:B23","'推移'!B145:B145","'設定'!B101:B101"])
+        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4","'設定'!B22:B23","'推移'!B145:B145","'設定'!B101:B101",
+            "'履歴'!B9:B9","'推移'!B17:B17","'確認'!B73:B75","'確認'!B64:B64","'確認'!B61:B61"])
         def val(block,row,default):
             value=blocks[block][row][0] if len(blocks[block])>row and blocks[block][row] else default
             return default if value=="" else value
         return {"month":val(0,0,"直近13か月"),"category":val(0,1,"すべて"),"search":val(0,2,""),
                 "page":val(0,3,1),"review_page":val(1,0,1),"home_month":val(2,0,current_month),
                 "trend_year":val(3,0,current_month[:4]),"trend_category":val(3,1,"すべて"),
-                "coverage_month":val(4,0,current_month),"coverage_page":val(4,1,1),"breakdown_page":val(5,0,1),"category_page":val(6,0,1)}
+                "coverage_month":val(4,0,current_month),"coverage_page":val(4,1,1),"breakdown_page":val(5,0,1),"category_page":val(6,0,1),
+                "history_choice_page":val(7,0,1),"trend_choice_page":val(8,0,1),"correction_category_page":val(9,0,1),
+                "expense_choice_page":val(9,2,1),"correction_category":val(10,0,""),"correction_choice":val(11,0,"")}
 
     def update_outputs(self,requests):
         titles={spec[0]:title for title,spec in SHEETS.items()}
@@ -105,6 +108,8 @@ class DailySheets:
         controls=self.controls(current_month)
         controls["coverage_enabled"]=CoverageForm(self).installed()
         controls["category_management_enabled"]=CategoryForm(self).installed()
+        from .daily_choices import installed
+        controls["choice_pages_enabled"]=installed(self)
         catalog=load_catalog(self.store.read("catalog"))
         summary=self.store.read("summary")
         if summary is None:raise ProjectionError("projection_bootstrap_required")
@@ -137,9 +142,9 @@ class DailySheets:
                 changes={name:value for name,value in zip(["date","amount","category_label","merchant","item","note"],values[1:7]) if value!=""}
                 if "category_label" in changes:
                     label=changes.pop("category_label")
-                    choices=[c for c in load_catalog(self.store.read("catalog")).categories if c.active and c.label==label]
-                    if len(choices)!=1:raise ProjectionError("correction_category_invalid")
-                    changes["category_id"]=choices[0].category_id
+                    from .daily_choices import category_id
+                    try:changes["category_id"]=category_id(load_catalog(self.store.read("catalog")),label,active_only=True)
+                    except ProjectionError:raise ProjectionError("correction_category_invalid") from None
                 old=inbox.prepare(token,expense_id,changes,form_digest=form_digest)
             except ProjectionError as error:
                 if str(error) not in INPUT_ERRORS:raise
