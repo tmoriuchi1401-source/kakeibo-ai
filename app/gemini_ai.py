@@ -1,7 +1,9 @@
 from __future__ import annotations
 import base64
+import json
 from hashlib import sha256
 from google import genai
+from pydantic import ValidationError
 from .models import ReceiptResult, ProductClassificationBatch
 from .medical_receipt_privacy import Classification
 from .receipt_privacy_gate import ReceiptPrivacyBlocked, require_receipt_ai_permission
@@ -46,29 +48,56 @@ class GeminiAI:
 ルール:
 - 商品ごとに税込の明細金額を抽出。数量が読めれば数量も。
 - 値引きが特定商品に対応すると読める場合はその商品のamountへ反映。
+- 全体値引き・クーポンは、印字された金額を負の明細として記録。二重に値引きしない。
+- 税抜商品が並ぶ場合は、印字された外税を独立明細にしてもよい。内税を加算しない。
+- 数量×単価と明細金額を区別し、全商品・値引き・税を上から下まで読み取る。
+- 合計と明細の差を埋める架空の「調整額」を作らない。合計自体を明細合計で置き換えない。
 - 商品名はレシート表記を基礎に、人が理解できる程度に正規化。
 - 判断不能な商品は「その他 / 未分類」。
 - 店舗全体の合計totalを必ず抽出。
 - 支払方法が読める場合のみ記録。推測しない。
 - 日付はYYYY-MM-DD。読めない場合は空文字。
+- 店舗名も読めない場合は空文字。ファイル名・現在日付から推測しない。
 - 習い事の種類（ピアノ、ダンス、体操、スイミング等）が商品/サービス名から分かる場合、
   カテゴリは教育/習い事、種類はnoteに記録。
 """
         encoded = base64.b64encode(image_bytes).decode("ascii")
         media_type = "document" if mime_type == "application/pdf" else "image"
-        interaction = self.client.interactions.create(
-            model=self.model,
-            input=[
-                {"type": "text", "text": prompt},
-                {"type": media_type, "mime_type": mime_type, "data": encoded},
-            ],
-            response_format={
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": ReceiptResult.model_json_schema(),
-            },
-        )
-        return ReceiptResult.model_validate_json(interaction.output_text)
+        from .receipt_validation import validate_receipt_result
+        correction='';last=None;previous=None;unresolved=None
+        for attempt in range(3):
+            # The same immutable original is reread, never a guessed repair or
+            # an unverified crop. API/transport errors are not replayed here.
+            interaction = self.client.interactions.create(
+                model=self.model,
+                input=[{'type':'text','text':prompt+correction},
+                       {'type':media_type,'mime_type':mime_type,'data':encoded}],
+                response_format={'type':'text','mime_type':'application/json',
+                                 'schema':ReceiptResult.model_json_schema()},
+            )
+            try:
+                result=ReceiptResult.model_validate_json(interaction.output_text)
+            except ValidationError:
+                correction='\n前回の応答は指定JSON形式ではありませんでした。原本から指定形式で再読取してください。'
+                continue
+            last=result
+            ok,issues=validate_receipt_result(result,categories)
+            changed=previous is not None and any(a and a!=b for a,b in (
+                (previous.date,result.date),(previous.merchant,result.merchant),(previous.total,result.total)))
+            if ok and not changed:return result
+            if not ok:unresolved=result
+            if changed:
+                issues=issues+['前回と日付・店舗・合計が変化。原本の印字で再確認']
+            previous=result
+            correction=('\n検証で次の問題が見つかりました: '+'; '.join(issues)+
+                '\n前回結果は誤りを含む参考データです。原本を拡大して見直し、読み落とした商品・数量・値引き・外税を確認してください。'
+                '印字を確認できない項目は推測せず未確定のまま返してください。\n前回結果:\n'+
+                json.dumps(result.model_dump(),ensure_ascii=False))
+        if last is None:raise RuntimeError('receipt_response_invalid')
+        # A changed total must not make an omitted item look balanced. If the
+        # bounded reread could not corroborate it, preserve the invalid reading
+        # for review rather than posting the uncorroborated replacement.
+        return unresolved or last
 
     def classify_products(self, products: list[dict],
                           categories: list[tuple[str, str]]) -> ProductClassificationBatch:

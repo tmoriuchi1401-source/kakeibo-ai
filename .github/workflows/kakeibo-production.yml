@@ -77,6 +77,8 @@ jobs:
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.6-flash
+      KAKEIBO_LOCAL_OCR_ENABLED: 'true'
+      KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-ocr-models
       RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
       PROCESSED_DRIVE_FOLDER_ID: ${{ secrets.PROCESSED_DRIVE_FOLDER_ID }}
       PAYPAY_DRIVE_FOLDER_ID: ${{ secrets.PAYPAY_DRIVE_FOLDER_ID }}
@@ -130,10 +132,12 @@ jobs:
       - name: Install dependencies and existing OCR runtime
         run: |
           pip install -r requirements.txt
+          pip install -r requirements-local-ocr.txt
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
           tesseract --list-langs | grep -qx jpn
           tesseract --list-langs | grep -qx eng
+          python -m app.receipt_local_ocr prepare
       - name: Execute sources and dependent accounting serially
         shell: bash
         env:

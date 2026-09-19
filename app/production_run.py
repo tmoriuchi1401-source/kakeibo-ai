@@ -52,8 +52,9 @@ DEPENDENCIES = {
     "expenses_refresh": ("auto_expense",),
 }
 COUNT_KEYS = frozenset({
+    "medical_local_written",
     "found", "fetched", "new", "written", "written_purchases", "new_eligible",
-    "already_present", "duplicate", "needs_review", "review", "withheld",
+    "already_present", "duplicate", "needs_review", "review", "withheld", "deferred",
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
     "files_seen", "files_new", "files_processed", "write_requests",
     "expenses_created", "expenses_updated", "updated", "unchanged",

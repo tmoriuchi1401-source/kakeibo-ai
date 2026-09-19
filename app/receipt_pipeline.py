@@ -6,18 +6,7 @@ from .receipt_privacy_gate import evaluate_receipt_privacy
 from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
-
-def validate_receipt_result(result, categories):
-    """The existing normal-receipt validation, also used for approved reanalysis."""
-    allowed=set(categories)
-    invalid=[x for x in result.items if (x.major_category,x.minor_category) not in allowed]
-    item_sum=sum(x.amount for x in result.items)
-    tolerance=max(10, round(abs(result.total)*0.01))
-    notes=[]
-    if invalid: notes.append("カテゴリ不正")
-    if abs(item_sum-result.total)>tolerance: notes.append(f"明細合計{item_sum}≠レシート合計{result.total}")
-    if not result.date: notes.append("日付不明")
-    return not notes, notes
+from .receipt_validation import validate_receipt_result
 
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,

@@ -104,7 +104,9 @@ def execute(env,apply):
             from .settings import service_account_source
             from .medical_crop_review import identity_key
             key_path,key_info=service_account_source();key_info=key_info or json.loads(Path(key_path).read_bytes())
-            auto_written=apply_automatic(review,identity_key=identity_key(key_info['private_key']),policy=policy)
+            from .medical_auto_posting import WRITE_LIMIT
+            remaining=max(0,WRITE_LIMIT-int(env.get('MEDICAL_LOCAL_WRITTEN','0')))
+            auto_written=apply_automatic(review,identity_key=identity_key(key_info['private_key']),policy=policy,write_limit=remaining)
         written+=auto_written;rows=review.render()
         if store.value.get('confirmation_ui_version')!=2:
             configure_ui(db,validation_only=True)
@@ -120,7 +122,7 @@ def execute(env,apply):
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
         fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
-    plans=[];medical_plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'failure':0}
+    plans=[];medical_plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
@@ -140,6 +142,12 @@ def execute(env,apply):
                 import base64
                 key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
                 rid=review_id('medical',source)
+                if review.items[rid]['status'] in {'applied','pending','closed_user'}:
+                    if getattr(settings,'processed_drive_folder_id','') and review.items[rid].get('local_decision'):
+                        from .medical_local_reading import archive_local
+                        from .google_clients import drive_service
+                        archive_local(review,source,folder,normalize_folder_id(settings.processed_drive_folder_id),drive_service())
+                    continue
                 # Automatic mode is independent of saved UI coordinates and
                 # owner attestations, including malformed/old manual records.
                 crop_review=None if automatic else store.value.get('medical_crop_reviews',{}).get(rid)
@@ -153,6 +161,23 @@ def execute(env,apply):
                     packet,crop={'source':source,'fields':{},'status':'held','reason':'automatic_scope_or_owner_input'},None
                 else:
                     packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic)
+                if packet['status']=='local_ready':
+                    from .medical_local_reading import apply_local
+                    from .medical_auto_posting import WRITE_LIMIT
+                    from .models import ReceiptResult
+                    review.render()
+                    if counts['medical_local_written']<WRITE_LIMIT:
+                        parsed=ReceiptResult.model_validate(packet['local_parsed'])
+                        if apply_local(review,source,folder,parsed,packet['local_provenance']):
+                            counts['medical_local_written']+=1;counts['written']+=1
+                            if getattr(settings,'processed_drive_folder_id',''):
+                                from .medical_local_reading import archive_local
+                                from .google_clients import drive_service
+                                archive_local(review,source,folder,normalize_folder_id(settings.processed_drive_folder_id),drive_service())
+                            continue
+                        reason='existing_accounting_or_review_conflict'
+                    else:reason='automatic_run_limit'
+                    packet.pop('local_parsed',None);packet.update(status='held',reason=reason)
                 packet['review_id']=review_id('medical',source)
                 if crop is not None:
                     # Derived pixels only; no original or OCR file is written.
@@ -171,7 +196,7 @@ def execute(env,apply):
             counts['blocked']+=1;blocked_sources.add(f['id'])
             review.observe_intake_hold(source,folder,gate)
     review.finish_intake_scan(blocked_sources)
-    if not env.get('MEDICAL_PREPARE_DIR'):counts['written']=review.apply_confirmations()
+    if not env.get('MEDICAL_PREPARE_DIR'):counts['written']+=review.apply_confirmations()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     create_ui=TITLE not in db.sheet_titles()
     counts['review_rows']=review.render()

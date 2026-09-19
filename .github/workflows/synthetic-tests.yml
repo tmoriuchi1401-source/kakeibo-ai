@@ -14,6 +14,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  local-ocr-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-ocr-models
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify pinned public models and offline pixel processing
+        run: |
+          pip install -r requirements.txt -r requirements-local-ocr.txt
+          python -m app.receipt_local_ocr prepare
+          python - <<'PY'
+          import socket
+          from PIL import Image
+          from app.receipt_local_ocr import read_tokens
+          def deny(*args, **kwargs):
+              raise AssertionError('OCR runtime must be offline')
+          socket.socket.connect = deny
+          socket.create_connection = deny
+          assert read_tokens(Image.new('RGB', (300, 200), 'white')) == []
+          PY
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

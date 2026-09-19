@@ -414,7 +414,10 @@ class ReceiptConfirmation:
             elif medical:
                 prior='本人未確定（入力値はH:O）'
                 values=item.get('medical_candidates',{})
-                if values:
+                if item.get('local_decision') and item['status'] in {'pending','applied'}:
+                    local=item['local_decision']['parsed']
+                    candidate='【自動反映内容】\n日付: '+local['date']+'\n施設: '+local['merchant']+'\n実支払額: '+str(local['total'])+'\n原本をローカルで照合。外部送信なし。'
+                elif values:
                     candidate='【未確定候補】\n日付（非AI）: '+str(values.get('date') or '不足')+'\n施設（非AI）: '+str(values.get('issuer') or '不足')+'\n実支払額（画像AI）: '+str(values.get('amount_yen') or '不足')+'\nカテゴリ候補: '+str(values.get('category') or '不足')+'\n'+str(values.get('review_message',''))
                 else:candidate='候補なし。患者名・病名・診療内容は入力不要'
             else:

@@ -4,7 +4,8 @@ Callers hold the top-level kakeibo-production workflow concurrency lock. This
 module is not a distributed lock. A durable pending marker is written BEFORE a
 source can write Sheets. A crash or an ambiguous Drive response requires an
 operator to reconcile the existing stable IDs before explicitly releasing it.
-No operation retries, rolls back, creates folders, or silently initializes state.
+Transient read failures receive bounded retries. Writes never retry, roll back,
+create folders, or silently initialize state.
 """
 from __future__ import annotations
 
@@ -245,17 +246,30 @@ class Transport(Protocol):
 class DriveStateTransport:
     """Use the caller's existing authenticated Drive service and precreated file.
 
-    No create/delete/list-by-name, no OAuth changes, no automatic retries.
+    No create/delete/list-by-name, no OAuth changes, no automatic write retries.
     Folder permission/ownership checks are a separate cutover preflight.
     """
     def __init__(self, service, binding: StateBinding):
         self.service, self.binding = service, binding
 
+    @staticmethod
+    def _read_request(request):
+        import http.client
+        import time
+        from googleapiclient.errors import HttpError
+        for attempt in range(3):
+            try:return request.execute(num_retries=0)
+            except Exception as error:
+                transient=(isinstance(error,(TimeoutError,ConnectionError,http.client.RemoteDisconnected))
+                    or isinstance(error,HttpError) and error.resp.status in {429,500,502,503,504})
+                if not transient or attempt==2:raise
+                time.sleep(.5*2**attempt)
+
     def _metadata(self):
-        meta = self.service.files().get(
+        meta = self._read_request(self.service.files().get(
             fileId=self.binding.file_id, supportsAllDrives=True,
             fields="id,parents,trashed,mimeType,capabilities(canEdit)",
-        ).execute(num_retries=0)
+        ))
         if (meta.get("trashed") or meta.get("parents") != [self.binding.folder_id]
                 or meta.get("mimeType") != "application/json"):
             raise StateError("state_drive_target_mismatch")
@@ -264,9 +278,9 @@ class DriveStateTransport:
     def read(self) -> bytes:
         try:
             self._metadata()
-            return self.service.files().get_media(
+            return self._read_request(self.service.files().get_media(
                 fileId=self.binding.file_id, supportsAllDrives=True,
-            ).execute(num_retries=0)
+            ))
         except StateError:
             raise
         except Exception:

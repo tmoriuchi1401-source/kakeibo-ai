@@ -254,6 +254,11 @@ class StyledDB(MemoryDB):
     configure_review_validation = SheetsDB.configure_review_validation
     format_date_column = SheetsDB.format_date_column
 
+    def set_raw_range(self, rng, rows):
+        title, region = rng.split('!')
+        assert title.strip("'") == '支出一覧' and region.startswith('A2:J')
+        self.sheets['支出一覧'] = deepcopy(rows)
+
     def get(self, rng):
         if rng == "支出明細!A2:M": return deepcopy(self.sheets["支出明細"])
         return super().get(rng)
@@ -303,8 +308,20 @@ def test_real_expense_refresh_retains_ui_and_business_contract():
     sid = IDS["支出一覧"]
     assert db.svc.dimensions[sid, "COLUMNS", 9]["hiddenByUser"]
     assert db.svc.cells[sid, 1, 3]["userEnteredFormat"]["numberFormat"]["type"] == "NUMBER"
-    assert db.svc.dimensions[sid, "ROWS", 100]["pixelSize"] == 56
+    assert db.svc.dimensions[sid, "ROWS", 99]["pixelSize"] == 56
+    assert next(s['properties']['gridProperties']['rowCount'] for s in db.svc.meta['sheets'] if s['properties']['sheetId']==sid)==100
     assert refresh_layout_requests(metadata(), "支出一覧") == []
+
+
+def test_expense_refresh_grows_only_when_needed_and_never_inserts_blank_rows():
+    db=StyledDB()
+    db.sheets['支出明細']=[[str(i),'2026-09-01','店','品',100,'食費','食料品','','fixture','','','','active'] for i in range(105)]
+    ExpenseViewPipeline(db).refresh()
+    sheet=next(s['properties'] for s in db.svc.meta['sheets'] if s['properties']['title']=='支出一覧')
+    assert sheet['gridProperties']['rowCount']==106 and len(db.sheets['支出一覧'])==105
+    before=deepcopy(db.sheets['支出一覧'])
+    ExpenseViewPipeline(db).refresh()
+    assert sheet['gridProperties']['rowCount']==106 and db.sheets['支出一覧']==before
 
 
 def test_restore_captures_ui_fields_only_and_disables_hooks_without_deletion():
