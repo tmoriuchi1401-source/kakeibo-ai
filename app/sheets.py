@@ -41,8 +41,8 @@ def category_rule_ui_control_requests(*, sheet_id: int, helper_sheet_id: int,
     helper_rows = []
     for row_num in range(start_row, end_row + 1):
         helper_rows.append({"values": [{"userEnteredValue": {"formulaValue": (
-            "=IFERROR(TRANSPOSE(UNIQUE(FILTER('カテゴリ'!$B$2:$B,"
-            f"'カテゴリ'!$A$2:$A='{CATEGORY_RULE_UI_SHEET}'!C{row_num}))),\"\")"
+            f"=IFERROR(LET(major,INDEX('{CATEGORY_RULE_UI_SHEET}'!C:C,ROW()),IF(major=\"\",\"\","
+            "TRANSPOSE(UNIQUE(FILTER('カテゴリ'!$B$2:$B,'カテゴリ'!$A$2:$A=major))))),\"\")"
         )}}]})
     requests = [
         {"updateCells": {"range": {"sheetId": helper_sheet_id,
@@ -209,14 +209,17 @@ class SheetsDB:
             for marker in helper.get("developerMetadata", [])
         ):
             return
-        from .sheets_ui_actions import expense_minor_category_validation_requests
+        from .sheets_ui_actions import expense_minor_category_validation_requests, expense_helper_growth_requests
+        growth = expense_helper_growth_requests(helper, end)
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid, body={
-            "requests": expense_minor_category_validation_requests(start, end),
+            "requests": growth + expense_minor_category_validation_requests(start, end),
         }).execute()
+        if growth:self._invalidate_sheet_metadata()
     def append_raw(self, sheet:str, rows:list[list]):
         """Append literal ledger values; do not interpret bank descriptions as formulas."""
         if not rows:return
-        self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="RAW",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+        reply=self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="RAW",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
+        if sheet == "支出明細":self._restore_expense_category_validation_for_append(reply)
     def clear(self,rng:str):
         self.svc.spreadsheets().values().clear(
             spreadsheetId=self.sid,range=rng,body={}
@@ -568,6 +571,10 @@ class SheetsDB:
             ]
         rule_position=positions["rule"]
         if helper and rule_position["count"]:
+            from .sheets_ui_actions import expense_helper_growth_requests
+            growth=expense_helper_growth_requests(helper,rule_position['start']+rule_position['count']-1)
+            requests.extend(growth)
+            if growth:self._invalidate_sheet_metadata()
             requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
         backfill_position=positions["backfill"]
         requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))

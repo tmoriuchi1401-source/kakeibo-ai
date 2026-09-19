@@ -88,8 +88,8 @@ def test_expense_category_rules_are_master_derived_and_row_relative():
     assert helper_write["range"]["endRowIndex"] == CAP + 1
     assert "SORT(UNIQUE(FILTER(カテゴリ!$A$2:$A" in helper_write["rows"][1]["values"][0]["userEnteredValue"]["formulaValue"]
     assert "FILTER(カテゴリ!$B$2:$B" in helper_write["rows"][1]["values"][1]["userEnteredValue"]["formulaValue"]
-    assert "'支出明細'!F2" in helper_write["rows"][1]["values"][1]["userEnteredValue"]["formulaValue"]
-    assert "'支出明細'!F3" in helper_write["rows"][2]["values"][1]["userEnteredValue"]["formulaValue"]
+    assert "INDEX('支出明細'!F:F,ROW())" in helper_write["rows"][1]["values"][1]["userEnteredValue"]["formulaValue"]
+    assert 'IF(major="","",' in helper_write["rows"][2]["values"][1]["userEnteredValue"]["formulaValue"]
     rules = [r["setDataValidation"] for r in requests if "setDataValidation" in r]
     major, *minors = rules
     assert len(minors) == CAP
