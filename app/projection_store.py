@@ -51,7 +51,7 @@ class DriveProjectionStore:
         return allowed
 
     def _name(self, key):
-        if not re.fullmatch(r"catalog|index|journal|summary|corrections|money|money-reviews|month-\d{4}-\d{2}", key):
+        if not re.fullmatch(r"catalog|index|journal|summary|corrections|money|money-reviews|coverage|month-\d{4}-\d{2}", key):
             raise ProjectionError("projection_key_invalid")
         return f"kakeibo-projection-{key}.json"
 

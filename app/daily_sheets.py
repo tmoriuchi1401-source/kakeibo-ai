@@ -48,13 +48,14 @@ class DailySheets:
         return [b.get("values",[]) for b in blocks]
 
     def controls(self,current_month):
-        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4"])
+        blocks=self.read_ranges(["'履歴'!B3:B6","'確認'!B3:B3","'ホーム'!B3:B3","'推移'!B3:B4","'設定'!B22:B23","'推移'!B145:B145"])
         def val(block,row,default):
             value=blocks[block][row][0] if len(blocks[block])>row and blocks[block][row] else default
             return default if value=="" else value
         return {"month":val(0,0,"直近13か月"),"category":val(0,1,"すべて"),"search":val(0,2,""),
                 "page":val(0,3,1),"review_page":val(1,0,1),"home_month":val(2,0,current_month),
-                "trend_year":val(3,0,current_month[:4]),"trend_category":val(3,1,"すべて")}
+                "trend_year":val(3,0,current_month[:4]),"trend_category":val(3,1,"すべて"),
+                "coverage_month":val(4,0,current_month),"coverage_page":val(4,1,1),"breakdown_page":val(5,0,1)}
 
     def update_outputs(self,requests):
         titles={spec[0]:title for title,spec in SHEETS.items()}
@@ -99,12 +100,15 @@ class DailySheets:
 
     def refresh(self,*,current_month,updated_at,reviews,ledger_sheet_id=None):
         self.verify()
+        from .daily_coverage import CoverageForm
+        controls=self.controls(current_month)
+        controls["coverage_enabled"]=CoverageForm(self).installed()
         catalog=load_catalog(self.store.read("catalog"))
         summary=self.store.read("summary")
         if summary is None:raise ProjectionError("projection_bootstrap_required")
         requests=render_requests(read_month=lambda month:load_month(self.store.read("month-"+month)),
             summary=summary,catalog=catalog,current_month=current_month,source_id=self.source_id,
-            controls=self.controls(current_month),reviews=reviews,updated_at=updated_at,
+            controls=controls,reviews=reviews,updated_at=updated_at,
             ledger_sheet_id=ledger_sheet_id)
         return self.update_outputs(requests)
 

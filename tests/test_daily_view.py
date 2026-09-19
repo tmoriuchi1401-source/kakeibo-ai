@@ -59,6 +59,24 @@ def test_trends_show_missing_as_unknown_and_include_10_years():
     assert any(r[0].startswith("2026-09\n進行月") and r[1]==100 for r in values)
 
 
+def test_category_breakdown_pages_all_categories_without_changing_totals_or_selection():
+    from app.daily_view import trend_requests
+    from app.monthly_projection import CategoryCatalog
+    catalog=CategoryCatalog.bootstrap(("分類",str(i)) for i in range(301))
+    summary={"months":{"2026-08":{"amount":301,"purchase_count":301,
+        "category_amounts":[[c.category_id,1] for c in catalog.categories]}}}
+    labels=[]
+    for page in (1,2,3):
+        requests=trend_requests(summary,catalog,"2026-09",{"breakdown_page":page},"now")
+        block=next(r["updateCells"] for r in requests if r.get("updateCells",{}).get("range",{}).get("startRowIndex")==149)
+        labels.extend(r["values"][0]["userEnteredValue"]["stringValue"] for r in block["rows"] if r["values"][0])
+        for r in requests:
+            if "updateCells" not in r:continue
+            target=r["updateCells"]["range"]
+            assert not(target["startRowIndex"]<=144<target["endRowIndex"] and target["startColumnIndex"]<=1<target["endColumnIndex"])
+    assert len(set(labels))==len(labels)==301 and summary["months"]["2026-08"]["amount"]==301
+
+
 def test_merchant_formula_text_is_literal_and_category_filter_is_not_silently_lost():
     import pytest
     data=row("a");data[2]='=IMPORTXML("https://invalid","x")'

@@ -354,7 +354,7 @@ def compare_years(year: int, current_month: str, amounts: Mapping[str, int],
             current, previous = f"{year:04d}-{number:02d}", f"{year-1:04d}-{number:02d}"
             if current >= current_month:
                 continue
-            if all(month in amounts and all(coverage.get((month, route)) == "complete"
+            if all(month in amounts and all(coverage.get((month, route)) in {"complete","not_applicable"}
                                            for route in required_routes) for month in (current, previous)):
                 months.append(number)
     current_total = sum(amounts[f"{year:04d}-{n:02d}"] for n in months)

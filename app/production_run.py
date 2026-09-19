@@ -58,6 +58,7 @@ COUNT_KEYS = frozenset({
     "corrections_submitted", "corrections_applied", "corrections_failed", "corrections_pending",
     "correction_form_ready", "correction_input_changed",
     "money_reviews_submitted", "money_reviews_applied", "money_reviews_failed", "money_reviews_pending",
+    "coverage_submitted", "coverage_applied", "coverage_failed", "coverage_pending", "coverage_form_ready", "coverage_input_changed",
     "money_review_form_ready", "money_review_input_changed",
     "money_eligible", "money_posted", "money_linked", "money_review", "money_duplicate", "money_supplement", "money_transfer",
     "medical_local_written",

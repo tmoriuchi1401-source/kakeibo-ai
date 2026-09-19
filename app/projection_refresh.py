@@ -118,6 +118,11 @@ class ProjectionRefresh:
         self._save("summary", summary)
         before = self.journal.read()
         replace_document(self.store, "journal", before, {**empty_journal(), "generation": before["generation"] + 1})
+        # Completion is user input, kept outside disposable summary values.
+        # Rebuilding a lost summary must restore it without re-importing money.
+        if self.store.read("coverage") is not None:
+            from .daily_coverage import Coverage
+            Coverage(self.store).sync()
         return {"projection_months": len(months), "projection_rows": len(index.by_id), "errors": 0}
 
     @staticmethod

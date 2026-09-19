@@ -132,7 +132,8 @@ def install_copy_requests(source_id,target_id,old_sheet_ids,*,current_month):
     requests.append({"createDeveloperMetadata":{"developerMetadata":{"metadataKey":OWNED_MARKER,
         "metadataValue":sha256(source_id.encode()).hexdigest(),"visibility":"DOCUMENT","location":{"spreadsheet":True}}}})
     from .daily_money_review import install_requests
-    return [r for r in requests if r]+layout_requests()+install_requests(source_id)
+    from .daily_coverage import install_requests as coverage_install
+    return [r for r in requests if r]+layout_requests()+install_requests(source_id)+coverage_install(source_id,current_month=current_month)
 
 
 def layout_requests():
@@ -190,7 +191,7 @@ def review_page(items, page=1):
 def coverage_status(summary,month):
     routes=summary.get("required_routes",[])
     states=summary.get("coverage",{}).get(month,{})
-    return "完了" if routes and all(states.get(route)=="complete" for route in routes) else "取込状況未確認"
+    return "完了" if routes and all(states.get(route) in {"complete","not_applicable"} for route in routes) else "取込状況未確認"
 
 
 def render_requests(*,read_month,summary,catalog,current_month,source_id,controls,reviews,updated_at,ledger_sheet_id=None):
@@ -243,6 +244,8 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
     if candidates:requests.append(dropdown("確認",64,1,[c.label for c in candidates]))
     if choices:requests.append(dropdown("確認",61,1,source=f"='_候補'!$D$2:$D${len(choices)+1}",strict=False))
     requests.extend(trend_requests(summary,catalog,current_month,controls,updated_at))
+    from .daily_coverage import render_requests as coverage_render
+    if controls.get("coverage_enabled"):requests.extend(coverage_render(summary,current_month,controls))
     for title,start,count,width in [("履歴",11,len(page.rows),3),("確認",7,len(shown),4)]:
         if count:
             requests.append({"repeatCell":{"range":grid(title,start,start+count-1,0,width),"cell":{"userEnteredFormat":{
@@ -282,8 +285,12 @@ def trend_requests(summary,catalog,current_month,controls,updated_at):
             for key,amount in item["category_amounts"]:category_amounts[key]=category_amounts.get(key,0)+amount
     labels={c.category_id:c.label for c in catalog.categories}
     breakdown=[[labels.get(key,"未分類"),value] for key,value in sorted(category_amounts.items(),key=lambda x:-x[1])]
-    if len(breakdown)>150:raise ValueError("daily_category_breakdown_page_required")
+    total=len(breakdown);pages=max(1,math.ceil(total/150))
+    page=min(pages,max(1,int(controls.get("breakdown_page",1))))
+    breakdown=breakdown[(page-1)*150:page*150]
     return [cells("推移",2,[["最終更新",updated_at]],width=3),cells("推移",7,annual,width=3),
+            cells("推移",145,[["内訳ページ"]],width=1),dropdown("推移",145,1,range(1,pages+1)),
+            cells("推移",146,[["全カテゴリ",total,f"{page}/{pages}ページ"]],width=3),
             cells("推移",19,[["年月・取込状況","記録済み金額","買い物件数"]],width=3),
             cells("推移",20,monthly,width=3),cells("推移",149,[[selected_year+"年の内訳","記録済み金額"]],width=3),
             cells("推移",150,breakdown+[[""]*3 for _ in range(150-len(breakdown))],width=3)]
