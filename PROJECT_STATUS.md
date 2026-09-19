@@ -28,8 +28,10 @@
 - production factoryは固定11文書＋13キャッシュの`RollingProjectionStore`を使用する。所有者が事前に作った24ファイルだけを更新し、欠落時は新規作成せず停止。初期ファイルには正本hash/key/schema/nullを保存し、読む時と更新直前に照合する。アップロード元とSAのOAuthアプリが違っても、app-private metadataへの依存なくsource bindingを検査できる。
 - 13か月より古い正本・全月の集計・固定ID index・入力/要求は保持する。過去修正は対象月の集計だけを更新し、最近のキャッシュを上書きしない。月替わりは必要なslotだけを入れ替え、1/13/48か月進行と保存結果不明後の再開を検証。空キャッシュは未取込月のゼロ集計を作らず、coverage本人入力も再生成後に保持する。
 - 通常表示は13キャッシュだけを読み、古い月の金銭重複照合はwriter内でindexから対象月の正本だけを再構築する。キャッシュ入替えで過去の候補を見失わない。日常表示は未更新/欠落cacheを検出して停止し、欠落を支出0件として公開しない。10万買い物/20万商品明細でも全120か月の集計と過去修正を保持し、日常adapterが正本/indexを読まないことを確認した。
-- 関連67件、Windows全回帰2,391件成功（105.71秒）。その後に旧方式/新方式を対比する大規模テスト2件成功（34.55秒）。compile/diff-check実施。新commitのLinux CIはpush後に確認する。
+- 関連67件、Windows全回帰2,391件成功（105.71秒）。その後に旧方式/新方式を対比する大規模テスト2件成功（34.55秒）、表示保護の追加を含む関連38件成功。compile/diff-check実施。実装`c57b787`のLinux CI `35475867145`全3job成功を確認し、PR #41へ反映した。
 - Google Driveに所有者限定の「家計簿AI 集計（切替準備）」フォルダ1個と空JSON24個を作成。全24ファイルのenvelope、親folder、MIME、owner-only permissionを読戻しで一致確認。manifestはGit対象外`.private/projection-provision.json`、初期payloadは`.private/projection-initial/`。実Google変更25件、金融値/本人入力/正本/日常表示/既存権限/本番フラグの変更0。SAへの既存共有範囲内の接続と実bootstrapは次工程。
+- 正本に既存のSA writerが1つあることを照合し、集計folderの同じwriterへの共有を準備したが、自動承認レビューが受取アカウント・権限・範囲の明示的なユーザー承認不足として送信を拒否した。共有変更は未実行。folder/配下24ファイルと日常ファイルへの同SAの編集権限をまとめて確認中で、承認なしの別経路による再試行はしない。
+- 接続用IDの暗号化はGoogleの公開証明書だけで準備し、秘密鍵は取得しない。公開証明書が2つあるため、2組の候補をGit対象外`.private/daily-projection-binding-candidates.json`へ保存。本番の既存鍵の公開fingerprintとの一致確認後に選ぶ。GitHub変数へは未設定で、候補の推測・試行適用はしない。
 - Goal継続中。実初期化、排他下の最新backup/移行、金銭/未完了要求の隔離復元、main/承認/実行SHA一致、非0本番canary/readback/replay0と通常切替、スマホ実機確認は未完了。
 
 ### 2026-09-20 分類承認の集約と保存済みAmazon商品の再利用（本番未接続）

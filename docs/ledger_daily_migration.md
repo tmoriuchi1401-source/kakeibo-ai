@@ -255,3 +255,5 @@ slotは年月通番mod13で決まり、payloadにも実年月を保持する。�
 事前準備として[集計フォルダ](https://drive.google.com/drive/folders/1xixXmEOIwAVWvV2KRJduTL3Nza0M7ZGX)と空JSON24個を所有者のDriveへ作成した。全内容と全permissionを読戻し、source binding/key/null、MIME、親folder、owner-onlyを確認。24ファイルは金融値を含まず、実projectionはまだ初期化していない。保存先/ID/検証済みkey一覧を`.private/projection-provision.json`に保存。実Google変更はfolder1＋upload24の25件。まだ既存SAへ共有していない。
 
 切替時は既存正本の実行主体だけを必要最小限で共有し、encrypted folder bindingを設定する。復元対象はこの固定24ファイル、正本の対象範囲、日常の本人入力。slot単体を古い月へ戻した状態で日常表示を再開せず、journal/index/summaryと整合するbackup組を戻すか、正本からprojectionを再生成する。金銭book/未完了intentの復元検証と実SAによるbootstrapは未完了。
+
+実装`c57b787`のLinux CI `35475867145`は全3job成功。既存SAへのfolder共有は自動承認レビューが明示的な受取人/権限/範囲の承認不足として拒否したため未実行で、日常ファイルと合わせてユーザーへ確認中。承認までは共有を別経路で再試行しない。Google公開証明書だけで接続用binding候補をprivateに準備したが、証明書が2つあるため本番で使う公開鍵fingerprintとの照合が必要。秘密鍵の取得や候補の推測適用は行わず、GitHub変数も未設定。
