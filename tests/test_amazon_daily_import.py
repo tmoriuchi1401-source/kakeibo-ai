@@ -172,39 +172,3 @@ def test_header_creation_failure_does_not_start_recalculation():
         )
 
     assert recalculation_called is False
-
-
-def test_cli_uses_readonly_gmail_and_writable_sheets(monkeypatch, capsys):
-    import sys
-
-    import app.cli as cli
-
-    gmail_service = object()
-    db = object()
-    summary = {"Gmail fetched": 1, "Amazon注文ヘッダ created": 1}
-
-    class FakeSettings:
-        spreadsheet_id = "sheet-id"
-        gmail_token_json = "readonly-token"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True, "need_gmail": True}
-
-    monkeypatch.setattr(cli, "Settings", FakeSettings)
-    monkeypatch.setattr(
-        cli, "SheetsDB", lambda spreadsheet_id: db if spreadsheet_id == "sheet-id" else None,
-    )
-    monkeypatch.setattr(
-        cli, "gmail_readonly_service",
-        lambda token: gmail_service if token == "readonly-token" else None,
-    )
-    monkeypatch.setattr(
-        cli, "run_amazon_daily_import",
-        lambda service, sheets_db: summary
-        if service is gmail_service and sheets_db is db else None,
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-daily-import"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == str(summary)

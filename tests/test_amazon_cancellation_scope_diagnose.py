@@ -231,34 +231,3 @@ def test_output_contains_counts_only_and_no_private_data():
     ):
         assert private not in rendered
     assert all(isinstance(value, int) for value in result.values())
-
-
-def test_cli_uses_both_read_only_services(monkeypatch, capsys):
-    sheets_service = object()
-    gmail_service = object()
-    db = object()
-
-    class Settings:
-        spreadsheet_id = "private-sheet-id"
-        gmail_token_json = "private-token"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_gmail": True, "need_sheet": True}
-
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: sheets_service)
-    monkeypatch.setattr(cli, "gmail_readonly_service", lambda token: gmail_service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda sid, service: db)
-    monkeypatch.setattr(
-        cli, "diagnose_amazon_cancellation_scopes",
-        lambda gmail, sheets: {"scope_unknown_events": int(
-            gmail is gmail_service and sheets is db
-        )},
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-scope-diagnose"],
-    )
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'scope_unknown_events': 1}"

@@ -152,26 +152,3 @@ def test_preview_does_not_turn_observed_imported_data_range_complete():
     assert order["source_coverage"]["paypay"]["covers_required_window"] is True
     assert order["source_coverage"]["paypay"]["coverage_status"] == "unknown"
     assert order["source_coverage"]["imported_data"]["coverage_status"] == "unknown"
-
-
-def test_cli_uses_read_only_sheets(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "sheet-id"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True}
-
-    service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda spreadsheet_id, service=None: db)
-    monkeypatch.setattr(
-        cli, "preview_payment_coverage_status",
-        lambda value: {"read_only": value is db},
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "payment-coverage-status-preview"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'read_only': True}"

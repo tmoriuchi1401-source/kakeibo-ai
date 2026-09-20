@@ -22,6 +22,225 @@
 
 ## 1. Last verified
 
+### 2026-09-20 main統合前のCI完了・実行ゲート停止の承認待ち
+
+- mainを再fetchして`c8ef626731cc8a941982a0d77b22e7ee4d88af31`、PR #41はmerge可能。復元検証`4ac5fc4`のLinux CI `35478307054`は全3job成功。統合後の同一main SHAを検証するため合成CIのpush対象にmainを追加し、`5efe9dd`のCI `35478523582`も全3job成功、関連55テスト成功。CIに本番Secretsは渡さない。
+- 実GitHub変数を再取得。production/scheduleはtrue、legacy disabledはtrue、validated mainは上記`c8ef626`、money/corrections modeは未設定。実行中/待機中Actionsは0。直近定期run `35475076208`はreceiptsが`source_reconciliation_required`で失敗し、cardと後続会計は依存停止。既存の未完了状態を消去/初期化していない。
+- 統合前に現設定をprivate退避してproduction/scheduleをfalseにする操作を準備したが、自動承認レビューが「この2設定と範囲への明示的なユーザー承認不足」として実行前に拒否。退避ファイルも作成されず、読戻しでも両値true・validated SHA不変。main移動によって間接的にwriterを止める回避もせず、PRは未統合のまま。
+- 既存SAへの日常/集計共有の確認と、本番/定期実行2ゲートの一時停止・PR統合の確認を1つの入力欄へまとめた。共有/停止/本番接続/初期化/非0canaryは未実行。実Google変更0、本番変数変更0。承認後は停止読戻し→実行中writer終了確認→main統合/同SHA CI→validated SHA更新/公開鍵照合→既存共有範囲の接続→最新backup/照合/移行→非0canary/replay0の順で再開する。receiptsの既存未完了状態は正本との照合なしで解除しない。
+
+### 2026-09-20 金銭・未完了要求と合成台帳の実Google隔離復元
+
+- 前工程`262b019`のLinux CI `35477141311`全3job成功。所有者限定・本番未登録の隔離folderで、合成の24状態文書と一式backupを作成し、全payload/MIME/親folder/共有範囲を検証した。money/corrections/money-reviews/journalを変更後、Google上のbackupから同じ4ファイルIDへ復元し、全24文書の一致を確認した。
+- 合成の支出2行・取込1行だけを持つnative Sheetsを同folderへ作成。支出の金額と本人メモを変更し、backupから同じSheetの2セルへ復元。全固定ID/日付/金額/分類/本人入力、対象書式/入力規則が一致。Google desktop/100%で2タブを確認した。実家計データをこの検証へコピーせず、本番の正本・日常・共有・フラグの変更0。
+- Googleから再取得した24文書と台帳値をローカルの合成adapterへ渡し、記帳後の結果不明、年越し日付修正後の結果不明、本人の保留後の結果不明の3件を再開。追加記帳/行更新0、年越し前後の再集計一致、再実行の文書更新0を確認。これはnative保存・復元とローカルengine再開の組合せであり、既存SAによる本番Actions記帳の証明ではない。
+- `tests/test_projection_restore.py`に一式復元・欠落・重複・別source・不明keyの5検証を追加。金銭/修正/集計の関連106件成功（30.83秒）。実Google mutationは37件（folder1、JSON upload25、JSON変更4＋復元4、native Sheets import1、変更/復元batch各1）。全て隔離対象。退避/manifest/読戻し/検証結果はGit対象外`.private/isolated-money-restore/`に保存。
+- Goal継続中。既存SAへの共有は自動承認レビューが明示的な受取人・編集権限・対象範囲の承認不足として拒否しており、確認への回答待ち。別経路で再試行していない。main統合、実鍵照合/接続設定、排他下の最新backup/実移行、非0本番canary/readback/replay0と通常切替、スマホ実機確認が残る。
+
+### 2026-09-20 金銭移行を既存排他の手動Actionsへ接続（本番未実行）
+
+- 最新mainを再fetchして`c8ef626`。前工程の進捗commit `d9f5b92`はLinux CI `35476370335`全3job成功。共有の明示的な確認は未回答で、前工程で拒否された共有を再試行していない。本工程の実Google変更0、本番フラグ/main変更0。
+- `ledger-daily-migration.yml`と`app.ledger_daily_migration`を追加。既存`kakeibo-production`排他・手動main・expected/event/checkout/validated SHA一致を使用し、定期runnerや新認証は追加しない。Secretsは既存SAと正本IDだけ。debug時と未検証checkoutはcredential使用前に停止する。
+- `key-info`は既存SA鍵の公開部分のfingerprintだけを返し、Google公開証明書の複数候補から正しいbinding鍵を選ぶ経路を用意した。秘密鍵/ID/金額の出力やGoogle API呼出しはない。実Actionsによる照合はmain統合後に実施する。
+- `inspect / initialize`はproduction/schedule停止、旧writer停止、新money/corrections mode未設定を必須にする。別native backupの共有範囲を検査し、正本とbackupの支出A:M/取込A:Lを全期間・有限範囲で比較する。本人分類/メモ/状態/固定IDを含む差異、特定backup/切替日/manifestのdigest変更があれば書込み前に停止。処理後にも正本とbackupを再照合する。
+- 初期化の書込先は事前作成済みmoney-migration / money-notices / moneyだけで、Sheetsは常に読取り専用。保存済みCSVの確定固定targetを再利用し、未証明の旧照合/未対応購入は確認へ残す。intent先行・読戻し・保存結果不明からの再開・稼働bookの再初期化拒否・本人の保留と他inboxのpending保持を検証した。
+- 関連108件成功、Windows全回帰2,443件成功（114.25秒）。その後にbackupの処理後再照合を追加し、移行テスト50件成功。本番factoryを通した合成接続でも24事前作成ファイルのうち3個だけを更新し、新規ファイル/正本書込み0、replay追加更新0を確認。compile/diff-check成功。実装`203d7b2`のLinux CI `35476909686`全3job成功を確認した。
+- 日常試作をブラウザの390×844px/100%で視覚確認。ホーム、履歴の検索/ページ、確認一覧、支出修正の固定ID/日付/金額/分類/送信/結果、推移の年/分類選択が左側に表示された。カテゴリdropdownを開き、選択変更せず閉じた。長文・右側の列・実データ入りの表示は未検証で、Google Sheetsスマホ実機の確認とは区別する。値/書式/規則を変更せず、確認後viewportを元へ戻した。
+- Goal継続中。共有承認、実鍵照合/接続設定、排他下の最新backup/移行、金銭/未完了要求の実Google隔離復元、main/承認/実行SHA一致、非0本番canary/readback/replay0と定期運用切替、スマホ実機確認が残る。
+
+### 2026-09-20 集計を事前作成ファイルと13か月キャッシュへ変更（本番未接続）
+
+- 最新mainを再fetch。前工程`d3fdc66`の商品補足はLinux CI `35474940927`全3job成功まで完了。既存実行主体は委任なしのSAで、正本はMy Driveにあるため、通常処理で月ごとのJSONファイルを新規作成する前提を除去した。追加認証・共有先・サービス契約は設けない。
+- production factoryは固定11文書＋13キャッシュの`RollingProjectionStore`を使用する。所有者が事前に作った24ファイルだけを更新し、欠落時は新規作成せず停止。初期ファイルには正本hash/key/schema/nullを保存し、読む時と更新直前に照合する。アップロード元とSAのOAuthアプリが違っても、app-private metadataへの依存なくsource bindingを検査できる。
+- 13か月より古い正本・全月の集計・固定ID index・入力/要求は保持する。過去修正は対象月の集計だけを更新し、最近のキャッシュを上書きしない。月替わりは必要なslotだけを入れ替え、1/13/48か月進行と保存結果不明後の再開を検証。空キャッシュは未取込月のゼロ集計を作らず、coverage本人入力も再生成後に保持する。
+- 通常表示は13キャッシュだけを読み、古い月の金銭重複照合はwriter内でindexから対象月の正本だけを再構築する。キャッシュ入替えで過去の候補を見失わない。日常表示は未更新/欠落cacheを検出して停止し、欠落を支出0件として公開しない。10万買い物/20万商品明細でも全120か月の集計と過去修正を保持し、日常adapterが正本/indexを読まないことを確認した。
+- 関連67件、Windows全回帰2,391件成功（105.71秒）。その後に旧方式/新方式を対比する大規模テスト2件成功（34.55秒）、表示保護の追加を含む関連38件成功。compile/diff-check実施。実装`c57b787`のLinux CI `35475867145`全3job成功を確認し、PR #41へ反映した。
+- Google Driveに所有者限定の「家計簿AI 集計（切替準備）」フォルダ1個と空JSON24個を作成。全24ファイルのenvelope、親folder、MIME、owner-only permissionを読戻しで一致確認。manifestはGit対象外`.private/projection-provision.json`、初期payloadは`.private/projection-initial/`。実Google変更25件、金融値/本人入力/正本/日常表示/既存権限/本番フラグの変更0。SAへの既存共有範囲内の接続と実bootstrapは次工程。
+- 正本に既存のSA writerが1つあることを照合し、集計folderの同じwriterへの共有を準備したが、自動承認レビューが受取アカウント・権限・範囲の明示的なユーザー承認不足として送信を拒否した。共有変更は未実行。folder/配下24ファイルと日常ファイルへの同SAの編集権限をまとめて確認中で、承認なしの別経路による再試行はしない。
+- 接続用IDの暗号化はGoogleの公開証明書だけで準備し、秘密鍵は取得しない。公開証明書が2つあるため、2組の候補をGit対象外`.private/daily-projection-binding-candidates.json`へ保存。本番の既存鍵の公開fingerprintとの一致確認後に選ぶ。GitHub変数へは未設定で、候補の推測・試行適用はしない。
+- Goal継続中。実初期化、排他下の最新backup/移行、金銭/未完了要求の隔離復元、main/承認/実行SHA一致、非0本番canary/readback/replay0と通常切替、スマホ実機確認は未完了。
+
+### 2026-09-20 分類承認の集約と保存済みAmazon商品の再利用（本番未接続）
+
+- 最新mainを再fetchして`c8ef626`。前工程の分類承認集約`f9e88ed`はWindows2,345件、Linux CI `35474258237`全3job成功。今後のルール・過去分プレビュー・固定対象反映を別段階/固定IDで日常の全期間確認へ追加し、本人入力は元の画面へ保持。任意の未選択候補は未解決件数から除き、保存済み要求のcomplete/partialと古いUI表示を照合する。実正本構造との読取り照合済み、native書込み0。
+- 確定金銭writerへ保存済みAmazon商品の任意補足を接続。確定情報に明示された注文IDでのみ商品を探し、商品キー一意・正数数量/商品額・全商品合計と確定額一致を条件にする。数量は行総額へ再乗算せず、差額配賦/ポイント加算/同日同額照合をしない。商品情報の不足・不一致・取得失敗は金額の確定判定を変えず、Amazon／未分類で通常記帳できる。
+- 保存済みの商品分類を優先し、不足時は一意な商品マスタを再利用。既存`CATEGORY_RULE_AUTO_APPLY_ENABLED`が有効なら、未分類だけに同じ厳密な商品ID/名称・承認時刻・競合判定のルールを適用する。金銭ID・fingerprint・確定日・総額・支払元を変更しない。旧記帳へのリンク/重複/保留とpending再開では商品を再取得せず、保存済みintentの明細を保持する。
+- 元購入の固定支出IDと金額を検証できる全額返金は、元の明細名/分類と各行の負額を返金確定日に引き継ぐ。元購入は不変。一部返金は商品を推測せず未分類の負額とする。返金上限・正式元・経路横断重複の既存判定を先に通す。
+- Windows全回帰2,366件成功（98.98秒）。その後、実production factoryと確定カードadapterを通る商品付き記帳/readback/replay0の合成接続テストを追加し、関連71件成功（1.47秒）。新commitのLinux CIはpush後に確認する。保存済み実商品の検証はmetadataと3つのbounded cells callsによる読取りのみ。3商品の配分一致を確認し、実値は`.private/products-live-sample.json`だけに保存した。確認用のローカルrecordは確定請求の証拠ではなく、ledger writerへ渡していない。
+- この工程の実Google書込み/共有/フラグ変更0。実projection初期化・排他下の最終移行、金銭/未完了要求の隔離復元、main/承認/実行SHA一致、非0本番canary・readback・replay0と通常運用切替は残る。スマホ実機未確認。Goal継続中。
+
+### 2026-09-20 日常の候補上限をページ選択へ置換（本番未接続）
+
+- 最新mainは再fetchして`c8ef626`。先行`0850b87`のLinux CI `35472772572`全3job成功を再確認。前工程はカテゴリ管理実装と実日常試作3フォーム設置までのprogress。
+- 日常のカテゴリ候補999行超による停止と、表示中の買い物の修正対象を先頭500明細に限定する処理を置換。履歴/推移の分類は全カテゴリを200件単位、修正分類は有効カテゴリを200件単位、修正対象明細は500件単位で切替える。全件数/現在ページ/総ページを表示し、選択中の値は別ページでも保持。helperは4列×1,000行のまま、カテゴリ名→IDの全件二重探索も除去した。
+- 履歴9行目・推移17行目・確認73/75行目に独立した候補ページ欄を追加。多数ページのメニューは先頭/末尾/周辺43件以下とし、任意番号の直接入力も許可する。既存の履歴/未解決/内訳/coverage/カテゴリ一覧のページメニューにも適用。カテゴリ管理の元分類候補は表示中50件に合わせる。改名前の選択名はaliasで同CAT IDへ解決し、再分類せず履歴/推移の絞込と明示修正受付を維持する。
+- 合成1,205カテゴリ（廃止分類を含む）・1,201商品明細の全候補へ到達し、台帳/集計/入力を不変と確認。実DailySheets経由の第3明細ページ、13か月投影のみの表示、入力保持、改名後の旧名選択、再表示の値write0を検証。Windows全回帰2,337件成功（99.70秒）、最終UI調整後の関連61件成功（0.73秒）、compileall/diff-check成功。
+- 所有者限定の日常試作をfresh metadata/範囲で確認し、25 native requestsの1batchで4ページ欄/案内/markerを設置。16セル・4dropdown・既存フォーム/隣接値/書式/入力規則の保持を読戻し確認。Google desktop/100%で3タブを視覚確認し、6タブ/12,630セルは不変。実Google内容変更1batch、別途限定metadata probe 1callは置換0件。正本/共有/本番mode変更0、実帳票/合成支出/仮CAT IDの追加0。
+- 旧承認入口を調査し、分類ルールは固定条件キー/承認snapshot、医療レシートはAIキーなしの専用processを維持する必要を確認。入口の集約実装、保存済み商品補足、実projection初期化/最終移行・金銭/要求の隔離復元・非0本番canary/replay・main/承認/実行SHA一致は残る。スマホ実機未確認。Goal継続中。
+
+### 2026-09-20 固定IDのカテゴリ管理と実日常試作の3フォーム設置（本番未接続）
+
+- mainを再fetchして`c8ef626`、先行`f515950`のLinux CI `35471289280`全3job成功を確認。前工程はカテゴリの実Google隔離移行・同一ファイル復元までのprogress。
+- 日常設定に改名/分割/統合/新規追加の固定REQ受付を追加。改名は同CAT IDと旧名aliasを保持し、分割/統合は親IDと別の結果IDを保存する。元分類と承認済みルールを残し、過去明細の自動置換を行わないことを入力欄にも明記。カテゴリ一覧は50件ページング、合成123件の全ページを確認した。
+- 旧ルールの名称参照を維持するため、正本カテゴリマスタは旧名を残し新名称だけA:B末尾へ追加。最新gridの2,000行単位読込、snapshot比較、一括write/readbackを実装。旧行/C列以降/ルール/支出は変更せず、compact候補には現名称だけを表示する。native結果不明後の再実行で追加行/IDを重複作成しない。
+- private `category-requests`を先行保存し、master/catalog/helperの途中失敗を同intentで回復。pending中はprojectionのrefresh/bootstrapを止め、daily stageが先に回復する。queued競合は失敗として全期間の確認へ集約し、送信中の入力変更・ack結果不明も保持。4種類の受付212件を5ページで表示する合成検証を追加。
+- Windows全回帰は2,328件成功・期待値差分1件。未完了要求の追加読込を期待値へ反映後、関連88件がすべて成功（0.73秒）。追加64件の関連検証、compileall/diff-checkも成功。実装`6bd918b`のLinux CI `35472328403`全3job成功を確認した。
+- 所有者限定の日常試作を再読込し、source marker・6タブのID/grid・設置予定領域の空欄/入力規則なしを確認。確認A80:D88の金銭/通知/失敗対応、設定A10:C24のcoverage、設定A89:C153のカテゴリ管理を108 native requestsの1batchで設置。108セルの値・6入力規則・3新markerを読戻し検証し、既存支出修正フォームと設定上部の値/書式/入力規則を完全保持、12,630セルのままと確認した。
+- Google desktop/100%で3フォームの入力・送信・結果・説明を視覚確認。長いラベル2箇所を短縮して再読込/再表示し、コードにも同じ修正を反映。関連41件成功（0.52秒）。実帳票/合成支出/仮のカテゴリIDは日常試作へ追加していない。実カテゴリ一覧・年月候補はprojection初期化後のrendererで反映する。スマホ実機は未確認。
+- この工程の実Google内容変更は日常試作への2batch（設置1・ラベル修正1）。別にmetadata取得用の限定findReplace 1callは置換0件。main/正本/共有/mode変更0。旧分類/レシート承認の入口統合・候補数上限解消・保存済み商品補足・実初期化/切替・金銭/要求の隔離復元・非0本番canary/replay/SHA一致は残る。Goal継続中。
+
+### 2026-09-20 実Google隔離コピーでカテゴリ移行・復元を確認（本番変更なし）
+
+- 前工程は実対応manifest準備・旧確認引継ぎの実装とCI成功までのprogress。検証コードは`4f3c8d8`、Linux CI `35458142501`全3job成功を再確認し、mainを再fetchした。
+- 変更前native backupから所有者だけの隔離コピーを作成。31タブ・2,273,539セルを保持し、全参照を116有限範囲で監査した。医療/給与は数式・入力規則だけでscalar値を取得せず、既知のhelper参照6,245箇所だけと確認。候補表と変更対象入力/規則をprivate退避して13 native requestsを一括適用。
+- 実Googleでhelper 1,001,000→228セル、全体2,273,539→1,272,767セルを確認。56カテゴリ、本人入力/固定ID/承認snapshotを保持し、移行後169規則とhelper値を読戻し一致。支出553行・取込1,976行は移行前後の全値が一致した。これは旧backup時点の件数で、現行正本の554/1,979と混同しない。
+- 同じ隔離コピーへ56 native requestsで復元。helper全39分割のuserEnteredValue/dataValidation/userEnteredFormat、支出F:Gの6,077規則、要確認L:Mの5,706規則、カテゴリ操作A:L全入力/規則、31タブmetadata（検証済みラベルへの改名前）が退避内容と完全一致。支出/取込の全値も再一致し、helper/全体セル数は元へ戻った。private退避・復元payload・比較証拠はGit対象外に保存。
+- Google desktopで移行後/復元後のカテゴリ操作を確認。既存の狭いC列では結合カテゴリが折り返されるため、日常入口統合時の表示調整を残す。本番やスマホの最終画面確認ではない。
+- この工程の実Google mutationは隔離コピー作成1・検証ラベル変更2・移行batch1・復元batch1の計5、すべて隔離対象。本番/原backup/共有/mode変更0。コード変更なしのため全回帰は繰り返さず、先行Windows2,307件とLinux成功に加えて上記実Google readbackを検証結果とする。
+- [隔離復元確認済みコピー](https://docs.google.com/spreadsheets/d/1xmYR3xib-xsAtTrg7x40XoqLQdm0V2BrLOFuCo58vV8/edit)。これはカテゴリ移行の復元証拠であり、今後の全本番切替・新money記帳・projection/private intent復元の完了証拠ではない。日常入口/カテゴリ管理、商品補足、実初期化/切替・非0canary/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 実Amazon対応プレビューと旧照合例外の引継ぎ準備（本番未適用）
+
+- mainを再fetchして`c8ef626`、先行`8f09786`のLinux CI `35457488439`全3job成功を確認。前工程は対応表/初期化APIの実装・push・CIまでのprogress。
+- 実Googleのmetadataと有限範囲全読込で、支出554行・取込1,979行、Amazon有効旧支出6行・マイナス0行を確認。実データ・対応bindings・manifest・リハーサル結果はGit対象外の`.private/`だけに保存し、実ID/金額をGit/ログへ出していない。切替日はプレビュー値で、実切替前の最新backup/再照合が必要。
+- 保存済みカードCSV取込の旧分割払い3件は、固定targetが正式支出1件を指し、合計も一致。既存解析済み取込を再利用する`statement_bindings`で1groupを対応済み、残る注文合計5groupをopenとして準備。CSV ID/元ID/hash/会員情報/有効target/正額を検査し、別のメールへ日付/同額aliasを作らない。元の日付/分類/本人入力は不変。
+- 旧`matched_amazon`121件（CSV30・メール91）は正式支出への固定対応が確認できない。10件の旧targetも正式支出IDには存在しない。固定MN ID・取込ID・fingerprint・台帳リンクの通知としてmanifestへ保持し、初期化時に既存`money-notices`へ保存/readbackする処理を追加。金銭額/RFC IDを推定せず、旧取込を変更せず、共通確認で保留/確認済みを受け付ける。本人判断はreplayで保持し、通知確認から記帳しない。
+- 実snapshotを使うローカルmemoryリハーサルは3 private document相当・旧支出6件・対応済み金銭3件・通知121件を保持、台帳書込み0、replay追加write0。これはGoogle書込み/隔離native復元の証明ではない。関連88件、Windows全回帰2,307件成功（100.03秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。実book/通知初期化、保存済み商品補足、日常入口/カテゴリ管理統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 旧Amazon計上の対応表と金銭book初期化（実データ未適用）
+
+- mainは`c8ef626`、先行`5a83602`のLinux CI `35456638673`全3job成功を確認。前工程は要求状態集約の実装・push・CIまでのprogress。
+- `amazon_money_migration`に2,000行単位の最新全行reader・private manifest・初期化APIを追加。正本の支出/取込2表だけを読み、source binding、全行snapshot、月/取引種別件数・金額、旧支出/取込IDと金額・状態・fingerprintを固定する。Medical/Payroll/旧イベント本文は読まない。置換済み合計は記録を保持して集計対象から外し、過去日付/分類/本人メモを変えない。
+- 確定adapterの金銭recordと旧取込ID・既存target/商品キーによる固定対応だけを採用。日付/同額の類似照合を再実行しない。商品明細の全集合に対する分割請求の合計が揃えばsettled、未対応はopenのままとして後日請求を保留する。既存マイナス支出は確定元と元購入の対応を必須にし、累積返金上限へ引き継ぐ。旧明細の金額配分が変わっていれば合計同額でも新返金を確認へ回す。
+- 既存writer lock/最新backup/旧writer停止を前提に、manifest保存前と保存後に台帳を再照合してbookを初期化。結果不明は同manifestで回復し、既存の稼働bookや別manifestを上書きしない。初期化は正本支出/取込書込み0、replayはprivate document書込みも0。API段階で、実切替への接続・実対応データの準備は未実施。
+- Windows全回帰2,292件成功（100.44秒）、追加4ケースを含む関連81件成功。5,000行超・2010年・分割請求・旧返金・本人入力変更・別source・保存前後失敗・既存book保護を検証。compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。実manifest生成とsource原本の対応、保存済み商品補足、日常入口/カテゴリ管理統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 全期間の要求状態・失敗確認を集約（本番未有効化）
+
+- 最新mainは`c8ef626`、先行`599591b`のLinux CI `35456080326`全3job成功を確認。前工程は実装・push・CIまでのprogress。
+- 支出修正・金銭/通知確認・取込状況の既存inboxからqueued/pending/failedを全期間で日常確認へ集約。要求元と固定REQ IDの組で識別し、安全な日本語理由・最終更新・元フォームへのリンクを表示する。2018年を含む159件を全4ページで確認。表示は入力/台帳/indexを書き換えない。
+- 共通確認フォームに「失敗を確認済みにする（再実行なし）」を接続。最新の失敗snapshotへ本人判断を結び付け、既存REQ inboxへ保存する。元の失敗要求・本人入力・coverage・台帳・native checkpointを変更せず、再実行もしない。内容が後から変われば一覧へ戻す。pending/queuedや金銭IDの解除に流用できない。
+- 同じinbox内の失敗と別inboxの失敗、保存前後の結果不明、最新snapshot競合、同IDの要求元間分離、入力保持、再実行の台帳書込み0を確認。関連87件、Windows全回帰2,262件成功（100.87秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。旧分類/レシート承認の入口統合・カテゴリ管理入力、Amazon旧対応manifest/初期化/保存済み商品補足、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 未解析の確定通知を日常確認へ接続（本番未有効化）
+
+- 最新mainは`c8ef626`、先行`4506a5a`のLinux CI `35455274644`成功を確認。前工程は実装・push・CIまでのprogress。
+- Amazonの金額/確定日/識別情報不足と、Amazonを含む確定カード通知の部分/全体解析不足を、固定MN ID・原本リンク・短い理由・内容hashのprivate `money-notices`へ保存する。金額を仮置きせず、本文/長い解析/注文工程を蓄積しない。注文/発送/配達/返品申請/速報や、確定の否定・予定文は記帳/通知保存しない。
+- 通常runnerは通知を保存/readback後にcheckpointを進める。保存結果不明・不完全取得では進めない。正常に読める別の確定明細は既存金銭writerへ渡す。previewと固定ID canaryは未解析通知を保存しない。
+- 未解決は全期間の確認一覧へ表示し、既存金銭フォームで保留・確認済み（記帳なし）を受け付ける。MN通知からの支出/返金/振替/既存支出対応を拒否。再取得で本人判断を保持し、内容変化で再確認、古い要求はsnapshot比較で拒否する。REQ pending/readback/ackを再利用し、本人入力を残す。
+- 既存金銭確認のpending snapshotと完了更新の辞書共有を解消し、初回からappliedを永続化するよう修正。通知の保存前後失敗、両source checkpoint、再取得追加0、本人判断保持、入力保持、台帳書込み0を検証。Windows全回帰2,240件成功（98.44秒）、最後の否定/予定文4ケースを含む関連105件成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。日常受付統合/失敗要求一覧、カテゴリ管理入力、Amazon旧対応manifest/初期化/保存済み商品補足、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 カテゴリ候補同期と年月候補の固定範囲依存を解消（本番未有効化）
+
+- 最新mainを再fetchして`c8ef626`、先行`8332e7e`のLinux CI `35454589475`全3job成功を確認。前工程は実装・push・CIまでのprogress。
+- 台帳の更新待ちが空でもカテゴリマスタの変更をprivate catalogへ同期する。既存ID/改名aliasと過去集計を保持し、未知の組は新ID、廃止分類はinactiveとする。改名/分割/統合を名称差分だけで推定しない。固定IDの本人向け管理入力は引き続き統合対象。
+- 既存daily applyで移行済み4列helperの変更行だけを同期し、変更なしは書込み0。候補増加時だけgridを延長し、カテゴリ操作C列/要確認L列の全行の入力規則を2,000行単位で取得・参照更新する。取得fieldはdataValidationだけで、機密表や本人入力のスカラーを読まない。入力/承認snapshot/過去分類は書き換えない。結果不明writeの自動retryなし、native一括write後readbackで確認する。
+- compact移行後の過去反映の年月候補を、summary全記録月と本人の現在の全開始/終了月から作るリテラル値へ置換。旧ホーム5,001行・入力1,000行の範囲とspill式に依存しない。1,201か月の候補・1,201行目の本人選択を保持し、必要な候補行だけgridを増やす。
+- 関連59件・分類/過去反映82件・追加後49件成功。Windows全回帰2,218件成功（97.97秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、main/共有/mode変更0。日常受付統合/失敗要求一覧、カテゴリ管理入力、Amazon旧対応manifest/初期化/未解析確定通知/商品補足、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 固定金銭IDの限定試行を両sourceへ接続（本番未実行）
+
+- 先行`ce5f337`のLinux CI `35453681004`成功、mainは`c8ef626`を確認。前工程は実装・push・CIまでのprogress。
+- 既存親Actionsの`amazon_canary`でAmazon/au PAYカードの確定元を選び、既存RSA bindingで指定した固定金銭ID 1件だけを処理する。注文IDによる旧試行を置換し、手動dispatch・金銭mode・main/検証SHA境界・production lock・native pendingの停止を維持する。
+- 両sourceで試行後も走査checkpointを進めず、対象外取引を次の通常処理へ残す。他source・共通後処理・日常受付・OCRは実行しない。指定ID不在/競合、未確定/混合払い、補足/振替/旧計上対応だけの対象は新規記帳の試行にしない。
+- 初回とreplayで正式な取込/支出の固定ID・日付・金額・active状態を読み戻し、台帳変更や欠落を追加ゼロの成功としない。append結果不明ではnative pendingを保持し、親実行で自動再試行しない。
+- 親Actions→実CLI→共有Sheetsの合成統合で両sourceの非0記帳・イベント/注文ヘッダ増加0・replay追加0・他source state不変を確認。対象外金銭と通常カード取引の後続取込、台帳変更時停止も確認。Windows全回帰2,209件成功（100.10秒）、追加した手動/mode境界2ケースを含む関連66件成功、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0、本番main/共有/mode変更0。実book/旧計上対応manifest/未解析確定通知/商品補足、カテゴリ同期/日常受付統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 旧Amazon CLI/専用Actionsを廃止（本番main未反映）
+
+- 最新mainを再fetchして`c8ef626`、先行`52bdc95`のLinux CI `35452885269`成功を確認。前工程は実装・push・CIまでのprogress。
+- 注文/発送/返品状態追跡・イベント再解析・注文照合等のCLI 35個を削除し、直接起動する旧Gmail診断2入口も認証前に終了。専用Actions 20個を削除。旧`amazon-daily-import.yml`は過去cache/run参照を保つ案内だけにし、schedule・secrets・checkout・Python実行を撤去した。
+- 現行Amazon CLIは`confirmed-v1`未移行なら認証前に停止し、旧注文計上にfallbackしない。main統合とmode/金銭book初期化は排他切替の同じ工程で実施する。ライブラリの旧解析関数・回帰テストは旧データの移行照合用に保持し、日常CLIの稼働経路から除去。
+- money modeの共通reconciliationからAmazonの類似日付/金額/店舗による注文・レシート・カード除外を外した。汎用自動計上とカードCSV入口の未確定/旧対応不明Amazonは金銭確認へ送る。カードCSVは注文表を読まず、通常カード/レシート照合・銀行authorityは保持する。旧Amazon確認行から金銭IDへの実対応と未処理の解決はmanifest工程に残る。
+- 廃止CLIの実行を要求する23テストを35入口の認証/write前拒否へ置換。親Actions→実CLI→共有Sheetsの合成統合を確定ギフト残高請求へ更新し、非0記帳・イベント/注文ヘッダ増加0・replay追加0を確認。旧注文canaryは金銭modeで拒否し、固定金銭IDの新canaryは未実装。
+- 関連124件、直接起動診断を含む97件、更新した統合/廃止50件が成功。最終Windows全回帰2,193件成功（98.08秒）、compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- 今回の実Google変更0、本番main/共有/mode変更0。稼働中の旧イベントの退避・新旧writerの実排他切替は未実施。旧対応manifest/初期化/未解析確定通知/保存済み商品補足、新money canary、カテゴリ同期/日常受付統合、実移行・隔離復元・非0本番readback/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 口座・経路別coverage受付と完了ゼロ月を接続（本番未有効化）
+
+- 最新mainを再fetchして`c8ef626`、先行`b0a7923`のLinux CI `35452121704`成功を確認。前工程は実装・push・CI成功までのprogress。
+- 日常「設定」に開始/終了月・経路・口座・未確認/取込中/完了/対象外のフォームを追加し、既存daily stageへ接続。最大120か月をまとめて設定できる。経路/口座の組を固定ID、要求を固定REQ IDとし、反映前の状態比較・入力保持・pending回復・結果/時刻表示を実装。既存summaryにだけcoverage入力がある場合は明示移行を要求し、新フォームで上書きしない。
+- 本人入力は集計とは別のprivate coverage documentへ保存。全経路が完了/対象外で、更新待ちなし・indexに取引なしを確認した月だけ明示ゼロを作る。新経路追加や完了取消で未確認になった月の導出ゼロは撤回するが、実取引の金額は保持。平均/前年比は共通完了月のみで進行月を除外する。summary紛失後のbootstrapでも本人入力・完了ゼロ月を復元する。
+- 通常表示/同REQ replayでは全indexを読まない。初めて未集計月を完了ゼロに確定する際のみ検査する。経路/口座一覧は50件、カテゴリ内訳は150件でページングし、全件数を表示。301カテゴリの全ページを合成検証。6タブ/12,630セルの設計を維持し、表示処理から入力値を上書きしない。
+- 関連86件成功、Windows全回帰2,170件成功（99.40秒）。その後の既存入力保護も含む関連35件成功。120月/年越し/対象外/進行月除外、保存前後失敗、JSON往復、summary再生成、後日取引追加、入力変更/ack結果不明、既存daily runtimeの会計write0、再実行追加write0を確認。compileall/diff-check成功。新commitのLinux CIはpush後に確認する。
+- 今回の実Google変更0、共有・本番mode変更0。coverageフォームと金銭フォームの実upgrade、実行主体共有・projection初期化・helper/編集保護移行、分類ルール入口統合/カテゴリ同期、過去失敗要求の一覧と解決、旧Amazon全入口停止・対応manifest・商品補足・未解析確定通知の確認、本番非0canary/replay・隔離復元・SHA一致は未完了。Goal継続中。
+
+### 2026-09-20 Amazon金銭例外の固定ID受付を接続（本番未有効化）
+
+- 最新mainは`c8ef626`、先行`6b5c869`のLinux CI `35450826247`は3job成功。専用branchで金銭例外の本人判断受付を実装し、日常修正stageへ接続した。
+- 日常「確認」の予約領域に金銭ID・対応・返金元ID・既存支出ID・送信・結果/更新時刻を持つ小さなフォームを追加。保留、別の確定取引、旧支出への対応付け、返金元指定、自分用チャージの判断を固定要求IDのprivate intentへ保存する。表示更新は入力値を書き換えず、処理中の入力変更や応答不明を回復する。既存日常ファイルは空欄確認とbinding検証を伴う明示upgradeが必要。
+- 旧支出の対応付けは最新の全明細fingerprint/金額/activeを検証し、過去の日付・金額・カテゴリは変更しない。分割請求の累計対応額と重複する明細集合を検査。確定情報・混合払いの内訳不足は強制計上しない。返金は元購入の最新台帳金額と、旧計上/分割請求IDをまたぐ累積返金額を検証する。
+- 新money modeでは旧注文候補の読込・生成・更新を停止し、旧候補選択と本人メモを保持。旧Amazon承認は金銭確認へ案内し、他のレシート承認は維持。注文同期・専用workflow等すべての停止/削減が完了したという意味ではない。
+- Windows全回帰2,142件成功（99.13秒）。その後の返金上限・保存前後失敗の追加を含む関連83件成功。Drive JSON往復、取込/支出の片側保存後失敗、intent保存前後失敗、replay追加0、保留維持、入力保持、旧候補非参照、通常レシート承認を確認。compileall/diff-check成功。最新commitのLinux CIはpush後に確認する。
+- 今回の実Google変更0、共有・本番mode設定0。実フォームupgrade/編集保護、旧計上manifest/金銭book初期化、未解析確定通知の確認行化、保存済み商品補足、coverage、失敗要求一覧/解決、カテゴリ同期、旧専用workflow等の停止、排他移行・隔離復元・非0本番canary/replay・SHA一致は残る。Goal継続中。
+
+### 2026-09-20 日常の固定ID修正を既存Actionsへ接続（本番未有効化）
+
+- 最新mainをfetchして`c8ef626`、先行`c094480`のLinux CI `35450033345`成功を確認。前工程は実装・検証・push済みのprogress。
+- `KAKEIBO_DAILY_CORRECTIONS_MODE=fixed-id-v1`を既存親Actionsへ接続。all実行の取込前に独立した固定ID修正を処理し、manual `scope=daily`でも修正→変更月集計→日常表示だけを実行できる。新しいschedulerは追加しない。projection表示専用scopeから修正submitを呼ばず、native取込stageのcheckpoint/pending再実行制限も変更しない。
+- 日常フォームと正本の紐付けmarker、compact候補、正本A:M全行の実行SA専用の保護を検証してから有効化。旧「カテゴリ対応」の台帳セル編集リンクを日常フォームへ置換し、保護とmarkerを一括設定する移行request builderも追加。通常表示から保護・共有を変更しない。Googleの仕様上、所有者による保護変更能力は残る。
+- 修正intentを先に保存し、反映待ち・反映済み・失敗と更新時刻を表示。日付/金額/カテゴリの入力不正は本文を残して理由を表示し、取込全体を恒久停止しない。処理中のフォーム変更、カテゴリ改名後の旧要求、checkbox解除後に残った結果不明の要求も、元の固定ID intentとして回復する。
+- 関連78件成功。実form adapter→台帳→旧/新月の再集計、同じ要求の再実行追加write0、台帳応答不明・待ち状態表示失敗・最終表示失敗からの復旧、未切替/保護不足の拒否、preview write0、入力保持を検証。既存runnerを動かさずdaily scopeだけ実行できることも合成テストで確認。
+- Windows全回帰2,119件成功（97.44秒）。保護rangeのGoogle既定0省略を正規化した後の関連14件も成功。compileall/diff-check成功。最新commitのLinux CIはpush後に確認する。
+- 実Google変更0、共有/本番mode設定0。日常ファイルは準備中のまま。実行主体共有、projection初期化、編集保護/旧入口置換の実移行、金銭例外/coverage入力、カテゴリ同期、旧Amazonの停止と固定対応manifest、非0本番canary/replay・隔離復元・SHA一致は残る。Goal継続中。
+
+### 2026-09-19 共通カテゴリ候補への移行実装（実Google未適用）
+
+- 先行`82334ed`のLinux CI `35449106041`成功を確認。専用branchで実装を継続し、本番設定は変更していない。
+- 巨大helperを「表示名／固定ID／大カテゴリ／小カテゴリ」の値だけの4列表へ縮小するnative一括移行を実装。全タブの数式・入力規則参照をboundedに監査し、未知の利用箇所・named range等の参照・移行直前の入力差分があれば書込み前に停止。通常の台帳値やMedical/Payrollの値は参照監査で取得しない。
+- カテゴリ操作C列を「大｜小」選択へ変換し、既存のルール承認処理には元の2項目を渡す。本人の選択、過去/今後のチェック、固定条件ID、承認snapshot、過去反映・確認欄を保持。台帳F:Gは値を変えず旧入力規則のみ除去、要確認L列も小さな共通候補へ接続。移行後は旧UI再設置/旧UI復元による巨大helper再生成を拒否する。
+- 分類操作の1,000行読込上限を移行後の経路で撤廃し、入力の再読込競合検知と一括値更新を追加。移行の読戻しでは全入力と候補内容、実際のdropdown参照を確認する。応答不明writeは自動retryしない。
+- 関連82件成功、追加移行12件成功。合成の1,001,000セル→12セル（2候補）、7,001行目の参照、1,050個の選択入力、改名ID維持、未知参照、書込み直前の変更、結果不明後の再実行を検証。現在観測済みの実56候補なら57行×4列=228セルになる設計値であり、Google上の縮小実績ではない。
+- Windows全回帰2,095件成功（101.42秒）、compileall/diff-check成功。移行requestを連続する入力行でまとめた後の追加12件も成功。新commitのLinux CIはpush後に確認する。
+- この工程の実Google変更0。既存writer排他・入力凍結・native backupの下での実移行、日常修正一本化、category更新時の共通候補同期、過去反映の年月候補の旧ホーム依存解消は未実施。Amazon移行manifest/例外受付/旧writer停止、coverage、本番canary/replay、隔離復元・SHA一致も残る。Goal継続中。
+
+### 2026-09-19 Amazon確定金銭とカード経路を同じ設定へ接続（本番未有効化）
+
+- 最新mainは再fetchして`c8ef626`、作業treeの先行`8216a6e`はLinux CI `35447924114`成功を確認。
+- Amazon注文番号を金銭IDから分離。支払元/確定記録の参照IDで分割請求・一部/複数返金を区別し、返金は確定日のマイナス支出として元購入へ関連付ける。商品未取得・明細合計不一致でも金額の同一性が確かな場合はAmazon／未分類。明細/値引きが揃う場合は合計を二重加算しない。
+- 公式au PAYカード説明で「ご利用詳細」は確定情報、「ご利用速報」は未確定と確認。確定詳細メールだけをカード金額の正式元とし、Amazon側のカード通知は補足のみ。ギフト残高等は確定した支払元の記録を使い、混合払い・元購入不明返金・旧計上との対応不明を限定確認へ回す。チャージの疑いを同日同額で振替へ強制統合しない。
+- `KAKEIBO_AMAZON_MONEY_MODE=confirmed-v1`を既存Amazon/card両runnerへ接続。Amazon runnerは金銭以外の注文/発送/返品申請でevent/headerを増やさない。card runnerはAmazon購入/返金を旧除外・同日同額照合から分離し、他のカード処理のcapability経路は維持。台帳のfixed-ID intent/readback、親checkpoint/pending境界、既存lock/main/SHA条件を維持する。
+- 既存取込ID・台帳の重複候補・旧計上対応は自動で同一視せず、private money bookと日常の確認一覧へ保持。金銭writerは最新gridのbounded ID scanで5,000行超も検出。正本保存後に途中停止しても同じIDの再記帳はせず、既存行との競合は止める。個人情報/金額は親Actionsの件数ログへ出さない。
+- Windows全回帰2,078件成功（96.92秒）。その後の追加を含む金銭/実runner接続31件成功。分割/同額別決済/複数部分返金/速報除外/経路横断二重計上/既存取込・レシート候補/途中保存とcheckpoint維持/7,001行/入力競合を検証。最新commitのLinux CIはpush後に確認する。
+- 今回の実Google変更0、money mode・本番フラグ変更0。旧計上の対応manifest/金銭book初期化、保存済み商品補足の接続、金銭例外の本人判断受付、旧専用workflow・注文同期コードの停止/削減は残る。カテゴリhelper/coverage/日常修正統合、最終移行・本番canary/replay・復元・SHA一致も未完了。Goal継続中。
+- 接続実装`8b9691a`のLinux CI `35448972181`成功。続けて旧計上aliasの参照先を実台帳で再検証し、ID欠落・金額変更・非activeなら確認へ戻す処理を追加。関連32件成功。aliasは元明細の金額snapshotを必須とし、移行manifestで確定させる。
+
+### 2026-09-19 日常ファイル試作・固定ID修正受付（本番未有効化）
+
+- nativeコピーを日常専用6タブへ整形し、12,630セルをmetadata/セル読戻しで確認。正本は31タブ・2,273,539セルのまま。今回は1ファイル作成、コピー内だけ3batch/142requests、正本値・分類・共有・本番設定の変更0。日常は所有者のみ。ID/リンクはGit外のprivate移行記録に保存。
+- ホーム／履歴／確認／推移／設定と共通候補を実装。Google実表示でホームの案内文、確認の見出し・修正フォームの文字切れを修正。表示領域340px、実機スマホは未確認。現在は「準備中・本番未切替」「未集計」で、試験金額は入れていない。
+- 日常writerは管理セルの差分だけを書き、入力欄を表示更新から分離。全期間の既存未解決をページングし、医療の入力/候補列は取得しない。固定IDでの修正intent・最新値競合・結果不明の回復・読戻しを実装し、途中の本人入力変更を保持。修正submitの本番stage接続と既存受付の一本化は次工程。
+- 暗号化daily Variable未設定なら無効。既存Actions内の表示更新だけを接続し、元台帳の既存共有主体を超える出力先を拒否。表示処理からsubmit/OCR/取込は起動しない。日常の実行主体共有、projection初期化、運用設定はまだ行っていない。
+- 全回帰2,050件成功（108.47秒）。その後拡張した10万買い物/20万明細→永続集計→日常adapterの通し検証と関連17件成功（15.81秒）。日常読込は13月ファイル、正本/index読込0、同一内容の再表示は値書換え0。いずれもfake transportで、実Google速度の実績ではない。先行`dfd6a64`はLinux CI `35446288415`成功。
+- Amazon金銭中心化、旧helper縮小、coverage入力、受付一本化、最終差分移行、実データ非0canary/replay、隔離復元、本番SHA統一は未完了。Goal継続中。
+- 日常実装`d243d41`のLinux CI `35447752526`は成功。Google desktopで5つの表示タブを確認済み。親Actionsの集計には日常の変更block数/write request数のみを追加し、金額・入力本文は出力しない。
+
+### 2026-09-19 変更月集計の永続化と既存writerへの接続（本番未有効化）
+
+- 前turnは実装/バックアップ/検証を伴うprogress。最新origin/mainは再取得して`c8ef626`を確認。前turnの`d7be148`はLinux CI `35445328846`で成功した。
+- private Drive JSONのcatalog/index/journal/月別結果/summaryを実装。追記・行更新・カテゴリ更新の共通SheetsDB口で台帳書込み前に範囲を保存する。保存前の失敗は台帳を止め、台帳保存後は変更範囲を読戻して前後月を再生成する。旧月をjournalに保持するためindex保存後の停止でも回復できる。
+- 既存`expenses-refresh`と親Actionsへ接続。folderの暗号化Variableが未設定なら旧動作を維持。新しい集計専用scopeは既存production lock/main/SHA境界内で、read-only台帳→投影更新だけを行う。取込/OCR/銀行/Medical/Payroll処理を呼ばない。会計stageのcheckpoint/pendingゲートは維持し、派生集計stageだけを再実行可能にした。
+- 故障・再実行・writer先行marker・共有制限・境界の関連テストが成功。永続化を含む10万買い物/20万明細合成評価13.50秒、旧1件修正の正本読込1+1,668行、履歴は13か月のみ・正本/index読込0。これはfake transport計測であり本番のAPI/時間ではない。
+- 最終Windows全回帰2,020件成功（95.46秒）、compileall/diff-check成功。接続後のLinux CIはpush後に確認する。
+- このturnの実Google変更0。本番folder初期化、新日常ファイル/UI、修正受付、カテゴリhelper縮小、Amazon両経路切替、移行・実データcanary/replay・隔離復元は残る。全writer入口の最終監査は旧Amazon稼働コード削減と合わせて実施する。Goalは未完了。
+
+### 2026-09-19 日常ファイル分離・Amazon金銭中心化のGoalに着手（本番未切替）
+
+- 最新main `c8ef626731cc8a941982a0d77b22e7ee4d88af31`から専用clone/branch `feat/ledger-daily-money`を作成。他Work・stashは変更していない。
+- 実Sheetsは31タブ、確保2,273,539セル（カテゴリhelper 1,001,000）。nativeバックアップ1ファイル作成、31タブのgrid構成一致、コピーownerのみを読戻し確認。元台帳の変更0、既存共有/本番フラグ変更0。最終排他スナップショットと復元確認は未実施。
+- `monthly_projection.py`とbounded Sheets readerを実装。月の再計算・置換、前後月更新、固定カテゴリID/改名alias、買い物単位13か月履歴、完了経路/口座が揃う月だけの前年比。既存writerへの接続・永続化・新日常Googleファイル・Amazon経路切替は未完了で、本番有効化していない。
+- 既存合成1,965件成功。新規18件（10年/10万買い物/20万明細、失敗再実行、年越し、本人分類保持、返金、bounded読込、旧/空白カテゴリ保持を含む）成功。先行commit `f4f8112`のLinux CI `35445179174`は3job成功。旧/空白カテゴリ保持追加後のCIはpush後に確認する。実Googleの軽量化後セル数/実行時間/API量は未測定。
+- コピー553明細/正本554明細をbounded readで照合し、追加1 ID・既存変更0・欠落0・重複0。現行カテゴリ56組にない有効明細23行は元分類を保持するmappingが必要と確認し、inactiveカテゴリとして明示取込する実装を追加。実Googleの分類更新は0。
+- [Draft PR #41](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/41)で実装を継続。本番切替前なのでdraftのまま保持する。
+- 観測した本番成功run `35429733480`のSHAは`099dea08d07db4fef1fa30a18ea5d4a5d5953636`。最新mainと異なり、承認SHAも未取得。一致・切替成功とは扱わない。
+- 全残作業と実装契約は[移行記録](docs/ledger_daily_migration.md)。Goalを継続し、移行・Linux検証・限定非0件反映・再実行追加0・通常運用・隔離復元・最終SHA照合まで進める。スマホ実機も未確認。
+
 ### 2026-09-18 カテゴリ専用runnerの読み取り429修正と表示限定確認
 
 - **コード修正:** [PR #22](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/22) を通常マージし、main `74a1be9` へ統合。期間候補ヘッダZ1はSheets APIの`ExtendedValue.stringValue`で書き、Z2の`formulaValue`とB列dropdown条件の参照式文字列はそれぞれ既存の正しい型のまま維持する。カテゴリUIの同一プロセス内metadata再利用、確認画面の要求ID単位一括読込、429だけを1/2/4秒で有限再試行するread-only retryを追加した。400等は即時失敗し、write/applyの再試行は行わない。

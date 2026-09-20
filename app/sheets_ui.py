@@ -333,6 +333,9 @@ def home_requests(home):
 
 
 def build_plan(meta):
+    from .compact_categories import compact_helper
+    if compact_helper(meta):
+        raise ValueError("Legacy UI installation is retired after compact category migration")
     if meta.get("spreadsheetId") != SPREADSHEET_ID:
         raise ValueError("UI target spreadsheet mismatch")
     sheets = sorted(meta["sheets"], key=lambda s: s["properties"]["index"])

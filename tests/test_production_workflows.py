@@ -32,7 +32,10 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert inputs["mode"]["default"] == "preview"
     assert inputs["bank_apply"]["default"] == "false"
     assert inputs["scope"]["default"] == "all"
-    assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts"]
+    assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily"]
+    assert inputs["projection_bootstrap"]["default"] == "false"
+    assert inputs["canary_source"]["options"]==["amazon","aupay_card"]
+    assert inputs["canary_source"]["default"]=="amazon"
     assert inputs["receipt_operation"]["options"] == ["reanalyze", "replay"]
     assert inputs["receipt_limit"]["default"] == "1"
     assert inputs["receipt_limit"]["options"] == ["1", "2", "3"]
@@ -48,11 +51,15 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert checkout["with"]["ref"] == "main"
     guard = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("Bind verified"))
     assert 'test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"' in guard
+    ocr=next(step for step in job["steps"] if step.get("name")=="Install existing OCR runtime")
+    assert "inputs.scope != 'projection'" in ocr["if"]
+    assert "inputs.scope != 'daily'" in ocr["if"]
+    assert "inputs.scope != 'amazon_canary'" in ocr["if"]
 
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():
     all_workflows = workflows()
-    for name in ("amazon-daily-import.yml", "aupay-card-recurring-production.yml", "bank-pdf-recurring.yml", "process-receipts.yml"):
+    for name in ("aupay-card-recurring-production.yml", "bank-pdf-recurring.yml", "process-receipts.yml"):
         job = next(iter(all_workflows[name]["jobs"].values()))
         assert "vars.KAKEIBO_LEGACY_DISABLED != 'true'" in job["if"]
 

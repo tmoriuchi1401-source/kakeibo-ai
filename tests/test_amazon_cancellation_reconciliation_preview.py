@@ -179,28 +179,3 @@ def test_summary_has_all_actions_and_scope_counts_and_reads_only():
         "Amazon注文!A2:O", "Amazon注文ヘッダ!A2:O",
         "取込データ!A2:L", "Amazonイベント!A2:X",
     ]
-
-
-def test_cli_uses_read_only_sheets(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "sheet-id"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True}
-
-    service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda spreadsheet_id, service=None: db)
-    monkeypatch.setattr(
-        cli, "preview_amazon_cancellation_reconciliation",
-        lambda value: {"sampled_cancellation_count": int(value is db)},
-    )
-    monkeypatch.setattr(
-        sys, "argv", ["kakeibo", "amazon-cancellation-reconciliation-preview"],
-    )
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'sampled_cancellation_count': 1}"

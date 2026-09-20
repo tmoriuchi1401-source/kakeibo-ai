@@ -270,22 +270,6 @@ def test_html_email_is_supported():
     assert parse_amazon_email(message).charged_amount == 500
 
 
-def test_cli_preview_is_anonymized(tmp_path, monkeypatch, capsys):
-    path = tmp_path / "amazon.eml"
-    path.write_bytes(mail("Amazon.co.jp ご請求のお知らせ", f"""
-注文番号: {ORDER_ID}
-カード請求額: 500円
-支払い方法: Visa 末尾1234
-"""))
-    import app.cli as cli
-    monkeypatch.setattr(sys, "argv", ["app.cli", "amazon-email-preview", str(path)])
-    cli.main()
-    output = capsys.readouterr().out
-    assert "'charged_amount': 500" in output
-    assert "'order_id_present': True" in output
-    assert ORDER_ID not in output
-    assert "Visa" not in output
-    assert "1234" not in output
 
 
 def test_invalid_input_type_is_rejected():

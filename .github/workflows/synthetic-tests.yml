@@ -2,7 +2,7 @@ name: Synthetic integration checks
 
 on:
   push:
-    branches: [integration/production-orchestration-20260915]
+    branches: [main, integration/production-orchestration-20260915]
   pull_request:
     branches: [main]
 

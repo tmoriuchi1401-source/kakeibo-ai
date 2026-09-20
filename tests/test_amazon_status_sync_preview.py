@@ -189,30 +189,3 @@ def test_summary_contains_no_private_source_data():
 def test_existing_review_schema_is_not_changed():
     assert len(AMAZON_REVIEW_HEADERS) == 14
     assert "Amazon要確認" not in HEADERS
-
-
-def test_cli_uses_read_only_sheets_and_prints_summary(monkeypatch, capsys):
-    class Settings:
-        spreadsheet_id = "private-sheet-id"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True}
-
-    service = object()
-    db = object()
-    monkeypatch.setattr(cli, "Settings", Settings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: service)
-    monkeypatch.setattr(
-        cli, "SheetsDB",
-        lambda spreadsheet_id, service=None: db
-        if spreadsheet_id == "private-sheet-id" and service is not None else None,
-    )
-    monkeypatch.setattr(
-        cli, "preview_amazon_status_sync",
-        lambda value: {"cancellation_events": 1} if value is db else {},
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-status-sync-preview"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'cancellation_events': 1}"

@@ -1,4 +1,7 @@
 from app.review_pipeline import ReviewApprovalPipeline, ReviewPipeline
+from copy import deepcopy
+
+import pytest
 
 
 def import_row(import_id, source, date, amount, status, *, merchant="AMAZON.CO.JP", note=""):
@@ -76,6 +79,43 @@ class MemoryDB:
 
 def review_row(db, import_id):
     return next(row for row in db.sheets["要確認"] if row[0] == import_id)
+
+
+def test_money_mode_retires_candidate_processing_and_preserves_pending_inputs(monkeypatch):
+    db=MemoryDB();ReviewPipeline(db).refresh()
+    row=review_row(db,"card:1")
+    row[9:15]=["Amazon注文と照合","target","日用品｜雑貨","","本人メモ","未反映"]
+    row[17:20]=[db.sheets["Amazon照合候補"][0][17],db.sheets["Amazon照合候補"][0][0],"選択済み"]
+    original=deepcopy(row);candidates=deepcopy(db.sheets["Amazon照合候補"])
+    monkeypatch.setenv("KAKEIBO_AMAZON_MONEY_MODE","confirmed-v1")
+    get=db.get
+    def forbid_orders(rng):
+        assert not rng.startswith(("Amazon注文","Amazon照合候補"))
+        return get(rng)
+    db.get=forbid_orders
+    assert ReviewPipeline(db).preview()["candidates_generated"]==0
+    assert ReviewPipeline(db).refresh()["candidates_generated"]==0
+    assert db.sheets["Amazon照合候補"]==candidates
+    refreshed=review_row(db,"card:1")
+    assert refreshed[9:20]==original[9:20]
+    assert "金銭確認" in refreshed[7]
+    assert ReviewApprovalPipeline(db).preview()["amazon_manual_would_match"]==0
+    result=ReviewApprovalPipeline(db).apply()
+    assert result["held"]==1 and result["expenses_created"]==0
+    assert not db.sheets.get("updates:取込データ") and not db.sheets.get("支出明細")
+    assert "金銭確認" in review_row(db,"card:1")[14]
+
+
+@pytest.mark.parametrize("action",["支出として計上","重複として除外","レシートと統合"])
+def test_money_mode_prevents_legacy_amazon_approval_but_keeps_other_receipts(monkeypatch,action):
+    db=MemoryDB();ReviewPipeline(db).refresh()
+    review_row(db,"card:1")[9]=action
+    receipt=review_row(db,"receipt:1");receipt[9]="支出として計上";receipt[11]="日用品｜雑貨"
+    monkeypatch.setenv("KAKEIBO_AMAZON_MONEY_MODE","confirmed-v1")
+    result=ReviewApprovalPipeline(db).apply()
+    assert result["held"]==1 and result["expenses_created"]==1
+    assert {r[10] for r in db.sheets["支出明細"]}=={"receipt:1"}
+    assert review_row(db,"card:1")[9]==action
 
 
 def test_refresh_shows_only_amazon_candidates_with_top_three_and_total_count():

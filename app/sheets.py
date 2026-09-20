@@ -111,11 +111,31 @@ HEADERS={
 }
 
 class SheetsDB:
-    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep):
+    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None):
         self.sid=spreadsheet_id; self.svc=service or sheets_service()
         self._read_sleeper=read_sleeper
         self._sheet_metadata_cache=None
         self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
+        self._projection_journal=projection_journal
+
+    def projection_store(self):
+        """Lazily use the configured private folder; reads create no state."""
+        journal=getattr(self,"_projection_journal",None)
+        if journal is None:
+            from .projection_store import ProjectionJournal, store_from_environment
+            store=store_from_environment(self.sid)
+            if store is None:return None
+            journal=ProjectionJournal(store)
+            self._projection_journal=journal
+        return journal.store
+
+    def _invalidate_expense_projection(self, sheet, ranges=(), *, append=False):
+        if sheet.strip("'") != "支出明細":return
+        store=self.projection_store()
+        if store is not None:
+            # Must finish before the accounting request. Nothing after the
+            # request clears this marker; derived refresh does the readback.
+            self._projection_journal.mark(ranges,append=append)
 
     def _read_metrics(self):
         if not hasattr(self, "_sheet_read_metrics"):
@@ -153,6 +173,10 @@ class SheetsDB:
     def _invalidate_sheet_metadata(self):
         self._sheet_metadata_cache=None
 
+    def _compact_category_helper(self):
+        from .compact_categories import compact_helper
+        return compact_helper(self._sheet_metadata())
+
     def sheet_titles(self):
         meta=self._sheet_metadata()
         return [s["properties"]["title"] for s in meta["sheets"]]
@@ -175,8 +199,13 @@ class SheetsDB:
         return self._execute_sheet_read(
             lambda: self.svc.spreadsheets().values().get(spreadsheetId=self.sid,range=rng)
         ).get("values",[])
+    def get_raw(self,rng:str):
+        return self._execute_sheet_read(lambda:self.svc.spreadsheets().values().get(
+            spreadsheetId=self.sid,range=rng,valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="SERIAL_NUMBER")).get("values",[])
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
+        self._invalidate_expense_projection(sheet,append=True)
         reply=self.svc.spreadsheets().values().append(
             spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",body={"values":rows},
@@ -218,9 +247,13 @@ class SheetsDB:
     def append_raw(self, sheet:str, rows:list[list]):
         """Append literal ledger values; do not interpret bank descriptions as formulas."""
         if not rows:return
+        self._invalidate_expense_projection(sheet,append=True)
         reply=self.svc.spreadsheets().values().append(spreadsheetId=self.sid,range=f"{sheet}!A:A",valueInputOption="RAW",insertDataOption="INSERT_ROWS",body={"values":rows}).execute()
         if sheet == "支出明細":self._restore_expense_category_validation_for_append(reply)
     def clear(self,rng:str):
+        if rng.split("!")[0].strip("'")=="支出明細" and self.projection_store() is not None:
+            from .monthly_projection import ProjectionError
+            raise ProjectionError("ledger_clear_forbidden_use_status")
         self.svc.spreadsheets().values().clear(
             spreadsheetId=self.sid,range=rng,body={}
         ).execute()
@@ -242,6 +275,9 @@ class SheetsDB:
             ).execute()
     def configure_review_validation(self, categories:list[tuple[str,str]],
                                     amazon_options_by_row:dict[int,list[str]]|None=None):
+        from .amazon_money_runtime import money_enabled
+        actions=["支出として計上","重複として除外","レシートと統合","保留"]
+        if not money_enabled():actions.insert(3,"Amazon注文と照合")
         meta=self.svc.spreadsheets().get(spreadsheetId=self.sid).execute()
         sheet_id=next(s["properties"]["sheetId"] for s in meta["sheets"]
                       if s["properties"]["title"]=="要確認")
@@ -255,12 +291,26 @@ class SheetsDB:
              "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
              "fields":"userEnteredFormat.numberFormat"}},
             rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
-                 ["支出として計上","重複として除外","レシートと統合","Amazon注文と照合","保留"]]}),
+                 actions]}),
             rule(11,12,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
                  for x in combined_category_options(categories)]}),
             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
              "startColumnIndex":12,"endColumnIndex":13}}},
         ]
+        from .compact_categories import compact_helper, category_condition
+        compact = compact_helper(meta)
+        if compact:
+            # Retain only existing review rows; never populate blank grid tails.
+            sheet = next(s for s in meta["sheets"] if s["properties"]["sheetId"] == sheet_id)
+            extent = sheet["properties"]["gridProperties"]["rowCount"]
+            last = 1
+            for first in range(2, extent + 1, 2000):
+                ids = self.get_raw(f"'要確認'!A{first}:A{min(extent, first + 1999)}")
+                last = max(last, max((first+i for i, row in enumerate(ids) if row and row[0]), default=1))
+            requests[2]["setDataValidation"]["rule"]["condition"] = category_condition(compact)
+            for request in requests:
+                body = next(iter(request.values()))
+                body["range"]["endRowIndex"] = max(2, last)
         for row_num,options in (amazon_options_by_row or {}).items():
             if options:
                 requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,
@@ -290,26 +340,38 @@ class SheetsDB:
             spreadsheetId=self.sid,body={"requests":requests}
         ).execute()
     def update_row(self,sheet:str,row_num:int,row:list):
+        if row_num>=2:self._invalidate_expense_projection(sheet,[(row_num,row_num)])
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{sheet}!A{row_num}",valueInputOption="USER_ENTERED",body={"values":[row]}).execute()
     def set_raw_range(self, rng:str, rows:list[list]):
+        if rows and rng.split("!")[0].strip("'")=="支出明細":
+            match=re.fullmatch(r"'?(支出明細)'?![A-Z]+([0-9]+)(?::[A-Z]+[0-9]*)?",rng)
+            if not match:
+                from .monthly_projection import ProjectionError
+                raise ProjectionError("ledger_write_range_must_be_bounded")
+            start=int(match[2]);end=start+len(rows)-1
+            if end>=2:self._invalidate_expense_projection("支出明細",[(max(2,start),end)])
         self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=rng,
             valueInputOption="RAW",body={"values":rows}).execute(num_retries=0)
     def update_row_raw(self,sheet:str,row_num:int,row:list):
         self.set_raw_range(f"'{sheet}'!A{row_num}",[row])
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
         if not rows:return
+        self._invalidate_expense_projection(sheet,[(n,n) for n,_ in rows if n>=2])
         section={"カテゴリ自動分類":"rule", "カテゴリ過去反映":"backfill",
                  "カテゴリ過去反映確認":"confirm"}.get(sheet)
         if section and CATEGORY_WORKFLOW_SHEET in set(self.sheet_titles()):
+            prior=getattr(self,"_category_workflow_last_read",None)
             blocks=self._category_workflow_blocks()
+            self._check_category_workflow_input(prior)
             start=self._workflow_positions(blocks)[section]["start"]
             data=[{"range":f"{CATEGORY_WORKFLOW_SHEET}!A{start+row_num-2}",
-                   "values":[self._workflow_physical_row(section, row)]}
+                   "values":[self._workflow_physical_row(section, row, compact=bool(self._compact_category_helper()))]}
                   for row_num,row in rows]
             self.svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=self.sid,
                 body={"valueInputOption":"RAW","data":data}
             ).execute()
+            self._category_workflow_last_read=None
             return
         data=[{"range":f"{sheet}!A{row_num}","values":[row]} for row_num,row in rows]
         self.svc.spreadsheets().values().batchUpdate(
@@ -421,17 +483,25 @@ class SheetsDB:
         return {"rule": list(UI_HEADERS), "backfill": list(BACKFILL_UI_HEADERS),
                 "confirm": list(BACKFILL_CONFIRM_HEADERS)}
 
+    def _check_category_workflow_input(self, prior):
+        if prior is not None and self._compact_category_helper() and prior != self._category_workflow_last_read:
+            from .monthly_projection import ProjectionError
+            raise ProjectionError("category_workflow_input_changed")
+
     @staticmethod
-    def _workflow_logical_row(section, physical):
+    def _workflow_logical_row(section, physical, *, compact=False):
         cells=list(physical)+[""]*max(0, 12-len(physical))
         if section == "backfill":
             return cells[:5]+cells[6:11]
         if section == "confirm":
             return cells[:4]+[cells[6]]
+        if compact:
+            from .compact_categories import logical_rule_row
+            return logical_rule_row(cells)
         return cells[:12]
 
     @staticmethod
-    def _workflow_physical_row(section, logical):
+    def _workflow_physical_row(section, logical, *, compact=False, header=False):
         cells=list(logical)
         def checkbox(value):
             text=str(value).strip().upper()
@@ -446,6 +516,9 @@ class SheetsDB:
             return cells[:4]+["", "", cells[4]]+[""]*5
         cells += [""]*max(0, 12-len(cells))
         cells[4]=checkbox(cells[4]); cells[5]=checkbox(cells[5])
+        if compact:
+            from .compact_categories import physical_rule_row
+            return physical_rule_row(cells, header=header)
         return cells[:12]
 
     def _category_workflow_blocks(self):
@@ -460,7 +533,18 @@ class SheetsDB:
             legacy["confirm"]=(defaults["confirm"], self.get("カテゴリ過去反映確認!A2:E")
                                if "カテゴリ過去反映確認" in titles else [])
             return legacy
-        values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+        compact=bool(self._compact_category_helper())
+        if compact:
+            sheet=next(s for s in self._sheet_metadata()["sheets"]
+                       if s["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+            extent=sheet["properties"]["gridProperties"]["rowCount"]
+            values=[]
+            for first in range(1,extent+1,1000):
+                last=min(extent,first+999)
+                page=self.get_raw(f"'{CATEGORY_WORKFLOW_SHEET}'!A{first}:L{last}")
+                values.extend(page+[[] for _ in range(last-first+1-len(page))])
+        else:
+            values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
         markers={key: next((index for index,row in enumerate(values)
                             if row and row[0] == marker), None)
                  for key,marker in CATEGORY_WORKFLOW_MARKERS.items()}
@@ -478,8 +562,13 @@ class SheetsDB:
             rows=[]
             for row in values[marker+2:end]:
                 if any(str(value).strip() for value in row):
-                    rows.append(self._workflow_logical_row(key, row))
+                    rows.append(self._workflow_logical_row(key, row, compact=compact))
+            if compact and key == "rule":
+                header=defaults[key]
             blocks[key]=(header, rows)
+        if compact:
+            from .compact_categories import digest
+            self._category_workflow_last_read=digest(values)
         return blocks
 
     def _ensure_category_workflow_sheet(self):
@@ -544,6 +633,11 @@ class SheetsDB:
             ])
             if len(row)>3 and row[3] == "過去すべて":
                 requests.append({"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":row_num-1,"endRowIndex":row_num,"startColumnIndex":2,"endColumnIndex":3},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.93,"green":0.93,"blue":0.93},"textFormat":{"foregroundColor":{"red":0.45,"green":0.45,"blue":0.45},"italic":True}}},"fields":"userEnteredFormat(backgroundColor,textFormat)"}})
+        if self._compact_category_helper():
+            from .compact_category_sync import backfill_month_choices
+            sheet=next(s for s in self._sheet_metadata()["sheets"] if s["properties"]["sheetId"]==sheet_id)
+            requests=backfill_month_choices(requests,sheet_id=sheet_id,title=CATEGORY_WORKFLOW_SHEET,rows=rows,
+                extent=sheet["properties"]["gridProperties"]["rowCount"],store=self.projection_store())
         return requests
 
     def _configure_category_workflow(self, blocks, positions):
@@ -558,7 +652,7 @@ class SheetsDB:
             requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"COLUMNS","length":27-column_count}})
         requests += [
             {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":1000,"startColumnIndex":0,"endColumnIndex":6}}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":sheet["properties"]["gridProperties"]["rowCount"] if self._compact_category_helper() else 1000,"startColumnIndex":0,"endColumnIndex":6}}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":25},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":2}},"fields":"gridProperties.frozenRowCount"}},
@@ -571,11 +665,16 @@ class SheetsDB:
             ]
         rule_position=positions["rule"]
         if helper and rule_position["count"]:
-            from .sheets_ui_actions import expense_helper_growth_requests
-            growth=expense_helper_growth_requests(helper,rule_position['start']+rule_position['count']-1)
-            requests.extend(growth)
-            if growth:self._invalidate_sheet_metadata()
-            requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
+            compact=self._compact_category_helper()
+            if compact:
+                from .compact_categories import controls
+                requests.extend(controls(sheet_id,compact,rule_position["start"],rule_position["count"]))
+            else:
+                from .sheets_ui_actions import expense_helper_growth_requests
+                growth=expense_helper_growth_requests(helper,rule_position['start']+rule_position['count']-1)
+                requests.extend(growth)
+                if growth:self._invalidate_sheet_metadata()
+                requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
         backfill_position=positions["backfill"]
         requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))
         confirm_position=positions["confirm"]
@@ -592,17 +691,38 @@ class SheetsDB:
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
 
     def _replace_category_workflow_section(self, section, rows, header):
-        blocks=self._category_workflow_blocks(); blocks[section]=(list(header), [list(row) for row in rows])
+        prior=getattr(self,"_category_workflow_last_read",None)
+        blocks=self._category_workflow_blocks()
+        self._check_category_workflow_input(prior)
+        blocks[section]=(list(header), [list(row) for row in rows])
         self._ensure_category_workflow_sheet(); positions=self._workflow_positions(blocks)
         values=[]
+        compact=bool(self._compact_category_helper())
         for key in ("rule", "backfill", "confirm"):
             block_header,block_rows=blocks[key]
             values.append([CATEGORY_WORKFLOW_MARKERS[key]])
-            values.append(self._workflow_physical_row(key, block_header))
-            values.extend(self._workflow_physical_row(key, row) for row in block_rows)
+            values.append(self._workflow_physical_row(key, block_header, compact=compact, header=True))
+            values.extend(self._workflow_physical_row(key, row, compact=compact) for row in block_rows)
             values.append([""])
-        self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
-        self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
+        if compact:
+            # Atomic values replacement, including stale tail clearing. No
+            # intermediate blank input surface and no 1,000-row truncation.
+            from .compact_categories import _cells
+            sheet=next(s for s in self._sheet_metadata()["sheets"] if s["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+            extent=sheet["properties"]["gridProperties"]["rowCount"]
+            sheet_id=sheet["properties"]["sheetId"]
+            requests=[]
+            if len(values)>extent:
+                requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)-extent}})
+            request=_cells(sheet_id,1,0,values,12)
+            request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values))
+            requests.append(request)
+            self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
+            self._invalidate_sheet_metadata()
+            self._category_workflow_last_read=None
+        else:
+            self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
+            self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
         self._configure_category_workflow(blocks, positions)
 
     def ensure_category_rule_ui_sheet(self, header):
@@ -632,6 +752,7 @@ class SheetsDB:
                     {"range": f"{CATEGORY_WORKFLOW_SHEET}!F{row_num}", "values": [[False]]},
                 ],
             }).execute()
+            self._category_workflow_last_read=None
             return True
         return False
     def ensure_category_backfill_sheets(self):
@@ -648,12 +769,23 @@ class SheetsDB:
     def update_expense_categories(self, rows:list[tuple[int,str,str]]):
         """Backfill's sole ledger mutation: the existing F:G category cells."""
         if not rows: return
+        self._invalidate_expense_projection("支出明細",[(n,n) for n,_,_ in rows])
         self.svc.spreadsheets().values().batchUpdate(
             spreadsheetId=self.sid, body={"valueInputOption":"RAW", "data":[
                 {"range":f"支出明細!F{row_num}:G{row_num}", "values":[[major,minor]]}
                 for row_num,major,minor in rows
             ]},
         ).execute()
+    def update_expense_fields(self,row_num:int,cells:list[list]):
+        """Atomic field-only correction; immutable IDs/source/status excluded."""
+        if not cells:return
+        if row_num<2 or any(c not in {1,2,3,4,5,6,7,11} for c,_ in cells):
+            raise ValueError("expense_correction_field_invalid")
+        self._invalidate_expense_projection("支出明細",[(row_num,row_num)])
+        self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid,body={
+            "valueInputOption":"RAW","data":[
+                {"range":f"'支出明細'!{chr(65+c)}{row_num}","values":[[value]]} for c,value in cells
+            ]}).execute(num_retries=0)
     def _configure_backfill_mobile_sheet(self, title, header, hidden_from, control_rows, ignored_start_rows=()):
         """Render backfill controls only on the rows that can be actioned.
 
@@ -813,7 +945,4 @@ class SheetsDB:
         if rows:
             statuses=[[r[12] if len(r)>12 and r[12] else "active"] for r in rows]
             if any(len(r)<=12 or not r[12] for r in rows):
-                self.svc.spreadsheets().values().update(
-                    spreadsheetId=self.sid,range="支出明細!M2",valueInputOption="RAW",
-                    body={"values":statuses}
-                ).execute()
+                self.set_raw_range("支出明細!M2",statuses)

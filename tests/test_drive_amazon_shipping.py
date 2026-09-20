@@ -115,16 +115,9 @@ def test_no_csv_stops_with_clear_error():
         select_latest_csv([drive_file("txt", "notes.txt", "2026-08-22T00:00:00Z")])
 
 
-def test_workflow_uses_required_secrets_and_read_only_command():
-    workflow = Path(".github/workflows/amazon-shipping-backfill-preview.yml").read_text()
-    assert "AMAZON_ORDER_HISTORY_FOLDER_ID: ${{ secrets.AMAZON_ORDER_HISTORY_FOLDER_ID }}" in workflow
-    assert "GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" in workflow
-    assert "permissions:\n  contents: read" in workflow
-    assert "amazon-shipping-backfill-drive-preview" in workflow
+def test_order_shipping_preview_workflow_is_retired():
+    assert not Path(".github/workflows/amazon-shipping-backfill-preview.yml").exists()
 
 
-def test_apply_workflow_requires_explicit_confirmation():
-    workflow = Path(".github/workflows/amazon-shipping-backfill.yml").read_text()
-    assert "confirm == 'APPLY'" in workflow
-    assert "amazon-shipping-backfill-drive-apply" in workflow
-    assert "GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" in workflow
+def test_order_shipping_writer_workflow_is_retired():
+    assert not Path(".github/workflows/amazon-shipping-backfill.yml").exists()

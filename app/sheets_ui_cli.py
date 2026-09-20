@@ -314,6 +314,9 @@ def main(argv=None):
         print(json.dumps(verify_home(service, meta)))
         return
     if args.restore:
+        from .compact_categories import compact_helper
+        if compact_helper(meta):
+            raise ValueError("Legacy UI restore cannot overwrite compact categories; use the isolated native backup")
         plan = json.loads(private_path(args.restore).read_text(encoding="utf-8"))
         if plan.get("spreadsheetId") != SPREADSHEET_ID:
             raise ValueError("Restore target mismatch")

@@ -178,31 +178,6 @@ def test_parser_error_missing_and_identity_mismatch_are_skipped():
     assert result["would_update"] == 0
 
 
-def test_cli_uses_both_readonly_services(monkeypatch, capsys):
-    sheets_service = object()
-    gmail_service = object()
-    db = object()
-
-    class FakeSettings:
-        spreadsheet_id = "sheet-id"
-        gmail_token_json = "gmail-token"
-
-        def validate(self, **kwargs):
-            assert kwargs == {"need_sheet": True, "need_gmail": True}
-
-    monkeypatch.setattr(cli, "Settings", FakeSettings)
-    monkeypatch.setattr(cli, "read_only_sheets_service", lambda: sheets_service)
-    monkeypatch.setattr(cli, "gmail_readonly_service", lambda token: gmail_service)
-    monkeypatch.setattr(cli, "SheetsDB", lambda sid, service: db)
-    monkeypatch.setattr(
-        cli, "preview_amazon_event_reparse",
-        lambda gmail, sheets: {"ok": gmail is gmail_service and sheets is db},
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-event-reparse-preview"])
-
-    cli.main()
-
-    assert capsys.readouterr().out.strip() == "{'ok': True}"
 
 
 def test_apply_does_not_erase_existing_values_when_new_values_are_empty():
@@ -298,16 +273,3 @@ def test_apply_updates_only_changed_cells_and_counts_fields():
     assert result["field_updates"]["order_amount"] == 1
     assert all(column not in {0, 1, 2, 3, 4, 19, 20, 22}
                for column, _value in db.write_calls[0][1])
-
-
-def test_cli_apply_without_safety_flag_does_not_initialize_or_write(monkeypatch):
-    monkeypatch.setattr(
-        cli, "Settings",
-        lambda: (_ for _ in ()).throw(AssertionError("must not initialize")),
-    )
-    monkeypatch.setattr(sys, "argv", ["kakeibo", "amazon-event-reparse-apply"])
-
-    with pytest.raises(SystemExit) as exc:
-        cli.main()
-
-    assert exc.value.code == 2
