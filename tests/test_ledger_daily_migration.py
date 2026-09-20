@@ -6,6 +6,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+
+def test_failure_report_excludes_private_exception_text():
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    error = HttpError(Response({"status": "429"}), b'{"error":{"message":"private row value"}}')
+    report = migration.failure_report(error)
+    assert report == {"success": False, "error": "ledger_daily_migration_failed", "http_status": 429}
+    assert "private" not in str(report)
+    assert migration.failure_report(StateError("compact_category_snapshot_changed"))["error"] == "compact_category_snapshot_changed"
 import yaml
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -297,7 +307,9 @@ def test_entrypoint_sanitizes_exception_and_has_no_success_on_failure(message, e
     with pytest.raises(SystemExit) as error: migration.main()
     assert error.value.code == 1
     output = capsys.readouterr()
-    assert json.loads(output.out) == {"success": False, "error": expected} and output.err == ""
+    report = json.loads(output.out)
+    assert report.pop("failure_location").startswith("ledger_daily_migration.py:")
+    assert report == {"success": False, "error": expected} and output.err == ""
 
 
 def test_workflow_is_manual_same_lock_and_minimal_existing_credentials():
