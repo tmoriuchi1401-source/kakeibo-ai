@@ -37,7 +37,7 @@ def open_context(env,apply):
     from .google_clients import drive_service,read_only_drive_service,read_only_sheets_service,download_drive_file
     from .settings import Settings,service_account_source
     from .private_state_bindings import unwrap
-    from .sheets import SheetsDB
+    from .sheets import SheetsDB, SheetsReadPacer
     settings=Settings();settings.validate(need_sheet=True,need_drive=True)
     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
     config=json.loads(env['RECEIPT_CONFIRMATION_BINDING'])
@@ -57,7 +57,8 @@ def open_context(env,apply):
         if m.get('trashed') or m.get('parents')!=[folder] or m.get('version')!=source['version'] or m.get('mimeType')!=source['mime_type']:
             raise StateError('confirmation_source_changed')
         return m
-    db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service())
+    db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service(),
+        read_pacer=SheetsReadPacer() if apply else None,read_retry_base=20)
     return settings,store,db,metadata
 
 
@@ -224,7 +225,7 @@ def main():
         if len(sys.argv)!=2 or sys.argv[1] not in {'preview','apply'}:raise StateError('confirmation_mode_invalid')
         print(json.dumps(execute(env,sys.argv[1]=='apply'),sort_keys=True))
     except Exception as error:
-        from .production_run import safe_source_error
-        print(json.dumps({'failure':1,'error':safe_source_error(error)}));raise SystemExit(1)
+        from .production_source import source_error_code
+        print(json.dumps({'failure':1,'error':source_error_code(error)}));raise SystemExit(1)
 
 if __name__=='__main__':main()

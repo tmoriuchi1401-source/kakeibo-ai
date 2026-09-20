@@ -68,7 +68,7 @@ def install_copy_requests(source_id,target_id,old_sheet_ids,*,current_month):
             "hidden":title.startswith("_"),"gridProperties":{"hideGridlines":True,"frozenRowCount":0 if title.startswith("_") else 2}},
             "fields":"title,index,hidden,gridProperties.hideGridlines,gridProperties.frozenRowCount"}})
         if title.startswith("_"):continue
-        widths=[105,145,90] if title!="確認" else [90,130,80,40]
+        widths=[100,140,85] if title!="確認" else [90,120,75,40]
         for col,width in enumerate(widths):
             requests.append({"updateDimensionProperties":{"range":{"sheetId":sid,"dimension":"COLUMNS",
                 "startIndex":col,"endIndex":col+1},"properties":{"pixelSize":width},"fields":"pixelSize"}})
@@ -157,7 +157,20 @@ def layout_requests():
         requests.append({"updateDimensionProperties":{"range":{"sheetId":SHEETS["推移"][0],
             "dimension":"ROWS","startIndex":first-1,"endIndex":last},
             "properties":{"pixelSize":height},"fields":"pixelSize"}})
-    return requests+header_form_layout_requests()
+    return requests+header_form_layout_requests()+number_format_requests()
+
+
+def number_format_requests():
+    requests=[]
+    money=[("ホーム",4,4,1),("履歴",11,60,2),
+           ("推移",7,16,1),("推移",20,139,1),("推移",150,299,1)]
+    counts=[("ホーム",5,6,1),("推移",20,139,2)]
+    for ranges,pattern in [(money,'#,##0" 円";-#,##0" 円";0" 円"'),(counts,'#,##0" 件"')]:
+        for title,first,last,col in ranges:
+            requests.append({"repeatCell":{"range":grid(title,first,last,col,col+1),
+                "cell":{"userEnteredFormat":{"numberFormat":{"type":"NUMBER","pattern":pattern}}},
+                "fields":"userEnteredFormat.numberFormat"}})
+    return requests
 
 
 def header_form_layout_requests():
@@ -245,8 +258,13 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
             requests.append({"repeatCell":{"range":grid(title,start,start+count-1,0,width),"cell":{"userEnteredFormat":{
                 "wrapStrategy":"WRAP","verticalAlignment":"MIDDLE","textFormat":{"fontSize":10}}},
                 "fields":"userEnteredFormat(wrapStrategy,verticalAlignment,textFormat)"}})
-            requests.append({"updateDimensionProperties":{"range":{"sheetId":SHEETS[title][0],"dimension":"ROWS",
-                "startIndex":start-1,"endIndex":start+count-1},"properties":{"pixelSize":70},"fields":"pixelSize"}})
+            dimensions={"sheetId":SHEETS[title][0],"dimension":"ROWS",
+                "startIndex":start-1,"endIndex":start+count-1}
+            if title=="確認":
+                requests.append({"autoResizeDimensions":{"dimensions":dimensions}})
+            else:
+                requests.append({"updateDimensionProperties":{"range":dimensions,
+                    "properties":{"pixelSize":70},"fields":"pixelSize"}})
     return [r for r in requests if r]
 
 

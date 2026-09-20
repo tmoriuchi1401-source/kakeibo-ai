@@ -15,6 +15,8 @@ from .drive_run_state import DurableState, StateError
 
 
 SAFE_SOURCE_ERRORS = frozenset({
+    'confirmation_source_changed', 'confirmation_store_permissions_changed',
+    'confirmation_store_invalid',
     'confirmation_sheet_header_mismatch', 'confirmation_unknown_ui_identity',
     'confirmation_duplicate_ui_identity', 'confirmation_missing_ui_identity',
     'confirmation_new_row_occupied', 'confirmation_new_row_write_unknown',

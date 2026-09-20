@@ -65,6 +65,15 @@ def test_changed_original_cannot_close_an_old_question():
     assert review.needs_attention(key)
 
 
+def test_unchanged_held_difference_does_not_reread_entire_review_ui():
+    review,store,db,key,*_=normal_service()
+    store.value['records']['s1']['parsed']['items'][0]['name']='Different product'
+    before=deepcopy(store.value)
+    review.ui_rows=Mock(side_effect=AssertionError('unnecessary full UI read'))
+    assert review.resolve_general_without_writes()==0
+    assert store.value==before and review.needs_attention(key)
+
+
 @pytest.mark.parametrize('mutation',[
     lambda t:t['expense_rows'].append(deepcopy(t['expense_rows'][0])),
     lambda t:t['expense_rows'][0].__setitem__(12,'duplicate_excluded'),

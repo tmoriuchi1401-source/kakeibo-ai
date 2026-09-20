@@ -110,6 +110,18 @@ HEADERS={
 "カテゴリ自動分類ルール":["ルールID","条件種別","データ元","口座別名","請求名","店舗名","商品ID","商品名","金額","大カテゴリ","小カテゴリ","承認元支出ID","承認日時","revision","有効","適用件数","最終適用支出ID","最終適用日時"],
 }
 
+class SheetsReadPacer:
+    """Optional shared per-account read spacing for lengthy verification jobs."""
+    def __init__(self, *, clock=time.monotonic, sleep=time.sleep):
+        self.clock, self.sleep, self.next_read = clock, sleep, 0.0
+
+    def __call__(self):
+        delay = self.next_read - self.clock()
+        if delay > 0:
+            self.sleep(delay)
+        self.next_read = self.clock() + 1.1
+
+
 class SheetsDB:
     def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None,
                  read_pacer=None, read_retry_base=1):

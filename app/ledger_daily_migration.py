@@ -20,6 +20,7 @@ from .amazon_money_migration import MigrationReader, _snapshot, build_manifest, 
 from .drive_run_state import StateError
 from .private_state_bindings import unwrap
 from .projection_store import DriveProjectionStore
+from .sheets import SheetsReadPacer as MigrationReadPacer
 
 
 BACKUP_VARIABLE = "KAKEIBO_MIGRATION_BACKUP_ID"
@@ -63,18 +64,6 @@ def failure_report(exc):
     if isinstance(exc, HttpError):
         report["http_status"] = int(exc.resp.status)
     return report
-
-
-class MigrationReadPacer:
-    """One read budget shared by source, backup and daily during migration."""
-    def __init__(self, *, clock=time.monotonic, sleep=time.sleep):
-        self.clock, self.sleep, self.next_read = clock, sleep, 0.0
-
-    def __call__(self):
-        delay = self.next_read - self.clock()
-        if delay > 0:
-            self.sleep(delay)
-        self.next_read = self.clock() + 1.1
 
 
 def prepare_daily(store, reader, backup_reader, source, daily, env, writer_email,
