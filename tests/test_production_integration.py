@@ -459,6 +459,10 @@ def test_real_receipt_committed_response_loss_blocks_automatic_replay(integrated
     first = f.run(True)
     assert not first["success"]
     assert first["sources"]["receipts"]["status"] == "failed"
+    assert first['sources']['receipts']['stage'] == 'receipt_processing'
+    # The committed response was lost, so completed-result counts cannot assert
+    # that this receipt was written or justify an automatic retry.
+    assert first['sources']['receipts']['counts']['written'] == 0
     assert first["sources"]["auto_expense"]["status"] == "skipped"
     assert len([row for row in f.rows["取込データ"] if row[0] == "receipt:receipt-fixture"]) == 1
     assert f.metadata["receipt-fixture"]["parents"] == [RECEIPTS]
@@ -467,3 +471,49 @@ def test_real_receipt_committed_response_loss_blocks_automatic_replay(integrated
     assert f.calls.count("receipts") == 1  # pending is checked before its CLI
     assert len(f.ai_calls) == 1
     assert len([row for row in f.rows["取込データ"] if row[0] == "receipt:receipt-fixture"]) == 1
+
+
+def test_six_committed_receipts_survive_seventh_failure_in_parent_report(integrated, monkeypatch):
+    from app.receipt_pipeline import ReceiptPipeline
+    f = integrated
+    for number in range(2, 8):
+        identity = f'receipt-fixture-{number}'
+        f.metadata[identity] = {**deepcopy(f.metadata['receipt-fixture']), 'id': identity}
+        f.payloads[identity] = b'synthetic-normal-receipt'
+    analyze = ReceiptPipeline._analyze
+    attempts = []
+    def fail_seventh(self, *args, **kwargs):
+        attempts.append(1)
+        if len(attempts) == 7:raise TimeoutError('private receipt details')
+        return analyze(self, *args, **kwargs)
+    monkeypatch.setattr(ReceiptPipeline, '_analyze', fail_seventh)
+    report = f.run(True)
+    outcome = report['sources']['receipts']
+    assert outcome['status'] == 'failed'
+    assert outcome['error'] == 'source_timeout'
+    assert outcome['stage'] == 'receipt_processing'
+    assert outcome['counts']['written'] == 6
+    assert len([r for r in f.rows['取込データ'] if r[0].startswith('receipt:')]) == 6
+    assert len([r for r in f.rows['支出明細'] if r[0].startswith('R-receipt')]) == 6
+    assert json.loads(f.payloads['ledger'])['sources']['receipts']['phase'] == 'pending'
+    assert report['sources']['auto_expense']['status'] == 'skipped'
+    assert 'private receipt details' not in json.dumps(report)
+    replay = f.run(True)
+    assert replay['sources']['receipts']['error'] == 'source_reconciliation_required'
+    assert len(attempts) == 7
+
+
+def test_projection_failure_after_accounting_keeps_counts_and_pending(integrated, monkeypatch):
+    from app.monthly_projection import ProjectionError
+    def fail(*args):raise ProjectionError('projection_drive_read_failed')
+    monkeypatch.setattr('app.expense_view.ExpenseViewPipeline.refresh', fail)
+    f = integrated
+    report = f.run(True)
+    outcome = report['sources']['receipts']
+    assert outcome['error'] == 'projection_drive_read_failed'
+    assert outcome['stage'] == 'receipt_projection'
+    assert outcome['counts']['written'] == 1
+    assert f.metadata['receipt-fixture']['parents'] == [ARCHIVE]
+    assert json.loads(f.payloads['ledger'])['sources']['receipts']['phase'] == 'pending'
+    assert not f.run(True)['success']
+    assert f.calls.count('receipts') == 1

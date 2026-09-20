@@ -125,13 +125,14 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
         raise StateError('source_command_timed_out') from None
     if result.returncode != 0:
         if source in {"receipt_confirmation", "receipts", "paypay"}:
-            from .production_run import SAFE_SOURCE_ERRORS
+            from .production_run import SAFE_SOURCE_ERRORS, SourceFailure
             try:
-                code=json.loads(result.stdout).get("error")
+                failure=json.loads(result.stdout)
+                code=failure.get("error")
             except (ValueError,AttributeError):
                 code=None
             if isinstance(code,str) and code in SAFE_SOURCE_ERRORS:
-                raise StateError(code)
+                raise SourceFailure(code, failure.get('stage', ''), failure)
         if source == "receipt_reimport":
             try:
                 code=json.loads(result.stdout).get("error")

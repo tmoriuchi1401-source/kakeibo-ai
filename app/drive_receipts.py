@@ -28,7 +28,10 @@ def is_supported_receipt_mime(mime_type: str) -> bool:
 
 
 def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str="", *,
-                  known_source_classification: Classification | None = None, approved_sources=None):
+                  known_source_classification: Classification | None = None, approved_sources=None,
+                  progress=None):
+    # Optional in-memory diagnostics; never includes source identities or values.
+    progress = progress or (lambda stage, result=None: None)
     folder_id=normalize_folder_id(folder_id)
     processed_folder_id=normalize_folder_id(processed_folder_id) if processed_folder_id else ""
     svc=drive_service()
@@ -44,6 +47,7 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
     approved=None if approved_sources is None else {x['source_id']:x for x in approved_sources}
     for f in files:
         if not is_supported_receipt_mime(f["mimeType"]): continue
+        progress('receipt_preflight')
         if approved is not None:
             if f['id'] not in approved:continue
             entry=approved[f['id']]
@@ -58,6 +62,7 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
         source_policy = ({"known_source_classification": known_source_classification}
                          if known_source_classification is not None else {})
         try:
+            progress('receipt_processing')
             res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
         except Exception as error:
             from google.genai.errors import APIError
@@ -67,11 +72,17 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
             if isinstance(error,APIError) and getattr(error,'code',None) in {429,503}:
                 remaining=[x for x in files[files.index(f):] if is_supported_receipt_mime(x['mimeType'])
                            and (approved is None or x['id'] in approved)]
-                results.extend((x['name'],{'status':'deferred','reason':'ai_temporarily_unavailable'}) for x in remaining)
+                for x in remaining:
+                    deferred={'status':'deferred','reason':'ai_temporarily_unavailable'}
+                    results.append((x['name'],deferred))
+                    progress('receipt_processing', deferred)
                 break
             raise
         results.append((f["name"],res))
+        progress('receipt_processing', {key: res[key] for key in
+            ('status', 'reason', 'medical_shadow_status') if key in res})
         if processed_folder_id and should_archive_result(res):
+            progress('receipt_archive')
             prev=",".join(f.get("parents",[]))
             properties = dict(f.get("appProperties", {}))
             # Only a fresh result passed through the normal privacy gate proves

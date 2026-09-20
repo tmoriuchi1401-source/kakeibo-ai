@@ -19,7 +19,10 @@ def source_error_code(error):
     """Emit fixed diagnostic codes, never API responses or document values."""
     from google.genai.errors import APIError
     from googleapiclient.errors import HttpError
-    from .production_run import safe_source_error
+    from .production_run import SAFE_SOURCE_ERRORS, safe_source_error
+    from .monthly_projection import ProjectionError
+    import ssl
+    import httpx
     if isinstance(error, APIError):
         from .receipt_reimport_production import error_code
         return error_code(error)
@@ -29,8 +32,16 @@ def source_error_code(error):
         return 'google_api_request_failed'
     if isinstance(error, RuntimeError) and str(error) in {
             'receipt_preflight_source_changed','receipt_preflight_content_changed',
-            'receipt_inbox_collection_incomplete','receipt_preflight_required'}:
+            'receipt_inbox_collection_incomplete','receipt_preflight_required',
+            'receipt_response_invalid'}:
         return str(error)
+    if isinstance(error, ProjectionError) and str(error) in SAFE_SOURCE_ERRORS:
+        return str(error)
+    if isinstance(error, ssl.SSLError):return 'source_tls_failed'
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):return 'source_timeout'
+    if isinstance(error, (ConnectionError, httpx.TransportError)):return 'source_connection_failed'
+    if isinstance(error, (KeyError, TypeError, AttributeError, NameError)):return 'source_internal_error'
+    if isinstance(error, ValueError) and not isinstance(error, ProjectionError):return 'source_invalid_data'
     return safe_source_error(error)
 
 
@@ -39,15 +50,11 @@ def receipts(settings, *, apply: bool) -> dict:
     db = SheetsDB(settings.spreadsheet_id, service=None if apply else read_only_sheets_service())
     counts = {"found": 0, "written": 0, "needs_review": 0, "unchanged": 0, "failure": 0}
     if apply:
-        approved=None
-        if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
-            if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
-            approved=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())['sources']
-        results = process_inbox(
-            settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
-            settings.processed_drive_folder_id, **({'approved_sources':approved} if approved is not None else {}),
-        )
-        for _, result in results:
+        stage = 'receipt_preflight'
+        def progress(current, result=None):
+            nonlocal stage
+            stage = current
+            if result is None:return
             counts["found"] += 1
             status = result.get("status")
             if status == "imported":
@@ -62,9 +69,23 @@ def receipts(settings, *, apply: bool) -> dict:
                 counts["failure"] += 1
             if result.get("medical_shadow_status") == "handoff_failed":
                 counts["failure"] += 1
-        if counts['written']:
-            from .expense_view import ExpenseViewPipeline
-            ExpenseViewPipeline(db).refresh()
+        try:
+            approved=None
+            if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
+                if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
+                approved=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())['sources']
+            process_inbox(
+                settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
+                settings.processed_drive_folder_id, progress=progress,
+                **({'approved_sources':approved} if approved is not None else {}),
+            )
+            if counts['written']:
+                stage = 'receipt_projection'
+                from .expense_view import ExpenseViewPipeline
+                ExpenseViewPipeline(db).refresh()
+        except Exception as error:
+            from .production_run import SourceFailure
+            raise SourceFailure(source_error_code(error), stage, counts) from None
         return counts
     # Read-only preview inspects identities and the existing local privacy gate.
     # AI extraction/write counts cannot be promised before the approved AI run.
@@ -119,7 +140,9 @@ def main():
     try:
         result = {"receipts": receipts, "paypay": paypay}[args.source](Settings(), apply=args.mode == "apply")
     except Exception as error:
-        result['error'] = source_error_code(error)
+        from .production_run import SourceFailure
+        if isinstance(error, SourceFailure):result = error.report()
+        else:result['error'] = source_error_code(error)
     print(json.dumps(result, sort_keys=True))
     if result.get("failure") or result.get("failed_files"):
         raise SystemExit(1)
