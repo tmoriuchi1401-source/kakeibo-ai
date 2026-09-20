@@ -1,7 +1,7 @@
 """Bounded dropdown pages without changing selections or accounting data."""
 from hashlib import sha256
 
-from .daily_view import SHEETS, cells, dropdown, grid
+from .daily_view import SHEETS, HOME_LOOKUP_ROW, cells, dropdown, grid
 from .monthly_projection import ProjectionError
 
 MARKER="kakeibo_daily_choice_pages_v1"
@@ -87,7 +87,7 @@ def render_requests(catalog,expense_choices,controls):
             requests.extend([cells(title,row,[[label]],width=1),
                 cells(title,row,[[f"全{len(options)}件\n{page}/{pages}頁"]],left=2,width=1),
                 page_dropdown(title,row,1,page,pages)])
-    helper=[[column[i] if i<len(column) else "" for column in columns] for i in range(999)]
+    helper=[[column[i] if i<len(column) else "" for column in columns] for i in range(HOME_LOOKUP_ROW-2)]
     requests.extend([cells("_候補",1,[["履歴カテゴリ","推移カテゴリ","修正カテゴリ","修正対象ID"]],width=4),
                      cells("_候補",2,helper,width=4)])
     for (title,row,column,strict),values in zip([("履歴",4,"A",True),("推移",4,"B",True),("確認",64,"C",True),("確認",61,"D",False)],columns):

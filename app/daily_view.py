@@ -18,6 +18,10 @@ SHEETS={"ホーム":(260919001,50,3),"履歴":(260919002,120,8),
         "設定":(260919005,700,6),"_候補":(260919006,1000,4)}
 OWNED_MARKER="kakeibo_daily_view_v1"
 PAGE_SIZE=50
+HOME_MONTH_COUNT=13
+# Reuse the last 14 rows of the existing hidden grid. Choice pages use at
+# most 501 entries, so reserving these cells does not reduce available choices.
+HOME_LOOKUP_ROW=SHEETS["_候補"][1]-HOME_MONTH_COUNT
 STATE_LABELS={"queued":"反映待ち","pending":"反映待ち（保存確認中）","applied":"反映済み","failed":"失敗"}
 
 
@@ -209,6 +213,33 @@ def coverage_status(summary,month):
     return "完了" if routes and all(states.get(route) in {"complete","not_applicable"} for route in routes) else "取込状況未確認"
 
 
+def home_requests(summary,current_month,total,updated_at):
+    """Publish saved monthly totals; Sheets alone recalculates month selection."""
+    months=[shift_month(current_month,-i) for i in range(HOME_MONTH_COUNT)]
+    rows=[["ホーム対象月","記録済み支出","買い物件数","取込状況"]]
+    for month in months:
+        item=summary.get("months",{}).get(month)
+        state=coverage_status(summary,month)
+        known=item is not None and (item["purchase_count"]>0 or state=="完了")
+        rows.append([month,item["amount"] if known else "未集計",
+                     item["purchase_count"] if known else "未集計",state])
+    # Dropdown edits may be stored as a date serial by Sheets. Normalize only
+    # the lookup key, leaving the owner's typed value and number format intact.
+    key='IF(ISNUMBER($B$3),TEXT($B$3,"yyyy-mm"),$B$3)'
+    def lookup(column,missing):
+        first,last=HOME_LOOKUP_ROW+1,HOME_LOOKUP_ROW+HOME_MONTH_COUNT
+        return {"userEnteredValue":{"formulaValue":
+            f'=XLOOKUP({key},\'_候補\'!$A${first}:$A${last},'
+            f'\'_候補\'!${column}${first}:${column}${last},"{missing}",0)'}}
+    return [cells("_候補",HOME_LOOKUP_ROW,rows,width=4),
+            cells("ホーム",2,[["取込状況",lookup("D","取込状況未確認")]],width=3),
+            cells("ホーム",4,[["記録済み支出",lookup("B","未集計")],
+                ["買い物件数",lookup("C","未集計")],["確認が必要",total],
+                ["最終更新",updated_at]],width=3),
+            cells("ホーム",12,[["対象月の表示はすぐ切り替わります。新しい取込・送信の反映は定期処理です。未取込はゼロではありません。"]],left=1,width=1),
+            dropdown("ホーム",3,1,months)]
+
+
 def render_requests(*,read_month,summary,catalog,current_month,source_id,controls,reviews,updated_at,ledger_sheet_id=None):
     from .daily_choices import category_id, page_dropdown, render_requests as choice_requests
     labels={c.category_id:c.label for c in catalog.categories}
@@ -240,12 +271,7 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
     monetary += [r.fixed_id for r in shown if r.fixed_id.startswith("RQ-") and r.status=="失敗"]
     if monetary:requests.append(dropdown("確認",81,1,monetary,strict=False))
     # Renderer never touches B61:B68 or J61, even when filters/page change.
-    home_month=controls.get("home_month",current_month)
-    home=summary.get("months",{}).get(home_month)
-    requests.extend([cells("ホーム",2,[["取込状況",coverage_status(summary,home_month)]],width=3),
-                     cells("ホーム",4,[["記録済み支出",home["amount"] if home else "未集計"],
-                     ["買い物件数",home["purchase_count"] if home else "未集計"],["確認が必要",total],
-                     ["最終更新",updated_at]],width=3)])
+    requests.extend(home_requests(summary,current_month,total,updated_at))
     requests.extend(choice_requests(catalog,choices,controls))
     requests.extend(trend_requests(summary,catalog,current_month,controls,updated_at))
     from .daily_coverage import render_requests as coverage_render
