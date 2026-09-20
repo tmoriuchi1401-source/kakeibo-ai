@@ -3,6 +3,47 @@ from app.projection_refresh import load_catalog
 from test_projection_refresh import initialized, row
 
 
+def test_native_link_keeps_exact_label_url_and_uses_writable_link_field():
+    from app.daily_view import link,cells
+    url='https://docs.google.com/spreadsheets/d/fixed-id/edit#gid=0&range=A4:M4'
+    label='開く → "引用"\n詳細'
+    value=link(url,label)
+    assert value=={"userEnteredValue":{"stringValue":label},
+                   "userEnteredFormat":{"textFormat":{"link":{"uri":url}}}}
+    assert cells("確認",7,[[value]])["updateCells"]["fields"]=="userEnteredValue,userEnteredFormat.textFormat.link"
+
+
+def test_all_rendered_links_and_install_links_are_native_including_navigation():
+    store,reader,refresh=initialized([row("a")])
+    urls=[f"https://docs.google.com/spreadsheets/d/source/edit#gid={gid}&range=A{n}"
+          for gid,n in [(123,2),(456,4),(789,13)]]
+    reviews=[ReviewItem(str(i),title,"確認内容","保留",url)
+             for i,(title,url) in enumerate(zip(["要確認","領収書確認","分類・ルール承認"],urls))]
+    requests=render_requests(read_month=refresh.read_month,summary=store.data["summary"],
+        catalog=load_catalog(store.data["catalog"]),current_month="2026-09",source_id="source",
+        controls={},reviews=reviews,updated_at="now",ledger_sheet_id=0)
+    review=next(r["updateCells"] for r in requests if r.get("updateCells",{}).get("range",{}).get("sheetId")==SHEETS["確認"][0]
+                and r["updateCells"]["range"]["startRowIndex"]==6)
+    assert [r["values"][2]["userEnteredFormat"]["textFormat"]["link"]["uri"] for r in review["rows"][:3]]==urls
+    history=next(r["updateCells"] for r in requests if r.get("updateCells",{}).get("range",{}).get("sheetId")==SHEETS["履歴"][0]
+                and r["updateCells"]["range"]["startRowIndex"]==10)
+    assert history["rows"][0]["values"][1]["userEnteredFormat"]["textFormat"]["link"]["uri"].endswith("#gid=0&range=A2:M2")
+    for r in requests:
+        if "repeatCell" in r:assert ",textFormat)" not in r["repeatCell"]["fields"]
+    for batch in [requests,install_copy_requests("source","copy",[0],current_month="2026-09")]:
+        linked_sheets=set()
+        for request in batch:
+            if "updateCells" not in request:continue
+            spec=request["updateCells"]
+            for row_data in spec["rows"]:
+                for cell in row_data["values"]:
+                    assert "HYPERLINK(" not in cell.get("userEnteredValue",{}).get("formulaValue","")
+                    if "link" in cell.get("userEnteredFormat",{}).get("textFormat",{}):
+                        linked_sheets.add(spec["range"]["sheetId"])
+                        assert "stringValue" in cell["userEnteredValue"]
+        assert {SHEETS[t][0] for t in ["ホーム","設定"]}<=linked_sheets
+
+
 def render(store,refresh,**controls):
     return render_requests(read_month=refresh.read_month,summary=store.data["summary"],
         catalog=load_catalog(store.data["catalog"]),current_month="2026-09",source_id="source",

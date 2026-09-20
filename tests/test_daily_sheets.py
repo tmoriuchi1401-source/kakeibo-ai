@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.daily_sheets import DailySheets, entered
-from app.daily_view import SHEETS, cells
+from app.daily_view import SHEETS, cells, link, literal
 from app.monthly_projection import ProjectionError
 from test_daily_corrections import setup, REQUEST
 
@@ -15,10 +15,30 @@ class Grid:
     sid="daily"
     def __init__(self):
         self.data={};self.writes=[];self.fail_after=False;self.on_write=None;self.charts={}
-        self.svc=self
+        self.svc=self;self.links={};self.gets=[];self.typed={}
     def spreadsheets(self):return self
     def values(self):return self
     def _execute_sheet_read(self,operation):return operation().execute(num_retries=0)
+    def get(self,*,ranges,fields,**kwargs):
+        self.gets.append((ranges,fields))
+        def execute(**ignored):
+            sheets={}
+            for a in ranges:
+                title,c1,r1,c2,r2=re.fullmatch(r"'(.+)'!([A-Z])(\d+):([A-Z])(\d+)",a).groups()
+                sid=SHEETS[title][0];rows=[]
+                for r in range(int(r1)-1,int(r2)):
+                    values=[]
+                    for c in range(ord(c1)-65,ord(c2)-64):
+                        key=(sid,r,c);value=self.data.get(key,"")
+                        cell=({"userEnteredValue":{"formulaValue":value}} if isinstance(value,str) and value.startswith("=") else literal(value))
+                        if key in self.typed and entered(self.typed[key])==value:cell=deepcopy(self.typed[key])
+                        if key in self.links:cell["userEnteredFormat"]={"textFormat":{"link":{"uri":self.links[key]}}}
+                        values.append(cell)
+                    rows.append({"values":values})
+                sheets.setdefault(sid,{"properties":{"sheetId":sid},"data":[]})["data"].append(
+                    {"startRow":int(r1)-1,"startColumn":ord(c1)-65,"rowData":rows})
+            return {"sheets":list(sheets.values())}
+        return SimpleNamespace(execute=execute)
     def batchGet(self,*,ranges,**kwargs):
         def execute(**ignored):
             blocks=[]
@@ -47,6 +67,12 @@ class Grid:
                 for r,row in enumerate(spec["rows"],rect["startRowIndex"]):
                     for c,cell in enumerate(row["values"],rect["startColumnIndex"]):
                         self.data[(rect["sheetId"],r,c)]=entered(cell)
+                        self.typed[(rect["sheetId"],r,c)]={"userEnteredValue":deepcopy(cell.get("userEnteredValue",{}))}
+                        if "userEnteredFormat.textFormat.link" in spec["fields"]:
+                            key=(rect["sheetId"],r,c)
+                            uri=cell.get("userEnteredFormat",{}).get("textFormat",{}).get("link",{}).get("uri")
+                            if uri:self.links[key]=uri
+                            else:self.links.pop(key,None)
             if self.on_write:self.on_write()
             if self.fail_after:
                 self.fail_after=False
@@ -89,6 +115,49 @@ def test_render_detects_bad_readback():
     grid.on_write=lambda:grid.put(11,1,"conflicting",title="履歴")
     with pytest.raises(ProjectionError,match="readback_failed"):
         daily.update_outputs([cells("履歴",11,[["item"]],width=3)])
+
+
+def test_native_link_migration_url_change_removal_and_replay_preserve_inputs():
+    grid=Grid();daily=DailySheets(grid,"source",None)
+    url="https://docs.google.com/spreadsheets/d/source/edit#gid=123&range=A4"
+    grid.put(7,3,f'=HYPERLINK("{url}","開く →")')
+    grid.put(65,2,"本人の入力");grid.put(68,2,True)
+    output=[cells("確認",7,[[link(url,"開く →"),"保留",1200,False,'=literal']],left=2)]
+    assert daily.update_outputs(output)["daily_write_requests"]==1
+    key=(SHEETS["確認"][0],6,2)
+    assert grid.data[key]=="開く →" and grid.links[key]==url
+    assert daily.update_outputs(output)["daily_write_requests"]==0
+    new_url=url.replace("A4","A19")
+    output[0]["updateCells"]["rows"][0]["values"][0]=link(new_url,"開く →")
+    assert daily.update_outputs(output)["daily_changed_blocks"]==1
+    assert grid.links[key]==new_url
+    assert daily.update_outputs(output)["daily_write_requests"]==0
+    output[0]["updateCells"]["rows"][0]["values"][0]=literal("開く →")
+    daily.update_outputs(output)
+    assert key not in grid.links
+    assert grid.data[(SHEETS["確認"][0],64,1)]=="本人の入力"
+    assert grid.data[(SHEETS["確認"][0],67,1)] is True
+    assert all(req["updateCells"]["fields"]=="userEnteredValue,userEnteredFormat.textFormat.link"
+               for batch in grid.writes for req in batch["requests"])
+
+
+@pytest.mark.parametrize("corruption",["missing","wrong"])
+def test_native_link_readback_rejects_matching_label_with_wrong_link(corruption):
+    grid=Grid();daily=DailySheets(grid,"source",None)
+    def corrupt():
+        key=(SHEETS["確認"][0],6,2)
+        if corruption=="missing":grid.links.pop(key)
+        else:grid.links[key]="https://wrong.invalid/"
+    grid.on_write=corrupt
+    with pytest.raises(ProjectionError,match="readback_failed"):
+        daily.update_outputs([cells("確認",7,[[link("https://example.test/","開く →")]],left=2)])
+
+
+def test_native_link_lost_write_response_recovers_without_rewrite():
+    grid=Grid();daily=DailySheets(grid,"source",None);grid.fail_after=True
+    output=[cells("確認",7,[[link("#gid=123&range=A4","開く →")]],left=2)]
+    with pytest.raises(RuntimeError,match="lost_response"):daily.update_outputs(output)
+    assert daily.update_outputs(output)["daily_write_requests"]==0
 
 
 def test_submission_ack_preserves_input_and_repeated_poll_does_not_write():
