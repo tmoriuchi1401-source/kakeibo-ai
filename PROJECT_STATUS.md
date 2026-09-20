@@ -22,6 +22,14 @@
 
 ## 1. Last verified
 
+### 2026-09-20 ユーザー承認後にwriter停止・main統合・既存鍵照合まで実行
+
+- ユーザーから今回の対象writerの一時停止/検証後再開と、必要な新Googleファイルを既存実行アカウントへ最小権限で共有する明示承認を受領。PayrollとMedicalのprivacy設定は対象外。既存SAを正本permissionから再照合した。
+- 現GitHub変数をGit対象外`.private/pre-main-cutover-variables.json`へ退避。`KAKEIBO_SCHEDULE_ENABLED=false`、`KAKEIBO_PRODUCTION_ENABLED=false`を設定/読戻し。legacy disabled=true、category backfill runner=falseは維持。停止前後の実行中/待機中Actionsは0。対象の統合writerは停止中で、まだ通常運用へ戻していない。
+- PR #41を通常mergeし、mainは`7a841b64f28f1896585c6b4c0f47f3217756cdb3`。同SHAのLinux CI `35479620368`全3job成功後、validated SHAも一致させた。手動`key-info` run `35479772614`が同SHAで成功し、既存公開証明書の1候補と一致。秘密鍵を取得せず、照合済み暗号化IDだけをprojection/daily変数へ設定した。新money/corrections modeは未設定。
+- writer停止後に新native backupを作成。正本/backupの31タブ・2,273,799セルが一致し、支出A:M/取込A:Lを全gridの有限10読取りで比較、全userEnteredValue一致。backupはowner＋既存SA reader、日常はowner＋同SA writerと読戻し確認。新規アカウント/公開共有なし。Google変更3件（copy1、ファイル共有2）、GitHub変数変更5件。証拠は`.private/current-cutover-progress.json`等へ保存。
+- 集計folderの既存SA writer共有だけは、明示承認済みでもブラウザの自動承認レビューが「操作直前の確認が必要」として最終クリックを拒否。folder/配下24ファイルの共有は未実行で、直前確認1件への回答待ち。別経路で回避せず、folderへの実初期化/移行は未実行。必要な確認後に既存SA接続、カテゴリ縮小/編集保護、旧イベント退避、非0本番canary/replay0、定期再開を続ける。既存receipts未完了状態は照合前に解除していない。
+
 ### 2026-09-20 main統合前のCI完了・実行ゲート停止の承認待ち
 
 - mainを再fetchして`c8ef626731cc8a941982a0d77b22e7ee4d88af31`、PR #41はmerge可能。復元検証`4ac5fc4`のLinux CI `35478307054`は全3job成功。統合後の同一main SHAを検証するため合成CIのpush対象にmainを追加し、`5efe9dd`のCI `35478523582`も全3job成功、関連55テスト成功。CIに本番Secretsは渡さない。
