@@ -23,7 +23,7 @@ from .projection_store import DriveProjectionStore
 
 
 BACKUP_VARIABLE = "KAKEIBO_MIGRATION_BACKUP_ID"
-OPERATIONS = ("key-info", "inspect", "initialize", "prepare-daily")
+OPERATIONS = ("key-info", "inspect", "initialize", "prepare-daily", "inspect-receipts")
 SAFE_ERRORS = frozenset({
     "migration_validated_main_required", "migration_writer_freeze_required",
     "migration_mode_must_be_inactive", "migration_backup_required",
@@ -244,6 +244,14 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
     sheets = read_only_sheets_service()
     reader = MigrationReader(SheetsDB(sid, service=sheets))
     backup_reader = MigrationReader(SheetsDB(backup_id, service=sheets))
+    if operation == "inspect-receipts":
+        from .receipt_recovery_audit import run as audit_receipts
+        migrate(store, reader, backup_reader, cutover_day=cutover_day,
+                expected_commitment=expected_commitment)
+        report = audit_receipts(env, key, service, SheetsDB(sid, service=sheets), reader)
+        migrate(store, reader, backup_reader, cutover_day=cutover_day,
+                expected_commitment=expected_commitment)
+        return report
     if operation == "prepare-daily":
         from .daily_runtime import daily_from_environment
         from .projection_cache import RollingProjectionStore

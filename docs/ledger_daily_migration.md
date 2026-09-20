@@ -293,3 +293,6 @@ backupの共有確認は、file metadataの完全ACLが省略される場合、p
 
 
 読取専用backupがACLの全APIで取得不能の場合は、手動operatorが所有者のDrive接続で直前に完全permissionを読み、`source`/`backup`/全permissionのtype・role・emailをsortしたJSONのdigestを`backup_acl`へ渡す。値は`{"sha256": "...", "verified_at": UTC_UNIX_SECONDS}`。15分以内、正本とbackupのowner一致、正本の既存SA writer一致、backupがowner＋同SA readerだけという観測digestとの一致を必須とする。公開/追加共有/backup writerを含むdigest、異なるファイル、古い観測は拒否。これは所有者側のACL確認を記録する手動入力であり、SAがACLを直接読めたとは報告しない。SAは別途backupの全金融値を正本と比較する。
+
+
+`inspect-receipts`は停止中の既存receipts pendingを照合する読取専用操作。既存暗号化bindingから共通運用ledgerと確認storeの2ファイルだけを開き、正本/backupの一致、レシートと取込markerと固定明細IDの関係、確認pending、解析requestedを件数とdigestで報告する。原本画像取得・OCR・AI・新規ファイル・Google書込み・pending解除は行わない。出力のevidenceは非公開snapshotに結び付け、解除判断の証拠として扱う。

@@ -42,7 +42,7 @@ def test_checkout_expected_and_validated_sha_must_match(head, expected):
         migration.validate_boundary(environment(), head, expected, "inspect")
 
 
-@pytest.mark.parametrize("operation", ["inspect", "initialize", "prepare-daily"])
+@pytest.mark.parametrize("operation", ["inspect", "initialize", "prepare-daily", "inspect-receipts"])
 @pytest.mark.parametrize("field,value", [("KAKEIBO_PRODUCTION_ENABLED", "true"),
     ("KAKEIBO_SCHEDULE_ENABLED", "true"), ("KAKEIBO_LEGACY_DISABLED", "false"),
     ("KAKEIBO_AMAZON_MONEY_MODE", "confirmed-v1"), ("KAKEIBO_DAILY_CORRECTIONS_MODE", "fixed-id-v1")])
