@@ -22,6 +22,12 @@
 
 ## 1. Last verified
 
+### 2026-09-20 集計folder共有完了・読取専用backupの権限検証修正
+
+- 操作直前の明示承認を受け、確認済み既存SAへ集計folderのwriter権限を付与。folderと配下24文書がowner＋同SA writerだけであることを読戻し確認。公開/第三者共有なし。停止後のGoogle変更は計4件。日常writer、backup readerの最小権限は維持。
+- 実SAのinspect run `35481713468`はbackupの権限一覧がfile metadataから省略されて停止し、正本/集計への書込み0。読取専用backupの権限を増やさず、専用permissions.listの全ページで既存共有範囲内か検査するよう修正。取得不能/空/範囲外/public/繰返しページは停止。関連61テスト成功。
+- production/scheduleは停止継続中。修正のCI/main統合後に実SA inspectを再実行し、実移行・非0canary/replay0・通常取込再開を続ける。実SAアクセス確認はまだ成功扱いにしていない。
+
 ### 2026-09-20 ユーザー承認後にwriter停止・main統合・既存鍵照合まで実行
 
 - ユーザーから今回の対象writerの一時停止/検証後再開と、必要な新Googleファイルを既存実行アカウントへ最小権限で共有する明示承認を受領。PayrollとMedicalのprivacy設定は対象外。既存SAを正本permissionから再照合した。

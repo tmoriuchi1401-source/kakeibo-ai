@@ -194,6 +194,33 @@ def test_backup_must_be_separate_native_and_within_source_sharing(failure):
         migration.verify_backup_access(service, "source", backup_id)
 
 
+@pytest.mark.parametrize("late_grant", ["sa", "other", "public", "empty", "unavailable", "repeated-token"])
+def test_read_only_backup_lists_complete_permissions_without_needing_writer_access(late_grant):
+    service = Metadata()
+    del service.backup["permissions"]
+    calls = []
+    def list_permissions(**kwargs):
+        calls.append(kwargs)
+        assert kwargs["fileId"] == "backup" and kwargs["supportsAllDrives"]
+        assert kwargs["fields"] == "nextPageToken,permissions(id,type)"
+        def execute(**options):
+            assert options == {"num_retries": 0}
+            if late_grant == "unavailable": raise RuntimeError("private API response")
+            if late_grant == "empty": return {"permissions": []}
+            if kwargs["pageToken"] is None:
+                return {"permissions": [{"id": "owner", "type": "user"}], "nextPageToken": "next"}
+            if late_grant == "repeated-token": return {"permissions": [], "nextPageToken": "next"}
+            return {"permissions": [{"id": late_grant, "type": "anyone" if late_grant == "public" else "user"}]}
+        return SimpleNamespace(execute=execute)
+    service.permissions = lambda: SimpleNamespace(list=list_permissions)
+    if late_grant == "sa":
+        migration.verify_backup_access(service, "source", "backup")
+        assert len(calls) == 2
+    else:
+        with pytest.raises(StateError, match="migration_backup_sharing_mismatch|migration_backup_permissions_unavailable"):
+            migration.verify_backup_access(service, "source", "backup")
+
+
 @pytest.fixture(scope="module")
 def private_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
