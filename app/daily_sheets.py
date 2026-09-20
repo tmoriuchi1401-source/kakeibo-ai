@@ -28,7 +28,7 @@ class DailySheets:
 
     def verify(self):
         meta=self.db._execute_sheet_read(lambda:self.db.svc.spreadsheets().get(
-            spreadsheetId=self.db.sid,fields="sheets(properties),developerMetadata"))
+            spreadsheetId=self.db.sid,fields="sheets(properties,charts(chartId,spec,position)),developerMetadata"))
         shapes={s["properties"]["title"]:s["properties"] for s in meta.get("sheets",[])}
         if set(shapes)!=set(SHEETS):raise ProjectionError("daily_sheet_contract_changed")
         if any(shapes[t]["sheetId"]!=spec[0] for t,spec in SHEETS.items()):
@@ -103,7 +103,7 @@ class DailySheets:
         return {"daily_changed_blocks":len(changes),"daily_write_requests":len(combined)}
 
     def refresh(self,*,current_month,updated_at,reviews,ledger_sheet_id=None):
-        self.verify()
+        metadata=self.verify()
         from .daily_coverage import CoverageForm
         from .daily_category_management import CategoryForm
         controls=self.controls(current_month)
@@ -125,7 +125,12 @@ class DailySheets:
             summary=summary,catalog=catalog,current_month=current_month,source_id=self.source_id,
             controls=controls,reviews=reviews,updated_at=updated_at,
             ledger_sheet_id=ledger_sheet_id)
-        return self.update_outputs(requests)
+        from .daily_charts import chart_requests
+        chart_changes=chart_requests(metadata)
+        result=self.update_outputs(requests+chart_changes)
+        if chart_changes and chart_requests(self.verify()):
+            raise ProjectionError("daily_chart_readback_failed")
+        return result
 
     def form(self):
         blocks=self.read_ranges(["'確認'!B61:B68","'確認'!J61:J61"])

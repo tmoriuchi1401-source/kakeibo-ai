@@ -14,7 +14,7 @@ class Grid:
     """Small native-range fake; stores typed values and fails after mutation."""
     sid="daily"
     def __init__(self):
-        self.data={};self.writes=[];self.fail_after=False;self.on_write=None
+        self.data={};self.writes=[];self.fail_after=False;self.on_write=None;self.charts={}
         self.svc=self
     def spreadsheets(self):return self
     def values(self):return self
@@ -34,6 +34,14 @@ class Grid:
         def execute(**ignored):
             self.writes.append(deepcopy(body))
             for req in body["requests"]:
+                if "addChart" in req:
+                    chart=deepcopy(req["addChart"]["chart"])
+                    assert chart["chartId"] not in self.charts
+                    self.charts[chart["chartId"]]=chart
+                if "updateChartSpec" in req:
+                    spec=req["updateChartSpec"];self.charts[spec["chartId"]]["spec"]=deepcopy(spec["spec"])
+                if "updateEmbeddedObjectPosition" in req:
+                    spec=req["updateEmbeddedObjectPosition"];self.charts[spec["objectId"]]["position"]=deepcopy(spec["newPosition"])
                 if "updateCells" not in req:continue
                 spec=req["updateCells"];rect=spec["range"]
                 for r,row in enumerate(spec["rows"],rect["startRowIndex"]):

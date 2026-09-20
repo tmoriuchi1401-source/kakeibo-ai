@@ -51,7 +51,8 @@ def test_trends_show_missing_as_unknown_and_include_10_years():
     store,reader,refresh=initialized([row("a")])
     requests=render(store,refresh)
     monthly=next(r["updateCells"] for r in requests if r.get("updateCells",{}).get("range",{}).get("sheetId")==SHEETS["推移"][0]
-                 and r["updateCells"]["range"]["startRowIndex"]==19)
+                 and r["updateCells"]["range"]["startRowIndex"]==19
+                 and r["updateCells"]["range"]["startColumnIndex"]==0)
     values=[[next(iter(c.get("userEnteredValue",{}).values()),"") for c in r["values"]] for r in monthly["rows"]]
     assert len(values)==120
     assert values[-1][0].startswith("2017-01")

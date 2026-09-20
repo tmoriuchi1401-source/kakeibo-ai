@@ -272,6 +272,9 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
     if monetary:requests.append(dropdown("確認",81,1,monetary,strict=False))
     # Renderer never touches B61:B68 or J61, even when filters/page change.
     requests.extend(home_requests(summary,current_month,total,updated_at))
+    from .daily_charts import data_requests as chart_data, layout_requests as chart_layout
+    requests.extend(chart_data(summary,catalog,current_month))
+    requests.extend(chart_layout())
     requests.extend(choice_requests(catalog,choices,controls))
     requests.extend(trend_requests(summary,catalog,current_month,controls,updated_at))
     from .daily_coverage import render_requests as coverage_render
