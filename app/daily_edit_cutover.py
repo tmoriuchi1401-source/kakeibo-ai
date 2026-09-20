@@ -66,7 +66,7 @@ def cutover_requests(metadata, daily_id, writer_email, *, owner_email=""):
             raise ProjectionError("daily_legacy_edit_ui_not_owned")
         # Remove generated ledger-cell edit links from this owned view only.
         from .compact_categories import _cells
-        from .daily_view import SHEETS, link
+        from .daily_view import SHEETS, OUTPUT_FIELDS, link
         requests.append({"updateCells": {"range": {"sheetId": CATEGORY_UI_ID},
             "fields": "userEnteredValue,dataValidation"}})
         requests.append(_cells(CATEGORY_UI_ID, 1, 0,
@@ -74,7 +74,7 @@ def cutover_requests(metadata, daily_id, writer_email, *, owner_email=""):
         requests.append({"updateCells": {"range": {"sheetId": CATEGORY_UI_ID,
             "startRowIndex": 2, "endRowIndex": 3, "startColumnIndex": 0, "endColumnIndex": 1},
             "rows": [{"values": [link(f"https://docs.google.com/spreadsheets/d/{daily_id}/edit#gid={SHEETS['確認'][0]}&range=B61", "確認・修正を開く →")]}],
-            "fields": "userEnteredValue"}})
+            "fields": OUTPUT_FIELDS}})
     requests.append({"createDeveloperMetadata": {"developerMetadata": {"metadataKey": MARKER,
         "metadataValue": sha256(daily_id.encode()).hexdigest(), "visibility": "DOCUMENT",
         "location": {"spreadsheet": True}}}})

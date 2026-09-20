@@ -20,6 +20,13 @@ def entered(cell):
     return next(iter(value.values()),"")
 
 
+def output_value(cell):
+    """Compare typed values and the only format field owned by the renderer."""
+    value=cell.get("userEnteredValue",{})
+    if value=={"stringValue":""}:value={}
+    return value,cell.get("userEnteredFormat",{}).get("textFormat",{}).get("link",{})
+
+
 class DailySheets:
     def __init__(self,db,source_id,store,*,source_owner_email=""):
         if db.sid==source_id:raise ProjectionError("daily_copy_required")
@@ -66,7 +73,7 @@ class DailySheets:
         content=[r["updateCells"] for r in requests if "updateCells" in r]
         ranges=[a1(titles[r["range"]["sheetId"]],r["range"]["startRowIndex"]+1,r["range"]["endRowIndex"],
                    r["range"]["startColumnIndex"],r["range"]["endColumnIndex"]) for r in content]
-        current=self.read_ranges(ranges,formulas=True) if ranges else []
+        current=self.read_outputs(ranges,content) if ranges else []
         changes=[]
         for spec,observed in zip(content,current):
             target=spec["range"]
@@ -74,8 +81,8 @@ class DailySheets:
                 old=observed[offset] if len(observed)>offset else []
                 changed=[]
                 for column,value in enumerate(desired["values"]):
-                    actual=old[column] if len(old)>column else ""
-                    if actual!=entered(value):changed.append((column,value))
+                    actual=old[column] if len(old)>column else {}
+                    if output_value(actual)!=output_value(value):changed.append((column,value))
                 # Only changed contiguous cells are written, including clearing
                 # stale output. Blank padding is never sent on every refresh.
                 groups=[]
@@ -87,20 +94,38 @@ class DailySheets:
                         "startRowIndex":target["startRowIndex"]+offset,"endRowIndex":target["startRowIndex"]+offset+1,
                         "startColumnIndex":target["startColumnIndex"]+column,
                         "endColumnIndex":target["startColumnIndex"]+column+len(values)},
-                        "rows":[{"values":values}],"fields":"userEnteredValue"}})
+                        "rows":[{"values":values}],"fields":spec["fields"]}})
         formatting=[r for r in requests if "updateCells" not in r]
         combined=changes+formatting
         for first in range(0,len(combined),100):
             self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,
                 body={"requests":combined[first:first+100]}).execute(num_retries=0)
         if changes:
-            actual=self.read_ranges(ranges,formulas=True)
+            actual=self.read_outputs(ranges,content)
             for spec,observed in zip(content,actual):
                 for i,row in enumerate(spec["rows"]):
                     old=observed[i] if i<len(observed) else []
-                    if any((old[j] if j<len(old) else "")!=entered(value) for j,value in enumerate(row["values"])):
+                    if any(output_value(old[j] if j<len(old) else {})!=output_value(value) for j,value in enumerate(row["values"])):
                         raise ProjectionError("daily_output_readback_failed")
         return {"daily_changed_blocks":len(changes),"daily_write_requests":len(combined)}
+
+    def read_outputs(self,ranges,content):
+        response=self.db._execute_sheet_read(lambda:self.db.svc.spreadsheets().get(
+            spreadsheetId=self.db.sid,ranges=ranges,
+            fields="sheets(properties.sheetId,data(startRow,startColumn,rowData.values(userEnteredValue,userEnteredFormat.textFormat.link)))"))
+        found={}
+        for sheet in response.get("sheets",[]):
+            sid=sheet["properties"]["sheetId"]
+            for block in sheet.get("data",[]):
+                for row,values in enumerate(block.get("rowData",[]),block.get("startRow",0)):
+                    for col,value in enumerate(values.get("values",[]),block.get("startColumn",0)):
+                        found[sid,row,col]=value
+        if {s["properties"]["sheetId"] for s in response.get("sheets",[])}!={s["range"]["sheetId"] for s in content}:
+            raise ProjectionError("daily_read_incomplete")
+        return [[[found.get((r["sheetId"],row,col),{})
+                  for col in range(r["startColumnIndex"],r["endColumnIndex"])]
+                 for row in range(r["startRowIndex"],r["endRowIndex"])]
+                for r in (spec["range"] for spec in content)]
 
     def refresh(self,*,current_month,updated_at,reviews,ledger_sheet_id=None):
         metadata=self.verify()

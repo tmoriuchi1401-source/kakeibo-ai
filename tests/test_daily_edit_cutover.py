@@ -42,6 +42,11 @@ def test_cutover_targets_existing_ledger_and_owned_old_edit_view_only():
     assert "endRowIndex" not in requests[0]["addProtectedRange"]["protectedRange"]["range"]
     assert all(q["updateCells"]["range"]["sheetId"]==CATEGORY_UI_ID for q in requests if "updateCells" in q)
     assert requests[-1]["createDeveloperMetadata"]["developerMetadata"]["metadataKey"]==MARKER
+    native=requests[-2]["updateCells"]
+    assert native["fields"]=="userEnteredValue,userEnteredFormat.textFormat.link"
+    cell=native["rows"][0]["values"][0]
+    assert cell["userEnteredValue"]=={"stringValue":"確認・修正を開く →"}
+    assert cell["userEnteredFormat"]["textFormat"]["link"]["uri"].endswith("#gid=260919003&range=B61")
     verify_cutover(metadata(),"daily",WRITER)
     normalized=metadata()
     normalized["sheets"][0]["protectedRanges"][0]["range"].pop("startColumnIndex")

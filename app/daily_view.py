@@ -19,6 +19,7 @@ SHEETS={"ホーム":(260919001,50,3),"履歴":(260919002,120,8),
 OWNED_MARKER="kakeibo_daily_view_v1"
 PAGE_SIZE=50
 HOME_MONTH_COUNT=13
+OUTPUT_FIELDS="userEnteredValue,userEnteredFormat.textFormat.link"
 # Reuse the last 14 rows of the existing hidden grid. Choice pages use at
 # most 501 entries, so reserving these cells does not reduce available choices.
 HOME_LOOKUP_ROW=SHEETS["_候補"][1]-HOME_MONTH_COUNT
@@ -37,8 +38,8 @@ def literal(value):
 
 
 def link(url,label):
-    quote=lambda text:'"'+str(text).replace('"','""')+'"'
-    return {"userEnteredValue":{"formulaValue":f"=HYPERLINK({quote(url)},{quote(label)})"}}
+    return {"userEnteredValue":{"stringValue":str(label)},
+            "userEnteredFormat":{"textFormat":{"link":{"uri":str(url)}}}}
 
 
 def cells(title,start,rows,left=0,width=None):
@@ -47,7 +48,7 @@ def cells(title,start,rows,left=0,width=None):
     if any(len(row)>width for row in rows):raise ValueError("daily_cell_width_invalid")
     return {"updateCells":{"range":grid(title,start,start+len(rows)-1,left,left+width),
         "rows":[{"values":[v if isinstance(v,dict) else literal(v) for v in list(row)+[""]*(width-len(row))]}
-                for row in rows],"fields":"userEnteredValue"}}
+                for row in rows],"fields":OUTPUT_FIELDS}}
 
 
 def dropdown(title,row,col,options=None,source=None,strict=True):
@@ -286,7 +287,7 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
         if count:
             requests.append({"repeatCell":{"range":grid(title,start,start+count-1,0,width),"cell":{"userEnteredFormat":{
                 "wrapStrategy":"WRAP","verticalAlignment":"MIDDLE","textFormat":{"fontSize":10}}},
-                "fields":"userEnteredFormat(wrapStrategy,verticalAlignment,textFormat)"}})
+                "fields":"userEnteredFormat(wrapStrategy,verticalAlignment,textFormat.fontSize)"}})
             dimensions={"sheetId":SHEETS[title][0],"dimension":"ROWS",
                 "startIndex":start-1,"endIndex":start+count-1}
             if title=="確認":
@@ -294,6 +295,13 @@ def render_requests(*,read_month,summary,catalog,current_month,source_id,control
             else:
                 requests.append({"updateDimensionProperties":{"range":dimensions,
                     "properties":{"pixelSize":70},"fields":"pixelSize"}})
+    requests.extend([
+        cells("ホーム",8,[[link(f"#gid={SHEETS['履歴'][0]}","買い物を探す →")],
+                         [link(f"#gid={SHEETS['確認'][0]}","確認・修正 →")],
+                         [link(f"#gid={SHEETS['推移'][0]}","10年の記録 →")],
+                         [link(f"https://docs.google.com/spreadsheets/d/{source_id}/edit","過去の詳細・原本 →")]],left=1,width=1),
+        cells("設定",2,[[link(f"https://docs.google.com/spreadsheets/d/{source_id}/edit","正式台帳を開く")]],left=1,width=1),
+    ])
     return [r for r in requests if r]
 
 
