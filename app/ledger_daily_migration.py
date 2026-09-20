@@ -65,6 +65,18 @@ def failure_report(exc):
     return report
 
 
+class MigrationReadPacer:
+    """One read budget shared by source, backup and daily during migration."""
+    def __init__(self, *, clock=time.monotonic, sleep=time.sleep):
+        self.clock, self.sleep, self.next_read = clock, sleep, 0.0
+
+    def __call__(self):
+        delay = self.next_read - self.clock()
+        if delay > 0:
+            self.sleep(delay)
+        self.next_read = self.clock() + 1.1
+
+
 def prepare_daily(store, reader, backup_reader, source, daily, env, writer_email,
                   *, cutover_day, expected_commitment):
     """Explicit category/protection migration; reuses existing tested builders."""
@@ -265,13 +277,16 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
     store = DriveProjectionStore(service, folder_id, sid, precreated=True)
     # Same existing SA, but read-only Sheets credentials for both modes.
     sheets = read_only_sheets_service()
-    reader = MigrationReader(SheetsDB(sid, service=sheets))
-    backup_reader = MigrationReader(SheetsDB(backup_id, service=sheets))
+    pacer = MigrationReadPacer()
+    def db_for(target, service=None):
+        return SheetsDB(target, service=service, read_pacer=pacer, read_retry_base=20)
+    reader = MigrationReader(db_for(sid, sheets))
+    backup_reader = MigrationReader(db_for(backup_id, sheets))
     if operation == "inspect-receipts":
         from .receipt_recovery_audit import run as audit_receipts
         migrate(store, reader, backup_reader, cutover_day=cutover_day,
                 expected_commitment=expected_commitment)
-        report = audit_receipts(env, key, service, SheetsDB(sid, service=sheets), reader)
+        report = audit_receipts(env, key, service, db_for(sid, sheets), reader)
         migrate(store, reader, backup_reader, cutover_day=cutover_day,
                 expected_commitment=expected_commitment)
         return report
@@ -280,9 +295,12 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
         from .projection_cache import RollingProjectionStore
         # The backup remains on the read-only service. Only source UI and the
         # separately bound daily copy use writable Sheets credentials.
-        source = SheetsDB(sid)
+        source = db_for(sid)
         rolling = RollingProjectionStore(store)
         daily = daily_from_environment(source, rolling, env)
+        if daily is not None:
+            daily.db._read_pacer = pacer
+            daily.db._read_retry_base = 20
         return prepare_daily(rolling, reader, backup_reader, source, daily, env,
             info["client_email"], cutover_day=cutover_day,
             expected_commitment=expected_commitment)

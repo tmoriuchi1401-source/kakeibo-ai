@@ -331,6 +331,7 @@ def test_workflow_is_manual_same_lock_and_minimal_existing_credentials():
 
 
 def test_actual_runtime_uses_read_only_sheets_and_precreated_drive_files(private_key, monkeypatch):
+    monkeypatch.setattr(migration, "MigrationReadPacer", lambda: lambda: None)
     from test_projection_store import Drive
     from test_projection_cache import provision
     raw, backup, _ = fixture()
@@ -474,3 +475,29 @@ def test_daily_cutover_reuses_category_and_protection_builders_and_recovers_with
     assert raw == original and report["counts"]["expense_rows_written"] == 0
     assert source.state["workflow_values"][2][2:4] == ["食費｜外食", ""]
     assert source.state["workflow_values"][2][4:] == snapshot()["workflow_values"][2][4:]
+
+
+def test_migration_read_budget_is_shared_and_retries_only_quota_reads():
+    from app.sheets import SheetsDB
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    now, sleeps, attempts = [0.0], [], []
+    def sleep(delay):
+        sleeps.append(delay)
+        now[0] += delay
+    pacer = migration.MigrationReadPacer(clock=lambda: now[0], sleep=sleep)
+    source = SheetsDB('source', service=object(), read_sleeper=sleep, read_pacer=pacer, read_retry_base=20)
+    backup = SheetsDB('backup', service=object(), read_sleeper=sleep, read_pacer=pacer, read_retry_base=20)
+    results = [HttpError(Response({'status': '429'}), b'{}'), {'ok': True}, {'ok': True}]
+    def execute():
+        attempts.append(now[0])
+        value = results.pop(0)
+        if isinstance(value, Exception): raise value
+        return value
+    request = lambda: SimpleNamespace(execute=execute)
+    assert source._execute_sheet_read(request) == backup._execute_sheet_read(request) == {'ok': True}
+    assert attempts == pytest.approx([0, 20, 21.1])
+    results[:] = [HttpError(Response({'status': '403'}), b'{}')]
+    with pytest.raises(HttpError): source._execute_sheet_read(request)
+    assert not results and len(attempts) == 4
+    assert sleeps == pytest.approx([20, 1.1, 1.1])
