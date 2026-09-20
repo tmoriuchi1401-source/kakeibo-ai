@@ -15,6 +15,11 @@ from .drive_run_state import DurableState, StateError
 
 
 SAFE_SOURCE_ERRORS = frozenset({
+    'state_drive_read_failed_401', 'state_drive_read_failed_403', 'state_drive_read_failed_404',
+    'state_drive_read_failed_429', 'state_drive_read_failed_500', 'state_drive_read_failed_502',
+    'state_drive_read_failed_503', 'state_drive_read_failed_504', 'receipt_audit_state_changed',
+    'confirmation_archive_readback_required', 'confirmation_archive_folders_invalid',
+    'confirmation_readback_mismatch',
     'confirmation_source_changed', 'confirmation_store_permissions_changed',
     'confirmation_store_invalid',
     'confirmation_sheet_header_mismatch', 'confirmation_unknown_ui_identity',
@@ -54,6 +59,7 @@ DEPENDENCIES = {
     "expenses_refresh": ("auto_expense",),
 }
 COUNT_KEYS = frozenset({
+    'archived', 'review_eligible', 'review_closable',
     "projection_months", "projection_rows", "projection_sheet_requests", "projection_sheet_cells",
     "projection_drive_reads", "projection_drive_writes",
     "daily_changed_blocks", "daily_write_requests",
