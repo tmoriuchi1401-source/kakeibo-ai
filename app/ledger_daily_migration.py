@@ -26,6 +26,7 @@ SAFE_ERRORS = frozenset({
     "migration_validated_main_required", "migration_writer_freeze_required",
     "migration_mode_must_be_inactive", "migration_backup_required",
     "migration_backup_sharing_mismatch", "migration_backup_snapshot_mismatch",
+    "migration_backup_permissions_unavailable",
     "migration_commitment_required", "migration_commitment_mismatch",
     "money_migration_snapshot_changed", "money_migration_manifest_conflict",
     "money_migration_book_exists", "money_migration_already_posted",
@@ -73,7 +74,25 @@ def verify_backup_access(service, source_id, backup_id):
     backup = service.files().get(fileId=backup_id, supportsAllDrives=True,
         fields="mimeType,trashed,permissions(id,type)").execute(num_retries=0)
     allowed = {p["id"] for p in source.get("permissions", []) if p.get("type") in {"user", "group"}}
-    grants = backup.get("permissions", [])
+    grants = backup.get("permissions")
+    # files.permissions is omitted when the caller cannot share the file.
+    # Keep backup access read-only and retrieve its ACL through permissions.list.
+    if grants is None:
+        grants, token, seen = [], None, set()
+        while True:
+            try:
+                page = service.permissions().list(fileId=backup_id, supportsAllDrives=True,
+                    pageSize=100, pageToken=token,
+                    fields="nextPageToken,permissions(id,type)").execute(num_retries=0)
+            except Exception:
+                raise StateError("migration_backup_permissions_unavailable") from None
+            grants.extend(page.get("permissions", []))
+            token = page.get("nextPageToken")
+            if not token:
+                break
+            if token in seen:
+                raise StateError("migration_backup_permissions_unavailable")
+            seen.add(token)
     if (backup.get("mimeType") != "application/vnd.google-apps.spreadsheet" or backup.get("trashed")
             or not grants or any(p.get("type") not in {"user", "group"}
                                  or p.get("id") not in allowed for p in grants)):
