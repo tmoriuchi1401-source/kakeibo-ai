@@ -49,3 +49,21 @@ def test_cutover_targets_existing_ledger_and_owned_old_edit_view_only():
     assert cutover_requests(metadata(),"daily",WRITER)==[]
     meta["sheets"][-1]["developerMetadata"]=[]
     with pytest.raises(ProjectionError,match="not_owned"):cutover_requests(meta,"daily",WRITER)
+
+
+def test_native_zero_sheet_id_and_inherent_owner_require_verified_owner():
+    meta=metadata()
+    ledger=meta['sheets'][0]
+    ledger['properties']['sheetId']=0
+    protection=ledger['protectedRanges'][0]
+    protection['range'].pop('sheetId')
+    protection['editors']['users'].append('owner@example.test')
+    with pytest.raises(ProjectionError):verify_cutover(meta,'daily',WRITER)
+    verify_cutover(meta,'daily',WRITER,owner_email='owner@example.test')
+    assert cutover_requests(meta,'daily',WRITER,owner_email='owner@example.test')==[]
+    with pytest.raises(ProjectionError):verify_cutover(meta,'daily',WRITER,owner_email='different@example.test')
+    protection['editors']['users'].append('other-writer@example.test')
+    with pytest.raises(ProjectionError):verify_cutover(meta,'daily',WRITER,owner_email='owner@example.test')
+    protection['editors']['users'].pop()
+    ledger['properties']['sheetId']=123
+    with pytest.raises(ProjectionError):verify_cutover(meta,'daily',WRITER,owner_email='owner@example.test')

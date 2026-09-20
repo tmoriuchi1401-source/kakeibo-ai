@@ -42,3 +42,21 @@ def test_refresh_uses_actual_ledger_tab_id_and_never_submits(monkeypatch):
     assert refresh_daily(source,object(),{})=={"daily_changed_blocks":0}
     assert daily.refresh.call_args.kwargs["ledger_sheet_id"]==987
     daily.submit.assert_not_called()
+
+
+@pytest.mark.parametrize('owners', [[], [{'emailAddress':'owner@example.test'}],
+    [{'emailAddress':'owner@example.test'},{'emailAddress':'other@example.test'}]])
+def test_daily_passes_only_unique_drive_owner_into_protection_check(monkeypatch,owners):
+    monkeypatch.setattr('app.settings.service_account_source',lambda:('',{'private_key':'synthetic'}))
+    monkeypatch.setattr('app.private_state_bindings.unwrap',lambda *args:'daily')
+    monkeypatch.setattr('app.sheets.SheetsDB',lambda sid:SimpleNamespace(sid=sid))
+    drive=Mock()
+    grants=[{'id':'owner','type':'user'}]
+    drive.files().get().execute.side_effect=[{'owners':owners,'permissions':grants},
+        {'mimeType':'application/vnd.google-apps.spreadsheet','permissions':grants}]
+    args=(SimpleNamespace(sid='source'),SimpleNamespace(service=drive),
+        dict(valid_env(),KAKEIBO_DAILY_SPREADSHEET_ID='encrypted'))
+    if len(owners)!=1:
+        with pytest.raises(ProjectionError,match='owner_unavailable'):daily_from_environment(*args)
+    else:
+        assert daily_from_environment(*args).source_owner_email=='owner@example.test'

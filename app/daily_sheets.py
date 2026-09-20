@@ -21,9 +21,10 @@ def entered(cell):
 
 
 class DailySheets:
-    def __init__(self,db,source_id,store):
+    def __init__(self,db,source_id,store,*,source_owner_email=""):
         if db.sid==source_id:raise ProjectionError("daily_copy_required")
         self.db,self.source_id,self.store=db,source_id,store
+        self.source_owner_email=source_owner_email
 
     def verify(self):
         meta=self.db._execute_sheet_read(lambda:self.db.svc.spreadsheets().get(

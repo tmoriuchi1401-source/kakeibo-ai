@@ -109,12 +109,13 @@ def prepare_daily(store, reader, backup_reader, source, daily, env, writer_email
     def metadata():
         return source._execute_sheet_read(lambda: source.svc.spreadsheets().get(
             spreadsheetId=source.sid, includeGridData=False))
-    requests = cutover_requests(metadata(), daily.db.sid, writer_email)
+    owner_email = getattr(daily, "source_owner_email", "")
+    requests = cutover_requests(metadata(), daily.db.sid, writer_email, owner_email=owner_email)
     if requests:
         source.svc.spreadsheets().batchUpdate(spreadsheetId=source.sid,
             body={"requests": requests}).execute(num_retries=0)
         source._invalidate_sheet_metadata()
-    verify_cutover(metadata(), daily.db.sid, writer_email)
+    verify_cutover(metadata(), daily.db.sid, writer_email, owner_email=owner_email)
     counts["daily_cutover_write_requests"] = int(bool(requests))
     counts.update(refresh_daily(source, store, env))
     # Recheck all financial IDs/values and the independent backup after writes.

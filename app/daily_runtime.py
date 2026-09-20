@@ -28,7 +28,7 @@ def daily_from_environment(source_db,store,env=None,*,read_only=False):
     if sid==source_db.sid:raise ProjectionError("daily_copy_required")
     # Compare permission actors before copying financial output into the view.
     source=store.service.files().get(fileId=source_db.sid,supportsAllDrives=True,
-        fields="permissions(id,type)").execute(num_retries=0)
+        fields="owners(emailAddress),permissions(id,type)").execute(num_retries=0)
     target=store.service.files().get(fileId=sid,supportsAllDrives=True,
         fields="mimeType,trashed,permissions(id,type)").execute(num_retries=0)
     allowed={p["id"] for p in source.get("permissions",[]) if p.get("type") in {"user","group"}}
@@ -36,10 +36,14 @@ def daily_from_environment(source_db,store,env=None,*,read_only=False):
     if (target.get("mimeType")!="application/vnd.google-apps.spreadsheet" or target.get("trashed")
             or not grants or any(p.get("type") not in {"user","group"} or p.get("id") not in allowed for p in grants)):
         raise ProjectionError("daily_sharing_mismatch")
+    owners=source.get("owners",[])
+    if len(owners)!=1 or not owners[0].get("emailAddress"):
+        raise ProjectionError("daily_source_owner_unavailable")
+    owner=owners[0]["emailAddress"]
     if read_only:
         from .google_clients import read_only_sheets_service
-        return DailySheets(SheetsDB(sid,service=read_only_sheets_service()),source_db.sid,store)
-    return DailySheets(SheetsDB(sid),source_db.sid,store)
+        return DailySheets(SheetsDB(sid,service=read_only_sheets_service()),source_db.sid,store,source_owner_email=owner)
+    return DailySheets(SheetsDB(sid),source_db.sid,store,source_owner_email=owner)
 
 
 def run_daily_requests(env,*,apply=False):
@@ -72,7 +76,7 @@ def run_daily_requests(env,*,apply=False):
         spreadsheetId=sid,fields="sheets(properties,protectedRanges,developerMetadata),developerMetadata"))
     path,info=service_account_source()
     info=info or json.loads(Path(path).read_bytes())
-    verify_cutover(metadata,daily.db.sid,info["client_email"])
+    verify_cutover(metadata,daily.db.sid,info["client_email"],owner_email=daily.source_owner_email)
     daily.verify()
     inbox=DailyCorrections(store,source)
     before=inbox._requests()["requests"]
