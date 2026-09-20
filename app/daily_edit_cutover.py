@@ -8,7 +8,7 @@ MARKER = "kakeibo_daily_corrections_v1"
 PROTECTION = "家計簿AI: 修正は日常画面の固定IDフォームから"
 
 
-def verify_cutover(metadata, daily_id, writer_email):
+def verify_cutover(metadata, daily_id, writer_email, *, owner_email=""):
     from .compact_categories import compact_helper
     if not compact_helper(metadata):raise ProjectionError("daily_compact_categories_required")
     if not any(m.get("metadataKey") == MARKER and m.get("metadataValue") == sha256(daily_id.encode()).hexdigest()
@@ -20,17 +20,21 @@ def verify_cutover(metadata, daily_id, writer_email):
     target = {"sheetId": ledger["properties"]["sheetId"], "startColumnIndex": 0, "endColumnIndex": 13}
     for item in ledger.get("protectedRanges", []):
         actual = dict(item.get("range", {}))
+        # Google omits the default sheetId=0 in native range responses.
+        actual.setdefault("sheetId", 0)
         actual.setdefault("startColumnIndex",0)
         if actual.get("startRowIndex") == 0:actual.pop("startRowIndex")
         editors = item.get("editors", {})
+        users = set(editors.get("users", []))
+        allowed = {writer_email} | ({owner_email} if owner_email else set())
         if (item.get("description") == PROTECTION and actual == target and not item.get("warningOnly", False)
-                and not item.get("unprotectedRanges") and set(editors.get("users", [])) == {writer_email}
+                and not item.get("unprotectedRanges") and writer_email in users and users <= allowed
                 and not editors.get("groups") and not editors.get("domainUsersCanEdit")):
             return
     raise ProjectionError("daily_ledger_protection_required")
 
 
-def cutover_requests(metadata, daily_id, writer_email):
+def cutover_requests(metadata, daily_id, writer_email, *, owner_email=""):
     """Explicit locked migration only; no normal refresh calls this builder.
 
     The source owner retains Google's inherent ability to edit protections.
@@ -46,7 +50,7 @@ def cutover_requests(metadata, daily_id, writer_email):
     if ledger is None:
         raise ProjectionError("daily_ledger_missing")
     if any(m.get("metadataKey") == MARKER for m in metadata.get("developerMetadata", [])):
-        verify_cutover(metadata, daily_id, writer_email)
+        verify_cutover(metadata, daily_id, writer_email, owner_email=owner_email)
         return []
     if any(p.get("description") == PROTECTION for p in ledger.get("protectedRanges", [])):
         raise ProjectionError("daily_edit_partial_cutover")
