@@ -6,7 +6,7 @@ on:
       operation:
         description: Inspect a frozen ledger and matching backup before initialization
         type: choice
-        options: [inspect, initialize, key-info]
+        options: [inspect, initialize, key-info, prepare-daily]
         default: inspect
         required: true
       expected_sha:
@@ -58,6 +58,7 @@ jobs:
       KAKEIBO_AMAZON_MONEY_MODE: ${{ vars.KAKEIBO_AMAZON_MONEY_MODE }}
       KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+      KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
     steps:
       - uses: actions/checkout@v4
         with:

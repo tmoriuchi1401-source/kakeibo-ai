@@ -22,6 +22,12 @@
 
 ## 1. Last verified
 
+### 2026-09-20 読取専用backup検証と停止中の日常準備の接続
+
+- PR #42をmain `bc4ff07a75e7e6f64ecd9a1dad082ef112a81936`へ通常merge。PR CI `35481969646`とmain CI `35482089741`全3job成功後、validated SHAを一致させた。実inspect `35482255401`はreaderのpermissions.list取得不可で停止、Google書込み0。permissionIdsを正本の既知user/groupへ照合する経路を追加し、権限はreaderのまま維持する。実SA検証の成功はまだ未確認。
+- 既存のbootstrap/compactカテゴリ/固定ID保護/日常rendererを、writer停止中の`prepare-daily`へ接続。初期化済みmoney、backup、同一manifestを前後で検証し、finance/原本/checkpointへのwriteを行わない。カテゴリ保存結果不明からの再開、入力保持、保護のreplay追加0、共有範囲逸脱の拒否を含む関連99テスト成功。
+- 既存運用recordは、フォルダ全体の一覧を取得せず、PROJECT_STATUSに記録されたローカル保存先定義からproduction_runの固定IDを確認して読取り。未完了はreceiptsだけ。元状態をprivateへ保存し、照合前の解除はしていない。本番/定期フラグは停止継続、Google変更は前工程から増えていない。
+
 ### 2026-09-20 集計folder共有完了・読取専用backupの権限検証修正
 
 - 操作直前の明示承認を受け、確認済み既存SAへ集計folderのwriter権限を付与。folderと配下24文書がowner＋同SA writerだけであることを読戻し確認。公開/第三者共有なし。停止後のGoogle変更は計4件。日常writer、backup readerの最小権限は維持。

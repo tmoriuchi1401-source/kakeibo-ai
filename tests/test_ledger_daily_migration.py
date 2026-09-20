@@ -42,7 +42,7 @@ def test_checkout_expected_and_validated_sha_must_match(head, expected):
         migration.validate_boundary(environment(), head, expected, "inspect")
 
 
-@pytest.mark.parametrize("operation", ["inspect", "initialize"])
+@pytest.mark.parametrize("operation", ["inspect", "initialize", "prepare-daily"])
 @pytest.mark.parametrize("field,value", [("KAKEIBO_PRODUCTION_ENABLED", "true"),
     ("KAKEIBO_SCHEDULE_ENABLED", "true"), ("KAKEIBO_LEGACY_DISABLED", "false"),
     ("KAKEIBO_AMAZON_MONEY_MODE", "confirmed-v1"), ("KAKEIBO_DAILY_CORRECTIONS_MODE", "fixed-id-v1")])
@@ -221,6 +221,19 @@ def test_read_only_backup_lists_complete_permissions_without_needing_writer_acce
             migration.verify_backup_access(service, "source", "backup")
 
 
+@pytest.mark.parametrize("ids", [["owner", "sa"], ["owner", "third-party"],
+    ["owner", "anyoneWithLink"], [], None, "owner", [None]])
+def test_reader_permission_ids_must_all_match_verified_source_principals(ids):
+    service = Metadata()
+    del service.backup["permissions"]
+    service.backup["permissionIds"] = ids
+    if ids == ["owner", "sa"]:
+        migration.verify_backup_access(service, "source", "backup")
+    else:
+        with pytest.raises(StateError, match="sharing_mismatch"):
+            migration.verify_backup_access(service, "source", "backup")
+
+
 @pytest.fixture(scope="module")
 def private_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
@@ -333,3 +346,86 @@ def test_actual_runtime_uses_read_only_sheets_and_precreated_drive_files(private
         expected_commitment=report["manifest_sha256"])
     assert replay["counts"]["money_initialized"] == 0 and drive.payloads == saved
     assert {sid for sid, _ in calls} == {"source", "synthetic-backup"}
+
+
+@pytest.mark.parametrize("failure", ["missing-book", "stale-backup", "wrong-commitment", "missing-daily"])
+def test_daily_cutover_rejects_unprepared_state_before_projection_or_sheet_writes(failure):
+    raw, backup, store = fixture()
+    report = invoke(store, raw, backup)
+    commitment = report["manifest_sha256"]
+    if failure != "missing-book":
+        invoke(store, raw, backup, apply=True, expected_commitment=commitment)
+    if failure == "stale-backup": backup["expenses"][0][11] = "changed"
+    if failure == "wrong-commitment": commitment = "0" * 64
+    before, writes = deepcopy(store.data), list(store.writes)
+    with pytest.raises(StateError):
+        migration.prepare_daily(store, lambda: raw, lambda: backup, None, None, {}, "",
+            cutover_day=DAY, expected_commitment=commitment)
+    assert store.data == before and store.writes == writes
+
+
+@pytest.mark.parametrize("lost_response", [False, True])
+def test_daily_cutover_reuses_category_and_protection_builders_and_recovers_without_finance_writes(monkeypatch, lost_response):
+    from test_compact_categories import snapshot, apply_requests, catalog
+    from app.compact_categories import CompactCategoryMigration
+    from app.projection_refresh import catalog_document
+    raw, backup, store = fixture()
+    commitment = invoke(store, raw, backup)["manifest_sha256"]
+    invoke(store, raw, backup, apply=True, expected_commitment=commitment)
+    original = deepcopy(raw)
+    store.metrics = {"reads": 0, "writes": 0}
+    class Call:
+        def __init__(self, action): self.action = action
+        def execute(self, **kw): return self.action()
+    class DB:
+        sid = "source"
+        def __init__(self):
+            self.state, self.svc, self.writes, self.fail = snapshot(), self, 0, lost_response
+        def spreadsheets(self): return self
+        def _execute_sheet_read(self, factory): return factory().execute()
+        def _invalidate_sheet_metadata(self): pass
+        def categories(self): return []
+        def get(self, **kw): return Call(lambda: deepcopy(self.state["metadata"]))
+        def batchUpdate(self, **kw):
+            def write():
+                self.writes += 1
+                requests = kw["body"]["requests"]
+                self.state = apply_requests(self.state, requests)
+                for request in requests:
+                    if "addProtectedRange" in request:
+                        protected = request["addProtectedRange"]["protectedRange"]
+                        ledger = next(s for s in self.state["metadata"]["sheets"] if s["properties"]["title"] == "支出明細")
+                        ledger.setdefault("protectedRanges", []).append(deepcopy(protected))
+                    if "createDeveloperMetadata" in request:
+                        self.state["metadata"].setdefault("developerMetadata", []).append(request["createDeveloperMetadata"]["developerMetadata"])
+                if self.fail:
+                    self.fail = False
+                    raise TimeoutError("unknown outcome after save")
+            return Call(write)
+    class Categories(CompactCategoryMigration):
+        def snapshot(self): return deepcopy(self.db.state)
+    class Projection:
+        def __init__(self, *a): pass
+        def bootstrap(self, pairs):
+            store.data["catalog"] = catalog_document(catalog())
+            return {"projection_rows": len(raw["expenses"])}
+    monkeypatch.setattr("app.compact_categories.CompactCategoryMigration", Categories)
+    monkeypatch.setattr("app.projection_refresh.ProjectionRefresh", Projection)
+    monkeypatch.setattr("app.daily_runtime.refresh_daily", lambda *a: {"daily_refreshed": 1})
+    source = DB()
+    daily = SimpleNamespace(db=SimpleNamespace(sid="daily"), verify=lambda: None)
+    def run():
+        return migration.prepare_daily(store, lambda: deepcopy(raw), lambda: deepcopy(backup),
+            source, daily, {}, "existing@synthetic.iam.gserviceaccount.com",
+            cutover_day=DAY, expected_commitment=commitment)
+    if lost_response:
+        with pytest.raises(TimeoutError): run()
+        assert source.writes == 1
+    report = run()
+    writes = source.writes
+    replay = run()
+    assert writes == source.writes == 2
+    assert replay["counts"]["daily_cutover_write_requests"] == 0
+    assert raw == original and report["counts"]["expense_rows_written"] == 0
+    assert source.state["workflow_values"][2][2:4] == ["食費｜外食", ""]
+    assert source.state["workflow_values"][2][4:] == snapshot()["workflow_values"][2][4:]
