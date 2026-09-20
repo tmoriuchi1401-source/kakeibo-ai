@@ -292,7 +292,8 @@ def test_state_read_does_not_retry_permanent_response(setup,status):
     from httplib2 import Response
     binding,_,_=setup;service=MagicMock()
     service.files().get().execute.side_effect=HttpError(Response({'status':status}),b'private error')
-    with pytest.raises(StateError,match='^state_drive_read_failed$'):DriveStateTransport(service,binding).read()
+    expected='state_drive_read_failed'+('_'+str(status) if status!=400 else '')
+    with pytest.raises(StateError,match='^'+expected+'$'):DriveStateTransport(service,binding).read()
     assert service.files().get().execute.call_count==1
 
 
@@ -306,3 +307,21 @@ def test_state_read_timeout_is_bounded_and_write_remains_single_attempt(setup,mo
     service.files().update().execute.side_effect=TimeoutError()
     with pytest.raises(StateError,match='state_drive_write_unknown'):DriveStateTransport(service,binding).write(b'payload')
     assert service.files().update().execute.call_count==1
+
+@pytest.mark.parametrize('reason',['userRateLimitExceeded','rateLimitExceeded','insufficientFilePermissions'])
+def test_state_read_distinguishes_rate_limited_403_from_permission_failure(setup,monkeypatch,reason):
+    from googleapiclient.errors import HttpError
+    from httplib2 import Response
+    monkeypatch.setattr('time.sleep',lambda _:None)
+    binding,_,_=setup;service=MagicMock()
+    service.files().get().execute.return_value={'parents':[binding.folder_id],'mimeType':'application/json'}
+    request=service.files().get_media().execute
+    error=HttpError(Response({'status':403}),json.dumps({'error':{'errors':[{'reason':reason}]}}).encode())
+    request.side_effect=[error,b'recovered']
+    if reason=='insufficientFilePermissions':
+        with pytest.raises(StateError,match='state_drive_read_failed_403'):DriveStateTransport(service,binding).read()
+        assert request.call_count==1
+    else:
+        assert DriveStateTransport(service,binding).read()==b'recovered'
+        assert request.call_count==2
+    service.files().update.assert_not_called()

@@ -255,12 +255,20 @@ class DriveStateTransport:
     @staticmethod
     def _read_request(request):
         import http.client
+        import ssl
         import time
         from googleapiclient.errors import HttpError
         for attempt in range(3):
             try:return request.execute(num_retries=0)
             except Exception as error:
-                transient=(isinstance(error,(TimeoutError,ConnectionError,http.client.RemoteDisconnected))
+                quota=False
+                if isinstance(error,HttpError) and error.resp.status==403:
+                    try:
+                        reasons={x.get('reason') for x in json.loads(error.content)['error']['errors']}
+                        quota=bool(reasons) and reasons<={'rateLimitExceeded','userRateLimitExceeded'}
+                    except (ValueError,KeyError,TypeError,AttributeError):pass
+                transient=(isinstance(error,(TimeoutError,ConnectionError,http.client.RemoteDisconnected,
+                                             http.client.IncompleteRead,ssl.SSLEOFError)) or quota
                     or isinstance(error,HttpError) and error.resp.status in {429,500,502,503,504})
                 if not transient or attempt==2:raise
                 time.sleep(.5*2**attempt)
@@ -283,8 +291,12 @@ class DriveStateTransport:
             ))
         except StateError:
             raise
-        except Exception:
-            raise StateError("state_drive_read_failed") from None
+        except Exception as error:
+            from googleapiclient.errors import HttpError
+            # Fixed HTTP status only; never expose source IDs or response bodies.
+            status=error.resp.status if isinstance(error,HttpError) else None
+            suffix=('_'+str(status)) if status in {401,403,404,429,500,502,503,504} else ''
+            raise StateError("state_drive_read_failed"+suffix) from None
 
     def write(self, payload: bytes) -> None:
         from googleapiclient.http import MediaIoBaseUpload

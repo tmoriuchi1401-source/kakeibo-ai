@@ -156,6 +156,46 @@ class ReceiptConfirmation:
         self.save_item(key,item)
         return True
 
+    def route_owner_intake(self, source, folder_id):
+        """An exact-version kind answer can narrow routing, never permit AI/posting."""
+        key=review_id('intake',source);old=self.items.get(key)
+        if not old or old['status'] not in {'waiting','closed_user'}:return ''
+        inputs=old['inputs']
+        if any(inputs[:7]):return ''  # Includes an explicit hold.
+        answer=str(inputs[7]).strip()
+        if answer not in {'医療','対象外'}:return ''
+        live=self.ui_rows().get(key)
+        if live is None or live[1][7:15]!=inputs:return ''
+        if live[1][:2]+live[1][3:7]!=old.get('presentation'):return ''
+        self.verify_source(source,folder_id)
+        if self.ui_rows().get(key)!=live:return ''
+        if answer=='医療':
+            self.observe_medical(source,folder_id)
+        if old['status']=='waiting':
+            item=deepcopy(old)
+            item.update(status='closed_user',decision='本人の種類回答: '+answer,
+                reason=('本人が医療と確認。医療確認行で支払日・施設・実支払額・カテゴリを入力してください。'
+                        if answer=='医療' else '本人が対象外と確認。会計処理せず原本を保持します。'))
+            item.pop('error',None);self.save_item(key,item)
+        return answer
+
+    def close_keep_existing(self):
+        """Keeping a verified existing ledger does not adopt a changed original."""
+        tables=self.tables();closed=0
+        for key,old in list(self.items.items()):
+            if (old['kind']!='normal' or old['status'] not in {'waiting','superseded'}
+                    or old.get('require_reconfirm') or old['inputs'][5]!='既存値を維持'):continue
+            current=target_snapshot(tables,old['source']['source_id'])
+            if not current['expense_rows'] or digest(current)!=digest(old['before']):continue
+            live=self.ui_rows().get(key)
+            if (live is None or live[1][7:15]!=old['inputs']
+                    or live[1][:2]+live[1][3:7]!=old.get('presentation')):continue
+            if self.ui_rows().get(key)!=live:continue
+            if digest(target_snapshot(self.tables(),old['source']['source_id']))!=digest(current):continue
+            item=deepcopy(old);item.update(status='closed_user',decision='本人が既存値維持を選択')
+            item.pop('error',None);self.save_item(key,item);closed+=1
+        return closed
+
     def needs_attention(self,key):
         item=self.items[key]
         if item['status'] in {'waiting','pending'}:return True
@@ -312,7 +352,8 @@ class ReceiptConfirmation:
             if len(matches)!=1 or not same_row(title,matches[0],expected):return False
         return True
 
-    def apply_confirmations(self):
+    def apply_confirmations(self, *, dry_run=False):
+        self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
             if old['status']=='pending':
@@ -329,11 +370,11 @@ class ReceiptConfirmation:
             if item.get('require_reconfirm'):continue
             if action in {'','保留'}:continue
             try:
-                self.verify_source(item['source'],item['folder_id'])
                 if action=='既存値を維持':
                     if item['kind']!='normal':raise ValueError('医療費は必要項目と確定判断を入力してください')
                     if not item['before']['expense_rows']:raise ValueError('明細が未計上です。候補明細の確認、重複先の指定、または保留を選んでください')
-                    item['status']='closed_user';item['decision']='本人が既存値維持を選択';self.save_item(key,item);continue
+                    raise ValueError('既存行または表示・入力が変更されています。現在の記帳を再確認してください')
+                self.verify_source(item['source'],item['folder_id'])
                 if action not in ({'候補明細で確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'} if item['kind']=='normal' else {'医療費を確定','候補で医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
                     raise ValueError('種別に対応する確定判断を選択してください')
                 parsed=self._parsed(item)
@@ -356,6 +397,9 @@ class ReceiptConfirmation:
                 self.save_item(key,item);continue
             # Durable intent before any accounting call. Unknown/partial writes
             # remain pending; next invocation can only reconcile a full readback.
+            if dry_run:
+                written+=1
+                continue
             item.update(status='pending',plan=plan,confirmation_hash=digest(item['inputs']))
             self.save_item(key,item)
             try:

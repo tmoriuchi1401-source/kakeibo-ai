@@ -91,10 +91,42 @@ def execute(env,apply):
     review=ReceiptConfirmation(store,db,metadata)
     from .medical_auto_posting import AUTO_POLICIES,apply_automatic,in_scope,owner_blocked
     policy=env.get('MEDICAL_DERIVED_AI_POLICY','');automatic=policy in AUTO_POLICIES
-    if not apply:return {'found':len(review.items),'written':0,'failure':0}
+    if not apply:
+        from copy import deepcopy
+        from types import SimpleNamespace
+        # Exercise the real validator with current owner input and read-only
+        # clients. Only the in-memory store receives diagnostic state changes.
+        memory=SimpleNamespace(value=deepcopy(store.value))
+        memory.save=lambda value:setattr(memory,'value',deepcopy(value))
+        preview=ReceiptConfirmation(memory,db,metadata)
+        preview.capture_inputs()
+        eligible=preview.apply_confirmations(dry_run=True)
+        closed=sum(x['status']=='closed_user' and review.items[k]['status']!='closed_user' for k,x in preview.items.items())
+        report={'found':len(review.items),'written':0,'failure':0,'review_eligible':eligible,
+            'review_closable':closed,**preview.review_counts()}
+        if env.get('KAKEIBO_RUN_LEDGER_FILE_ID'):
+            from .drive_run_state import StateBinding
+            from .production_ledger import ProductionLedger
+            from .receipt_recovery_audit import audit_rows
+            binding=StateBinding('production_run',settings.spreadsheet_id,env['KAKEIBO_STATE_FOLDER_ID'],env['KAKEIBO_RUN_LEDGER_FILE_ID'])
+            ledger=ProductionLedger(DriveStateTransport(reader,binding),binding)
+            tables=review.tables()
+            raw={'spreadsheet_id':settings.spreadsheet_id,'imports':tables['import_rows'],'expenses':tables['expense_rows']}
+            report['recovery_audit']=audit_rows(raw,tables['receipt_rows'],review,ledger)
+            if store.transport.read()!=store.payload or ledger.transport.read()!=ledger.payload:
+                raise StateError('receipt_audit_state_changed')
+        return report
     review.capture_inputs()
     review.prepare_general()
     review.resolve_general_without_writes()
+    def archive():
+        from .receipt_confirmation_archive import archive_confirmations
+        from .google_clients import drive_service
+        destination=getattr(settings,'processed_drive_folder_id','')
+        if not destination:return 0
+        return archive_confirmations(review,normalize_folder_id(settings.receipt_drive_folder_id),
+            normalize_folder_id(destination),drive_service(),lambda sid:download_drive_file(sid,reader))
+    resumed_archives=archive()
     if env.get('MEDICAL_FINALIZE_ONLY')=='true':
         written=review.apply_confirmations();auto_written=0
         if automatic:
@@ -104,7 +136,7 @@ def execute(env,apply):
             from .medical_auto_posting import WRITE_LIMIT
             remaining=max(0,WRITE_LIMIT-int(env.get('MEDICAL_LOCAL_WRITTEN','0')))
             auto_written=apply_automatic(review,identity_key=identity_key(key_info['private_key']),policy=policy,write_limit=remaining)
-        written+=auto_written;rows=review.render()
+        written+=auto_written;archived=resumed_archives+archive();rows=review.render()
         if store.value.get('confirmation_ui_version')!=2:
             configure_ui(db,validation_only=True)
             from copy import deepcopy
@@ -113,13 +145,13 @@ def execute(env,apply):
         if review.refresh_needed():
             from .expense_view import ExpenseViewPipeline
             ExpenseViewPipeline(db).refresh();review.mark_refreshed()
-        return {'found':rows,'written':written,'medical_auto_written':auto_written,'failure':0,**review.review_counts(),
+        return {'found':rows,'written':written,'archived':archived,'medical_auto_written':auto_written,'failure':0,**review.review_counts(),
             'medical_pending':sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())}
     folder=normalize_folder_id(settings.receipt_drive_folder_id)
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
         fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
-    plans=[];medical_plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0}
+    plans=[];medical_plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
@@ -129,6 +161,12 @@ def execute(env,apply):
         payload=download_drive_file(f['id'],reader)
         if before!=metadata(source,folder):raise StateError('confirmation_source_changed')
         source['sha256']=sha256(payload).hexdigest()
+        owner_route=review.route_owner_intake(source,folder)
+        if owner_route:
+            # A kind answer is not authority to send pixels or infer amounts.
+            # Medical confirmation uses the same explicit input writer below.
+            if owner_route=='医療':counts['medical_detected']+=1
+            continue
         gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical else {}))
         if gate.classification=='medical':
             review.observe_medical(source,folder);counts['medical_detected']+=1
@@ -193,7 +231,9 @@ def execute(env,apply):
             counts['blocked']+=1;blocked_sources.add(f['id'])
             review.observe_intake_hold(source,folder,gate)
     review.finish_intake_scan(blocked_sources)
-    if not env.get('MEDICAL_PREPARE_DIR'):counts['written']+=review.apply_confirmations()
+    if not env.get('MEDICAL_PREPARE_DIR'):
+        counts['written']+=review.apply_confirmations()
+        counts['archived']+=archive()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     create_ui=TITLE not in db.sheet_titles()
     counts['review_rows']=review.render()
