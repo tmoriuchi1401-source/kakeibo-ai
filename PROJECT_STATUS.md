@@ -22,6 +22,14 @@
 
 ## 1. Last verified
 
+### 2026-09-20 金銭・未完了要求と合成台帳の実Google隔離復元
+
+- 前工程`262b019`のLinux CI `35477141311`全3job成功。所有者限定・本番未登録の隔離folderで、合成の24状態文書と一式backupを作成し、全payload/MIME/親folder/共有範囲を検証した。money/corrections/money-reviews/journalを変更後、Google上のbackupから同じ4ファイルIDへ復元し、全24文書の一致を確認した。
+- 合成の支出2行・取込1行だけを持つnative Sheetsを同folderへ作成。支出の金額と本人メモを変更し、backupから同じSheetの2セルへ復元。全固定ID/日付/金額/分類/本人入力、対象書式/入力規則が一致。Google desktop/100%で2タブを確認した。実家計データをこの検証へコピーせず、本番の正本・日常・共有・フラグの変更0。
+- Googleから再取得した24文書と台帳値をローカルの合成adapterへ渡し、記帳後の結果不明、年越し日付修正後の結果不明、本人の保留後の結果不明の3件を再開。追加記帳/行更新0、年越し前後の再集計一致、再実行の文書更新0を確認。これはnative保存・復元とローカルengine再開の組合せであり、既存SAによる本番Actions記帳の証明ではない。
+- `tests/test_projection_restore.py`に一式復元・欠落・重複・別source・不明keyの5検証を追加。金銭/修正/集計の関連106件成功（30.83秒）。実Google mutationは37件（folder1、JSON upload25、JSON変更4＋復元4、native Sheets import1、変更/復元batch各1）。全て隔離対象。退避/manifest/読戻し/検証結果はGit対象外`.private/isolated-money-restore/`に保存。
+- Goal継続中。既存SAへの共有は自動承認レビューが明示的な受取人・編集権限・対象範囲の承認不足として拒否しており、確認への回答待ち。別経路で再試行していない。main統合、実鍵照合/接続設定、排他下の最新backup/実移行、非0本番canary/readback/replay0と通常切替、スマホ実機確認が残る。
+
 ### 2026-09-20 金銭移行を既存排他の手動Actionsへ接続（本番未実行）
 
 - 最新mainを再fetchして`c8ef626`。前工程の進捗commit `d9f5b92`はLinux CI `35476370335`全3job成功。共有の明示的な確認は未回答で、前工程で拒否された共有を再試行していない。本工程の実Google変更0、本番フラグ/main変更0。

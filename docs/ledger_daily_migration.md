@@ -273,3 +273,13 @@ slotは年月通番mod13で決まり、payloadにも実年月を保持する。�
 これは金銭初期化の実行経路であり、正本のカテゴリ縮小・編集保護・旧イベント退避・projection bootstrap・private要求の隔離復元・非0本番canary/replay・定期運用切替はそれぞれ残る。実本番の初期化成功を、合成検証や対象0件の実行で代用しない。
 
 実装`203d7b2`のLinux CI `35476909686`は全3job成功。ブラウザを390×844px/100%にして日常試作のホーム/履歴/確認/推移と支出修正フォームを確認し、カテゴリdropdownも値を変えず開閉した。主要入力は左側に表示されたが、実集計・長文・右側の列の使用感とスマホ実機は未確認。viewportは戻し、Googleのセル/書式/規則の変更は0。
+
+## 金銭・未完了要求の実Google隔離復元（2026-09-20）
+
+`tests/test_projection_restore.py`の合成fixtureは、支出書込み済みでmoneyがpending、年越し修正済みでcorrectionsがpending、本人の保留を保存済みでmoney-reviewsがpendingという3つの結果不明状態を一式にする。全24文書のenvelopeと固定ID付き台帳値を同じbackupへ保存する。単独のbookだけを戻して未完了intentとの対応を失わない。
+
+所有者限定の[隔離folder](https://drive.google.com/drive/folders/1a6Y_5F6gdyEwgYBKEPRtd665kKYB3UkS)へ24 JSONと一式backupを保存。4文書を変更して読戻した後、Google上のbackupから同じファイルIDへ復元し、全24 payloadの一致、MIME/親folder/非公開を確認した。同folderの[合成台帳](https://docs.google.com/spreadsheets/d/1v3YauQamAaMqHNp5yjUYovJ-JTjG5cb5npf8Unw5Dn8/edit)には支出2行/取込1行だけを保存し、金額と本人メモの2セルを変更/復元。全行の値と対象セルの書式/規則が退避時と一致した。実Google変更は37 mutationで、全て未登録の隔離対象。本番の正本/日常/権限/フラグは変更していない。
+
+復元したGoogle文書とGoogle Sheetsを再取得し、その値をローカルの合成adapterへ渡して3件を再開した。固定IDの存在とfingerprintを照合して追加記帳/行更新0、12月から1月への修正の両月再集計一致、再実行時の追加文書更新0を確認した。欠落/重複/別source/不明keyの一式は再開前に拒否する。これは実Googleへの保存・同ID復元とローカルengineの組合せ検証であり、既存SAの実Actions実行や本番の非0記帳成功とは区別する。
+
+private証拠は`.private/isolated-money-restore/`のbackup/native-manifest/native-combined/verification等に保持。隔離復元用payloadを本番へ流用しない。本番の復旧ではwriter排他下の最新backup組と本人入力を使い、再開前に正本とintentを照合する。日常表示だけの失敗は正本から集計を再生成し、記帳を繰り返して修復しない。
