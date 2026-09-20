@@ -1,7 +1,8 @@
-"""Manual Actions migration: frozen ledger + matching backup, no Sheet writes.
+"""Manual Actions migration under a frozen ledger and matching backup.
 
 The existing production workflow lock supplies exclusion. Only precreated
-money documents may change; source checkpoints and accounting are not invoked.
+money documents and explicit daily cutover surfaces may change. Financial
+values, source checkpoints and accounting are never written by this module.
 """
 import argparse
 import hashlib
@@ -21,13 +22,14 @@ from .projection_store import DriveProjectionStore
 
 
 BACKUP_VARIABLE = "KAKEIBO_MIGRATION_BACKUP_ID"
-OPERATIONS = ("key-info", "inspect", "initialize")
+OPERATIONS = ("key-info", "inspect", "initialize", "prepare-daily")
 SAFE_ERRORS = frozenset({
     "migration_validated_main_required", "migration_writer_freeze_required",
     "migration_mode_must_be_inactive", "migration_backup_required",
     "migration_backup_sharing_mismatch", "migration_backup_snapshot_mismatch",
     "migration_backup_permissions_unavailable",
     "migration_commitment_required", "migration_commitment_mismatch",
+    "migration_money_initialization_required", "migration_daily_binding_required",
     "money_migration_snapshot_changed", "money_migration_manifest_conflict",
     "money_migration_book_exists", "money_migration_already_posted",
     "money_migration_refund_identity_required", "private_binding_decode_failed",
@@ -36,6 +38,55 @@ SAFE_ERRORS = frozenset({
     "projection_file_invalid", "projection_drive_read_failed", "projection_drive_write_unknown",
     "projection_state_changed", "projection_readback_failed",
 })
+
+
+def prepare_daily(store, reader, backup_reader, source, daily, env, writer_email,
+                  *, cutover_day, expected_commitment):
+    """Explicit category/protection migration; reuses existing tested builders."""
+    from .compact_categories import CompactCategoryMigration, compact_helper, category_rows
+    from .daily_edit_cutover import cutover_requests, verify_cutover
+    from .daily_runtime import refresh_daily
+    from .monthly_projection_sheets import SheetsLedgerReader
+    from .projection_refresh import ProjectionRefresh, load_catalog
+
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_commitment):
+        raise StateError("migration_commitment_required")
+    report = migrate(store, reader, backup_reader, cutover_day=cutover_day,
+                     expected_commitment=expected_commitment)
+    if store.read("money-migration") is None or store.read("money") is None:
+        raise StateError("migration_money_initialization_required")
+    if daily is None:
+        raise StateError("migration_daily_binding_required")
+    daily.verify()
+    projection = ProjectionRefresh(store, SheetsLedgerReader(source))
+    counts = projection.bootstrap(source.categories())
+    catalog = load_catalog(store.read("catalog"))
+    categories = CompactCategoryMigration(source)
+    snapshot = categories.snapshot()
+    if not compact_helper(snapshot["metadata"]):
+        from .compact_categories import migration_plan
+        counts.update(categories.apply(migration_plan(snapshot, catalog), catalog))
+    elif snapshot.get("helper_values") != category_rows(catalog):
+        raise StateError("compact_category_readback_failed")
+    # Fresh native metadata, after category migration, before protecting edits.
+    def metadata():
+        return source._execute_sheet_read(lambda: source.svc.spreadsheets().get(
+            spreadsheetId=source.sid, includeGridData=False))
+    requests = cutover_requests(metadata(), daily.db.sid, writer_email)
+    if requests:
+        source.svc.spreadsheets().batchUpdate(spreadsheetId=source.sid,
+            body={"requests": requests}).execute(num_retries=0)
+        source._invalidate_sheet_metadata()
+    verify_cutover(metadata(), daily.db.sid, writer_email)
+    counts["daily_cutover_write_requests"] = int(bool(requests))
+    counts.update(refresh_daily(source, store, env))
+    # Recheck all financial IDs/values and the independent backup after writes.
+    migrate(store, reader, backup_reader, cutover_day=cutover_day,
+            expected_commitment=expected_commitment)
+    return {"manifest_sha256": report["manifest_sha256"], "counts": {
+        **counts, "expense_rows_written": 0, "import_rows_written": 0,
+        "projection_drive_reads": store.metrics["reads"],
+        "projection_drive_writes": store.metrics["writes"]}}
 
 
 def validate_boundary(env, head, expected_sha, operation):
@@ -72,9 +123,17 @@ def verify_backup_access(service, source_id, backup_id):
     source = service.files().get(fileId=source_id, supportsAllDrives=True,
                                 fields="permissions(id,type)").execute(num_retries=0)
     backup = service.files().get(fileId=backup_id, supportsAllDrives=True,
-        fields="mimeType,trashed,permissions(id,type)").execute(num_retries=0)
+        fields="mimeType,trashed,permissionIds,permissions(id,type)").execute(num_retries=0)
     allowed = {p["id"] for p in source.get("permissions", []) if p.get("type") in {"user", "group"}}
     grants = backup.get("permissions")
+    # Permission IDs identify the same principals across files. Match every ID
+    # to a user/group verified on the source; unknown/public IDs cannot pass.
+    # Unlike the full ACL, files.permissionIds does not require canShare.
+    if grants is None and "permissionIds" in backup:
+        ids = backup["permissionIds"]
+        if not isinstance(ids, list) or not ids or any(not isinstance(i, str) or i not in allowed for i in ids):
+            raise StateError("migration_backup_sharing_mismatch")
+        grants = [{"id": i, "type": "user"} for i in ids]
     # files.permissions is omitted when the caller cannot share the file.
     # Keep backup access read-only and retrieve its ACL through permissions.list.
     if grants is None:
@@ -147,7 +206,7 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
     folder_id = unwrap("KAKEIBO_PROJECTION_FOLDER_ID", env.get("KAKEIBO_PROJECTION_FOLDER_ID", ""), key)
     from .google_clients import drive_service, read_only_drive_service, read_only_sheets_service
     from .sheets import SheetsDB
-    service = drive_service() if operation == "initialize" else read_only_drive_service()
+    service = drive_service() if operation in {"initialize", "prepare-daily"} else read_only_drive_service()
     sid = env.get("SPREADSHEET_ID", "")
     verify_backup_access(service, sid, backup_id)
     store = DriveProjectionStore(service, folder_id, sid, precreated=True)
@@ -155,6 +214,17 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
     sheets = read_only_sheets_service()
     reader = MigrationReader(SheetsDB(sid, service=sheets))
     backup_reader = MigrationReader(SheetsDB(backup_id, service=sheets))
+    if operation == "prepare-daily":
+        from .daily_runtime import daily_from_environment
+        from .projection_cache import RollingProjectionStore
+        # The backup remains on the read-only service. Only source UI and the
+        # separately bound daily copy use writable Sheets credentials.
+        source = SheetsDB(sid)
+        rolling = RollingProjectionStore(store)
+        daily = daily_from_environment(source, rolling, env)
+        return prepare_daily(rolling, reader, backup_reader, source, daily, env,
+            info["client_email"], cutover_day=cutover_day,
+            expected_commitment=expected_commitment)
     return migrate(store, reader, backup_reader, cutover_day=cutover_day,
                    expected_commitment=expected_commitment, apply=operation == "initialize")
 

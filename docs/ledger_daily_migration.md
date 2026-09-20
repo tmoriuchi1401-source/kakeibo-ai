@@ -283,3 +283,10 @@ slotは年月通番mod13で決まり、payloadにも実年月を保持する。�
 復元したGoogle文書とGoogle Sheetsを再取得し、その値をローカルの合成adapterへ渡して3件を再開した。固定IDの存在とfingerprintを照合して追加記帳/行更新0、12月から1月への修正の両月再集計一致、再実行時の追加文書更新0を確認した。欠落/重複/別source/不明keyの一式は再開前に拒否する。これは実Googleへの保存・同ID復元とローカルengineの組合せ検証であり、既存SAの実Actions実行や本番の非0記帳成功とは区別する。
 
 private証拠は`.private/isolated-money-restore/`のbackup/native-manifest/native-combined/verification等に保持。隔離復元用payloadを本番へ流用しない。本番の復旧ではwriter排他下の最新backup組と本人入力を使い、再開前に正本とintentを照合する。日常表示だけの失敗は正本から集計を再生成し、記帳を繰り返して修復しない。
+
+
+### 停止中の日常画面準備
+
+`prepare-daily`は同じ手動migration workflow、writer停止、未稼働mode、検証済みmain境界で実行する。inspectの同一manifest digestと読取専用backup、初期化済みmoneyを照合してから、既存projection bootstrap、compact category migration、固定ID修正の保護/案内、日常表示を順に実行する。正式な金融値とbackupは書き換えず、処理後にも全金融値を再照合する。カテゴリ/保護の保存結果不明時は保存済みmarkerから再開し、入力を二重変換しない。取込・OCR・元state解除は呼ばない。
+
+backupの共有確認は、file metadataの完全ACLが省略される場合、permissionIdsを正本の確認済みuser/group ID集合へ照合する。空/不明/範囲外IDは停止し、permissionIdsも省略された場合だけpermissions.listを使用する。バックアップのSA権限をreaderから増やさない。
