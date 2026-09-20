@@ -101,14 +101,16 @@ class ReceiptConfirmation:
             except StateError as error:
                 if str(error)!='confirmation_source_changed':raise
                 continue  # Changed originals keep their question; never close from stale evidence.
-            live=self.ui_rows().get(key)
-            if live and (any(live[1][7:15]) or live[1][:2]+live[1][3:7]!=old.get('presentation')):continue
             sid=old['source']['source_id'];parsed=self._parsed(old)
             if manual_expense_already_recorded(sid,parsed,**tables,categories=categories):
                 reason='既存の本人判断による手動計上を維持。候補明細は追加しません。'
             elif digest(target_snapshot(tables,sid))==digest(old['before']) and accounting_equal_keeping_labels(sid,parsed,**tables,categories=categories):
                 reason='同一原本・日付・金額・明細・分類が一致。店舗表記と商品名の空白差は既存値を維持。'
             else:continue
+            # Only rows eligible for closure need a fresh UI comparison.
+            # Unchanged held differences must not each scan the whole UI.
+            live=self.ui_rows().get(key)
+            if live and (any(live[1][7:15]) or live[1][:2]+live[1][3:7]!=old.get('presentation')):continue
             # Re-read before closing in case the owner began typing during reads.
             latest=self.ui_rows().get(key)
             if latest!=live:continue

@@ -22,6 +22,14 @@
 
 ## 1. Last verified
 
+### 2026-09-20 日常表示の実反映完了・通常取込のreceipt再発を修正中
+
+- main `85a533f02a4e17d6a286d7c55623193c42f9975e`、Linux CI `35485327609`全3job成功・validated一致。prepare-daily `35485466815`成功。551明細/14か月、日常変更470block/491 native request（5batch）、projection読取120/更新2、金融追加0。日常43入力セル保持、数式error 0。カテゴリ縮小後の正本金融28,727セルは凍結snapshotと完全一致。
+- カテゴリ候補は1,001,000→228セル、正本全体2,273,799→1,273,027セル、日常12,630セル。GoogleがsheetId=0を省略し所有者を保護editorに含める実応答を検証へ反映。ownerはDriveの唯一の所有者を読み、既存SAとそのowner以外のeditorは拒否する。権限追加なし。4つの旧Amazon event/header/match/reviewタブは同じID/全内容を保ち「旧・保管」に改名・非表示。商品補足用Amazon注文は保持。
+- 日常/集計を正式名称へ変更。390×844/100%で実データのホーム・履歴・確認・推移を確認し、金額単位/桁区切り、端が切れない列幅、確認長文の自動行高を調整。入力/金額は変更せず、実機検証とは区別する。
+- 通常preview `35485787550`は全11stage成功、カード新規候補2。他経路新規0。通常apply `35485916543`はAmazon/au PAY残高/PayPay成功だが、receiptsが既存と同じsource_command_failedで再発、カードと依存処理は未実行。非0記帳/replay0/通常再開の証明は未完了。保守停止に戻し、同一snapshotのread-only receipt audit `35486220090`を実行中。
+- 保留差分ごとの確認表全件再読取りを削減し、閉じる候補だけは本人入力の直前/直後比較を継続。receipt確認clientにも移行と同じread pacing/429 backoffを適用し、API失敗を既存の機密を含まないcodeへ分類する。関連175テスト成功。Medical privacyとPayroll分離は変更なし。外部監査の拒否は対象の明示的な読取根拠で解消済みで、追加の承認待ちはない。
+
 ### 2026-09-20 金銭初期化・集計読戻し・receipt未完了照合を実行
 
 - PR #44/#45/#46を通常mergeし、main `516948b80552dce8b3b77468e091e2451427b656` のLinux CI `35484115979`全3job成功、validated SHA一致。実SAのinspect `35483211689`、money初期化 `35483286996`、初期化replay `35483376952`が成功。money関連3文書の所有者側読戻し一致、replay追加write 0、移行による支出/取込追加0。
