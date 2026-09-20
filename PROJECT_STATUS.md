@@ -22,6 +22,13 @@
 
 ## 1. Last verified
 
+### 2026-09-20 main統合前のCI完了・実行ゲート停止の承認待ち
+
+- mainを再fetchして`c8ef626731cc8a941982a0d77b22e7ee4d88af31`、PR #41はmerge可能。復元検証`4ac5fc4`のLinux CI `35478307054`は全3job成功。統合後の同一main SHAを検証するため合成CIのpush対象にmainを追加し、`5efe9dd`のCI `35478523582`も全3job成功、関連55テスト成功。CIに本番Secretsは渡さない。
+- 実GitHub変数を再取得。production/scheduleはtrue、legacy disabledはtrue、validated mainは上記`c8ef626`、money/corrections modeは未設定。実行中/待機中Actionsは0。直近定期run `35475076208`はreceiptsが`source_reconciliation_required`で失敗し、cardと後続会計は依存停止。既存の未完了状態を消去/初期化していない。
+- 統合前に現設定をprivate退避してproduction/scheduleをfalseにする操作を準備したが、自動承認レビューが「この2設定と範囲への明示的なユーザー承認不足」として実行前に拒否。退避ファイルも作成されず、読戻しでも両値true・validated SHA不変。main移動によって間接的にwriterを止める回避もせず、PRは未統合のまま。
+- 既存SAへの日常/集計共有の確認と、本番/定期実行2ゲートの一時停止・PR統合の確認を1つの入力欄へまとめた。共有/停止/本番接続/初期化/非0canaryは未実行。実Google変更0、本番変数変更0。承認後は停止読戻し→実行中writer終了確認→main統合/同SHA CI→validated SHA更新/公開鍵照合→既存共有範囲の接続→最新backup/照合/移行→非0canary/replay0の順で再開する。receiptsの既存未完了状態は正本との照合なしで解除しない。
+
 ### 2026-09-20 金銭・未完了要求と合成台帳の実Google隔離復元
 
 - 前工程`262b019`のLinux CI `35477141311`全3job成功。所有者限定・本番未登録の隔離folderで、合成の24状態文書と一式backupを作成し、全payload/MIME/親folder/共有範囲を検証した。money/corrections/money-reviews/journalを変更後、Google上のbackupから同じ4ファイルIDへ復元し、全24文書の一致を確認した。
