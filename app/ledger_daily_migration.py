@@ -25,6 +25,12 @@ from .projection_store import DriveProjectionStore
 BACKUP_VARIABLE = "KAKEIBO_MIGRATION_BACKUP_ID"
 OPERATIONS = ("key-info", "inspect", "initialize", "prepare-daily", "inspect-receipts")
 SAFE_ERRORS = frozenset({
+    "compact_category_snapshot_changed", "compact_category_reference_requires_mapping",
+    "compact_category_metadata_reference_requires_mapping", "compact_category_workflow_markers_invalid",
+    "compact_category_helper_not_owned", "compact_category_input_readback_changed",
+    "compact_category_readback_failed", "compact_category_validation_readback_failed",
+    "daily_sheet_contract_changed", "daily_source_binding_mismatch",
+    "daily_sharing_mismatch", "daily_output_readback_failed",
     "migration_validated_main_required", "migration_writer_freeze_required",
     "migration_mode_must_be_inactive", "migration_backup_required",
     "migration_backup_sharing_mismatch", "migration_backup_snapshot_mismatch",
@@ -40,6 +46,23 @@ SAFE_ERRORS = frozenset({
     "projection_file_invalid", "projection_drive_read_failed", "projection_drive_write_unknown",
     "projection_state_changed", "projection_readback_failed",
 })
+
+
+def failure_report(exc):
+    """Expose static code locations, never exception text or financial values."""
+    code = str(exc)
+    report = {"success": False, "error": code if code in SAFE_ERRORS else "ledger_daily_migration_failed"}
+    trace = exc.__traceback__
+    app_dir = Path(__file__).resolve().parent
+    while trace is not None:
+        path = Path(trace.tb_frame.f_code.co_filename).resolve()
+        if path.parent == app_dir:
+            report["failure_location"] = f"{path.name}:{trace.tb_lineno}"
+        trace = trace.tb_next
+    from googleapiclient.errors import HttpError
+    if isinstance(exc, HttpError):
+        report["http_status"] = int(exc.resp.status)
+    return report
 
 
 def prepare_daily(store, reader, backup_reader, source, daily, env, writer_email,
@@ -283,8 +306,7 @@ def main():
             owner_attestation=env.get("MIGRATION_BACKUP_ACL", ""))
         report = {"success": True, "operation": args.operation, **result}
     except Exception as exc:
-        code = str(exc)
-        report = {"success": False, "error": code if code in SAFE_ERRORS else "ledger_daily_migration_failed"}
+        report = failure_report(exc)
     print(json.dumps(report, sort_keys=True))
     if not report["success"]:
         raise SystemExit(1)
