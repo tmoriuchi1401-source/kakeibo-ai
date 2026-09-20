@@ -234,6 +234,39 @@ def test_reader_permission_ids_must_all_match_verified_source_principals(ids):
             migration.verify_backup_access(service, "source", "backup")
 
 
+@pytest.mark.parametrize("change", [None, "expired", "future", "wrong-backup", "wrong-source", "third-party",
+    "writer-backup", "different-owner", "wrong-sa", "malformed", "source-reader"])
+def test_fresh_owner_acl_attestation_keeps_backup_reader_access(change, monkeypatch):
+    service = Metadata()
+    service.source["owners"] = [{"emailAddress": "owner@example.test"}]
+    service.source["permissions"][0].update(role="owner", emailAddress="owner@example.test")
+    service.source["permissions"][1].update(role="writer", emailAddress="sa@example.test")
+    service.backup["owners"] = deepcopy(service.source["owners"])
+    del service.backup["permissions"]
+    def forbidden(**kw): raise PermissionError("reader cannot inspect ACL")
+    service.permissions = lambda: SimpleNamespace(list=forbidden)
+    monkeypatch.setattr(migration.time, "time", lambda: 2000)
+    observation = {"source": "source", "backup": "backup", "permissions": sorted([
+        ["user", "owner", "owner@example.test"], ["user", "reader", "sa@example.test"]])}
+    verified_at = 1990
+    if change == "expired": verified_at = 1099
+    if change == "future": verified_at = 2001
+    if change == "wrong-backup": observation["backup"] = "other"
+    if change == "wrong-source": observation["source"] = "other"
+    if change == "third-party": observation["permissions"].append(["user", "reader", "other@example.test"])
+    if change == "writer-backup": observation["permissions"][1][1] = "writer"
+    if change == "different-owner": service.backup["owners"][0]["emailAddress"] = "other@example.test"
+    if change == "source-reader": service.source["permissions"][1]["role"] = "reader"
+    proof = json.dumps({"sha256": migration.digest(observation), "verified_at": verified_at})
+    if change == "malformed": proof = "{}"
+    reader = "other@example.test" if change == "wrong-sa" else "sa@example.test"
+    if change:
+        with pytest.raises(StateError, match="attestation_invalid"):
+            migration.verify_backup_access(service, "source", "backup", reader_email=reader, owner_attestation=proof)
+    else:
+        migration.verify_backup_access(service, "source", "backup", reader_email=reader, owner_attestation=proof)
+
+
 @pytest.fixture(scope="module")
 def private_key():
     return rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(

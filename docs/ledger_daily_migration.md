@@ -290,3 +290,6 @@ private証拠は`.private/isolated-money-restore/`のbackup/native-manifest/nati
 `prepare-daily`は同じ手動migration workflow、writer停止、未稼働mode、検証済みmain境界で実行する。inspectの同一manifest digestと読取専用backup、初期化済みmoneyを照合してから、既存projection bootstrap、compact category migration、固定ID修正の保護/案内、日常表示を順に実行する。正式な金融値とbackupは書き換えず、処理後にも全金融値を再照合する。カテゴリ/保護の保存結果不明時は保存済みmarkerから再開し、入力を二重変換しない。取込・OCR・元state解除は呼ばない。
 
 backupの共有確認は、file metadataの完全ACLが省略される場合、permissionIdsを正本の確認済みuser/group ID集合へ照合する。空/不明/範囲外IDは停止し、permissionIdsも省略された場合だけpermissions.listを使用する。バックアップのSA権限をreaderから増やさない。
+
+
+読取専用backupがACLの全APIで取得不能の場合は、手動operatorが所有者のDrive接続で直前に完全permissionを読み、`source`/`backup`/全permissionのtype・role・emailをsortしたJSONのdigestを`backup_acl`へ渡す。値は`{"sha256": "...", "verified_at": UTC_UNIX_SECONDS}`。15分以内、正本とbackupのowner一致、正本の既存SA writer一致、backupがowner＋同SA readerだけという観測digestとの一致を必須とする。公開/追加共有/backup writerを含むdigest、異なるファイル、古い観測は拒否。これは所有者側のACL確認を記録する手動入力であり、SAがACLを直接読めたとは報告しない。SAは別途backupの全金融値を正本と比較する。
