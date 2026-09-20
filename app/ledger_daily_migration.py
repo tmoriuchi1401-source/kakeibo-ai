@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 from cryptography.hazmat.primitives import serialization
 
@@ -28,6 +29,7 @@ SAFE_ERRORS = frozenset({
     "migration_mode_must_be_inactive", "migration_backup_required",
     "migration_backup_sharing_mismatch", "migration_backup_snapshot_mismatch",
     "migration_backup_permissions_unavailable",
+    "migration_backup_attestation_invalid",
     "migration_commitment_required", "migration_commitment_mismatch",
     "migration_money_initialization_required", "migration_daily_binding_required",
     "money_migration_snapshot_changed", "money_migration_manifest_conflict",
@@ -117,13 +119,13 @@ def public_key_fingerprint(private_key_pem):
     return hashlib.sha256(public).hexdigest()
 
 
-def verify_backup_access(service, source_id, backup_id):
+def verify_backup_access(service, source_id, backup_id, *, reader_email="", owner_attestation=""):
     if not source_id or not backup_id or backup_id == source_id:
         raise StateError("migration_backup_required")
     source = service.files().get(fileId=source_id, supportsAllDrives=True,
-                                fields="permissions(id,type)").execute(num_retries=0)
+        fields="owners(emailAddress),permissions(id,type,role,emailAddress)").execute(num_retries=0)
     backup = service.files().get(fileId=backup_id, supportsAllDrives=True,
-        fields="mimeType,trashed,permissionIds,permissions(id,type)").execute(num_retries=0)
+        fields="mimeType,trashed,owners(emailAddress),permissionIds,permissions(id,type)").execute(num_retries=0)
     allowed = {p["id"] for p in source.get("permissions", []) if p.get("type") in {"user", "group"}}
     grants = backup.get("permissions")
     # Permission IDs identify the same principals across files. Match every ID
@@ -144,7 +146,34 @@ def verify_backup_access(service, source_id, backup_id):
                     pageSize=100, pageToken=token,
                     fields="nextPageToken,permissions(id,type)").execute(num_retries=0)
             except Exception:
-                raise StateError("migration_backup_permissions_unavailable") from None
+                if any(p.get("type") not in {"user", "group"} or p.get("id") not in allowed for p in grants):
+                    raise StateError("migration_backup_sharing_mismatch") from None
+                if not owner_attestation:
+                    raise StateError("migration_backup_permissions_unavailable") from None
+                # A Drive reader can be denied every ACL endpoint. The manual
+                # operator then supplies a fresh owner-side ACL observation,
+                # bound to this source, backup and exactly owner + SA reader.
+                # This never authorizes a share or grants additional access.
+                try:
+                    proof = json.loads(owner_attestation)
+                    owners = [p["emailAddress"] for p in source["owners"]]
+                    if (len(owners) != 1 or not reader_email or reader_email == owners[0]
+                            or [p["emailAddress"] for p in backup["owners"]] != owners
+                            or not any(p.get("emailAddress") == reader_email and p.get("type") == "user"
+                                and p.get("role") == "writer" for p in source["permissions"])
+                            or set(proof) != {"sha256", "verified_at"}
+                            or type(proof["verified_at"]) is not int
+                            or not 0 <= time.time() - proof["verified_at"] <= 900):
+                        raise ValueError()
+                    expected = digest({"source": source_id, "backup": backup_id, "permissions": sorted([
+                        ["user", "owner", owners[0]], ["user", "reader", reader_email]])})
+                    if proof["sha256"] != expected:
+                        raise ValueError()
+                except Exception:
+                    raise StateError("migration_backup_attestation_invalid") from None
+                grants = [{"id": p["id"], "type": "user"} for p in source["permissions"]
+                          if p.get("emailAddress") in {owners[0], reader_email}]
+                break
             grants.extend(page.get("permissions", []))
             token = page.get("nextPageToken")
             if not token:
@@ -193,7 +222,7 @@ def migrate(store, reader, backup_reader, *, cutover_day, expected_commitment=""
     return {"manifest_sha256": commitment, "counts": counts}
 
 
-def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_backup=""):
+def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_backup="", owner_attestation=""):
     from .settings import service_account_source
     path, info = service_account_source()
     info = info or json.loads(Path(path).read_bytes())
@@ -208,7 +237,8 @@ def run(env, *, operation, cutover_day="", expected_commitment="", encrypted_bac
     from .sheets import SheetsDB
     service = drive_service() if operation in {"initialize", "prepare-daily"} else read_only_drive_service()
     sid = env.get("SPREADSHEET_ID", "")
-    verify_backup_access(service, sid, backup_id)
+    verify_backup_access(service, sid, backup_id, reader_email=info.get("client_email", ""),
+                         owner_attestation=owner_attestation)
     store = DriveProjectionStore(service, folder_id, sid, precreated=True)
     # Same existing SA, but read-only Sheets credentials for both modes.
     sheets = read_only_sheets_service()
@@ -241,7 +271,8 @@ def main():
         validate_boundary(env, head, args.expected_sha, args.operation)
         result = run(env, operation=args.operation, cutover_day=env.get("MIGRATION_CUTOVER_DAY", ""),
             expected_commitment=env.get("MIGRATION_MANIFEST_SHA256", ""),
-            encrypted_backup=env.get("MIGRATION_BACKUP", ""))
+            encrypted_backup=env.get("MIGRATION_BACKUP", ""),
+            owner_attestation=env.get("MIGRATION_BACKUP_ACL", ""))
         report = {"success": True, "operation": args.operation, **result}
     except Exception as exc:
         code = str(exc)

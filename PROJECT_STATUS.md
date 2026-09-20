@@ -22,6 +22,12 @@
 
 ## 1. Last verified
 
+### 2026-09-20 backupの所有者側ACL確認を最小権限の移行へ接続
+
+- PR #43をmain `d3d8b68fd526cadd755b8dc9720e7ab41aae41b2`へ通常mergeし、PR CI `35482437015`/main CI `35482552922`全3job成功。validated SHA一致後のinspect `35482667941`でもreaderにはpermissionIdsが返らず、ACL取得不可で安全停止。正本/集計のwriteは0。
+- backup readerをwriterへ変更せず、所有者接続による直前の完全ACL観測digestを手動migrationへ渡す経路を追加。対象2ファイル、正本/backup所有者、正本の既存SA writer、backupのowner＋同SA readerだけという共有を検査し、15分を超えた観測/公開や第三者/別対象/backup writerを拒否する。直接SAでACLを読めた証明とは区別し、内容の実SA読戻しは継続して必須。関連110テスト成功。
+- receiptsの正本55件と取込完了marker55件、固定ID支出213件に重複/未完了/孤立0。別の既存M-ID支出1件は取込IDへ紐付いていた。最後のreceipt原始記帳は2026-09-19 14:46:30 JSTで失敗run以前。保存済み確認intentの照合と運用pending解除は未実施。通常運用は停止継続中。
+
 ### 2026-09-20 読取専用backup検証と停止中の日常準備の接続
 
 - PR #42をmain `bc4ff07a75e7e6f64ecd9a1dad082ef112a81936`へ通常merge。PR CI `35481969646`とmain CI `35482089741`全3job成功後、validated SHAを一致させた。実inspect `35482255401`はreaderのpermissions.list取得不可で停止、Google書込み0。permissionIdsを正本の既知user/groupへ照合する経路を追加し、権限はreaderのまま維持する。実SA検証の成功はまだ未確認。

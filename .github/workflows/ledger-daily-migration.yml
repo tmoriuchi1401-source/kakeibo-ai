@@ -25,6 +25,10 @@ on:
         description: Exact digest returned by inspect (required for initialize)
         type: string
         required: false
+      backup_acl:
+        description: Fresh owner-side backup ACL observation (sha256 and verified_at JSON), only if reader ACL is unavailable
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -87,6 +91,7 @@ jobs:
           MIGRATION_CUTOVER_DAY: ${{ inputs.cutover_day }}
           MIGRATION_BACKUP: ${{ inputs.backup }}
           MIGRATION_MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+          MIGRATION_BACKUP_ACL: ${{ inputs.backup_acl }}
         shell: bash
         run: |
           set -euo pipefail
