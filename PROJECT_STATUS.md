@@ -22,6 +22,16 @@
 
 ## 1. Last verified
 
+### 2026-09-20 本番切替・実取込の読戻し/replay・定期再開を完了
+
+- 実装main `6f1e06898af1c25b3cbd6840cbedf9c55e5ff21f`、Linux CI `35486462518`全3job成功。validated/event/checkout/mainを一致させ、通常apply [35486606150](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/35486606150)とreplay [35487060504](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/35487060504)が全11工程成功。カード取込2件を実反映・読戻しし、replayの追加取込/支出0、既存照合更新0、全金融値一致を確認した。
+- 支出554行は全値不変、取込1,979→1,981行。既存au PAYの2行は金融値を変えずレシートへ照合。新規カード2行はチャージ振替1と従来の支出作成対象外形式1であり、支出新規記帳やAmazon新規確定金銭の成功証明に数えない。後者の実対象は0で、今回のGoalのために未反映カード全体の追加計上範囲を広げていない。
+- [家計簿AI 日常](https://docs.google.com/spreadsheets/d/1MPx2E_rWPb4P567gZvdbeCyuH8uF23g3uVjdX6tyj3k/edit)は6タブ12,630セル。正本は2,273,799→移行直後1,273,027セル（通常取込後1,273,105）。カテゴリ候補1,001,000→228セル。移行時の金融28,727セル一致、日常43入力保持・数式error 0、551 active明細/14か月の独立集計照合、旧Amazon4タブの同ID退避を確認した。
+- 日常/集計は確認済み既存SA writer、凍結backupは同SA readerで、所有者接続のACLと実SAのread/write/readbackを確認。公開/新規共有先なし。既存receipts pendingはread-only監査と凍結金融照合後に2回だけ証拠付き解除し、現在は通常処理自身が成功している。Medical AI候補/呼出し/医療書込は今回の通常2runで全0。
+- production/scheduleをtrueへ戻して読戻し、通常取込と定期を再開。停止/再開したのは統合親のAmazon・一般レシート・au PAYカード/残高・PayPay・銀行previewと会計/表示。legacy disabled=trueを維持。Payroll、Medical privacy、銀行収入方針、分類backfill等の対象外Variablesは退避時から変更なし。新規サービス/課金/アカウント/ローカル定期なし。将来cronの実到来は未観測。
+- 金銭/未完了要求の隔離Google復元37 mutation、全24文書/合成台帳の同ID復元、結果不明3ケースの追加金融write0を確認済み。10万買い物/20万明細・10年集計、途中失敗、年越し、部分返金、入力保持は合成回帰とLinux CIで検証。直近のコード変更は関連175テスト成功。実データ390×844/100%の4画面を確認し、金額/列幅/長文を調整。スマホ実機だけは未確認。
+- 実Google変更の対象別件数、API/時間の計測限界、凍結backupリンクと最新差分を失わない復旧手順は[切替結果](docs/ledger_daily_migration.md)へ集約。失敗runのHTTP write総数は不明として扱い、変更文書数で代用しない。本人による最終実機確認（ホーム、年月/カテゴリ選択、確認長文/原本リンク）はまとめて依頼し、自動作業の承認待ちにしない。
+
 ### 2026-09-20 日常表示の実反映完了・通常取込のreceipt再発を修正中
 
 - main `85a533f02a4e17d6a286d7c55623193c42f9975e`、Linux CI `35485327609`全3job成功・validated一致。prepare-daily `35485466815`成功。551明細/14か月、日常変更470block/491 native request（5batch）、projection読取120/更新2、金融追加0。日常43入力セル保持、数式error 0。カテゴリ縮小後の正本金融28,727セルは凍結snapshotと完全一致。
