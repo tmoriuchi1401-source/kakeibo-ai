@@ -5,7 +5,7 @@ import pytest
 
 from app.daily_choices import (MARKER, category_id,
     installed, render_requests, page_options, upgrade_requests)
-from app.daily_view import SHEETS
+from app.daily_view import SHEETS, HOME_LOOKUP_ROW
 from app.monthly_projection import Category, CategoryCatalog, ProjectionError
 from app.projection_refresh import catalog_document, load_catalog
 from test_daily_sheets import daily_setup, Grid
@@ -29,7 +29,7 @@ def test_every_category_and_expense_is_reachable_with_constant_grid_and_small_dr
                       correction_category_page=page,expense_choice_page=page)
         requests=render_requests(cat,expenses,controls)
         rows=helper(requests)
-        assert len(rows)==999 and all(len(r)==4 for r in rows)
+        assert len(rows)==HOME_LOOKUP_ROW-2 and all(len(r)==4 for r in rows)
         for column in range(4):columns[column].update(r[column] for r in rows if r[column])
         assert all(len(q["setDataValidation"]["rule"]["condition"].get("values",[]))<=43
                    for q in requests if "setDataValidation" in q and "rule" in q["setDataValidation"])
@@ -97,7 +97,7 @@ def test_real_daily_refresh_reads_controls_and_all_items_after_the_old_500_limit
     grid.put(9,2,7,title="履歴");grid.put(17,2,6,title="推移");grid.put(73,2,4)
     before=deepcopy(store.data)
     daily.refresh(current_month="2026-09",updated_at="now",reviews=[])
-    displayed=[v for (sid,r,c),v in grid.data.items() if sid==SHEETS["_候補"][0] and c==3 and r>0 and v]
+    displayed=[v for (sid,r,c),v in grid.data.items() if sid==SHEETS["_候補"][0] and c==3 and 0<r<HOME_LOOKUP_ROW-1 and v]
     assert len(displayed)==202 and "original-selection" in displayed
     expected=[r[0] for r in original[1000:]]
     assert set(v.split("｜")[0] for v in displayed if v!="original-selection")==set(expected)
