@@ -260,7 +260,7 @@ def test_durable_pipeline_scales_to_100k_purchases_without_reading_old_history_f
     from app.daily_sheets import DailySheets
     from test_daily_sheets import Grid
     grid=Grid();daily=DailySheets(grid,"source",store)
-    daily.verify=lambda:None
+    daily.verify=lambda:{"sheets":[{"charts":list(grid.charts.values())}]}
     store.reads.clear()
     result=daily.refresh(current_month="2026-12",updated_at="synthetic",reviews=[],ledger_sheet_id=987)
     assert result["daily_changed_blocks"]>0

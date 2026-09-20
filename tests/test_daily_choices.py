@@ -92,7 +92,8 @@ def test_real_daily_refresh_reads_controls_and_all_items_after_the_old_500_limit
     cat=load_catalog(store.data["catalog"])
     store.data["catalog"]=catalog_document(CategoryCatalog([*cat.categories,*catalog().categories]))
     grid=Grid();daily=DailySheets(grid,"source",store)
-    daily.verify=lambda:{"developerMetadata":[{"metadataKey":MARKER,"metadataValue":sha256(b"source").hexdigest()}]}
+    daily.verify=lambda:{"developerMetadata":[{"metadataKey":MARKER,"metadataValue":sha256(b"source").hexdigest()}],
+                         "sheets":[{"charts":list(grid.charts.values())}]}
     grid.put(75,2,3);grid.put(61,2,"original-selection");grid.put(64,2,"食費｜食料品")
     grid.put(9,2,7,title="履歴");grid.put(17,2,6,title="推移");grid.put(73,2,4)
     before=deepcopy(store.data)
