@@ -22,6 +22,13 @@
 
 ## 1. Last verified
 
+### 2026-09-20 金銭初期化・集計読戻し・receipt未完了照合を実行
+
+- PR #44/#45/#46を通常mergeし、main `516948b80552dce8b3b77468e091e2451427b656` のLinux CI `35484115979`全3job成功、validated SHA一致。実SAのinspect `35483211689`、money初期化 `35483286996`、初期化replay `35483376952`が成功。money関連3文書の所有者側読戻し一致、replay追加write 0、移行による支出/取込追加0。
+- prepare-daily `35483744340`は集計保存後・カテゴリ縮小前に停止。全17集計文書を読み戻し、初回採番カテゴリIDの対応を照合すると、独立した凍結台帳計算と全件一致。診断を追加した再実行 `35484241517`でSheets読取quota 429を特定した。通常writer/定期は停止継続、金融記録への移行write 0。移行のsource/backup/dailyに共通読取り間隔を設け、429のみ最大4回の読取再試行を行う修正を追加。未知の書込結果は再送しない。関連113テスト成功。
+- read-only receipt audit `35483787920`成功。receipt/取込marker各55、対応欠落/孤立/確認pending/解析requested 0、運用ledgerのreceipt pendingのみ1。元payloadをprivate退避し、同一digestを再確認して既存のoperator復旧APIでそのpendingのみ解除。generation 236→237、他source・last_success・counts不変、Drive同IDへの保存/完全読戻し一致。OCR/原本/会計データの変更なし。
+- 日常表示の実反映、カテゴリ縮小/保護、非0本番canaryとreplay追加0、通常取込/定期再開は未完了。共有はowner＋照合済み既存SAのみ（backupはreader、日常/集計はwriter）で、公開/新規共有先なし。PayrollとMedical privacyは変更していない。
+
 ### 2026-09-20 backupの所有者側ACL確認を最小権限の移行へ接続
 
 - PR #43をmain `d3d8b68fd526cadd755b8dc9720e7ab41aae41b2`へ通常mergeし、PR CI `35482437015`/main CI `35482552922`全3job成功。validated SHA一致後のinspect `35482667941`でもreaderにはpermissionIdsが返らず、ACL取得不可で安全停止。正本/集計のwriteは0。

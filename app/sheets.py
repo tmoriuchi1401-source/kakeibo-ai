@@ -111,9 +111,12 @@ HEADERS={
 }
 
 class SheetsDB:
-    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None):
+    def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None,
+                 read_pacer=None, read_retry_base=1):
         self.sid=spreadsheet_id; self.svc=service or sheets_service()
         self._read_sleeper=read_sleeper
+        self._read_pacer=read_pacer
+        self._read_retry_base=read_retry_base
         self._sheet_metadata_cache=None
         self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
         self._projection_journal=projection_journal
@@ -151,6 +154,8 @@ class SheetsDB:
         metrics=self._read_metrics(); metrics["logical"] += 1
         for attempt in range(4):
             try:
+                pacer=getattr(self,"_read_pacer",None)
+                if pacer is not None:pacer()
                 metrics["attempts"] += 1
                 return request_factory().execute()
             except HttpError as exc:
@@ -158,7 +163,7 @@ class SheetsDB:
                 if status != 429 or attempt == 3:
                     raise
                 metrics["retries"] += 1
-                getattr(self, "_read_sleeper", time.sleep)(1 * (2 ** attempt))
+                getattr(self, "_read_sleeper", time.sleep)(min(60, getattr(self,"_read_retry_base",1) * (2 ** attempt)))
         raise RuntimeError("sheets_read_retry_exhausted")
 
     def _sheet_metadata(self):
