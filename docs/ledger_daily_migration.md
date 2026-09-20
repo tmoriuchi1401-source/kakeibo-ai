@@ -2,7 +2,36 @@
 
 2026-09-19着手。ユーザーのGoalで、対象のバックアップ・実装・通常push・検証後のmain統合・移行・本番切替は承認済み。段階承認は求めず、必要な既存境界を維持して続行する。
 
-## 現時点
+## 本番切替の結果（2026-09-20、最新）
+
+日常の入口は[家計簿AI 日常](https://docs.google.com/spreadsheets/d/1MPx2E_rWPb4P567gZvdbeCyuH8uF23g3uVjdX6tyj3k/edit)。正式台帳は従来のファイルを継続し、表示は[集計フォルダ](https://drive.google.com/drive/folders/1xixXmEOIwAVWvV2KRJduTL3Nza0M7ZGX)の固定24文書から再生成する。以下の過去の「未実行」「未共有」は各段階の履歴であり、現在の状態はこの節とPROJECT_STATUSの最新項目を参照する。
+
+実装main `6f1e06898af1c25b3cbd6840cbedf9c55e5ff21f`、同SHAのLinux CI `35486462518`全3job成功。既存SAで金銭初期化 `35483286996`、初期化replay `35483376952`、日常準備 `35485466815`、通常apply `35486606150`が成功した。通常applyは11工程すべて成功し、取込2件追加・既存au PAY取込2件のレシート照合・支出追加0件。通常replay `35487060504`も全11工程成功、取込/支出追加0・照合更新0で、正本の全金融値がapply後と完全一致した。
+
+検証後にproduction/scheduleをともにtrueへ戻し、既存定期を再開した。停止/再開対象はAmazon、一般レシート、au PAYカード、au PAY残高、PayPay、銀行previewと依存する照合/確認/表示の統合親。銀行のapply/収入方針、Payroll分離、Medical privacyは変更しない。旧writerはdisabledのまま、新しいローカル定期はない。money=`confirmed-v1`、corrections=`fixed-id-v1`を設定し、暗号化した日常/集計bindingとvalidated SHA以外の対象外Variablesが退避時と不変であることを確認した。将来cronの到来は未観測であり、定期と同経路の手動成功＋定期ONを再開の実績とする。
+
+この2件はAmazonの新規金銭記帳ではない。1件はチャージ振替、1件は従来から支出作成対象外のcanonicalカード行であり、過去の明示的な対象範囲を拡大していない。Amazonの新規確定金銭対象は0件だったため、新規請求/返金の実本番記帳成功を主張しない。分割請求・部分返金・経路横断重複・結果不明復旧は合成回帰で検証した。
+
+| 確認対象 | 切替前（writer停止後） | 切替後 |
+|---|---:|---:|
+| 正本の確保セル | 2,273,799 | カテゴリ移行直後1,273,027、通常取込後1,273,105 |
+| 共通カテゴリ候補 | 1,001,000 | 228 |
+| 日常ファイル | 分離前 | 6タブ・12,630セル |
+| 支出行 | 554 | 554（全値一致） |
+| 取込行 | 1,979 | 1,981（既存金融値不変） |
+| 日常の本人入力 | 43セル | 全て保持、数式エラー0 |
+
+移行前後の正本金融28,727セルは完全一致。551 active明細・14か月の集計17文書を独立した凍結台帳計算と照合し、カテゴリの初回固定ID対応を含め一致した。全期間のsummary/indexを保持し、日常詳細は13か月に限定する。4つの旧Amazon照合候補/イベント/注文ヘッダ/要確認タブは同じIDと全内容を保ち「旧・保管」へ改名・非表示。保存済み商品補足のAmazon注文は保持した。
+
+共有は確認済み既存実行アカウントだけ。日常と集計は更新に必要なwriter、[凍結backup](https://docs.google.com/spreadsheets/d/1Eo9JT7KvzbsT6Frb8yofImMLSyrU2YO7g8a8V71NZtQ/edit)はreader。所有者接続の完全ACLと既存SAの実データread/write/readbackをそれぞれ検証し、公開共有・新しい共有先はない。正本に以前から存在する共有先は変更していない。
+
+実Google変更の内訳は、writer停止後のnative backup作成1件と既存SAへの共有3件、金銭初期化3文書、集計初期化17文書、正本のカテゴリ縮小/保護/案内、日常表示、旧Amazon4タブの改名・非表示、日常/集計の名称変更2件、表示調整3batch、証拠照合済みの運用pending解除2回。通常applyでは取込2行追加・既存取込2行の照合更新・日常7block更新。HTTP書込み総回数は失敗した中間runに完全な計数がなく未確定であり、変更文書数と混同しない。隔離の金銭復元検証は別途37 mutation、24文書と合成台帳の同ID復元を確認済み。
+
+実日常準備は491 native requestを5batchで実行し、Drive読取り120/更新2。通常applyの最終表示は26.805秒、正本投影読取0 request/0 cells、変更月0、日常28 native request/7blockだった。replayの表示は23.660秒・25 native request/4block（成功時刻などの更新）、投影読取0で、金融writeは0。移行前のreceipt限定成功run `35429733480`は86.330秒、新通常applyのreceiptsは87.602秒、replayは84.836秒。scopeと入力量が異なるため全体速度の改善率を示さず、旧処理の全API要求数は未計測と明記する。初回bootstrapやquota再試行を含む移行時間と通常運用時間も比較しない。10年・10万買い物・20万商品明細の評価は合成transportであり、Google実速度の測定値ではない。
+
+390×844px・100%の実データでホーム/履歴/確認/推移、金額書式・列幅・長文行高を確認した。スマホ実機は未確認。本人の最終確認は、Sheetsアプリでホームを開く、年月/カテゴリdropdownを操作する、確認欄の長文と原本リンクが読めるか、の3点をまとめて依頼する。確認のために修正や承認を送信する必要はない。
+
+## 着手時の観測（履歴）
 
 - 開始main: `c8ef626731cc8a941982a0d77b22e7ee4d88af31`。専用clone、branch `feat/ledger-daily-money`。
 - 実Google確認: 正本31タブ、確保2,273,539セル。`_支出明細カテゴリ候補`だけで1,001,000セル。これは確保gridであり、非空データ件数ではない。
@@ -54,9 +83,13 @@ Drive保存前にfolderと対象JSONの共有主体が元台帳の既存主体�
 
 Goalは未完了。銀行収入方針、Payroll分離、Medical/給与privacy、対象外フラグは変更しない。追加OCR/AI呼出し、新規サービス、ローカル定期実行は追加しない。
 
-## 戻し方（現段階）
+## 現在の復旧手順
 
-本番コード・台帳値・共有・フラグは未変更。projectionのfolder Variableも未設定なので、現段階の実装を取り消すのに台帳復元は不要。変更前コピーは保持する。実移行の戻し方は、切替manifestとisolated restore検証に基づいてこの文書を更新する。投影ファイルは正本ではなく、欠落時に明示bootstrapで再生成できる。catalogはID保持のためバックアップ対象とする。
+まずproduction/scheduleの2ゲートを停止し、共通`kakeibo-production`実行の完了を確認する。正本、日常入力、集計24文書、既存source checkpoint/運用ledgerをその時点の組で退避し、未完了intentと正本固定IDを照合する。凍結backup後には実取込が増えているので、古いbackupを正本へ一括上書きしない。
+
+表示だけの失敗なら同じ検証済みmainの`scope=projection`・必要時の明示bootstrapで正本から集計を再生成し、日常表示を更新する。通常取込を再記帳して表示を修復しない。catalog/coverage/本人入力と未完了要求は保持する。codeの不具合なら通常revert/修正PRとLinux CIを通し、main/validated/event/checkoutを一致させて再実行する。新modeだけを解除して旧Amazon writerを同時稼働させない。
+
+状態復元が必要な場合は隔離検証と同じく、money・migration・corrections・reviews・catalog・journal・index・summary/cacheを整合するbackup組から同じIDへ戻す。source checkpointと実取込の差分を読み戻し、完了した記帳が再送されないことを確認してから再開する。カテゴリUIの逆移行は正本金融値を含まない限定fieldsだけを戻す。正本/原本の削除、force push、未知のpendingの無条件解除は行わない。
 
 ## 日常試作の確認記録（2026-09-19）
 
