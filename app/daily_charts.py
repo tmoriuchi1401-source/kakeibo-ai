@@ -50,8 +50,8 @@ def data_requests(summary,catalog,current_month):
     return [cells("推移",1,monthly,left=3,width=2),
             cells("推移",20,cache,left=3,width=3),
             cells("推移",102,selected,left=3,width=2),
-            cells("ホーム",13,[["記録済み分のグラフです。未集計月は空白です。"]],width=3),
-            cells("ホーム",30,[[formula(f'={key}&" の内訳 / "&\'ホーム\'!B2')]],width=3)]
+            cells("ホーム",13,[[formula(f'={key}&" の内訳 / "&\'ホーム\'!B2')]],width=3),
+            cells("ホーム",30,[["記録済み分のグラフです。未集計月は空白です。"]],width=3)]
 
 
 def layout_requests():
@@ -66,6 +66,9 @@ def layout_requests():
             {"updateDimensionProperties":{"range":{"sheetId":SHEETS["ホーム"][0],"dimension":"ROWS",
                 "startIndex":row-1,"endIndex":row},"properties":{"pixelSize":42},"fields":"pixelSize"}}])
     # Existing hidden columns, no new rows/columns or additional transaction data.
+    # Leave clearance below the 340px category chart before row 30's heading.
+    requests.append({"updateDimensionProperties":{"range":{"sheetId":SHEETS["ホーム"][0],
+        "dimension":"ROWS","startIndex":28,"endIndex":29},"properties":{"pixelSize":32},"fields":"pixelSize"}})
     requests.append({"repeatCell":{"range":grid("推移",1,108,4,6),"cell":{"userEnteredFormat":{
         "numberFormat":{"type":"NUMBER","pattern":"#,##0"}}},"fields":"userEnteredFormat.numberFormat"}})
     return requests
@@ -76,8 +79,8 @@ def charts():
         return {"sourceRange":{"sources":[grid("推移",first,last,col,col+1)]}}
     result=[]
     for chart_id,kind,title,subtitle,first,last,row,height,color in [
-        (CHART_IDS[0],"LINE","月別の支出推移","直近13か月・記録済み分（円）",1,14,14,300,{"red":40/255,"green":110/255,"blue":165/255}),
-        (CHART_IDS[1],"BAR","対象月のカテゴリ内訳","大カテゴリ上位5件＋その他（円）",102,108,31,340,{"red":30/255,"green":130/255,"blue":117/255})]:
+        (CHART_IDS[0],"LINE","月別の支出推移","直近13か月・記録済み分（円）",1,14,31,300,{"red":40/255,"green":110/255,"blue":165/255}),
+        (CHART_IDS[1],"BAR","対象月のカテゴリ内訳","大カテゴリ上位5件＋その他（円）",102,108,14,340,{"red":30/255,"green":130/255,"blue":117/255})]:
         series={"series":source(first,last,4),"targetAxis":"BOTTOM_AXIS" if kind=="BAR" else "LEFT_AXIS"}
         # Native BAR round-trips discard series color/labels. Keep its default
         # styling instead of reapplying unsupported fields on every refresh.
