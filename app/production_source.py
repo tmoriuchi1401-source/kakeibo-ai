@@ -17,13 +17,13 @@ from .sheets import SheetsDB
 
 def source_error_code(error):
     """Emit fixed diagnostic codes, never API responses or document values."""
-    from google.genai.errors import APIError
+    from .gemini_errors import is_gemini_api_error
     from googleapiclient.errors import HttpError
     from .production_run import SAFE_SOURCE_ERRORS, safe_source_error
     from .monthly_projection import ProjectionError
     import ssl
     import httpx
-    if isinstance(error, APIError):
+    if is_gemini_api_error(error):
         from .receipt_reimport_production import error_code
         return error_code(error)
     if isinstance(error, HttpError):

@@ -65,11 +65,11 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
             progress('receipt_processing')
             res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
         except Exception as error:
-            from google.genai.errors import APIError
+            from .gemini_errors import gemini_api_status
             # These errors originate from extraction, before accounting starts.
             # Preserve the inbox for the next scheduled run. Never catch a
             # Sheets/Drive write error or reset an uncertain accounting write.
-            if isinstance(error,APIError) and getattr(error,'code',None) in {429,503}:
+            if gemini_api_status(error) in {429,503}:
                 remaining=[x for x in files[files.index(f):] if is_supported_receipt_mime(x['mimeType'])
                            and (approved is None or x['id'] in approved)]
                 for x in remaining:
