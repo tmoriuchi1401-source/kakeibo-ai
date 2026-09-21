@@ -15,6 +15,15 @@ from .drive_run_state import DurableState, StateError
 
 
 SAFE_SOURCE_ERRORS = frozenset({
+    'source_execution_failed', 'source_timeout', 'source_connection_failed',
+    'source_tls_failed', 'source_invalid_data', 'source_internal_error',
+    'receipt_response_invalid',
+    'projection_drive_read_failed', 'projection_drive_write_unknown',
+    'projection_state_changed', 'projection_readback_failed',
+    'projection_bootstrap_required', 'projection_range_incomplete',
+    'projection_catalog_invalid', 'projection_index_invalid', 'projection_month_invalid',
+    'projection_journal_invalid', 'projection_file_invalid',
+    'projection_folder_sharing_mismatch', 'projection_file_sharing_mismatch',
     'state_drive_read_failed_401', 'state_drive_read_failed_403', 'state_drive_read_failed_404',
     'state_drive_read_failed_429', 'state_drive_read_failed_500', 'state_drive_read_failed_502',
     'state_drive_read_failed_503', 'state_drive_read_failed_504', 'receipt_audit_state_changed',
@@ -87,6 +96,28 @@ COUNT_KEYS = frozenset({
 })
 
 
+SOURCE_STAGES = frozenset({'receipt_preflight', 'receipt_processing',
+                           'receipt_archive', 'receipt_projection'})
+
+
+class SourceFailure(StateError):
+    """Only fixed codes and completed-result counts may cross the child boundary.
+
+    Counts are a lower bound after a failed/unknown write, never permission to
+    replay or clear the durable pending marker.
+    """
+    def __init__(self, code, stage='', counts=None):
+        super().__init__(code if isinstance(code, str) and code in SAFE_SOURCE_ERRORS
+                         else 'source_execution_failed')
+        self.stage = stage if isinstance(stage, str) and stage in SOURCE_STAGES else ''
+        self.counts = {key: value for key, value in (counts or {}).items()
+                       if key in COUNT_KEYS and type(value) is int and value >= 0}
+
+    def report(self):
+        return {**self.counts, 'failure': 1, 'error': str(self),
+                **({'stage': self.stage} if self.stage else {})}
+
+
 def require_success(result: Mapping) -> None:
     if not isinstance(result, Mapping) or not result:
         raise StateError("source_result_invalid")
@@ -153,6 +184,10 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 # Exception text may contain a document name, account ID or API
                 # response. The safe parent summary deliberately never includes it.
                 outcome.update(status="failed", error=safe_source_error(error))
+                if isinstance(error, SourceFailure) and error.stage:
+                    outcome.update(stage=error.stage, counts=error.report())
+                    outcome['counts'] = {key: value for key, value in outcome['counts'].items()
+                                         if key in COUNT_KEYS}
         outcome["duration_seconds"] = round(monotonic() - started, 3)
         outcomes[source] = outcome
     return {"schema": 1, "success": all(item["status"] == "success" for item in outcomes.values()),
