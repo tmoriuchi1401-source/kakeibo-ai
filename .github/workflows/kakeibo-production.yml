@@ -92,6 +92,8 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.6-flash
       KAKEIBO_LOCAL_OCR_ENABLED: 'true'
+      # Owner rule: unruled receipt images may enter ordinary Gemini extraction.
+      RECEIPT_UNRULED_POLICY: owner-unruled-v1
       KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-ocr-models
       RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
       PROCESSED_DRIVE_FOLDER_ID: ${{ secrets.PROCESSED_DRIVE_FOLDER_ID }}

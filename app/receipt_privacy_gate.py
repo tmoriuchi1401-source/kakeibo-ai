@@ -43,7 +43,7 @@ _MEDICAL_REASON_CODES = frozenset(
     }
 )
 _NON_MEDICAL_REASON_CODES: dict[str, frozenset[str]] = {
-    "normal": frozenset({"normal_receipt_evidence"}),
+    "normal": frozenset({"normal_receipt_evidence", "owner_unruled_receipt_policy"}),
     "payroll": frozenset({"payroll_strong_signal", "payroll_multiple_signals"}),
     "sensitive_unknown": frozenset(
         {
@@ -200,7 +200,10 @@ def evaluate_receipt_privacy(
             )) and extracted.status == 'extracted' and extracted.observation_complete):
         from .receipt_classification_ocr import reread_classification
 
-        decision = reread_classification(content, mime_type, extracted.text)
+        from .receipt_unruled_policy import enabled as unruled_enabled
+        extra = ({'additional_sensitive_text': ' '.join(t.text for t in extracted.structured_tokens)}
+                 if unruled_enabled() else {})
+        decision = reread_classification(content, mime_type, extracted.text, **extra)
         if decision is not None:
             if decision.classification == 'medical':
                 # Re-reading establishes kind only. Never invent payment fields
@@ -219,6 +222,7 @@ def evaluate_receipt_privacy(
     # cannot override the local gate. Keep public result fields compatible.
     if preview.classification == "normal":
         from .medical_receipt_privacy import classify_receipt_text
+        from .receipt_unruled_policy import text_compatible
 
         token_decision = classify_receipt_text(" ".join(t.text for t in extracted.structured_tokens))
         if known_source_classification not in {None, "normal"}:
@@ -231,7 +235,9 @@ def evaluate_receipt_privacy(
                   "medical_strong_signal", "medical_multiple_signals",
                   "payroll_strong_signal", "payroll_multiple_signals",
                   "conflicting_sensitive_evidence", "sensitive_signal_insufficient",
-              })):
+              } and not (preview.reason_code == 'owner_unruled_receipt_policy'
+                         and text_compatible(
+                             ' '.join(t.text for t in extracted.structured_tokens))))):
             preview = ReceiptPrivacyPreview(
                 classification="sensitive_unknown", status="not_applicable",
                 reason_code="insufficient_evidence", candidate_count=0,

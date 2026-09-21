@@ -42,6 +42,7 @@ ClassificationReasonCode = Literal[
     "payroll_multiple_signals",
     "sensitive_signal_insufficient",
     "normal_receipt_evidence",
+    "owner_unruled_receipt_policy",
     "insufficient_evidence",
     "known_sensitive_source",
 ]
@@ -66,7 +67,7 @@ PaymentDiagnosticCode = Literal[
 
 
 _CLASSIFICATION_REASONS: dict[Classification, frozenset[str]] = {
-    "normal": frozenset({"normal_receipt_evidence"}),
+    "normal": frozenset({"normal_receipt_evidence", "owner_unruled_receipt_policy"}),
     "medical": frozenset({"medical_strong_signal", "medical_multiple_signals"}),
     "payroll": frozenset({"payroll_strong_signal", "payroll_multiple_signals"}),
     "sensitive_unknown": frozenset(
