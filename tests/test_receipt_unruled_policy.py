@@ -125,3 +125,28 @@ def test_detector_failure_stays_blocked(monkeypatch):
     result = gate.evaluate_receipt_privacy(receipt_image(), 'image/png')
     assert not result.gemini_allowed
     assert 'private error' not in result.model_dump_json()
+
+
+@pytest.mark.parametrize('orientation', ['horizontal', 'vertical'])
+def test_many_text_line_candidates_without_cells_are_not_uninspected(monkeypatch, orientation):
+    import cv2
+    import numpy as np
+    setup_gate(monkeypatch)
+    lines = [[70, y, 530, y] for y in range(100, 800, 4)]
+    # One paper edge cannot make a cell, regardless of the text-line count.
+    lines.append([70, 100, 70, 800])
+    if orientation == 'vertical':
+        lines = [[x, 70, x, 800] for x in range(100, 450, 2)]
+        lines.append([70, 100, 530, 100])
+    monkeypatch.setattr(cv2, 'HoughLinesP', lambda *a, **kw: np.asarray(lines))
+    result = gate.evaluate_receipt_privacy(receipt_image(), 'image/png')
+    assert result.gemini_allowed and result.reason_code == policy.REASON
+
+
+def test_excessive_intersection_work_remains_uninspected(monkeypatch):
+    import cv2
+    import numpy as np
+    lines = [[70, y, 530, y] for y in range(100, 850, 3)]
+    lines += [[x, 100, x, 850] for x in range(70, 570, 2)]
+    monkeypatch.setattr(cv2, 'HoughLinesP', lambda *a, **kw: np.asarray(lines))
+    assert policy.has_ruled_table(receipt_image(), 'image/png') is None

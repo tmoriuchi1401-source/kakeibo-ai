@@ -62,7 +62,9 @@ def has_ruled_table(content, mime_type):
                 horizontal.append((x1, y1, x2, y2))
             elif abs(dy) >= max(40, height * .035) and abs(dx) <= abs(dy) * .30:
                 vertical.append((x1, y1, x2, y2))
-        if len(horizontal) > 120 or len(vertical) > 120:
+        # Text and barcodes can produce hundreds of candidates on a narrow
+        # receipt. Bound actual intersection work, not either line count alone.
+        if len(horizontal) * len(vertical) > 50_000:
             return None
         tolerance = max(6, width * .01)
         intersections = []
@@ -79,13 +81,21 @@ def has_ruled_table(content, mime_type):
                 if all(min(a, b)-tolerance <= n <= max(a, b)+tolerance
                     for a, b, n in ((x1,x2,px), (y1,y2,py), (x3,x4,px), (y3,y4,py))):
                     crossings[index] = (px, py)
-            intersections.append(crossings)
+            if len(crossings) >= 2:
+                intersections.append(crossings)
         # A cell needs two distinct vertical boundaries and two shared rules.
         # A single text stroke or paper edge crossing separators is insufficient.
+        remaining_work = 50_000
         for i, left in enumerate(intersections):
             for right in intersections[i + 1:]:
+                remaining_work -= len(left) + len(right)
+                if remaining_work < 0:
+                    return None
                 shared = [index for index in left.keys() & right.keys()
                           if abs(left[index][0] - right[index][0]) >= max(35, width * .12)]
+                remaining_work -= len(shared) ** 2
+                if remaining_work < 0:
+                    return None
                 for j, top in enumerate(shared):
                     for bottom in shared[j + 1:]:
                         if (abs(left[top][1] - left[bottom][1]) >= max(35, height * .035)
