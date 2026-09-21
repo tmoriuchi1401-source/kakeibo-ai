@@ -24,7 +24,7 @@ def _read_page(image):
             ) for config in ('--psm 6', '--psm 4 -c thresholding_method=2'))
 
 
-def reread_classification(content, mime_type, original_text):
+def reread_classification(content, mime_type, original_text, *, additional_sensitive_text=''):
     """Return a data-free decision only after every bounded pass completes."""
     from PIL import Image
 
@@ -53,10 +53,16 @@ def reread_classification(content, mime_type, original_text):
             texts.extend(observations)
         else:
             return None
-        # Sensitive evidence from ANY reading wins. Combine negative evidence,
-        # but require one complete reading to establish the sale structure:
-        # duplicated passes must not manufacture multiple purchased items.
+        # Inspect all readings before the owner-selected unruled policy. That
+        # policy relaxes a drugstore name alone, not explicit clinical evidence.
         combined = classify_receipt_text('\n'.join(texts))
+        from .receipt_unruled_policy import allows, REASON
+        if (combined.classification not in {'medical', 'payroll'}
+                and allows(content, mime_type, texts + ([additional_sensitive_text] if additional_sensitive_text else []))):
+            return ClassificationDecision(classification='normal', reason_code=REASON)
+        # Existing text route: sensitive evidence from any reading wins, while
+        # one complete reading must establish the sale structure. Duplicated
+        # passes must not manufacture multiple purchased items.
         if combined.classification in {'medical', 'payroll'} or combined.reason_code in {
             'conflicting_sensitive_evidence', 'sensitive_signal_insufficient',
         }:
