@@ -104,9 +104,9 @@ def error_code(error):
     if code in (401,403): return "gemini_auth_rejected"
     if code==429: return "gemini_quota_rejected"
     if code in (400,404): return "gemini_api_or_model_rejected"
-    if type(error).__name__ in {"ValidationError","JSONDecodeError"}: return "gemini_result_invalid"
+    if type(error).__name__ in {"ValidationError","JSONDecodeError","APIResponseValidationError"}: return "gemini_result_invalid"
     if (isinstance(error,(TimeoutError,ConnectionError)) or "Timeout" in type(error).__name__
-            or type(error).__name__ in {"ConnectError","ReadError","WriteError","RemoteProtocolError","NetworkError"}):
+            or type(error).__name__ in {"ConnectError","ReadError","WriteError","RemoteProtocolError","NetworkError","APIConnectionError"}):
         return "gemini_transport_unknown"
     return "gemini_request_failed_unknown"
 

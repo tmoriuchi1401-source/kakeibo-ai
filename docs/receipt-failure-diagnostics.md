@@ -27,3 +27,12 @@ This improves diagnosis of production run 35544075700, whose original child
 exception was discarded. It cannot recover that past exception or establish its
 root cause. Existing successful receipt writes must be reconciled before a new
 bounded production attempt.
+
+GenAI Interactions uses a different API-error hierarchy from
+`google.genai.errors.APIError`. Both the current GAOS compatibility hierarchy
+and the earlier Interactions hierarchy must be recognized explicitly. Otherwise
+Interactions 429/503 responses miss the existing extraction-deferral policy and
+are reported as unknown source failures. Status attributes on unrelated errors
+(including Sheets/Drive errors) do not authorize deferral. Connection/timeout and
+invalid-response errors remain failures with fixed diagnostics, without automatic
+replay. The exact provider error in past runs remains unknown.
