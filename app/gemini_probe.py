@@ -22,6 +22,23 @@ SCHEMA = {
 }
 
 
+def create_probe_client(api_key, *, httpx_client=None):
+    options = {
+        "api_version": "v1", "timeout": 90000,
+        "retry_options": {"attempts": 0},
+    }
+    if httpx_client is not None:
+        options["httpx_client"] = httpx_client
+    client = genai.Client(api_key=api_key, http_options=options)
+    # Version-bound workaround, covered through the real HTTP transport:
+    # google-genai 2.24's legacy retry_args mutates attempts=0 to 1 before
+    # Interactions translates it as a *retry* count (two wire requests).
+    # Set the generated resource's retry count after that normalization.
+    # The diagnostic workflow pins 2.24.0; this does not alter production.
+    client.interactions.sdk_configuration.retry_config.max_retries = 0
+    return client
+
+
 def synthetic_image() -> bytes:
     image = Image.new("RGB", (720, 400), "white")
     draw = ImageDraw.Draw(image)
@@ -84,14 +101,13 @@ def main():
     if not key:
         print('{"outcome":"missing_key"}')
         return 1
-    # In google-genai 2.24 Interactions, attempts=0 means zero retries.
     # A single call is bounded to 90 seconds; the workflow bounds the whole job.
     try:
-        client = genai.Client(api_key=key, http_options={
-            "api_version": "v1", "timeout": 90000,
-            "retry_options": {"attempts": 0},
-        })
-        results = run_probe(client)
+        client = create_probe_client(key)
+        try:
+            results = run_probe(client)
+        finally:
+            client.close()
     except Exception:
         print('{"outcome":"probe_setup_failed"}')
         return 1

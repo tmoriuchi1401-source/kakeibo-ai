@@ -88,9 +88,31 @@ def test_missing_key_never_constructs_client(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {'outcome': 'missing_key'}
 
 
-def test_installed_sdk_translates_zero_attempts_to_no_interactions_retries():
-    from google.genai import types
-    from google.genai._gaos.google_genai import _translate_retry_config
+@pytest.mark.parametrize('status,expected_calls', [(503, 4), (429, 1)])
+def test_real_sdk_transport_never_replays_probe_requests(status, expected_calls, capsys, caplog):
+    import httpx
 
-    options = types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=0))
-    assert _translate_retry_config(options).max_retries == 0
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(status, json={'error': {
+            'code': 'service_unavailable' if status == 503 else 'quota_exceeded',
+            'message': 'SYNTHETIC_PRIVATE_ERROR',
+        }})
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http_client:
+        client = probe.create_probe_client('synthetic-test-key', httpx_client=http_client)
+        messages = []
+        results = probe.run_probe(client, sleep=Mock(), emit=messages.append)
+        client.close()
+
+    assert len(requests) == len(results) == expected_calls
+    assert all(result['status'] == status for result in results)
+    assert all(request.url.path == '/v1/interactions' for request in requests)
+    assert all(request.extensions['timeout']['read'] == 90 for request in requests)
+    assert [json.loads(request.content)['model'] for request in requests] == (
+        [probe.MODELS[0], probe.MODELS[0], probe.MODELS[1], probe.MODELS[1]][:expected_calls]
+    )
+    output = capsys.readouterr()
+    assert 'SYNTHETIC_PRIVATE_ERROR' not in ''.join(messages) + output.out + output.err + caplog.text
