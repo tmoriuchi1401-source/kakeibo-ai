@@ -173,3 +173,25 @@ def test_distinct_bill_with_name_variation_requires_both_fresh_contact_fields(mo
         item=review.items[review_id('medical',source)]
         assert item['local_decision']['reconciliation']['operation']=='post_distinct'
         assert item['local_decision']['external_requests']==0
+
+
+@pytest.mark.parametrize('changed_after_intent',[False,True])
+def test_distinct_provider_evidence_is_fresh_and_never_modifies_existing_expense(monkeypatch,changed_after_intent):
+    from test_medical_issuer_locality import pair
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    current,other=pair(monkeypatch)
+    p['document_identity']=current;reader.return_value['identity']=other
+    for title,column in [('レシート',1),('取込データ',4),('支出明細',1)]:db.rows[title][0][column]='2026-08-31'
+    record=deepcopy(reader.return_value);calls=0
+    def read(sid):
+        nonlocal calls
+        calls+=1
+        result=deepcopy(record)
+        if calls==2 and changed_after_intent:result['identity']['issuer_locality']={}
+        return result
+    reader.side_effect=read;before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader) is not changed_after_intent
+    assert db.rows['支出明細'][:1]==before
+    assert len(db.rows['支出明細'])==1+int(not changed_after_intent)
+    if not changed_after_intent:
+        assert not apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)

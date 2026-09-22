@@ -29,16 +29,23 @@ jobs:
       - name: Verify pinned public models and offline pixel processing
         run: |
           pip install -r requirements.txt -r requirements-local-ocr.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr
           python -m app.receipt_local_ocr prepare
           python - <<'PY'
           import socket
-          from PIL import Image
+          from PIL import Image, ImageDraw, ImageFont
           from app.receipt_local_ocr import read_tokens
+          from app.medical_locality_models import verified_directory
+          from app.medical_issuer_locality import recognize_line
           def deny(*args, **kwargs):
               raise AssertionError('OCR runtime must be offline')
           socket.socket.connect = deny
           socket.create_connection = deny
           assert read_tokens(Image.new('RGB', (300, 200), 'white')) == []
+          sample = Image.new('RGB', (400, 80), 'white')
+          ImageDraw.Draw(sample).text((16, 16), 'LOCAL OCR 1234', font=ImageFont.load_default(size=32), fill='black')
+          assert recognize_line(sample, verified_directory()).strip() == 'LOCAL OCR 1234'
           PY
   test:
     runs-on: ubuntu-latest

@@ -105,6 +105,8 @@ def read_identity(image,observations,parsed,provenance,key):
     issuer=compact(parsed.merchant).replace('·','・')
     from .medical_issuer_contact import read_contacts
     contacts=read_contacts(image,observations,parsed.merchant,reference)
+    from .medical_issuer_locality import read_locality
+    locality=read_locality(image,observations,parsed.merchant,reference)
     return {'policy':POLICY,'source_sha256':binding['source_sha256'],
             'source_image_sha256':binding['source_image_sha256'],
             'key_ref':reference('key','domain'),
@@ -112,6 +114,7 @@ def read_identity(image,observations,parsed,provenance,key):
             'document_ref':reference('document',json.dumps([issuer,parsed.date,number],ensure_ascii=True)),
             'serial_ref':reference('serial',json.dumps([parsed.date,number],ensure_ascii=True)),
             'issuer_contacts':contacts,
+            'issuer_locality':locality,
             'date':parsed.date,'amount':parsed.total,'number_readers':2}
 
 
@@ -137,6 +140,8 @@ def compare_identities(left,right):
     serials=[x.get('serial_ref','') for x in (left,right)]
     contacts=[x.get('issuer_contacts',{}) for x in (left,right)]
     if any(not re.fullmatch('[a-f0-9]{64}',s) for s in serials) or serials[0]==serials[1]:return 'unknown'
+    from .medical_issuer_locality import distinct_locations
+    if distinct_locations(left,right):return 'different'
     if any(not isinstance(c,dict) or set(c)!={'telephone','fax'}
            or any(not re.fullmatch('[a-f0-9]{64}',str(v)) for v in c.values()) for c in contacts):return 'unknown'
     if contacts[0]==contacts[1] and contacts[0]['telephone']!=contacts[0]['fax']:return 'different'
