@@ -121,7 +121,8 @@ def make_receipt_pipeline(settings, db, ai):
             # Receipt privacy classification runs first. Normal receipts still
             # require the same fail-closed key validation at the use boundary.
             settings.validate(need_gemini=True)
-            return GeminiAI(settings.gemini_api_key, settings.gemini_model)
+            model = getattr(settings, "normal_receipt_gemini_model", "") or settings.gemini_model
+            return GeminiAI(settings.gemini_api_key, model)
     return ReceiptPipeline(
         db, ai, medical_review_observer=observer, gemini_factory=gemini_factory,
     )

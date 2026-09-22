@@ -11,6 +11,9 @@ load_dotenv()
 class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    normal_receipt_gemini_model: str = field(default_factory=lambda: os.getenv(
+        "NORMAL_RECEIPT_GEMINI_MODEL", "",
+    ))
     spreadsheet_id: str = os.getenv("SPREADSHEET_ID", "")
     service_account_file: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "service-account.json")
     receipt_drive_folder_id: str = os.getenv("RECEIPT_DRIVE_FOLDER_ID", "")
