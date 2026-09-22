@@ -215,19 +215,14 @@ def test_intake_posts_one_local_result_and_never_exports_it_to_cloud(monkeypatch
     assert len(db.rows['支出明細'])==1
 
 
-def test_local_archive_requires_complete_current_original_and_keeps_properties():
-    review,store,db,verify,source=medical();drive=Mock()
-    local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    drive.files.assert_not_called()
-    local.apply_local(review,source,'synthetic-folder',parsed(),proof())
-    meta={'parents':['synthetic-folder'],'version':'1','mimeType':'application/pdf','appProperties':{'other':'preserved'}}
-    drive.files.return_value.get.return_value.execute.return_value=meta
-    local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    args=drive.files.return_value.update.call_args.kwargs
-    assert args['addParents']=='synthetic-processed' and args['removeParents']=='synthetic-folder'
-    assert args['body']['appProperties']['other']=='preserved' and args['body']['appProperties']['kakeiboReceiptClass']=='medical'
-    assert drive.files.return_value.update.return_value.execute.call_args.kwargs=={'num_retries':0}
-    drive.files.return_value.update.reset_mock();meta['version']='2'
-    with pytest.raises(StateError,match='confirmation_source_changed'):
-        local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    drive.files.return_value.update.assert_not_called()
+def test_local_positive_empty_confirmation_is_preserved_without_fabricating_fields():
+    from app.medical_local_owner import MISSING_FIELDS
+    review,store,db,verify,source=medical()
+    db.rows[TITLE][0][12]='候補で医療費を確定';review.capture_inputs()
+    item=next(iter(review.items.values()));item['error']=MISSING_FIELDS
+    before=deepcopy(db.rows[TITLE][0][7:15])
+    assert local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    item=next(iter(review.items.values()))
+    assert item['decision_origin']=='automatic' and 'confirmation_hash' not in item
+    assert db.rows[TITLE][0][7:15]==before and item['inputs']==before
+    assert 'error' not in item and len(db.rows['支出明細'])==1

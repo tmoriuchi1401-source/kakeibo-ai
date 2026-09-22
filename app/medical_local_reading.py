@@ -107,21 +107,27 @@ def read_local_payment(image,observations,fields,provenance):
             major_category=category[0],minor_category=category[1],note='原本をローカルOCRで照合')])
     return parsed,''
 
-def apply_local(review,source,folder,parsed,provenance):
+def apply_local(review,source,folder,parsed,provenance,*,read_existing=None):
     """Immediate, source-checked local decision; never replay a saved reading."""
     from .receipt_confirmation import review_id
-    from .medical_auto_posting import owner_blocked,possible_duplicate
+    from .medical_auto_posting import possible_duplicate
+    from .medical_local_owner import snapshot as owner_snapshot
     from .receipt_validation import validate_receipt_result
     key=review_id('medical',source);old=review.items[key]
-    if old['status']!='waiting' or old.get('error') or owner_blocked(source,review.store.value):return False
+    if old['status']!='waiting':return False
     binding=provenance.get('document_binding',{})
     if binding.get('source_sha256')!=source['sha256']:return False
     if not validate_receipt_result(parsed,review.db.categories())[0]:return False
-    live=review.ui_rows().get(key)
-    if live is None or any(live[1][7:15]):return False
-    if possible_duplicate(parsed,review.tables()):return False
+    live=owner_snapshot(review,source)
+    if live is None or live.get(key) is None:return False
+    tables=review.tables();duplicate=None
+    if possible_duplicate(parsed,tables):
+        if read_existing is None:return False
+        from .medical_local_duplicate import decide
+        duplicate=decide(source,parsed,provenance,tables,read_existing)
+        if duplicate is None:return False
     review.verify_source(source,folder)
-    try:plan=review._plan(old,parsed,'',automatic=True)
+    try:plan=review._plan(old,parsed,duplicate.linked_expense_id if duplicate else '',automatic=True,local_duplicate=duplicate)
     except ValueError:return False
     # Correct the origin text from the older cloud-amount policy.
     for _,row in plan:
@@ -130,6 +136,8 @@ def apply_local(review,source,folder,parsed,provenance):
     item=deepcopy(old);item.update(status='pending',plan=plan,decision_origin='automatic',
         local_decision={'policy':POLICY,'source':deepcopy(source),'parsed':parsed.model_dump(),
                         'evidence':provenance,'external_requests':0})
+    item.pop('error',None)
+    if duplicate:item['local_decision']['reconciliation']=duplicate.audit()
     review.save_item(key,item)
     from .drive_run_state import StateError
     try:review.verify_source(source,folder)
@@ -137,25 +145,23 @@ def apply_local(review,source,folder,parsed,provenance):
         if str(error)!='confirmation_source_changed':raise
         item.update(status='waiting',automatic_hold='source_changed',aborted_before_accounting=True)
         item.pop('plan',None);review.save_item(key,item);return False
-    current=review.ui_rows().get(key)
-    if current is None or any(current[1][7:15]) or current!=live:
+    # The durable item is pending now; compare every captured live row without
+    # reinterpreting that machine-created pending status as owner intent.
+    try:
+        fresh=not duplicate or (duplicate.fresh() and duplicate.valid(source,parsed,review.tables(),duplicate.linked_expense_id))
+    except Exception:
+        fresh=False  # No accounting call occurred; never preserve a stale intent.
+    if not fresh:
+        item.update(status='waiting',automatic_hold='duplicate_evidence_changed',aborted_before_accounting=True)
+        item.pop('plan',None);review.save_item(key,item);return False
+    try:review.verify_source(source,folder)
+    except StateError as error:
+        if str(error)!='confirmation_source_changed':raise
+        item.update(status='waiting',automatic_hold='source_changed',aborted_before_accounting=True)
+        item.pop('plan',None);review.save_item(key,item);return False
+    current=review.ui_rows()
+    if any(current.get(k)!=v for k,v in live.items()):
         item.update(status='waiting',aborted_before_accounting=True);item.pop('plan',None)
         review.save_item(key,item);return False
     review._write_accounting_plan(key,item)
     return True
-
-
-def archive_local(review,source,folder,processed_folder,drive):
-    """Move only a read-back-complete local decision, preserving metadata."""
-    from .receipt_confirmation import review_id
-    from .drive_run_state import StateError
-    from datetime import datetime,timezone
-    item=review.items[review_id('medical',source)]
-    if item['status']!='applied' or not item.get('local_decision'):return
-    if not review._complete(item['plan']):raise StateError('confirmation_readback_mismatch')
-    meta=drive.files().get(fileId=source['source_id'],fields='parents,version,mimeType,trashed,appProperties',supportsAllDrives=True).execute(num_retries=0)
-    if meta.get('trashed') or meta.get('parents')!=[folder] or meta.get('version')!=source['version'] or meta.get('mimeType')!=source['mime_type']:
-        raise StateError('confirmation_source_changed')
-    drive.files().update(fileId=source['source_id'],addParents=processed_folder,removeParents=folder,
-        body={'appProperties':{**meta.get('appProperties',{}),'kakeiboReceiptClass':'medical',
-            'kakeiboProcessedAt':datetime.now(timezone.utc).isoformat()}},fields='id,parents',supportsAllDrives=True).execute(num_retries=0)

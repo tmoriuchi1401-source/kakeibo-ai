@@ -90,6 +90,8 @@ def execute(env,apply):
     reader=read_only_drive_service()
     review=ReceiptConfirmation(store,db,metadata)
     from .medical_auto_posting import AUTO_POLICIES,apply_automatic,in_scope,owner_blocked
+    from .medical_local_owner import blocked as local_owner_blocked
+    from .receipt_local_ocr import enabled as local_ocr_enabled
     policy=env.get('MEDICAL_DERIVED_AI_POLICY','');automatic=policy in AUTO_POLICIES
     if not apply:
         from copy import deepcopy
@@ -165,9 +167,10 @@ def execute(env,apply):
         if owner_route:
             # A kind answer is not authority to send pixels or infer amounts.
             # Medical confirmation uses the same explicit input writer below.
-            if owner_route=='医療':counts['medical_detected']+=1
-            continue
-        gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical else {}))
+            if owner_route!='医療' or not (automatic and local_ocr_enabled()):
+                if owner_route=='医療':counts['medical_detected']+=1
+                continue
+        gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical or owner_route=='医療' else {}))
         if gate.classification=='medical':
             review.observe_medical(source,folder);counts['medical_detected']+=1
             review.resolve_intake_kind(source,folder,gate)
@@ -178,10 +181,6 @@ def execute(env,apply):
                 key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
                 rid=review_id('medical',source)
                 if review.items[rid]['status'] in {'applied','pending','closed_user'}:
-                    if getattr(settings,'processed_drive_folder_id','') and review.items[rid].get('local_decision'):
-                        from .medical_local_reading import archive_local
-                        from .google_clients import drive_service
-                        archive_local(review,source,folder,normalize_folder_id(settings.processed_drive_folder_id),drive_service())
                     continue
                 # Automatic mode is independent of saved UI coordinates and
                 # owner attestations, including malformed/old manual records.
@@ -192,7 +191,8 @@ def execute(env,apply):
                     from .medical_crop_review import identity_key
                     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
                     review_key=identity_key(info['private_key'])
-                if automatic and (not in_scope(source,store.value,policy) or owner_blocked(source,store.value)):
+                owner_guard=local_owner_blocked if local_ocr_enabled() else owner_blocked
+                if automatic and (not in_scope(source,store.value,policy) or owner_guard(source,store.value)):
                     packet,crop={'source':source,'fields':{},'status':'held','reason':'automatic_scope_or_owner_input'},None
                 else:
                     packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic,
@@ -204,12 +204,12 @@ def execute(env,apply):
                     review.render()
                     if counts['medical_local_written']<WRITE_LIMIT:
                         parsed=ReceiptResult.model_validate(packet['local_parsed'])
-                        if apply_local(review,source,folder,parsed,packet['local_provenance']):
+                        from .medical_local_duplicate import existing_reader
+                        destination=normalize_folder_id(settings.processed_drive_folder_id) if getattr(settings,'processed_drive_folder_id','') else ''
+                        read_existing=existing_reader(reader,lambda sid:download_drive_file(sid,reader),destination,review_key,review)
+                        if apply_local(review,source,folder,parsed,packet['local_provenance'],read_existing=read_existing):
                             counts['medical_local_written']+=1;counts['written']+=1
-                            if getattr(settings,'processed_drive_folder_id',''):
-                                from .medical_local_reading import archive_local
-                                from .google_clients import drive_service
-                                archive_local(review,source,folder,normalize_folder_id(settings.processed_drive_folder_id),drive_service())
+                            counts['archived']+=archive()
                             continue
                         reason='existing_accounting_or_review_conflict'
                     else:reason='automatic_run_limit'

@@ -40,6 +40,7 @@ HOLD_TEXT={
     'automatic_run_limit':'今回の自動反映上限に達しました。次回に再判定します。',
     'possible_existing_payment':'同額の既存支払いがあり、重複関係を確認してください。',
     'existing_accounting_or_review_conflict':'既存の記帳・確認内容と競合しています。',
+    'duplicate_evidence_changed':'重複の照合中に原本または既存支出が変わりました。次回に再確認します。',
     'source_changed':'原本の版が変わりました。現在の原本を再判定します。',
     'owner_input_changed':'処理中の本人入力を保持しました。',
     'payment_cell_boundary_unknown':'金額欄の境界を確定できず、画像を送信していません。',
