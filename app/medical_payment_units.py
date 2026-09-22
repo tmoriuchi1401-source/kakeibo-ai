@@ -110,6 +110,60 @@ def _verified_school_collection(unit, parsed):
     return description in {'チバシキユウシヨクヒトウ', 'チバシガツコウキユウシヨクヒトウ'}
 
 
+def _verified_nonmedical_purchase(unit, parsed):
+    """Published counterparties plus an intact source contract, never fuzzy names.
+
+    These narrowly documented descriptors denote food or road use, rather than
+    clinical treatment. Unknown merchants, edited links, medical categories,
+    partial payments and pending review retain the ordinary duplicate hold.
+    Public references are in docs/receipt-local-payment-evidence.md.
+    """
+    if (not parsed.items or sum(i.amount for i in parsed.items) != parsed.total
+            or any((i.major_category, i.minor_category) not in
+                   {('医療・保険', '病院'), ('医療・保険', '薬')} for i in parsed.items)):
+        return ''
+    if unit.issues or unit.receipts or len(unit.imports) != 1 or len(unit.expenses) > 1:
+        return ''
+    row = unit.imports[0]
+    if (row[8] != 'auto_expense' or row[3] != row[0] or not _date(row[4])
+            or not re.fullmatch(r'[a-f0-9]{64}', str(row[10]))):
+        return ''
+    if unit.expenses:
+        from .auto_expense import expense_id
+        expense = unit.expenses[0]
+        if (row[9] != expense[0] or expense[0] != expense_id(row[0])
+                or expense[10] != row[0] or expense[9] or expense[12] != 'active'
+                or expense[8] != row[2] or expense[2] != row[5]
+                or _date(expense[1]) != _date(row[4]) or _money(expense[4]) != _money(row[6])
+                or expense[7] != row[7] or expense[5] == '医療・保険'
+                or expense[11] != '明確な決済取引'):
+            return ''
+    elif row[9]:
+        return ''
+    merchant = ''.join(unicodedata.normalize('NFKC', str(row[5])).split()).upper().replace('−', '-')
+    note_parts = [part.strip() for part in str(row[11]).split(';')]
+    if row[2] == 'au PAY':
+        if (not re.fullmatch(r'aupaycsv:[a-f0-9]{24}', str(row[0])) or row[7] != 'au PAY'
+                or not note_parts or note_parts[0] != 'CSV種別=支払い'
+                or len(note_parts) not in (2, 3)
+                or not re.fullmatch('利用日時=' + re.escape(_date(row[4])) + r' \d{2}:\d{2}', note_parts[1])
+                or (len(note_parts) == 3 and note_parts[2] != '自動判定=明確な決済取引')):
+            return ''
+        if merchant == 'LINK-CAFE新木場2':
+            return 'verified_public_cafe_not_medical_payment'
+    if row[2] == 'au PAYカード':
+        match = re.fullmatch(r'aupaycard-mail:[a-f0-9]{24}:([0-9]{3})', str(row[0]))
+        if (not match or row[7] != '通常払い' or not note_parts
+                or note_parts[0] != 'メール明細No.' + match[1]
+                or note_parts[1:] not in ([], ['自動判定=明確な決済取引'])):
+            return ''
+        # This public operator example is deliberately exact. Do not infer
+        # road use for arbitrary names containing 入/出, ETC, or a hyphen.
+        if merchant == '守口入-本町出':
+            return 'verified_public_toll_route_not_medical_payment'
+    return ''
+
+
 def _special_payment(row, kind):
     # Do not net refunds/transfers or invent installment/split-payment mappings.
     status = str(row[8] if kind == 'import_rows' else row[6]).lower()
@@ -293,6 +347,8 @@ def compare_payments(parsed, tables, *, days, unknown_dates):
             classification, reasons = 'different', ('verified_balance_transfer_not_purchase',)
         elif _verified_school_collection(unit, parsed):
             classification, reasons = 'different', ('verified_school_collection_not_medical_payment',)
+        elif purpose := _verified_nonmedical_purchase(unit, parsed):
+            classification, reasons = 'different', (purpose,)
         elif unit.issues:
             classification, reasons = 'unresolved', unit.issues
         elif whole_match:

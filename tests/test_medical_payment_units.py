@@ -408,3 +408,82 @@ def test_changed_evidence_after_intent_aborts_before_any_medical_accounting(chan
     assert not any(r[0] == 'receipt:'+source['source_id'] for r in db.rows['取込データ'])
     item = next(iter(service.items.values()))
     assert item['status'] == 'waiting' and item['aborted_before_accounting']
+
+
+def public_purchase(kind, posted=True):
+    from app.auto_expense import expense_id
+    cafe = kind == 'cafe'
+    iid = ('aupaycsv:' if cafe else 'aupaycard-mail:') + '2'*24 + ('' if cafe else ':001')
+    source, method = ('au PAY', 'au PAY') if cafe else ('au PAYカード', '通常払い')
+    merchant = 'Ｌｉｎｋ－ＣＡＦＥ新木場２' if cafe else '守口入 −本町出'
+    note = 'CSV種別=支払い; 利用日時='+DAY+' 12:00' if cafe else 'メール明細No.001'
+    eid = expense_id(iid)
+    return {'receipt_rows': [], 'review_rows': [],
+        'import_rows': [[iid, '', source, iid, DAY, merchant, 100, method, 'auto_expense',
+                         eid if posted else '', 'a'*64, note]],
+        'expense_rows': [[eid, DAY, merchant, '自動計上', 100, 'その他', '未分類', method, source, '', iid,
+                          '明確な決済取引', 'active']] if posted else []}
+
+
+@pytest.mark.parametrize('kind', ['cafe', 'toll'])
+@pytest.mark.parametrize('posted', [True, False])
+@pytest.mark.parametrize('days', [7, 31])
+def test_public_nonmedical_descriptors_require_an_intact_source_purchase(kind, posted, days):
+    tables = public_purchase(kind, posted); before = deepcopy(tables)
+    match, = comparison(tables, days=days)
+    assert match.classification == 'different'
+    assert match.reasons == ('verified_public_'+('cafe' if kind == 'cafe' else 'toll_route')+'_not_medical_payment',)
+    assert not possible_duplicate(query(), tables) and tables == before
+
+
+@pytest.mark.parametrize('kind', ['cafe', 'toll'])
+@pytest.mark.parametrize('change', ['unknown_name', 'substring', 'source', 'source_id', 'hash', 'date',
+    'method', 'status', 'note', 'owner_note', 'medical_category', 'target', 'expense_link',
+    'expense_amount', 'expense_date', 'expense_merchant', 'missing_import', 'duplicate', 'receipt_link', 'refund'])
+def test_name_or_incomplete_contract_cannot_bypass_medical_duplicate_protection(kind, change):
+    tables = public_purchase(kind); row = tables['import_rows'][0]; expense = tables['expense_rows'][0]
+    if change == 'unknown_name': row[5] = expense[2] = 'Unknown CAFE' if kind == 'cafe' else '不明入-不明出'
+    if change == 'substring': row[5] = expense[2] = row[5]+' 医療費'
+    if change == 'source': row[2] = expense[8] = 'unverified'
+    if change == 'source_id': row[3] = 'another'
+    if change == 'hash': row[10] = ''
+    if change == 'date': row[4] = ''
+    if change == 'method': row[7] = '不明'
+    if change == 'status': row[8] = 'needs_review'
+    if change == 'note': row[11] = 'CSV種別=支払い' if kind == 'cafe' else 'メール明細No.002'
+    if change == 'owner_note': expense[11] = '本人のメモ'
+    if change == 'medical_category': expense[5:7] = ['医療・保険', '病院']
+    if change == 'target': row[9] = 'another'
+    if change == 'expense_link': expense[10] = 'another'
+    if change == 'expense_amount': expense[4] = 99
+    if change == 'expense_date': expense[1] = '2026-09-02'
+    if change == 'expense_merchant': expense[2] = 'Synthetic clinic'
+    if change == 'missing_import': tables['import_rows'] = []
+    if change == 'duplicate': tables['import_rows'].append(deepcopy(row))
+    if change == 'receipt_link': expense[9] = 'missing-receipt'
+    if change == 'refund': row[6] = -100
+    assert possible_duplicate(query(), tables)
+    assert all(m.classification != 'different' for m in comparison(tables))
+
+
+@pytest.mark.parametrize('kind', ['cafe', 'toll'])
+def test_public_purpose_does_not_remove_a_second_actual_medical_candidate(kind):
+    tables = public_purchase(kind)
+    tables['import_rows'].append(['card-other', '', 'card', 'other', DAY, 'Synthetic clinic', 100, '', 'auto_expense'])
+    assert possible_duplicate(query(), tables)
+    nonmedical = query(); nonmedical.items[0].major_category = 'その他'
+    assert all(m.classification != 'different' for m in compare_payments(nonmedical, tables, days=31, unknown_dates=True))
+
+
+@pytest.mark.parametrize('kind', ['cafe', 'toll'])
+def test_local_medical_post_with_verified_other_purpose_never_reposts_existing_spending(kind):
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, _, source = medical()
+    tables = public_purchase(kind); tables['expense_rows'][0][4] = tables['import_rows'][0][6] = parsed().total
+    load(db, tables); before = deepcopy(db.rows['支出明細'])
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows['支出明細'][:1] == before and len(db.rows['支出明細']) == 2
+    after = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == after
