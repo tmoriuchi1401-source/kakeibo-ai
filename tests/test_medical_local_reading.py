@@ -189,6 +189,7 @@ def test_intake_posts_one_local_result_and_never_exports_it_to_cloud(monkeypatch
     store=Store();db=DB();verify=Mock()
     options=SimpleNamespace(receipt_drive_folder_id='synthetic-inbox')
     monkeypatch.setattr(runtime,'open_context',lambda *a:(options,store,db,verify))
+    monkeypatch.setattr('app.settings.service_account_source',lambda:('',{'private_key':'synthetic-private-key'}))
     api=Mock();api.files.return_value.list.return_value.execute.return_value={'files':[
         {'id':str(i),'version':'1','mimeType':'application/pdf'} for i in range(2)]}
     monkeypatch.setattr(google_clients,'read_only_drive_service',lambda:api)

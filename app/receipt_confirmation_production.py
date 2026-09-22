@@ -187,7 +187,7 @@ def execute(env,apply):
                 # owner attestations, including malformed/old manual records.
                 crop_review=None if automatic else store.value.get('medical_crop_reviews',{}).get(rid)
                 review_key=None
-                if crop_review is not None:
+                if crop_review is not None or automatic:
                     from .settings import service_account_source
                     from .medical_crop_review import identity_key
                     path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
@@ -195,7 +195,8 @@ def execute(env,apply):
                 if automatic and (not in_scope(source,store.value,policy) or owner_blocked(source,store.value)):
                     packet,crop={'source':source,'fields':{},'status':'held','reason':'automatic_scope_or_owner_input'},None
                 else:
-                    packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic)
+                    packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic,
+                                        document_key=review_key if automatic else None)
                 if packet['status']=='local_ready':
                     from .medical_local_reading import apply_local
                     from .medical_auto_posting import WRITE_LIMIT
