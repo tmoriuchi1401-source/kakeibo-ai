@@ -88,3 +88,14 @@ def test_failed_move_leaves_applied_accounting_and_pending_archive():
         archive_confirmations(review,'synthetic-folder','processed',drive,lambda _:b'original')
     assert review.items[key]['status']=='applied' and review.items[key]['archive']['status']=='pending'
     assert db.rows==financial and review.apply_confirmations()==0
+
+
+def test_automatic_local_receipt_uses_same_durable_content_verified_archive():
+    review,store,db,source,key,state,drive=setup_archive()
+    item=review.items[key];item['decision_origin']='automatic';item['local_decision']={'external_requests':0}
+    calls=[]
+    def download(sid):calls.append(sid);return b'original'
+    assert archive_confirmations(review,'synthetic-folder','processed',drive,download)==1
+    assert len(calls)==2 and set(calls)=={source['source_id']}
+    assert review.items[key]['archive']=={'status':'complete','destination':'processed'}
+    assert archive_confirmations(review,'synthetic-folder','processed',drive,download)==0

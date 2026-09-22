@@ -10,6 +10,7 @@ from .medical_anonymization import AnonymizationHold, compact, png, render_singl
 from .medical_image_candidate import seal_crop
 from .medical_issuer_selector_shadow import IssuerBinding, OcrFacilityRegion, OcrPageForIssuerSelection, select_medical_issuer_shadow
 from .medical_transaction_combined_shadow import MedicalDocumentBinding
+from .medical_receipt_heading import is_receipt_heading
 
 
 def _canonical(value):
@@ -44,7 +45,7 @@ def local_fields(observations, binding, size):
         fields['category']='医療・保険｜'+('薬' if selected.issuer_facility_type=='pharmacy' else '病院')
     # Full OCR page/reference providers are neither persisted nor emitted.
     return fields,{**date_provenance,'issuer_status':selected.verdict,
-        'paid_receipt_evidence':any(any(label in compact(r.raw_text) for label in ('領収書','領収証')) for r in regions),
+        'paid_receipt_evidence':any(is_receipt_heading(r.raw_text) for r in regions),
         'issuer_selector':selected.selector_version,'document_binding':binding.model_dump()}
 
 
@@ -80,7 +81,7 @@ def reread_local_fields(image, observations, binding):
     return fields,provenance
 
 
-def prepare(source, payload, key, *, crop_review=None, review_key=None, automatic=False):
+def prepare(source, payload, key, *, crop_review=None, review_key=None, automatic=False, document_key=None):
     if os.environ.get('GEMINI_API_KEY'):raise ValueError('medical_preprocessor_received_ai_key')
     if sha256(payload).hexdigest()!=source['sha256']:raise ValueError('medical_source_content_changed')
     try:
@@ -98,7 +99,12 @@ def prepare(source, payload, key, *, crop_review=None, review_key=None, automati
         from .medical_local_reading import read_local_payment
         parsed,reason=read_local_payment(image,observations,fields,local_provenance)
         if parsed is None:packet.update(status='held',reason=reason)
-        else:packet.update(status='local_ready',local_parsed=parsed.model_dump())
+        else:
+            if document_key is not None:
+                from .medical_document_identity import read_identity
+                evidence=read_identity(image,observations,parsed,local_provenance,document_key)
+                if evidence is not None:local_provenance['document_identity']=evidence
+            packet.update(status='local_ready',local_parsed=parsed.model_dump())
         # This result is consumed immediately in the key-free intake process.
         # It neither grants crop permission nor enters the cloud sender.
         return packet,None

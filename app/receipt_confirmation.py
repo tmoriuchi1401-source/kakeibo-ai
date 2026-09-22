@@ -286,7 +286,7 @@ class ReceiptConfirmation:
         return ReceiptResult(date=day,merchant=str(v[1]).strip(),total=int(amount),payment_method=str(v[4]),
             items=[ReceiptItem(name='医療費（本人確認）',amount=int(amount),major_category=category[0],minor_category=category[1])])
 
-    def _plan(self,item,parsed,linked,distinct=False,automatic=False):
+    def _plan(self,item,parsed,linked,distinct=False,automatic=False,local_duplicate=None):
         source=item['source'];sid=source['source_id'];rid='R-'+sid;iid='receipt:'+sid
         tables=self.tables();before=target_snapshot(tables,sid)
         if item['kind']=='normal' and digest(before)!=digest(item['before']):
@@ -301,10 +301,17 @@ class ReceiptConfirmation:
         if automatic and item['kind']=='medical':
             from .medical_payment_units import compare_payments
             matches=compare_payments(parsed,tables,days=7,unknown_dates=False)
-            if linked or distinct:
+            from .medical_local_duplicate import LocalReconciliation
+            verified_duplicate=(isinstance(local_duplicate,LocalReconciliation)
+                and local_duplicate.valid(source,parsed,tables,linked))
+            if distinct or (linked and not verified_duplicate):
                 raise ValueError('自動処理では既存支払いの紐付け・別取引の強制指定はできません')
-            if any(x.classification!='different' for x in matches):
+            if not verified_duplicate and any(x.classification!='different' for x in matches):
                 raise ValueError('同日付近・同額の既存支払い、または支払い単位が未確定です')
+            if verified_duplicate:
+                candidates=[list(r)+['']*max(0,13-len(r)) for r in tables['expense_rows']
+                            if r[0]==linked and len(r)>12 and r[12]=='active'
+                            and _date(r[1])==parsed.date and _money(r[4])==parsed.total]
         else:
             for row in tables['expense_rows']:
                 r=list(row)+['']*max(0,13-len(row))
@@ -357,6 +364,8 @@ class ReceiptConfirmation:
         written=0
         for key,old in list(self.items.items()):
             if old['status']=='pending':
+                from .medical_local_duplicate import verify_saved_targets
+                verify_saved_targets(old,self.tables)
                 self.verify_source(old['source'],old['folder_id'])
                 if not self._complete(old['plan']):raise StateError('confirmation_write_reconciliation_required')
                 item=deepcopy(old);item['status']='applied';self.save_item(key,item);continue
@@ -421,6 +430,8 @@ class ReceiptConfirmation:
 
     def _write_accounting_plan(self,key,item):
         if item['status']!='pending':raise StateError('confirmation_intent_required')
+        from .medical_local_duplicate import verify_saved_targets
+        verify_saved_targets(item,self.tables)
         for title,row in item['plan']:
             matches=[(n,r) for n,r in enumerate(_rows(self.db,title),2) if r and r[0]==row[0]]
             if len(matches)>1:raise StateError('confirmation_duplicate_accounting_identity')
@@ -432,6 +443,7 @@ class ReceiptConfirmation:
                 actual=[r for r in _rows(self.db,title) if r and r[0]==row[0]]
                 if len(actual)!=1 or not same_row(title,actual[0],row):raise StateError('confirmation_write_unknown') from None
         if not self._complete(item['plan']):raise StateError('confirmation_readback_mismatch')
+        verify_saved_targets(item,self.tables)
         item['status']='applied';self.save_item(key,item)
 
     def refresh_needed(self):

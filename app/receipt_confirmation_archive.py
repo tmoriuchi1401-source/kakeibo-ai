@@ -15,6 +15,8 @@ def archive_confirmations(review, inbox, processed, drive, download):
             continue
         # Historical operator imports have a separate verified archive history.
         if old.get('operator_import'):continue
+        from .medical_local_duplicate import verify_saved_targets
+        verify_saved_targets(old,review.tables)
         if not old.get('plan') or not review._complete(old['plan']):
             raise StateError('confirmation_readback_mismatch')
         source=old['source'];sid=source['source_id']

@@ -26,6 +26,25 @@ def parsed():return ReceiptResult(date='2026-09-01',merchant='Synthetic clinic',
 @pytest.mark.parametrize('text,expected',[('￥１，２３４－',1234),('3，780円',3780),('300',300),('1,234',1234),('-123',None),('1.234',None),('1,23',None),('12O円',None),('123円注',None),('Y123',None)])
 def test_numeric_grammar_never_repairs_digits(text,expected):assert local.amount_text(text)==expected
 
+
+@pytest.mark.parametrize('readings,expected,accepted,calls',[
+    (['1,234'],1234,True,1),
+    (['1,235','1,234'],1234,False,1),
+    (['1.234','1,234'],1234,True,2),
+    (['','1,235'],1234,False,2),
+    (['.','1.234'],1234,False,2),
+    (['123円注','123円注'],123,False,2),
+    (['-123','123'],123,False,1),
+    (['△123','123'],123,False,1),
+])
+def test_digit_reread_is_bounded_and_never_retries_a_valid_disagreement(monkeypatch,readings,expected,accepted,calls):
+    import pytesseract
+    reader=Mock(side_effect=readings)
+    monkeypatch.setattr(pytesseract,'image_to_string',reader)
+    assert local.confirm_digits(Image.new('RGB',(100,50),'white'),(0,0,100,50),expected) is accepted
+    assert reader.call_count==calls
+    assert all(c.kwargs['timeout']==20 and c.kwargs['config']=='--psm 7' for c in reader.call_args_list)
+
 def test_label_pair_uses_actual_payment_not_larger_insurance_total(monkeypatch):
     obs=observations()+[token('保険総額',(0,100,100,120)),token('9,999円',(120,100,220,120))]
     verify=Mock(return_value=True);monkeypatch.setattr(local,'confirm_digits',verify)
@@ -54,6 +73,31 @@ def test_disagreement_missing_or_low_confidence_never_autopost(monkeypatch):
     assert local.candidate_pairs(obs)[1]=='payment_label_uncertain'
     f=fields();f['date']=''
     assert local.read_local_payment(None,observations(),f,proof())[1]=='local_fields_incomplete'
+
+
+@pytest.mark.parametrize('heading', ['医療費請求（領収）書', '診療費請求(領収)書', '医療费請求(領収)書'])
+def test_combined_invoice_receipt_requires_verified_actual_payment(monkeypatch, heading):
+    obs=observations();obs[0]['text']=heading
+    monkeypatch.setattr(local,'confirm_digits',lambda *a:True)
+    result,reason=local.read_local_payment(None,obs,fields(),proof())
+    assert reason=='' and result.total==1234
+    obs[1]['text']='請求金額'
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='payment_label_missing'
+
+
+@pytest.mark.parametrize('heading', ['医療費請求書', '領収書は再発行しません', '領収書見本', '診療明細書'])
+def test_invoice_footer_or_sample_does_not_prove_receipt(monkeypatch, heading):
+    obs=observations();obs[0]['text']=heading
+    verify=Mock();monkeypatch.setattr(local,'confirm_digits',verify)
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='paid_receipt_missing'
+    verify.assert_not_called()
+
+
+def test_multiple_combined_receipts_remain_held(monkeypatch):
+    obs=observations()+[token('医療費請求（領収）書',(0,150,200,170))]
+    verify=Mock();monkeypatch.setattr(local,'confirm_digits',verify)
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='paid_receipt_missing'
+    verify.assert_not_called()
 
 @pytest.mark.parametrize('label,expected',[('発行日','2026-09-01'),('支払日','2026-09-01'),('生年月日',''),('診療日','')])
 def test_date_below_its_own_role(label,expected):
@@ -145,6 +189,7 @@ def test_intake_posts_one_local_result_and_never_exports_it_to_cloud(monkeypatch
     store=Store();db=DB();verify=Mock()
     options=SimpleNamespace(receipt_drive_folder_id='synthetic-inbox')
     monkeypatch.setattr(runtime,'open_context',lambda *a:(options,store,db,verify))
+    monkeypatch.setattr('app.settings.service_account_source',lambda:('',{'private_key':'synthetic-private-key'}))
     api=Mock();api.files.return_value.list.return_value.execute.return_value={'files':[
         {'id':str(i),'version':'1','mimeType':'application/pdf'} for i in range(2)]}
     monkeypatch.setattr(google_clients,'read_only_drive_service',lambda:api)
@@ -170,19 +215,14 @@ def test_intake_posts_one_local_result_and_never_exports_it_to_cloud(monkeypatch
     assert len(db.rows['支出明細'])==1
 
 
-def test_local_archive_requires_complete_current_original_and_keeps_properties():
-    review,store,db,verify,source=medical();drive=Mock()
-    local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    drive.files.assert_not_called()
-    local.apply_local(review,source,'synthetic-folder',parsed(),proof())
-    meta={'parents':['synthetic-folder'],'version':'1','mimeType':'application/pdf','appProperties':{'other':'preserved'}}
-    drive.files.return_value.get.return_value.execute.return_value=meta
-    local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    args=drive.files.return_value.update.call_args.kwargs
-    assert args['addParents']=='synthetic-processed' and args['removeParents']=='synthetic-folder'
-    assert args['body']['appProperties']['other']=='preserved' and args['body']['appProperties']['kakeiboReceiptClass']=='medical'
-    assert drive.files.return_value.update.return_value.execute.call_args.kwargs=={'num_retries':0}
-    drive.files.return_value.update.reset_mock();meta['version']='2'
-    with pytest.raises(StateError,match='confirmation_source_changed'):
-        local.archive_local(review,source,'synthetic-folder','synthetic-processed',drive)
-    drive.files.return_value.update.assert_not_called()
+def test_local_positive_empty_confirmation_is_preserved_without_fabricating_fields():
+    from app.medical_local_owner import MISSING_FIELDS
+    review,store,db,verify,source=medical()
+    db.rows[TITLE][0][12]='候補で医療費を確定';review.capture_inputs()
+    item=next(iter(review.items.values()));item['error']=MISSING_FIELDS
+    before=deepcopy(db.rows[TITLE][0][7:15])
+    assert local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    item=next(iter(review.items.values()))
+    assert item['decision_origin']=='automatic' and 'confirmation_hash' not in item
+    assert db.rows[TITLE][0][7:15]==before and item['inputs']==before
+    assert 'error' not in item and len(db.rows['支出明細'])==1
