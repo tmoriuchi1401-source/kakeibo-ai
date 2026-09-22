@@ -242,3 +242,169 @@ def test_broken_alias_never_makes_a_payment_verified(change):
         '', 'receipt','R-copy','receipt:copy','','active'])
     if change=='two_targets':tables['expense_rows'].append(deepcopy(tables['expense_rows'][0]))
     assert any(x.classification=='unresolved' for x in comparison(tables))
+
+
+def balance_transfer(kind='csv'):
+    iid = ('aupaycsv:' if kind == 'csv' else 'aupaycard-mail:') + '1' * 24
+    if kind != 'csv': iid += ':001'
+    return [iid, '', 'au PAY' if kind == 'csv' else 'au PAYカード', iid, DAY,
+            'オートチャージ　au PAY カード' if kind == 'csv' else 'au PAY 残高オートチャージ(不足額)',
+            100, 'au PAY' if kind == 'csv' else '通常払い', 'transfer_aupay_charge', '', 'a' * 64,
+            'CSV種別=オートチャージ; 利用日時=2026-09-01 12:00' if kind == 'csv' else 'メール明細No.001']
+
+
+@pytest.mark.parametrize('kind', ['csv', 'card'])
+@pytest.mark.parametrize('days', [7, 31])
+def test_verified_topup_excluded_but_same_day_same_amount_purchase_retained(kind, days):
+    tables = {'import_rows': [balance_transfer(kind)]}
+    match, = comparison(tables, days=days)
+    assert match.classification == 'different'
+    assert match.reasons == ('verified_balance_transfer_not_purchase',)
+    assert not possible_duplicate(query(), tables)
+    # A top-up never removes or nets the real spending that follows it.
+    tables['import_rows'].append(['purchase', '', 'au PAY', 'notice', DAY, 'Synthetic clinic',
+                                  100, 'au PAY', 'auto_expense', '', 'b' * 64, ''])
+    assert possible_duplicate(query(), tables)
+    assert [m.classification for m in comparison(tables, days=days)] == ['different', 'candidate']
+
+
+@pytest.mark.parametrize('change', ['unknown_source', 'invalid_id', 'source_mismatch', 'no_hash', 'date',
+    'status_only', 'merchant_suffix', 'purchase_kind', 'refund', 'split_method', 'linked', 'expense', 'duplicate_id'])
+def test_unverified_or_contradictory_transfer_remains_a_candidate(change):
+    row = balance_transfer(); tables = {'import_rows': [row]}
+    if change == 'unknown_source': row[2] = 'unknown'
+    if change == 'invalid_id': row[0] = row[3] = 'unknown-id'
+    if change == 'source_mismatch': row[3] = 'another-source'
+    if change == 'no_hash': row[10] = ''
+    if change == 'date': row[4] = ''
+    if change == 'status_only': row[5] = 'Synthetic clinic'
+    if change == 'merchant_suffix': row[5] += ' 医療費'
+    if change == 'purchase_kind': row[11] = 'CSV種別=支払い'
+    if change == 'refund': row[6] = -100; tables['expense_rows'] = [
+        ['expense', DAY, 'Merchant', 'Unknown', 100, '', '', '', '', '', row[0], '', 'active']]
+    if change == 'split_method': row[7] = '現金+au PAY'
+    if change == 'linked': row[9] = 'missing'
+    if change == 'expense': tables['expense_rows'] = [
+        ['expense', DAY, 'Merchant', 'Unknown', 100, '', '', '', 'au PAY', '', row[0], '', 'active']]
+    if change == 'duplicate_id': tables['import_rows'].append(deepcopy(row))
+    assert possible_duplicate(query(), tables)
+    assert all(m.classification != 'different' for m in comparison(tables))
+
+
+def test_local_medical_can_post_with_only_verified_topup_and_replay_is_noop():
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import proof, parsed
+    service, store, db, _, source = medical()
+    row = balance_transfer(); row[6] = parsed().total
+    db.rows['取込データ'] = [deepcopy(row)]
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert len(db.rows['支出明細']) == 1 and db.rows['取込データ'][0] == row
+    before = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == before
+
+
+def school_collection():
+    from app.auto_expense import expense_id
+    iid = 'bankpdf:chiba:synthetic-account:' + '1'*24; eid = expense_id(iid)
+    description = 'チバシキユウシヨクヒトウ'  # Published public descriptor, not household data.
+    return {'receipt_rows': [], 'review_rows': [],
+        'import_rows': [[iid, '', '千葉銀行PDF', iid, DAY, description, -100, '銀行口座',
+                         'auto_expense', eid, '1'*64, 'page=1;row=1; 銀行最終判定=bank_expense_authority']],
+        'expense_rows': [[eid, DAY, description, '自動計上', 100, 'その他', '未分類', '銀行口座',
+                         '千葉銀行PDF', '', iid, 'bank_expense_authority', 'active']]}
+
+
+@pytest.mark.parametrize('description', ['チバシキュウショクヒトウ', 'チバシガッコウキュウショクヒトウ',
+                                       'ﾁﾊﾞｼｷﾕｳｼﾖｸﾋﾄｳ'])
+@pytest.mark.parametrize('days', [7, 31])
+def test_published_school_descriptor_with_consistent_bank_authority_is_distinct(description, days):
+    tables = school_collection()
+    tables['expense_rows'][0][2] = tables['import_rows'][0][5] = description
+    before = deepcopy(tables)
+    match, = comparison(tables, days=days)
+    assert match.classification == 'different'
+    assert match.reasons == ('verified_school_collection_not_medical_payment',)
+    assert not possible_duplicate(query(), tables) and tables == before
+
+
+@pytest.mark.parametrize('change', ['unknown_descriptor', 'substring', 'medical_counterparty', 'source',
+    'id_namespace', 'hash', 'source_id', 'missing_expense', 'missing_import', 'amount', 'direction',
+    'date', 'expense_link', 'import_link', 'authority', 'note', 'status', 'inactive', 'method',
+    'merchant_conflict', 'medical_category', 'duplicate_import', 'receipt_link'])
+def test_name_alone_or_any_broken_bank_contract_cannot_discard_medical_candidate(change):
+    tables = school_collection(); row = tables['import_rows'][0]; expense = tables['expense_rows'][0]
+    if change == 'unknown_descriptor': row[5] = expense[2] = '別の市給食費'
+    if change == 'substring': row[5] = expense[2] = 'チバシキユウシヨクヒトウ医療費'
+    if change == 'medical_counterparty': row[5] = expense[2] = 'Synthetic clinic'
+    if change == 'source': row[2] = expense[8] = 'au PAYカード'
+    if change == 'id_namespace': row[0] = row[3] = expense[10] = 'unknown-id'
+    if change == 'hash': row[10] = '2'*64
+    if change == 'source_id': row[3] = 'different-source'
+    if change == 'missing_expense': tables['expense_rows'] = []; row[6] = 100
+    if change == 'missing_import': tables['import_rows'] = []
+    if change == 'amount': row[6] = -101
+    if change == 'direction': row[6] = 100
+    if change == 'date': row[4] = ''
+    if change == 'expense_link': expense[10] = 'missing'
+    if change == 'import_link': row[9] = 'missing'
+    if change == 'authority': expense[11] = 'manual'
+    if change == 'note': row[11] = '未確認'
+    if change == 'status': row[8] = 'needs_review_bank_finalization'
+    if change == 'inactive': expense[12] = 'inactive'; row[6] = 100
+    if change == 'method': expense[7] = row[7] = '不明'
+    if change == 'merchant_conflict': expense[2] = 'Synthetic clinic'
+    if change == 'medical_category': expense[5:7] = ['医療・保険', '病院']
+    if change == 'duplicate_import': tables['import_rows'].append(deepcopy(row))
+    if change == 'receipt_link': expense[9] = 'missing-receipt'
+    assert possible_duplicate(query(), tables)
+    assert all(m.classification != 'different' for m in comparison(tables))
+
+
+def test_school_rule_cannot_ignore_an_actual_medical_payment_or_nonmedical_query():
+    tables = school_collection()
+    nonmedical = query(); nonmedical.items[0].major_category = '教育'; nonmedical.items[0].minor_category = '学校'
+    assert compare_payments(nonmedical, tables, days=31, unknown_dates=True)[0].classification == 'unresolved'
+    actual = receipt((100,), identity='actual-medical')
+    for key in tables: tables[key] += actual[key]
+    assert possible_duplicate(query(), tables)
+    assert [m.classification for m in comparison(tables)].count('candidate') == 1
+
+
+def test_school_collection_is_preserved_when_local_medical_posts_and_replays():
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, _, source = medical()
+    tables = school_collection(); tables['expense_rows'][0][4] = parsed().total
+    tables['import_rows'][0][6] = -parsed().total; load(db, tables)
+    original = deepcopy(db.rows['支出明細'])
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows['支出明細'][:1] == original and len(db.rows['支出明細']) == 2
+    before = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == before
+
+
+@pytest.mark.parametrize('change', ['new_payment', 'changed_school_descriptor', 'changed_school_amount'])
+def test_changed_evidence_after_intent_aborts_before_any_medical_accounting(change):
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, verify, source = medical()
+    tables = school_collection(); tables['expense_rows'][0][4] = parsed().total
+    tables['import_rows'][0][6] = -parsed().total; load(db, tables)
+    calls = 0
+    def concurrent_change(*args):
+        nonlocal calls
+        calls += 1
+        if calls != 2: return
+        if change == 'new_payment':
+            db.rows['取込データ'].append(['new-card', '', 'card', 'notice', DAY, 'Synthetic clinic',
+                                          parsed().total, '', 'auto_expense', '', 'b'*64, ''])
+        if change == 'changed_school_descriptor': db.rows['取込データ'][0][5] = 'Unresolved counterparty'
+        if change == 'changed_school_amount': db.rows['支出明細'][0][4] = 999
+    verify.side_effect = concurrent_change
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert len(db.rows['支出明細']) == 1 and not db.rows['レシート']
+    assert not any(r[0] == 'receipt:'+source['source_id'] for r in db.rows['取込データ'])
+    item = next(iter(service.items.values()))
+    assert item['status'] == 'waiting' and item['aborted_before_accounting']

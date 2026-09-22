@@ -113,6 +113,7 @@ def apply_local(review,source,folder,parsed,provenance,*,read_existing=None):
     from .medical_auto_posting import possible_duplicate
     from .medical_local_owner import snapshot as owner_snapshot
     from .receipt_validation import validate_receipt_result
+    from .receipt_reimport_production import digest
     key=review_id('medical',source);old=review.items[key]
     if old['status']!='waiting':return False
     binding=provenance.get('document_binding',{})
@@ -148,7 +149,13 @@ def apply_local(review,source,folder,parsed,provenance,*,read_existing=None):
     # The durable item is pending now; compare every captured live row without
     # reinterpreting that machine-created pending status as owner intent.
     try:
-        fresh=not duplicate or (duplicate.fresh() and duplicate.valid(source,parsed,review.tables(),duplicate.linked_expense_id))
+        fresh=not duplicate or duplicate.fresh()
+        current_tables=review.tables()
+        # Excluded top-ups/school collections and an empty duplicate search
+        # also depend on the exact ledger examined before planning. Recheck
+        # after durable intent even when no reconciliation capability exists.
+        fresh=(fresh and digest(current_tables)==digest(tables)
+               and (not duplicate or duplicate.valid(source,parsed,current_tables,duplicate.linked_expense_id)))
     except Exception:
         fresh=False  # No accounting call occurred; never preserve a stale intent.
     if not fresh:

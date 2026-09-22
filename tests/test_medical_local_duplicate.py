@@ -157,3 +157,19 @@ def test_an_existing_verified_alias_does_not_hide_canonical_receipt(monkeypatch)
     assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
     assert db.rows['支出明細']==root
     assert db.rows['取込データ'][-1][9]==root[0][0]
+
+
+@pytest.mark.parametrize('contacts_agree',[True,False])
+def test_distinct_bill_with_name_variation_requires_both_fresh_contact_fields(monkeypatch,contacts_agree):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    p['document_identity']['issuer_contacts']={'telephone':'c'*64,'fax':'d'*64}
+    reader.return_value['identity']=evidence(monkeypatch,number='765432',source='b',merchant='Synthetic cIinic')
+    reader.return_value['identity']['issuer_contacts']={'telephone':'c'*64,'fax':('d' if contacts_agree else 'e')*64}
+    before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader) is contacts_agree
+    assert db.rows['支出明細'][:1]==before
+    assert len(db.rows['支出明細'])==1+int(contacts_agree)
+    if contacts_agree:
+        item=review.items[review_id('medical',source)]
+        assert item['local_decision']['reconciliation']['operation']=='post_distinct'
+        assert item['local_decision']['external_requests']==0

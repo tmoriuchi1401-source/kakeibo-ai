@@ -8,6 +8,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 import re
+import unicodedata
 
 from .receipt_reimport import _date, _money
 
@@ -36,6 +37,77 @@ class PaymentUnit:
     @property
     def posted(self):
         return any(r[12] == 'active' for r in self.expenses)
+
+
+def _verified_balance_transfer(unit):
+    """An unlinked, explicitly imported balance top-up is not a purchase.
+
+    Status alone is insufficient: require the source-specific contract, an
+    unambiguous charge description, and no receipt/expense materialization.
+    The subsequent purchase remains a separate unit and is still checked.
+    """
+    if (unit.receipts or unit.expenses or len(unit.imports) != 1
+            or set(unit.issues) != {'payment_role_requires_review'}):
+        return False
+    row = unit.imports[0]
+    if (row[8] != 'transfer_aupay_charge' or row[9] or not _date(row[4])
+            or not re.fullmatch(r'[a-f0-9]{64}', str(row[10]))):
+        return False
+    merchant = unicodedata.normalize('NFKC', str(row[5]))
+    merchant = re.sub(r'\s+', '', merchant).upper()
+    if row[2] == 'au PAY':
+        return (re.fullmatch(r'aupaycsv:[a-f0-9]{24}', str(row[0])) is not None
+                and row[3] == row[0] and row[7] == 'au PAY'
+                and merchant == 'オートチャージAUPAYカード'
+                and str(row[11]).split(';', 1)[0] == 'CSV種別=オートチャージ')
+    if row[2] == 'au PAYカード':
+        return (re.fullmatch(r'aupaycard(?:-mail)?:[a-f0-9]{24}(?::[0-9]{3})?', str(row[0])) is not None
+                and row[3] == row[0] and row[7] == '通常払い'
+                and re.fullmatch(r'AUPAY残高(?:オート)?チャージ(?:\(不足額\))?', merchant) is not None)
+    return False
+
+
+def _verified_school_collection(unit, parsed):
+    """A published municipal collection descriptor is not a medical payment.
+
+    This is an exact public descriptor contract, not a merchant-name/category
+    guess. See docs/receipt-local-payment-evidence.md for the primary sources.
+    No transaction ID, amount, private provider or household date is allowed
+    in the descriptor set. Existing bank authority and reciprocal ledger links
+    must agree; a similarly named orphan/card/receipt stays unresolved.
+    """
+    if (not parsed.items or sum(i.amount for i in parsed.items) != parsed.total
+            or any((i.major_category, i.minor_category) not in
+                   {('医療・保険', '病院'), ('医療・保険', '薬')} for i in parsed.items)):
+        return False
+    if (unit.receipts or len(unit.imports) != 1 or len(unit.expenses) != 1
+            or set(unit.issues) != {'invalid_payment_total', 'payment_expense_role_unknown'}):
+        return False
+    row, expense = unit.imports[0], unit.expenses[0]
+    from .bank_pdf_pipeline import JIBUN_BANK_ADAPTER, DOCOMO_SMTB_BANK_ADAPTER, CHIBA_BANK_ADAPTER
+    from .auto_expense import expense_id
+    namespaces = {a.source: a.identity_namespace for a in
+                  (JIBUN_BANK_ADAPTER, DOCOMO_SMTB_BANK_ADAPTER, CHIBA_BANK_ADAPTER)}
+    namespace = namespaces.get(row[2])
+    if not namespace: return False
+    if (not re.fullmatch('bankpdf:' + re.escape(namespace) + r':[a-z0-9-]+:[a-f0-9]{24}', str(row[0]))
+            or row[3] != row[0] or not re.fullmatch(r'[a-f0-9]{64}', str(row[10]))
+            or row[0].rsplit(':', 1)[1] != row[10][:24]):
+        return False
+    if (row[8] != 'auto_expense' or row[9] != expense[0] or expense[0] != expense_id(row[0])
+            or expense[10] != row[0] or expense[9] or expense[12] != 'active'
+            or expense[8] != row[2] or expense[2] != row[5]
+            or expense[5] == '医療・保険'
+            or not _date(row[4]) or _date(row[4]) != _date(expense[1])
+            or row[7] != '銀行口座' or expense[7] != row[7]
+            or _money(row[6]) is None or _money(row[6]) >= 0
+            or _money(expense[4]) != -_money(row[6])
+            or expense[11] != 'bank_expense_authority'
+            or '銀行最終判定=bank_expense_authority' not in [s.strip() for s in str(row[11]).split(';')]):
+        return False
+    description = ''.join(unicodedata.normalize('NFKC', str(row[5])).split())
+    description = description.translate(str.maketrans({'ュ': 'ユ', 'ョ': 'ヨ', 'ッ': 'ツ'}))
+    return description in {'チバシキユウシヨクヒトウ', 'チバシガツコウキユウシヨクヒトウ'}
 
 
 def _special_payment(row, kind):
@@ -217,7 +289,11 @@ def compare_payments(parsed, tables, *, days, unknown_dates):
         item_match = any(matches(d, a) for d, a in components)
         if not whole_match and not item_match:
             continue
-        if unit.issues:
+        if _verified_balance_transfer(unit):
+            classification, reasons = 'different', ('verified_balance_transfer_not_purchase',)
+        elif _verified_school_collection(unit, parsed):
+            classification, reasons = 'different', ('verified_school_collection_not_medical_payment',)
+        elif unit.issues:
             classification, reasons = 'unresolved', unit.issues
         elif whole_match:
             classification, reasons = 'candidate', ('payment_total_matches',)
