@@ -1,0 +1,96 @@
+import io
+import json
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+from PIL import Image
+from google.genai.errors import APIError
+
+from app import gemini_probe as probe
+
+
+def response(text='{"total":300}'):
+    return SimpleNamespace(output_text=text)
+
+
+def test_probe_uses_only_fixed_synthetic_inputs_and_four_spaced_calls():
+    client = Mock()
+    client.interactions.create.return_value = response()
+    sleep = Mock(); emit = Mock()
+    results = probe.run_probe(client, sleep=sleep, emit=emit)
+    assert len(results) == 4
+    assert all(r['outcome'] == 'valid' for r in results)
+    assert [r['model'] for r in results] == [probe.MODELS[0]] * 2 + [probe.MODELS[1]] * 2
+    assert [r['input'] for r in results] == ['text', 'image'] * 2
+    assert sleep.call_count == 3
+    assert all(c.args == (15,) for c in sleep.call_args_list)
+    assert Image.open(io.BytesIO(probe.synthetic_image())).size == (720, 400)
+    calls = client.interactions.create.call_args_list
+    assert len(calls[0].kwargs['input']) == 1
+    assert calls[1].kwargs['input'][1]['mime_type'] == 'image/png'
+    assert calls[1].kwargs['input'][1] == calls[3].kwargs['input'][1]
+    assert all(c.kwargs['response_format']['schema'] == probe.SCHEMA for c in calls)
+
+
+@pytest.mark.parametrize('status', [401, 403, 429])
+def test_probe_stops_immediately_on_auth_or_quota_and_never_logs_private_error(status):
+    client = Mock()
+    client.interactions.create.side_effect = APIError(status, {'error': {'message': 'PRIVATE_SECRET'}})
+    messages = []
+    results = probe.run_probe(client, sleep=Mock(), emit=messages.append)
+    assert len(results) == client.interactions.create.call_count == 1
+    assert results[0]['status'] == status
+    assert 'PRIVATE_SECRET' not in ''.join(messages)
+
+
+def test_503_compares_other_model_without_replaying_or_logging_server_message():
+    client = Mock()
+    client.interactions.create.side_effect = [
+        APIError(503, {'error': {'message': 'PRIVATE_SECRET'}}),
+        APIError(503, {'error': {'message': 'PRIVATE_SECRET'}}), response(), response(),
+    ]
+    messages = []
+    results = probe.run_probe(client, sleep=Mock(), emit=messages.append)
+    assert [r['status'] for r in results] == [503, 503, 200, 200]
+    assert len(messages) == 4
+    assert 'PRIVATE_SECRET' not in ''.join(messages)
+
+
+@pytest.mark.parametrize('text', ['PRIVATE_SECRET', '{"total":301}', '{"total":300,"secret":"PRIVATE_SECRET"}', 'null'])
+def test_response_is_validated_without_logging_its_contents(text):
+    client = Mock(); client.interactions.create.return_value = response(text)
+    messages = []
+    results = probe.run_probe(client, sleep=Mock(), emit=messages.append)
+    assert all(r['outcome'] == 'invalid_response' for r in results)
+    assert 'PRIVATE_SECRET' not in ''.join(messages)
+    assert all(set(json.loads(m)) == {'model', 'input', 'status', 'outcome', 'elapsed_seconds'} for m in messages)
+
+
+def test_main_bounds_sdk_requests_and_uses_existing_key_only(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'synthetic-test-key')
+    factory = Mock(); monkeypatch.setattr(probe.genai, 'Client', factory)
+    run = Mock(return_value=[{'outcome': 'valid'}] * 4)
+    monkeypatch.setattr(probe, 'run_probe', run)
+    assert probe.main() == 0
+    assert factory.call_args.kwargs == {
+        'api_key': 'synthetic-test-key', 'http_options': {
+            'api_version': 'v1', 'timeout': 90000, 'retry_options': {'attempts': 0},
+        },
+    }
+
+
+def test_missing_key_never_constructs_client(monkeypatch, capsys):
+    monkeypatch.delenv('GEMINI_API_KEY', raising=False)
+    factory = Mock(); monkeypatch.setattr(probe.genai, 'Client', factory)
+    assert probe.main() == 1
+    factory.assert_not_called()
+    assert json.loads(capsys.readouterr().out) == {'outcome': 'missing_key'}
+
+
+def test_installed_sdk_translates_zero_attempts_to_no_interactions_retries():
+    from google.genai import types
+    from google.genai._gaos.google_genai import _translate_retry_config
+
+    options = types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=0))
+    assert _translate_retry_config(options).max_retries == 0
