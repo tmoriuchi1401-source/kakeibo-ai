@@ -49,10 +49,11 @@ def read_tokens(image):
         for i,(box,text,score) in enumerate(zip(out.boxes,out.txts,out.scores)):
             if not str(text).strip():continue
             points=np.asarray(box)
-            if not np.isfinite(points).all() or not 0<=float(score)<=1:raise ValueError
+            if points.shape!=(4,2) or not np.isfinite(points).all() or not 0<=float(score)<=1:raise ValueError
             l,t=np.floor(points.min(axis=0)).astype(int);r,b=np.ceil(points.max(axis=0)).astype(int)
             if not 0<=l<r<=image.width or not 0<=t<b<=image.height:raise ValueError
-            result.append(dict(text=str(text),box=(int(l),int(t),int(r),int(b)),confidence=float(score)*100,line=(1,i,1)))
+            result.append(dict(text=str(text),box=(int(l),int(t),int(r),int(b)),
+                quad=tuple(tuple(float(v) for v in p) for p in points),confidence=float(score)*100,line=(1,i,1)))
         return result
     except Exception:
         raise AnonymizationHold('local_ocr_unavailable') from None
@@ -63,6 +64,8 @@ def main():
     # Only public weights are fetched during setup, before opening any receipt.
     from rapidocr import RapidOCR
     directory=model_directory();RapidOCR(params=parameters(directory));verify_models(directory)
+    from .medical_locality_models import prepare
+    prepare()
     print('Local OCR models verified')
 
 if __name__=='__main__':main()

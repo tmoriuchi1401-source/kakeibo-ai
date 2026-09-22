@@ -161,7 +161,9 @@ def test_local_ocr_geometry_and_complete_output(monkeypatch):
     monkeypatch.setattr(ocr,'model_directory',lambda:'synthetic')
     result=SimpleNamespace(boxes=np.array([[[1,2],[20,2],[20,12],[1,12]]]),txts=['領収額'],scores=[.99])
     engine=Mock(return_value=result);monkeypatch.setattr(ocr,'_engine',lambda p:engine)
-    assert ocr.read_tokens(Image.new('RGB',(100,100)))[0]['box']==(1,2,20,12)
+    observation=ocr.read_tokens(Image.new('RGB',(100,100)))[0]
+    assert observation['box']==(1,2,20,12)
+    assert observation['quad']==((1.,2.),(20.,2.),(20.,12.),(1.,12.))
     result.scores=[]
     with pytest.raises(AnonymizationHold):ocr.read_tokens(Image.new('RGB',(100,100)))
     result.scores=[.99];result.boxes[0,0,0]=-1
