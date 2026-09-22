@@ -69,11 +69,13 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
             # These errors originate from extraction, before accounting starts.
             # Preserve the inbox for the next scheduled run. Never catch a
             # Sheets/Drive write error or reset an uncertain accounting write.
-            if gemini_api_status(error) in {429,503}:
+            api_status = gemini_api_status(error)
+            if api_status in {429,503}:
                 remaining=[x for x in files[files.index(f):] if is_supported_receipt_mime(x['mimeType'])
                            and (approved is None or x['id'] in approved)]
                 for x in remaining:
-                    deferred={'status':'deferred','reason':'ai_temporarily_unavailable'}
+                    deferred={'status':'deferred','reason':'ai_temporarily_unavailable',
+                              'gemini_api_status':api_status}
                     results.append((x['name'],deferred))
                     progress('receipt_processing', deferred)
                 break

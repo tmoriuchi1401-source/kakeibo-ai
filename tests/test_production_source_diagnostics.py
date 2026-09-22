@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from unittest.mock import Mock
 from google.genai.errors import APIError
 from googleapiclient.errors import HttpError
 from httplib2 import Response
@@ -10,6 +11,25 @@ from httplib2 import Response
 from app import production_flow as flow, production_source as source
 from app.drive_run_state import StateError
 from app.production_run import execute_serial
+
+
+@pytest.mark.parametrize('status,key', [(429,'gemini_quota_deferred'), (503,'gemini_unavailable_deferred')])
+def test_deferred_receipt_cause_reaches_parent_as_counts_only(monkeypatch, status, key):
+    monkeypatch.delenv('RECEIPT_CONFIRMATION_BINDING', raising=False)
+    settings = SimpleNamespace(validate=Mock(), spreadsheet_id='synthetic-sheet',
+                               receipt_drive_folder_id='synthetic-inbox', processed_drive_folder_id='synthetic-archive')
+    monkeypatch.setattr(source, 'SheetsDB', Mock())
+    monkeypatch.setattr(source, 'make_receipt_pipeline', Mock())
+    def process(*args, progress, **kwargs):
+        for _ in range(3):
+            progress('receipt_processing', {'status':'deferred', 'gemini_api_status':status,
+                                            'private':'must not escape'})
+    monkeypatch.setattr(source, 'process_inbox', process)
+    report = execute_serial({'receipts': lambda: source.receipts(settings, apply=True)})
+    counts = report['sources']['receipts']['counts']
+    assert counts['deferred'] == counts[key] == counts['found'] == 3
+    assert counts['written'] == 0
+    assert 'must not escape' not in json.dumps(report)
 
 
 @pytest.mark.parametrize('error,expected',[

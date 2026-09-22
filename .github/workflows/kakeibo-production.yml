@@ -91,6 +91,8 @@ jobs:
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-3.6-flash
+      # Normal receipts only: verified text/image availability, separate model quota.
+      NORMAL_RECEIPT_GEMINI_MODEL: gemini-3.5-flash-lite
       KAKEIBO_LOCAL_OCR_ENABLED: 'true'
       # Owner rule: unruled receipt images may enter ordinary Gemini extraction.
       RECEIPT_UNRULED_POLICY: owner-unruled-v1

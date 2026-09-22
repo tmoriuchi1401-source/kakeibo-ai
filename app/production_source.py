@@ -65,6 +65,10 @@ def receipts(settings, *, apply: bool) -> dict:
                 counts["unchanged"] += 1
             elif status == 'deferred':
                 counts['deferred']=counts.get('deferred',0)+1
+                # Affected receipts, not the number of failed API requests.
+                key = {429:'gemini_quota_deferred',503:'gemini_unavailable_deferred'}.get(
+                    result.get('gemini_api_status'))
+                if key:counts[key]=counts.get(key,0)+1
             else:
                 counts["failure"] += 1
             if result.get("medical_shadow_status") == "handoff_failed":
