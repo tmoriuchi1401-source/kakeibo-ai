@@ -146,3 +146,14 @@ def test_duplicate_target_change_blocks_archiving_before_drive_call(monkeypatch)
     with pytest.raises(StateError,match='medical_duplicate_target_changed'):
         archive_confirmations(review,'synthetic-folder','processed',drive,Mock())
     drive.files.assert_not_called()
+
+
+def test_an_existing_verified_alias_does_not_hide_canonical_receipt(monkeypatch):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    root=deepcopy(db.rows['支出明細'])
+    db.rows['レシート'].append(['R-prior-copy','2026-09-01','Synthetic clinic',1234,'','','解析済','',''])
+    db.rows['取込データ'].append(['receipt:prior-copy','','receipt','prior-copy','2026-09-01','Synthetic clinic',1234,'',
+                                'matched_receipt',root[0][0],'b'*64,''])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    assert db.rows['支出明細']==root
+    assert db.rows['取込データ'][-1][9]==root[0][0]

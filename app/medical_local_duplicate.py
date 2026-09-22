@@ -59,9 +59,13 @@ def decide(source,parsed,provenance,tables,read_existing):
                   and tuple(r[0] for r in u.expenses)==match.expense_ids]
         if len(selected)!=1:return None
         unit=selected[0]
-        if not unit.verified_components or len(unit.receipts)!=1 or len(unit.imports)!=1:return None
+        if not unit.verified_components:return None
         if len(unit.expenses)!=1:return None
-        header,imported,expense=unit.receipts[0],unit.imports[0],unit.expenses[0]
+        expense=unit.expenses[0]
+        headers=[r for r in unit.receipts if r[0]==expense[9]]
+        imports=[r for r in unit.imports if r[0]==expense[10]]
+        if len(headers)!=1 or len(imports)!=1:return None
+        header,imported=headers[0],imports[0]
         sid=imported[3]
         if (imported[2]!='receipt' or imported[0]!='receipt:'+sid or header[0]!='R-'+sid
                 or expense[12]!='active' or expense[5]!='医療・保険'

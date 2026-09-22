@@ -50,6 +50,31 @@ def _special_payment(row, kind):
             or bool(re.search(r'返金|返品|取消|払戻|振替|引落|分割|一部入金|部分払|併用|預り|内金', ' '.join(map(str, fields)))))
 
 
+def _verified_aliases(receipts,imports,expenses):
+    """Existing matched_receipt headers describe a payment, not new items.
+
+    Admit only committed, exact-date/amount aliases to one active expense,
+    with no expense of their own. Broken or partial links stay in the ordinary
+    validation path and therefore remain unresolved.
+    """
+    aliases=[]
+    for imported in imports:
+        if imported[2]!='receipt' or imported[8]!='matched_receipt' or not imported[10]:continue
+        sid=imported[3]
+        if not sid or imported[0]!='receipt:'+sid:continue
+        headers=[r for r in receipts if r[0]=='R-'+sid]
+        targets=[r for r in expenses if r[0]==imported[9] and r[12]=='active']
+        if len(headers)!=1 or len(targets)!=1:continue
+        header,target=headers[0],targets[0]
+        if any(r[9]==header[0] or r[10]==imported[0] for r in expenses):continue
+        if (header[6]!='解析済' or not _date(header[1])
+                or not _date(header[1])==_date(imported[4])==_date(target[1])
+                or _money(header[3]) is None or _money(header[3])<=0
+                or not _money(header[3])==_money(imported[6])==_money(target[4])):continue
+        aliases.append((header[0],imported[0]))
+    return aliases
+
+
 def payment_units(tables):
     """Join identifiers only; never join on a filename, date, merchant or category."""
     sizes = {'receipt_rows': 9, 'import_rows': 12, 'expense_rows': 13}
@@ -117,14 +142,18 @@ def payment_units(tables):
             issues.add('linked_payment_totals_disagree')
         if any(_special_payment(r, 'receipt_rows') for r in receipts) or any(_special_payment(r, 'import_rows') for r in imports):
             issues.add('payment_role_requires_review')
-        receipt_imports = [r for r in imports if r[2] == 'receipt']
-        if receipts or receipt_imports or any(r[8] == 'receipt' or r[9] for r in expenses):
-            if len(receipts) != 1 or len(receipt_imports) != 1:
+        aliases=_verified_aliases(receipts,imports,expenses)
+        alias_headers={r for r,_ in aliases};alias_imports={i for _,i in aliases}
+        core_receipts=tuple(r for r in receipts if r[0] not in alias_headers)
+        core_imports=tuple(r for r in imports if r[0] not in alias_imports)
+        receipt_imports = [r for r in core_imports if r[2] == 'receipt']
+        if core_receipts or receipt_imports or any(r[8] == 'receipt' or r[9] for r in expenses):
+            if len(core_receipts) != 1 or len(receipt_imports) != 1:
                 issues.add('receipt_parent_not_unique')
             else:
-                header, imported = receipts[0], receipt_imports[0]
+                header, imported = core_receipts[0], receipt_imports[0]
                 children = [r for r in expenses if r[8] == 'receipt' or r[9] == header[0]]
-                if len(imports) - len(receipt_imports) > 1:
+                if len(core_imports) - len(receipt_imports) > 1:
                     issues.add('multiple_settlement_records')
                 if header[6] != '解析済' or imported[8] not in RECEIPT_COMMITTED or not imported[10]:
                     issues.add('receipt_commit_unverified')
@@ -152,13 +181,13 @@ def payment_units(tables):
                         if active:
                             issues.add('multiple_active_materializations')
                 verified_components = not issues
-        elif imports:
-            if len(imports) != 1:
+        elif core_imports:
+            if len(core_imports) != 1:
                 issues.add('multiple_payment_records_without_receipt')
             else:
                 active = [r for r in expenses if r[12] == 'active']
-                if active and (len(active) != 1 or active[0][10] != imports[0][0]
-                               or _money(active[0][4]) != _money(imports[0][6])):
+                if active and (len(active) != 1 or active[0][10] != core_imports[0][0]
+                               or _money(active[0][4]) != _money(core_imports[0][6])):
                     issues.add('payment_expense_role_unknown')
         else:
             # No existing schema evidence proves an orphan row is a whole

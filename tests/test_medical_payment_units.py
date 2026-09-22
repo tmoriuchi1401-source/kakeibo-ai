@@ -213,3 +213,32 @@ def test_automatic_post_preserves_existing_categories_and_replay_sends_or_append
     assert process_plans(plans, **args)['medical_ai_requests'] == 0
     assert post(service, args) == 0 and db.rows == rows and store.value['medical_image_analyses'] == ai
     assert send.call_count == 1
+
+
+def with_alias():
+    tables=receipt((100,))
+    tables['receipt_rows'].append(['R-copy',DAY,'Synthetic retailer',100,'','', '解析済','',''])
+    tables['import_rows'].append(['receipt:copy','','receipt','copy',DAY,'Synthetic retailer',100,'',
+                                  'matched_receipt',tables['expense_rows'][0][0],'b'*64,''])
+    return tables
+
+
+def test_committed_receipt_alias_is_one_payment_without_double_counting():
+    tables=with_alias();before=deepcopy(tables)
+    match,=comparison(tables)
+    assert match.classification=='candidate' and len(match.receipt_ids)==2 and len(match.expense_ids)==1
+    assert tables==before
+
+
+@pytest.mark.parametrize('change',['amount','date','uncommitted','missing_target','inactive_target','own_expense','two_targets'])
+def test_broken_alias_never_makes_a_payment_verified(change):
+    tables=with_alias()
+    if change=='amount':tables['receipt_rows'][-1][3]=101
+    if change=='date':tables['receipt_rows'][-1][1]='2026-09-02'
+    if change=='uncommitted':tables['import_rows'][-1][10]=''
+    if change=='missing_target':tables['import_rows'][-1][9]='missing'
+    if change=='inactive_target':tables['expense_rows'][0][12]='inactive'
+    if change=='own_expense':tables['expense_rows'].append(['R-copy-01',DAY,'Synthetic retailer','Product',100,'','',
+        '', 'receipt','R-copy','receipt:copy','','active'])
+    if change=='two_targets':tables['expense_rows'].append(deepcopy(tables['expense_rows'][0]))
+    assert any(x.classification=='unresolved' for x in comparison(tables))
