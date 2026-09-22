@@ -26,6 +26,25 @@ def parsed():return ReceiptResult(date='2026-09-01',merchant='Synthetic clinic',
 @pytest.mark.parametrize('text,expected',[('￥１，２３４－',1234),('3，780円',3780),('300',300),('1,234',1234),('-123',None),('1.234',None),('1,23',None),('12O円',None),('123円注',None),('Y123',None)])
 def test_numeric_grammar_never_repairs_digits(text,expected):assert local.amount_text(text)==expected
 
+
+@pytest.mark.parametrize('readings,expected,accepted,calls',[
+    (['1,234'],1234,True,1),
+    (['1,235','1,234'],1234,False,1),
+    (['1.234','1,234'],1234,True,2),
+    (['','1,235'],1234,False,2),
+    (['.','1.234'],1234,False,2),
+    (['123円注','123円注'],123,False,2),
+    (['-123','123'],123,False,1),
+    (['△123','123'],123,False,1),
+])
+def test_digit_reread_is_bounded_and_never_retries_a_valid_disagreement(monkeypatch,readings,expected,accepted,calls):
+    import pytesseract
+    reader=Mock(side_effect=readings)
+    monkeypatch.setattr(pytesseract,'image_to_string',reader)
+    assert local.confirm_digits(Image.new('RGB',(100,50),'white'),(0,0,100,50),expected) is accepted
+    assert reader.call_count==calls
+    assert all(c.kwargs['timeout']==20 and c.kwargs['config']=='--psm 7' for c in reader.call_args_list)
+
 def test_label_pair_uses_actual_payment_not_larger_insurance_total(monkeypatch):
     obs=observations()+[token('保険総額',(0,100,100,120)),token('9,999円',(120,100,220,120))]
     verify=Mock(return_value=True);monkeypatch.setattr(local,'confirm_digits',verify)
@@ -54,6 +73,31 @@ def test_disagreement_missing_or_low_confidence_never_autopost(monkeypatch):
     assert local.candidate_pairs(obs)[1]=='payment_label_uncertain'
     f=fields();f['date']=''
     assert local.read_local_payment(None,observations(),f,proof())[1]=='local_fields_incomplete'
+
+
+@pytest.mark.parametrize('heading', ['医療費請求（領収）書', '診療費請求(領収)書', '医療费請求(領収)書'])
+def test_combined_invoice_receipt_requires_verified_actual_payment(monkeypatch, heading):
+    obs=observations();obs[0]['text']=heading
+    monkeypatch.setattr(local,'confirm_digits',lambda *a:True)
+    result,reason=local.read_local_payment(None,obs,fields(),proof())
+    assert reason=='' and result.total==1234
+    obs[1]['text']='請求金額'
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='payment_label_missing'
+
+
+@pytest.mark.parametrize('heading', ['医療費請求書', '領収書は再発行しません', '領収書見本', '診療明細書'])
+def test_invoice_footer_or_sample_does_not_prove_receipt(monkeypatch, heading):
+    obs=observations();obs[0]['text']=heading
+    verify=Mock();monkeypatch.setattr(local,'confirm_digits',verify)
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='paid_receipt_missing'
+    verify.assert_not_called()
+
+
+def test_multiple_combined_receipts_remain_held(monkeypatch):
+    obs=observations()+[token('医療費請求（領収）書',(0,150,200,170))]
+    verify=Mock();monkeypatch.setattr(local,'confirm_digits',verify)
+    assert local.read_local_payment(None,obs,fields(),proof())[1]=='paid_receipt_missing'
+    verify.assert_not_called()
 
 @pytest.mark.parametrize('label,expected',[('発行日','2026-09-01'),('支払日','2026-09-01'),('生年月日',''),('診療日','')])
 def test_date_below_its_own_role(label,expected):

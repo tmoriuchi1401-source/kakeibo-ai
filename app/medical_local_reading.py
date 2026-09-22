@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from .medical_anonymization import compact
 from .models import ReceiptResult,ReceiptItem
+from .medical_receipt_heading import is_receipt_heading
 
 POLICY='medical-local-consensus-v1'
 LABELS=('領収金額','領収額','お支払金額','お支払額','支払金額','支払額','今回入金額')
@@ -57,9 +58,9 @@ def confirm_digits(image,box,expected):
     import pytesseract
     from PIL import Image,ImageOps
     l,t,r,b=box
-    patch=ImageOps.grayscale(image.crop((l,t,r,b)))
+    original=ImageOps.grayscale(image.crop((l,t,r,b)))
     # Normalize text height: very large scanned PDF glyphs degrade Tesseract.
-    patch=patch.resize((max(1,round(patch.width*64/patch.height)),64))
+    patch=original.resize((max(1,round(original.width*64/original.height)),64))
     canvas=Image.new('L',(patch.width+32,patch.height+32),255);canvas.paste(patch,(16,16))
     # The full numeric field is read; digit repair, rounding, dropping an
     # internal dot, and borrowing another amount are all forbidden.
@@ -67,14 +68,29 @@ def confirm_digits(image,box,expected):
     value=compact(text).replace('Y','¥') if compact(text).startswith('Y') else compact(text)
     # English OCR may omit the Japanese currency suffix, but must preserve
     # every digit and separator. No general removal of nonnumeric content.
-    return amount_text(value)==expected
+    amount=amount_text(value)
+    # A valid disagreement is evidence, not a reason to try until we obtain
+    # the expected value. Only an unreadable field gets one fixed reread.
+    if amount is not None:return amount==expected
+    # Never discard a negative/refund indicator in a subsequent reading.
+    if any(mark in value for mark in ('-', '−', '△', '▲')):return False
+    import cv2
+    import numpy as np
+    patch=original.resize((max(1,round(original.width*48/original.height)),48))
+    _,binary=cv2.threshold(np.asarray(patch),0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    canvas=ImageOps.expand(Image.fromarray(binary),border=16,fill=255)
+    # English recognition preserves Arabic digits and thousands commas better
+    # on scanned numeric fields. No whitelist, punctuation repair, or expected
+    # amount is supplied to either reader. The complete field stays local.
+    text=pytesseract.image_to_string(canvas,lang='eng',config='--psm 7',timeout=20)
+    return amount_text(text)==expected
 
 def read_local_payment(image,observations,fields,provenance):
     if not all(fields.get(k) for k in ('date','issuer','category')):return None,'local_fields_incomplete'
     if not provenance.get('date_evidence_verified') or provenance.get('date_candidates')!=1:return None,'local_date_unverified'
     if provenance.get('issuer_status')!='SELECTED_ISSUER':return None,'local_issuer_unverified'
     texts=[compact(t['text']) for t in observations]
-    headings=[t for t in texts if re.fullmatch(r'(?:(?:診療費|医療費|調剤|薬剤費|請求書兼))*領収[書証]',t)]
+    headings=[t for t in texts if is_receipt_heading(t)]
     numbered=[t for t in texts if re.fullmatch(r'領収[書証](?:No\.?|NO\.?|番号)\d*',t)]
     if len(headings)>1 or (not headings and len(numbered)!=1):return None,'paid_receipt_missing'
     if any(any(word in t for word in ('取消','無効','返金','未払い','未払','請求書のみ','一部入金','分割','部分入金','前受金')) for t in texts):
