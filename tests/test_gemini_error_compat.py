@@ -59,6 +59,8 @@ def test_transient_extraction_failure_preserves_completed_receipt_and_defers_rem
     pipeline.process_bytes.side_effect = [{'status': 'imported'}, error]
     results = drive_receipts.process_inbox('synthetic-inbox', pipeline, 'synthetic-archive')
     assert [result['status'] for _, result in results] == ['imported', 'deferred', 'deferred']
+    assert [result['gemini_api_status'] for _, result in results[1:]] == [status, status]
+    assert 'private receipt' not in str(results)
     assert pipeline.process_bytes.call_count == 2
     assert service.files().update.call_count == 1
     assert service.files().update.call_args.kwargs['fileId'] == '0'
