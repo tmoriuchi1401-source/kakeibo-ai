@@ -126,7 +126,7 @@ def _mark_processed(service, file: Mapping[str, object], inbox_id="", processed_
     properties = dict(file.get("appProperties") or {})
     properties[BANK_PROCESSED_PROPERTY] = datetime.now(timezone.utc).isoformat()
     if processed_id:
-        move_processed(service, str(file["id"]), inbox_id, processed_id, properties)
+        move_processed(service, str(file["id"]), inbox_id, processed_id, {BANK_PROCESSED_PROPERTY: properties[BANK_PROCESSED_PROPERTY]})
         return
     service.files().update(
         fileId=str(file["id"]),

@@ -251,3 +251,13 @@ def test_move_readback_mismatch_is_reported(monkeypatch):
     assert p.apply()["failed_files"] == 1
     assert "processed_move_readback_failed" in p.apply()["files"][0]["skip_reason"]
     assert len(p.db.rows) == 1
+
+
+def test_move_uses_current_unrelated_metadata():
+    from copy import deepcopy
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB())
+    listed = deepcopy(p.service.resource.items[0])
+    listed["appProperties"]["other"] = "stale"
+    p.service.resource.items[0]["appProperties"]["other"] = "current"
+    p._mark_processed(listed)
+    assert p.service.resource.items[0]["appProperties"]["other"] == "current"

@@ -104,7 +104,7 @@ class DrivePayPayPipeline:
         }
         if self.processed_folder_id:
             move_processed(self.service, file["id"], self.folder_id,
-                           self.processed_folder_id, properties)
+                           self.processed_folder_id, {PROCESSED_PROPERTY: properties[PROCESSED_PROPERTY]})
             return
         self.service.files().update(**kwargs).execute()
 
