@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from .category_backfill import BackfillSpec, CategoryBackfillPipeline
 from .category_rules import CategoryRule, narrow_text, parse_rules, valid_rule
+from .category_ui_order import member_keys
 
 BACKFILL_UI_SHEET = "カテゴリ過去反映"
 BACKFILL_CONFIRM_SHEET = "カテゴリ過去反映確認"
@@ -263,7 +264,9 @@ class CategoryBackfillUIPipeline:
                                 narrow_text(snapshot.get("merchant")), "", "", "", None,
                                 (narrow_text(category[0]), narrow_text(category[1])), "", datetime.now(timezone.utc), 1, True)
             if not valid_rule(rule, categories): continue
-            payload = self._payload(rule, saved_rule=False); prior,legacy=old.get(key, ([], False))
+            payload = self._payload(rule, saved_rule=False)
+            aliases=[key]+["displayed:"+alias for alias in sorted(member_keys(shown)) if "displayed:"+alias != key]
+            prior,legacy=next((old[alias] for alias in aliases if alias in old), ([], False))
             start,end,checked,retained=self._restored_controls(prior, legacy, payload, default_month)
             label=self._label_with_period_notice(
                 f"表示中: {condition_label(json.loads(payload))}", end, retained)
