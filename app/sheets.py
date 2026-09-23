@@ -700,6 +700,9 @@ class SheetsDB:
         if rule_position["count"]:
             from .category_rule_choices import choice_validation
             requests.append(choice_validation(sheet_id,rule_position["start"],rule_position["count"]))
+            requests.append({"updateDimensionProperties":{"range":{"sheetId":sheet_id,
+                "dimension":"COLUMNS","startIndex":4,"endIndex":5},
+                "properties":{"pixelSize":110},"fields":"pixelSize"}})
         # Explain the two approvals beside the operator's controls.
         requests.append({"updateCells":{"start":{"sheetId":sheet_id,
             "rowIndex":rule_position["header"]-1,"columnIndex":4},"rows":[{"values":[
