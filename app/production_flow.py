@@ -398,8 +398,11 @@ def main():
             if key in COUNT_KEYS and type(value) is int and value>=0}
         report["scope"] = args.scope
         report["bank_mode"] = "not_run" if args.scope in {"amazon_canary", "receipts"} else "apply" if args.bank_apply else "preview"
-    except Exception:
+    except Exception as exc:
         report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
+        from .category_operations import CategoryOperationFailure
+        if isinstance(exc,CategoryOperationFailure):
+            report.update(error="category_operation_failed",**exc.details)
     rendered = json.dumps(report, ensure_ascii=True, sort_keys=True)
     print(rendered)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

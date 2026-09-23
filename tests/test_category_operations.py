@@ -23,7 +23,7 @@ class OperationsDB(BackfillDB):
     def replace_category_backfill_ui_rows(self,rows,header): self.backfill=deepcopy(rows)
     def replace_category_backfill_confirmation_rows(self,rows,header): self.confirmations=deepcopy(rows)
     def get(self,rng):
-        if rng == "ホーム!B3": return [["2026-08"]]
+        if rng == "'ホーム'!B4": return [["2026-08"]]
         return super().get(rng)
     def append(self,sheet,rows):
         if sheet == "カテゴリ自動分類ルール": self.rule_rows.extend(deepcopy(rows))
@@ -93,6 +93,49 @@ def test_registration_failure_survives_next_refresh_without_retrying():
     run(db)
     assert "held: invalid_category_pair" in db.ui[-1][1]
     assert not db.rule_rows and db.ui[-1][4] is False
+
+
+def test_empty_proposal_is_not_a_conflict_with_an_existing_rule():
+    from test_category_backfill import condition
+    db=OperationsDB()
+    db.rule_rows=[condition().to_row()]
+    row=proposal(db)
+    assert row[2:4]==["", ""] and row[1].endswith("カテゴリを選択")
+    assert "競合" not in row[1]
+
+
+def test_saved_rule_preview_does_not_scan_unrelated_source_checkboxes(monkeypatch):
+    from test_category_backfill import condition
+    db=OperationsDB(); db.rule_rows=[condition().to_row()]
+    run(db)
+    db.backfill[0][2:5]=["2026-08","2026-08",True]
+    monkeypatch.setattr(db,"consume_category_rule_ui_past_choice",lambda *args:pytest.fail("saved rules have no source checkbox"))
+    assert run(db)["category_previews_processed"]==1
+    assert len(db.requests)==1 and not db.category_updates
+
+
+def test_category_diagnostics_never_include_private_error_body():
+    from app.category_operations import CategoryOperationFailure
+    from types import SimpleNamespace
+    cause=RuntimeError("PRIVATE ACCOUNT DETAILS")
+    cause.resp=SimpleNamespace(status=429)
+    failure=CategoryOperationFailure(cause)
+    assert failure.details=={"category_exception":"RuntimeError","category_http_status":429}
+    assert "PRIVATE" not in str(failure)
+
+
+def test_many_preview_choices_read_default_month_only_once(monkeypatch):
+    from app.category_backfill_ui import CategoryBackfillUIPipeline
+    from test_category_backfill import condition
+    db=OperationsDB(); db.rule_rows=[condition().to_row() for _ in range(20)]
+    reads=[]; original=db.get
+    def get(rng):
+        reads.append(rng)
+        return original(rng)
+    monkeypatch.setattr(db,"get",get)
+    CategoryBackfillUIPipeline(db,ui_enabled=True,apply_enabled=False).refresh()
+    assert len(db.backfill)==20
+    assert reads.count("'ホーム'!B4")==1
 
 
 def test_decline_removes_unclassified_proposal_from_daily_queue_but_keeps_past_request():
