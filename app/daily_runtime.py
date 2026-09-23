@@ -121,6 +121,9 @@ def refresh_daily(source_db,store,env=None):
     from .daily_request_review import review_items as request_review_items
     daily=daily_from_environment(source_db,store,env)
     if daily is None:return {}
+    if getattr(source_db,"_read_pacer",None) is not None:
+        daily.db._read_pacer=source_db._read_pacer
+        daily.db._read_retry_base=source_db._read_retry_base
     props=[s["properties"] for s in source_db._sheet_metadata().get("sheets",[])]
     ledger=next((p for p in props if p["title"]=="支出明細"),None)
     if ledger is None:raise ProjectionError("daily_ledger_missing")

@@ -138,6 +138,25 @@ def test_many_preview_choices_read_default_month_only_once(monkeypatch):
     assert reads.count("'ホーム'!B4")==1
 
 
+def test_category_runtime_shares_read_budget_with_projection(monkeypatch):
+    from app import category_operations as operations
+    from app.sheets import SheetsReadPacer
+    seen={}
+    def db(sid,**kwargs):
+        seen.update(kwargs)
+        return object()
+    def projection(env,**kwargs):
+        assert kwargs["read_pacer"] is seen["read_pacer"]
+        return {"refreshed":1}
+    monkeypatch.setattr("app.production_flow.verify_execution_boundary",lambda *args:None)
+    monkeypatch.setattr("app.google_clients.sheets_service",lambda:object())
+    monkeypatch.setattr("app.sheets.SheetsDB",db)
+    monkeypatch.setattr("app.projection_runtime.run_projection",projection)
+    monkeypatch.setattr(operations,"process_category_operations",lambda *args,**kwargs:{})
+    assert operations.run_category_operations({"CATEGORY_RULE_UI_ENABLED":"true"},apply=True)=={"refreshed":1}
+    assert isinstance(seen["read_pacer"],SheetsReadPacer) and seen["read_retry_base"]==20
+
+
 def test_decline_removes_unclassified_proposal_from_daily_queue_but_keeps_past_request():
     row=["条件","カテゴリを選択","","","登録しない",False,"group:key","id"]
     assert _item("rule",row,"url",{},combined=True) is None

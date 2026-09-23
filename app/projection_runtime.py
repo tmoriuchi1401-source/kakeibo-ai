@@ -5,7 +5,7 @@ from .projection_refresh import ProjectionRefresh
 from .projection_store import ProjectionJournal, store_from_environment
 
 
-def run_projection(env, *, apply=False, bootstrap=False):
+def run_projection(env, *, apply=False, bootstrap=False, read_pacer=None):
     from .google_clients import read_only_sheets_service
     from .sheets import SheetsDB
     if bootstrap and not apply:
@@ -16,6 +16,9 @@ def run_projection(env, *, apply=False, bootstrap=False):
         raise ProjectionError("projection_binding_missing")
     # This scope always has read-only ledger credentials, including bootstrap.
     db=SheetsDB(sid,service=read_only_sheets_service())
+    if read_pacer is not None:
+        db._read_pacer=read_pacer
+        db._read_retry_base=20
     reader=SheetsLedgerReader(db)
     refresh=ProjectionRefresh(store,reader)
     if not apply:
