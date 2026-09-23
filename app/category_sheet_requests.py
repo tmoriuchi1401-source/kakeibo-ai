@@ -117,7 +117,8 @@ def merge_results(captured, result, live):
                 output.append(deepcopy(row))
                 retained += 1
         merged[section] = (merged[section][0], output)
-    return merged, retained
+    from .category_ui_order import consolidate_blocks
+    return consolidate_blocks(merged), retained
 
 
 class SheetRequestStore:

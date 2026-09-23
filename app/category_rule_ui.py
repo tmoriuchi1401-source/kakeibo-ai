@@ -9,6 +9,7 @@ from .category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprovalRe
 from .category_rules import AGGREGATE_ITEM_NAMES, bank_account_alias, narrow_text, parse_rules
 from .reconciliation import parse_import_rows
 from .category_rule_choices import DECLINE, checked as _checked
+from .category_ui_order import consolidate_rules, member_keys, source_snapshot
 
 # Keep the only operator controls in the first six narrow columns.  The
 # condition key and source proof are intentionally retained (but hidden), so
@@ -25,17 +26,24 @@ class CategoryRuleUIPipeline:
             return {"state":"disabled", "reason":"category_rule_ui_disabled"}
         transactions={tx.import_id:tx for tx in parse_import_rows(self.db.get("取込データ!A2:L"))}
         old={}
-        for row in self.db.category_rule_ui_rows():
+        previous=self.db.category_rule_ui_rows()
+        preferred={str(row[6]) for row in previous if len(row) >= 12}
+        for row in previous:
             # The former UI has key/category/snapshot in D/F:G/J.  Preserve
             # its entered categories and checks during the one-way layout
             # migration rather than clearing a person's pending decision.
             if len(row) >= 12:
                 key=narrow_text(row[6])
-                old[key]={"future":row[4], "past":row[5], "major":row[2], "minor":row[3], "snapshot":row[11], "status":row[1]}
+                old[key]={"future":row[4], "past":row[5], "major":row[2], "minor":row[3], "snapshot":source_snapshot(row[11]), "status":row[1]}
             elif len(row) >= 10:
                 key=narrow_text(row[3])
                 old[key]={"future":row[2], "past":row[10] if len(row)>10 else False,
                           "major":row[5], "minor":row[6], "snapshot":row[9]}
+        for row in previous:
+            if len(row) >= 12:
+                for key in member_keys(row):
+                    # Carry category entry, not approval, to merged members.
+                    old.setdefault(key, {"major":row[2], "minor":row[3]})
         rules=parse_rules(self.db.category_rules()) if hasattr(self.db, "category_rules") else []
         declined_conditions={}
         for prior in old.values():
@@ -155,6 +163,8 @@ class CategoryRuleUIPipeline:
                 f"未分類 {len(members)}件 / {amount}円\n完全一致・金額不問・自動計上のみ\n{state}",
                 major, minor, DECLINE if declined else checked, past_checked, key, expense_id, expense[1], tx.source, "service", snapshot,
             ])
+        historical=self.db.category_backfill_ui_rows() if hasattr(self.db,"category_backfill_ui_rows") else []
+        rows=consolidate_rules(rows, historical, preferred)
         if hasattr(self.db, "replace_category_rule_ui_rows"):
             for row in rows:
                 if _checked(row[5]):
@@ -181,7 +191,7 @@ class CategoryRuleUIPipeline:
                 snapshot={}
             result=CategoryRuleApprovalPipeline(self.db, save_enabled=True).register(
                 RuleApprovalRequest(narrow_text(cells[7]), (narrow_text(cells[2]), narrow_text(cells[3])),
-                                    narrow_text(cells[10]), condition_snapshot=narrow_text(cells[11]),
+                                    narrow_text(cells[10]), condition_snapshot=source_snapshot(narrow_text(cells[11])),
                                     allow_fallback_origin=snapshot.get("proposal") == "fallback_group",
                                     allow_classified_override=snapshot.get("proposal") == "classified_override"))
             results.append((narrow_text(cells[6]), result))
