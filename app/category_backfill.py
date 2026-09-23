@@ -125,10 +125,11 @@ class BackfillSpec:
     start_date: str = ""
     end_date: str = ""
     saved_rule: bool = False
+    ui_all_months: bool = False
 
     def payload(self) -> dict:
         rule = self.condition
-        return {
+        payload = {
             "v": 1,
             "kind": rule.kind, "source": rule.source, "account_alias": rule.account_alias,
             "billing_name": rule.billing_name, "merchant": rule.merchant,
@@ -137,6 +138,9 @@ class BackfillSpec:
             "period": {"start": self.start_date, "end": self.end_date},
             "saved_rule": {"id": rule.rule_id, "revision": rule.revision} if self.saved_rule else None,
         }
+        if self.ui_all_months:
+            payload.update(ui_all_months=True)
+        return payload
 
 
 def _condition_from_payload(payload: dict) -> CategoryRule | None:
@@ -283,7 +287,7 @@ class CategoryBackfillPipeline:
             if match_state != "matched":
                 excluded[match_state] = excluded.get(match_state, 0) + 1; continue
             targets.append((str(expense_id), row_num, expense, self._source_snapshot(tx, expense)))
-        if not targets:
+        if not targets and not spec.ui_all_months:
             return {"state": "preview_empty", "targets": 0, "total_amount": 0, "excluded": excluded}
         request_id = self.id_factory()
         payload = spec.payload()
@@ -293,14 +297,16 @@ class CategoryBackfillPipeline:
         target_rows = []
         for expense_id, row_num, expense, source_snapshot in targets:
             target_rows.append([
-                request_id, expense_id, row_num, expense[1], _amount(expense[4]), FALLBACK_CATEGORY[0], FALLBACK_CATEGORY[1],
+                request_id, expense_id, row_num, expense[1], _amount(expense[4]), expense[5], expense[6],
                 spec.condition.category[0], spec.condition.category[1], _canonical(source_snapshot), "previewed", "", "", "", now,
             ])
         self.db.append(BACKFILL_REQUEST_SHEET, [[
-            request_id, now, "previewed", _canonical(payload), spec.start_date, spec.end_date,
+            request_id, now, "previewed" if targets else "complete", _canonical(payload), spec.start_date, spec.end_date,
             len(targets), sum(_amount(row[4]) for _, _, row, _ in targets),
-            _request_digest(payload, spec.start_date, spec.end_date, target_rows), False, now,
+            _request_digest(payload, spec.start_date, spec.end_date, target_rows), not targets, now,
         ]])
+        if not targets:
+            return {"state":"complete", "request_id":request_id, "targets":0, "applied":0, "excluded":excluded}
         self.db.append(BACKFILL_TARGET_SHEET, target_rows)
         return {"state": "previewed", "request_id": request_id, "targets": len(targets),
                 "total_amount": sum(row[4] for row in target_rows), "excluded": excluded,

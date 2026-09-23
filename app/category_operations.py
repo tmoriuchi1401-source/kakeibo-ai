@@ -22,7 +22,7 @@ class CategoryOperationFailure(StateError):
 
 
 def process_category_operations(db, *, apply, rule_enabled, save_enabled,
-                                preview_enabled, backfill_enabled):
+                                preview_enabled, backfill_enabled, all_months=False):
     # Preview is a real read-only path: even display refreshes are writes.
     rows=db.category_rule_ui_rows()
     counts={"category_registration_pending":sum(checked(row[4]) for row in rows if len(row)>4),
@@ -33,6 +33,10 @@ def process_category_operations(db, *, apply, rule_enabled, save_enabled,
     past=CategoryBackfillUIPipeline(db,ui_enabled=preview_enabled,apply_enabled=backfill_enabled)
     rules.refresh()  # Rebind first edits; invalidate stale source approvals.
     saved=rules.apply_checked()
+    direct=[]
+    if all_months and preview_enabled and backfill_enabled:
+        from .category_past_all_months import apply_checked
+        direct=apply_checked(db)
     past.refresh()
     previews=past.preview_checked()
     past.refresh_confirmations()
@@ -42,10 +46,10 @@ def process_category_operations(db, *, apply, rule_enabled, save_enabled,
     counts.update(category_registration_processed=saved.get("checked",0),
                   category_previews_processed=len(previews.get("results",[])),
                   category_confirmations_processed=len(applied.get("results",[])),
-                  category_expenses_applied=sum(x.get("applied",0) for x in applied.get("results",[])),
+                  category_expenses_applied=sum(x.get("applied",0) for x in [*applied.get("results",[]),*direct]),
                   category_held=sum(x.get("state") in {"held","partial","not_found"}
                       for x in [*[r for _,r in saved.get("results",[])],
-                                *previews.get("results",[]),*applied.get("results",[])]))
+                                *previews.get("results",[]),*applied.get("results",[]),*direct]))
     return counts
 
 

@@ -710,7 +710,7 @@ class SheetsDB:
         requests.append({"updateCells":{"start":{"sheetId":sheet_id,
             "rowIndex":rule_position["header"]-1,"columnIndex":4},"rows":[{"values":[
                 {"note":"登録する／登録しない／未選択から選択。登録しないはこの候補の追加登録を見送る選択で、既存ルールの停止ではありません。"},
-                {"note":"チェック後、下の「2. 過去分の固定プレビュー」で期間を選び「プレビューする」にチェックします。「3」の件数確認後に反映します。"}]}],"fields":"note"}})
+                {"note":"チェックして上部の「入力内容を処理する」を実行すると、同じ条件の全月の「その他／未分類」に選択カテゴリを反映します。分類済みは変更しません。完了した条件は別月分も一覧から除きます。月を限定する場合は下の「2」「3」を使います。"}]}],"fields":"note"}})
         backfill_position=positions["backfill"]
         requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))
         confirm_position=positions["confirm"]

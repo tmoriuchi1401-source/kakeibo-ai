@@ -74,7 +74,7 @@ function installCategorySubmit() {
   sheet.getRange('B2:F2').merge().setValue('入力後、上のチェックを入れると受付します。');
   sheet.getRange('A3').setValue('最終更新');
   sheet.getRange('B3:F3').merge().setValue('');
-  sheet.getRange('A4:F4').merge().setValue('受付済みなら閉じても処理は続きます。過去分はプレビュー確認後、反映チェックを入れて再実行。');
+  sheet.getRange('A4:F4').merge().setValue('F列チェック＋上部の実行で、全月の未分類に反映。分類済みは変更せず、完了分は一覧から除きます。');
   sheet.getRange('A1:F4').setWrap(true).setVerticalAlignment('middle').setFontSize(10)
     .setFontColor('#1f2933').setFontWeight('normal');
   sheet.getRange('A1:F1').setBackground('#dceee8').setFontWeight('bold');

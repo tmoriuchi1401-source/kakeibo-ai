@@ -10,11 +10,12 @@ from .category_rules import AGGREGATE_ITEM_NAMES, bank_account_alias, narrow_tex
 from .reconciliation import parse_import_rows
 from .category_rule_choices import DECLINE, checked as _checked
 from .category_ui_order import consolidate_rules, member_keys, source_snapshot
+from .category_past_all_months import PAST_HEADER, remove_resolved, resolved_conditions
 
 # Keep the only operator controls in the first six narrow columns.  The
 # condition key and source proof are intentionally retained (but hidden), so
 # sorting or inserting rows can never retarget a checked request.
-UI_HEADERS = ["条件・代表取引", "件数・状態", "大カテゴリ", "小カテゴリ", "今後の自動分類", "過去分の候補に追加", "固定条件キー", "代表支出ID", "日付", "データ元", "種別", "承認スナップショット"]
+UI_HEADERS = ["条件・代表取引", "件数・状態", "大カテゴリ", "小カテゴリ", "今後の自動分類", PAST_HEADER, "固定条件キー", "代表支出ID", "日付", "データ元", "種別", "承認スナップショット"]
 
 
 class CategoryRuleUIPipeline:
@@ -56,7 +57,8 @@ class CategoryRuleUIPipeline:
                     pass
         rows=[]
         grouped={}
-        for expense_id,(_, expense) in sorted(self.db.expense_records().items()):
+        records=self.db.expense_records()
+        for expense_id,(_, expense) in sorted(records.items()):
             category=(narrow_text(expense[5]),narrow_text(expense[6]))
             tx=transactions.get(str(expense[10]))
             if (not tx or expense[12] != "active" or not all(category)
@@ -115,6 +117,9 @@ class CategoryRuleUIPipeline:
                 state="既存ルールあり・追加登録しない" if any(rule.active for rule in same) else DECLINE
             elif not checked and not changed_checked_condition and not same and prior.get("snapshot") == snapshot:
                 state=_held_status(prior.get("status")) or state
+            held=_held_status(prior.get("status"))
+            if not past_checked and held.startswith("held: all_month:") and prior.get("snapshot") == snapshot:
+                state=held
             condition=f"{tx.source}{account_text} / {narrow_text(tx.merchant)}（完全一致・金額不問・今後の未分類のみ）\n{state}"
             if changed_checked_condition:
                 old_condition="以前の条件"
@@ -158,6 +163,9 @@ class CategoryRuleUIPipeline:
                 state="既存ルールあり・追加登録しない" if same else DECLINE
             elif not checked and not changed and not same and prior_snapshot == snapshot:
                 state=_held_status(prior.get("status")) or state
+            held=_held_status(prior.get("status"))
+            if not past_checked and held.startswith("held: all_month:") and prior_snapshot == snapshot:
+                state=held
             rows.append([
                 f"{tx.source}{account_text} / {narrow_text(tx.merchant)}\n代表 {expense[1]} {expense_id}",
                 f"未分類 {len(members)}件 / {amount}円\n完全一致・金額不問・自動計上のみ\n{state}",
@@ -165,12 +173,13 @@ class CategoryRuleUIPipeline:
             ])
         historical=self.db.category_backfill_ui_rows() if hasattr(self.db,"category_backfill_ui_rows") else []
         rows=consolidate_rules(rows, historical, preferred)
+        rows=remove_resolved(rows, resolved_conditions(self.db, records, transactions))
         if hasattr(self.db, "replace_category_rule_ui_rows"):
             for row in rows:
                 if _checked(row[5]):
                     # Keep the future state last for the read-only daily queue.
                     lines=row[1].split("\n")
-                    row[1]="\n".join(lines[:-1]+["過去分: 2で期間・プレビューを選択",lines[-1]])
+                    row[1]="\n".join(lines[:-1]+["過去分: 全月の未分類に反映待ち",lines[-1]])
             self.db.replace_category_rule_ui_rows(rows, UI_HEADERS)
         else:  # Minimal test and legacy adapter compatibility.
             self.db.ensure_category_rule_ui_sheet(UI_HEADERS)

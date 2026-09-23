@@ -46,7 +46,12 @@ def parse_snapshot(rows):
                 if row[4 if section == "confirm" else 6]]
         if len(keys) != len(set(keys)):
             raise StateError("category_snapshot_duplicate_key")
-        blocks[section] = (defaults[section], data)
+        header=list(defaults[section])
+        if section == "rule":
+            # The submitted header binds the checkbox's meaning. A request
+            # captured under the former preview-only label stays preview-only.
+            header[5]=rows[markers[section]+1][5]
+        blocks[section] = (header, data)
     return blocks
 
 
@@ -183,8 +188,10 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
         if not all(enabled(name) for name in ("CATEGORY_RULE_UI_ENABLED", "CATEGORY_RULE_SAVE_ENABLED",
                 "CATEGORY_BACKFILL_PREVIEW_ENABLED", "CATEGORY_BACKFILL_APPLY_ENABLED")):
             raise StateError("category_request_features_disabled")
+        from .category_past_all_months import PAST_HEADER
         result = process_category_operations(adapter, apply=True, rule_enabled=True,
-            save_enabled=True, preview_enabled=True, backfill_enabled=True)
+            save_enabled=True, preview_enabled=True, backfill_enabled=True,
+            all_months=captured["rule"][0][5] == PAST_HEADER)
         # Merge once, after all processing. UI refreshes during the pipeline can
         # never consume or overwrite changes made after the captured submission.
         live = db._category_workflow_blocks()
