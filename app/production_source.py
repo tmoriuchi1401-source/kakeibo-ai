@@ -122,8 +122,10 @@ def receipts(settings, *, apply: bool) -> dict:
 def paypay(settings, *, apply: bool) -> dict:
     settings.validate(need_paypay_drive=True, need_sheet=True)
     if apply:
+        if not settings.paypay_processed_drive_folder_id:
+            raise RuntimeError("PAYPAY_PROCESSED_DRIVE_FOLDER_ID is required")
         result = DrivePayPayPipeline(settings.paypay_drive_folder_id, SheetsDB(settings.spreadsheet_id),
-                                     settings.processed_drive_folder_id).apply()
+                                     settings.paypay_processed_drive_folder_id).apply()
         return {key: result[key] for key in ("imported_files", "skipped_files", "failed_files")}
     service = read_only_drive_service()
     result = DrivePayPayPipeline(

@@ -1417,3 +1417,5 @@ Amazon注文合計とAmazonレシートが金額・日付・店舗で一意に�
 Amazon取込は1行ずつSheets APIへ書き込まず、新規行をまとめて1回のappend、
 変更行をまとめて1回のbatchUpdateで反映します。
 途中で429になった旧版から再実行しても、すでに登録済みのAmazonキーは検出されるため二重登録しません。
+
+各Drive inboxの処理済みフォルダ設定と再実行については [inbox と処理済み原本](docs/inbox-processed-folders.md) を参照。

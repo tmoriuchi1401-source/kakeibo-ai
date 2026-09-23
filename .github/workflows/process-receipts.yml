@@ -19,6 +19,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
       PAYPAY_DRIVE_FOLDER_ID: ${{ secrets.PAYPAY_DRIVE_FOLDER_ID }}
+      PAYPAY_PROCESSED_DRIVE_FOLDER_ID: ${{ vars.PAYPAY_PROCESSED_DRIVE_FOLDER_ID }}
       PROCESSED_DRIVE_FOLDER_ID: ${{ secrets.PROCESSED_DRIVE_FOLDER_ID }}
       GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
       # Rules remain inert unless the separately approved future-only switch

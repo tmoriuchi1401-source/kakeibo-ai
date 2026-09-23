@@ -787,6 +787,7 @@ def main():
             dry_run=args.dry_run,
             audit_key_file=args.audit_key_file or None,
             income_write_enabled=os.getenv("BANK_INCOME_WRITE_ENABLED", "false") == "true",
+            processed_folder_id=s.bank_pdf_processed_drive_folder_id,
             confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
             confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
         )
@@ -1080,7 +1081,7 @@ def main():
     elif args.cmd=="drive-paypay":
         s,db,_=make(False); s.validate(need_paypay_drive=True)
         print(DrivePayPayPipeline(
-            s.paypay_drive_folder_id, db, s.processed_drive_folder_id,
+            s.paypay_drive_folder_id, db, s.paypay_processed_drive_folder_id,
         ).apply())
     elif args.cmd=="backup":
         s=Settings(); s.validate(need_sheet=True,need_backup=True)

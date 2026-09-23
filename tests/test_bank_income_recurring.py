@@ -337,7 +337,7 @@ def test_cli_passes_explicit_flag_and_readonly_mode_to_existing_runner(rig, monk
     observed = {}
     monkeypatch.setenv("BANK_INCOME_WRITE_ENABLED", "true" if enabled else "false")
     monkeypatch.setattr(cli, "Settings", lambda: SimpleNamespace(
-        spreadsheet_id=rig.db.sid, bank_pdf_drive_folder_id="",
+        spreadsheet_id=rig.db.sid, bank_pdf_drive_folder_id="", bank_pdf_processed_drive_folder_id="",
         validate=lambda **kw: None, bank_confirmed_internal_transfers=lambda: frozenset(),
         bank_confirmed_non_own_classifications=lambda: frozenset()))
     monkeypatch.setattr(cli, "read_only_sheets_service", lambda: object())
@@ -387,3 +387,16 @@ def test_provider_failure_payload_is_not_exposed_in_run_summary(rig, monkeypatch
     result = rig.run()
     assert result["failure_reason"] == "RuntimeError"
     assert "synthetic account" not in json.dumps(result)
+
+
+def test_saved_income_legacy_marker_can_archive_without_new_writes(rig):
+    tx = bank(amount=5000)
+    rig.add("income", tx)
+    assert rig.run()["status"] == "complete"
+    file = rig.drive._files.response["files"][0]
+    file["appProperties"] = {BANK_PROCESSED_PROPERTY: "old"}
+    file["parents"] = ["A" * 20]
+    before = len(rig.db.writes)
+    assert rig.run(processed_folder_id="B" * 20)["status"] == "noop"
+    assert len(rig.db.writes) == before
+    assert file["parents"] == ["B" * 20]
