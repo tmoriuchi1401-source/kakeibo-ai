@@ -209,6 +209,7 @@ class DailySheets:
 
 def read_existing_reviews(db):
     """All-year unresolved queues; no ledger history read and no input writes."""
+    from .receipt_confirmation import SUPERSEDED_REVIEW_REASON
     specs={"要確認":(15,14),"Amazon要確認":(12,None),"領収書確認":(5,2)}
     metadata=db._sheet_metadata()
     result=[]
@@ -230,6 +231,10 @@ def read_existing_reviews(db):
                 elif title=="領収書確認":
                     status=str(row[status_col])
                     if status in {"反映済み","自動反映済み","変更不要（本人判断）","変更不要（機械判断）"}:continue
+                    # The authoritative renderer emits this reason only when
+                    # needs_attention is false because a successor exists.
+                    # Keep orphaned changed-source warnings and real errors.
+                    if status in {"原本変更・再確認","要再確認"} and str(row[4])==SUPERSEDED_REVIEW_REASON:continue
                     detail="専用画面で確認してください。" if str(row[1]) in {"医療","受付保留"} else str(row[4])
                 else:
                     if str(row[status_col])=="反映済み":continue
