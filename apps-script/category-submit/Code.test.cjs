@@ -34,6 +34,7 @@ function harness({state='', response=204, throws=false}={}) {
     PropertiesService:{getUserProperties:()=>({getProperty:()=> 'github_pat_TEST'})},
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock:()=>{}})},
     Utilities:{getUuid:()=>id,DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},
+      formatDate:date=>new Date(date.getTime()+9*60*60*1000).toISOString().slice(0,19).replace('T',' '),
       computeDigest:(_,v)=>Array.from(crypto.createHash('sha256').update(v).digest())},
     UrlFetchApp:{fetch:(url,options)=>{calls.push({url,options});if(throws)throw Error('network');
       return {getResponseCode:()=>response};}},
