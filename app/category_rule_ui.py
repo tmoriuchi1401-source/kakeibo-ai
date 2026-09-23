@@ -8,11 +8,12 @@ from .auto_expense import FALLBACK_CATEGORY
 from .category_rule_pipeline import CategoryRuleApprovalPipeline, RuleApprovalRequest
 from .category_rules import AGGREGATE_ITEM_NAMES, bank_account_alias, narrow_text, parse_rules
 from .reconciliation import parse_import_rows
+from .category_rule_choices import DECLINE, checked as _checked
 
 # Keep the only operator controls in the first six narrow columns.  The
 # condition key and source proof are intentionally retained (but hidden), so
 # sorting or inserting rows can never retarget a checked request.
-UI_HEADERS = ["条件・代表取引", "件数・状態", "大カテゴリ", "小カテゴリ", "今後の自動分類に使う", "過去の未分類にも反映", "固定条件キー", "代表支出ID", "日付", "データ元", "種別", "承認スナップショット"]
+UI_HEADERS = ["条件・代表取引", "件数・状態", "大カテゴリ", "小カテゴリ", "今後の自動分類", "過去分の候補に追加", "固定条件キー", "代表支出ID", "日付", "データ元", "種別", "承認スナップショット"]
 
 
 class CategoryRuleUIPipeline:
@@ -30,12 +31,21 @@ class CategoryRuleUIPipeline:
             # migration rather than clearing a person's pending decision.
             if len(row) >= 12:
                 key=narrow_text(row[6])
-                old[key]={"future":row[4], "past":row[5], "major":row[2], "minor":row[3], "snapshot":row[11]}
+                old[key]={"future":row[4], "past":row[5], "major":row[2], "minor":row[3], "snapshot":row[11], "status":row[1]}
             elif len(row) >= 10:
                 key=narrow_text(row[3])
                 old[key]={"future":row[2], "past":row[10] if len(row)>10 else False,
                           "major":row[5], "minor":row[6], "snapshot":row[9]}
         rules=parse_rules(self.db.category_rules()) if hasattr(self.db, "category_rules") else []
+        declined_conditions={}
+        for prior in old.values():
+            if prior.get("future") == DECLINE:
+                try:
+                    proof=json.loads(prior.get("snapshot", ""))
+                    identity=(proof["kind"],proof["source"],proof["account_alias"],proof["merchant"],"","","","")
+                    declined_conditions[identity]=prior
+                except (KeyError, TypeError, ValueError):
+                    pass
         rows=[]
         grouped={}
         for expense_id,(_, expense) in sorted(self.db.expense_records().items()):
@@ -53,8 +63,10 @@ class CategoryRuleUIPipeline:
             # One conservative option: source + exact billing/store text. Users
             # may decline it; product and aggregate scopes require explicit CLI
             # detail until their own review controls are approved.
-            prior=old.get(expense_id, {})
-            checked=str(prior.get("future", "")).upper() in {"TRUE","1"}
+            # A past-only classification changes a group's key to an expense
+            # key. Carry its declined future decision by the exact condition.
+            prior=old.get(expense_id, declined_conditions.get(identity, {}))
+            checked=_checked(prior.get("future", ""))
             past_checked=str(prior.get("past", "")).upper() in {"TRUE","1"}
             entered=(narrow_text(prior.get("major")), narrow_text(prior.get("minor")))
             # F:G is an initial proposal only.  Once a person has selected a
@@ -90,13 +102,18 @@ class CategoryRuleUIPipeline:
                 state="競合"; checked=False
             else:
                 state="登録待ち" if checked else ("再承認が必要" if changed_checked_condition else "未登録")
+            declined=prior.get("future") == DECLINE
+            if declined:
+                state="既存ルールあり・追加登録しない" if any(rule.active for rule in same) else DECLINE
+            elif not checked and not changed_checked_condition and not same and prior.get("snapshot") == snapshot:
+                state=_held_status(prior.get("status")) or state
             condition=f"{tx.source}{account_text} / {narrow_text(tx.merchant)}（完全一致・金額不問・今後の未分類のみ）\n{state}"
             if changed_checked_condition:
                 old_condition="以前の条件"
                 condition=f"{old_condition}\n現在: {tx.source}{account_text} / {narrow_text(tx.merchant)}（完全一致）\n再承認が必要（条件またはカテゴリが変更）"
             rows.append([
                 f"{tx.source} / {narrow_text(tx.merchant)}\n代表 {expense[1]}",
-                condition, proposal[0], proposal[1], checked, past_checked,
+                condition, proposal[0], proposal[1], DECLINE if declined else checked, past_checked,
                 expense_id, expense_id, expense[1], tx.source, "service", snapshot,
             ])
         # Unclassified records are grouped strictly by the full reusable
@@ -112,7 +129,7 @@ class CategoryRuleUIPipeline:
                 item_name=narrow_text(expense[3]), proposal="fallback_group",
             )
             prior_snapshot=narrow_text(prior.get("snapshot"))
-            checked=str(prior.get("future", "")).upper() in {"TRUE", "1"}
+            checked=_checked(prior.get("future", ""))
             past_checked=str(prior.get("past", "")).upper() in {"TRUE", "1"}
             # An empty initial category is not an approval snapshot.  A person
             # may choose their first category and check either independent
@@ -124,12 +141,26 @@ class CategoryRuleUIPipeline:
             amount=sum(int(float(str(item[1][4]).replace(",", ""))) for item in members)
             account=identity[2]; account_text=f" / 口座={account}" if account else ""
             state=("カテゴリを選択" if not (major and minor) else ("再承認が必要" if changed else "登録待ち"))
+            same=[rule for rule in rules if rule.active and rule.identity() == identity]
+            if same and not changed:
+                state="登録済み" if all(rule.category == (major, minor) for rule in same) else "競合"
+                checked=False
+            declined=prior.get("future") == DECLINE
+            if declined:
+                state="既存ルールあり・追加登録しない" if same else DECLINE
+            elif not checked and not changed and not same and prior_snapshot == snapshot:
+                state=_held_status(prior.get("status")) or state
             rows.append([
                 f"{tx.source}{account_text} / {narrow_text(tx.merchant)}\n代表 {expense[1]} {expense_id}",
                 f"未分類 {len(members)}件 / {amount}円\n完全一致・金額不問・自動計上のみ\n{state}",
-                major, minor, checked, past_checked, key, expense_id, expense[1], tx.source, "service", snapshot,
+                major, minor, DECLINE if declined else checked, past_checked, key, expense_id, expense[1], tx.source, "service", snapshot,
             ])
         if hasattr(self.db, "replace_category_rule_ui_rows"):
+            for row in rows:
+                if _checked(row[5]):
+                    # Keep the future state last for the read-only daily queue.
+                    lines=row[1].split("\n")
+                    row[1]="\n".join(lines[:-1]+["過去分: 2で期間・プレビューを選択",lines[-1]])
             self.db.replace_category_rule_ui_rows(rows, UI_HEADERS)
         else:  # Minimal test and legacy adapter compatibility.
             self.db.ensure_category_rule_ui_sheet(UI_HEADERS)
@@ -162,8 +193,9 @@ class CategoryRuleUIPipeline:
         return {"state":"applied", "checked":len(results), "results":results}
 
 
-def _checked(value: object) -> bool:
-    return str(value).strip().upper() in {"TRUE", "1", "YES", "ON"}
+def _held_status(value):
+    lines=str(value or "").split("\n")
+    return next((line for line in reversed(lines) if line.startswith("held:")), "")
 
 
 def _snapshot_has_category(value: object) -> bool:

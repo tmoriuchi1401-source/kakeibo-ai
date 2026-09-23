@@ -512,6 +512,8 @@ class SheetsDB:
             return cells[:5]+cells[6:11]
         if section == "confirm":
             return cells[:4]+[cells[6]]
+        from .category_rule_choices import logical_choice
+        cells[4]=logical_choice(cells[4])
         if compact:
             from .compact_categories import logical_rule_row
             return logical_rule_row(cells)
@@ -533,6 +535,9 @@ class SheetsDB:
             return cells[:4]+["", "", cells[4]]+[""]*5
         cells += [""]*max(0, 12-len(cells))
         cells[4]=checkbox(cells[4]); cells[5]=checkbox(cells[5])
+        if not header:
+            from .category_rule_choices import physical_choice
+            cells[4]=physical_choice(cells[4])
         if compact:
             from .compact_categories import physical_rule_row
             return physical_rule_row(cells, header=header)
@@ -692,6 +697,14 @@ class SheetsDB:
                 requests.extend(growth)
                 if growth:self._invalidate_sheet_metadata()
                 requests.extend(category_rule_ui_control_requests(sheet_id=sheet_id, helper_sheet_id=helper["properties"]["sheetId"], row_count=rule_position["count"], start_row=rule_position["start"]))
+        if rule_position["count"]:
+            from .category_rule_choices import choice_validation
+            requests.append(choice_validation(sheet_id,rule_position["start"],rule_position["count"]))
+        # Explain the two approvals beside the operator's controls.
+        requests.append({"updateCells":{"start":{"sheetId":sheet_id,
+            "rowIndex":rule_position["header"]-1,"columnIndex":4},"rows":[{"values":[
+                {"note":"登録する／登録しない／未選択から選択。登録しないはこの候補の追加登録を見送る選択で、既存ルールの停止ではありません。"},
+                {"note":"チェック後、下の「2. 過去分の固定プレビュー」で期間を選び「プレビューする」にチェックします。「3」の件数確認後に反映します。"}]}],"fields":"note"}})
         backfill_position=positions["backfill"]
         requests.extend(self._workflow_backfill_requests(sheet_id, backfill_position["start"], blocks["backfill"][1]))
         confirm_position=positions["confirm"]

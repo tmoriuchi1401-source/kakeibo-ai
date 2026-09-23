@@ -241,7 +241,7 @@ def validate_scope(args) -> None:
     canary_source=getattr(args,"canary_source","amazon")
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and args.scope!="amazon_canary"):
         raise StateError("money_canary_source_invalid")
-    if args.scope in {"daily", "ledger_order"}:
+    if args.scope in {"daily", "ledger_order", "categories"}:
         if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
                 or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
             raise StateError(args.scope + "_scope_other_source_forbidden")
@@ -285,7 +285,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories"), default="all")
     parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--canary-source",choices=("amazon","aupay_card"),default="amazon")
@@ -301,6 +301,13 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope == "categories":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                raise StateError("categories_manual_scope_required")
+            from .category_operations import run_category_operations
+            result=run_category_operations(env,apply=args.mode=="apply")
+            print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
+            return
         if args.scope == "ledger_order":
             if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
                 raise StateError("ledger_order_manual_scope_required")
@@ -356,8 +363,11 @@ def main():
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
         daily_counts={}
+        category_counts={}
         if args.scope == "all":
             from .daily_runtime import run_daily_requests
+            from .category_operations import run_category_operations
+            category_counts=run_category_operations(env,apply=args.mode=="apply")
             # The fixed-ID inbox is replayable independently of the native
             # accounting stages. Their ledger/checkpoint gates are unchanged.
             daily_counts=run_daily_requests(env,apply=args.mode=="apply")
@@ -383,6 +393,7 @@ def main():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         report["mode"] = args.mode
+        if category_counts:report["category_operations"]=category_counts
         if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
             if key in COUNT_KEYS and type(value) is int and value>=0}
         report["scope"] = args.scope
