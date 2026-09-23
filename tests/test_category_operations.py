@@ -23,7 +23,7 @@ class OperationsDB(BackfillDB):
     def replace_category_backfill_ui_rows(self,rows,header): self.backfill=deepcopy(rows)
     def replace_category_backfill_confirmation_rows(self,rows,header): self.confirmations=deepcopy(rows)
     def get(self,rng):
-        if rng == "ホーム!B3": return [["2026-08"]]
+        if rng == "'ホーム'!B4": return [["2026-08"]]
         return super().get(rng)
     def append(self,sheet,rows):
         if sheet == "カテゴリ自動分類ルール": self.rule_rows.extend(deepcopy(rows))
@@ -122,6 +122,20 @@ def test_category_diagnostics_never_include_private_error_body():
     failure=CategoryOperationFailure(cause)
     assert failure.details=={"category_exception":"RuntimeError","category_http_status":429}
     assert "PRIVATE" not in str(failure)
+
+
+def test_many_preview_choices_read_default_month_only_once(monkeypatch):
+    from app.category_backfill_ui import CategoryBackfillUIPipeline
+    from test_category_backfill import condition
+    db=OperationsDB(); db.rule_rows=[condition().to_row() for _ in range(20)]
+    reads=[]; original=db.get
+    def get(rng):
+        reads.append(rng)
+        return original(rng)
+    monkeypatch.setattr(db,"get",get)
+    CategoryBackfillUIPipeline(db,ui_enabled=True,apply_enabled=False).refresh()
+    assert len(db.backfill)==20
+    assert reads.count("'ホーム'!B4")==1
 
 
 def test_decline_removes_unclassified_proposal_from_daily_queue_but_keeps_past_request():

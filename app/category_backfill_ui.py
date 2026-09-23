@@ -228,11 +228,12 @@ class CategoryBackfillUIPipeline:
         if not self.ui_enabled:
             return {"state": "disabled", "reason": "category_backfill_preview_disabled"}
         header, existing=self._existing_ui(); old=self._old_rows(header, existing)
-        categories = set(self.db.categories()); default_period = "対象月:" + self._home_month(); rows=[]
+        categories = set(self.db.categories()); default_month = self._home_month()
+        default_period = "対象月:" + default_month; rows=[]
         for rule in parse_rules(self.db.category_rules()):
             if not rule.active or not valid_rule(rule, categories): continue
             payload = self._payload(rule, saved_rule=True); prior,legacy=old.get(rule.rule_id, ([], False))
-            start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
+            start,end,checked,retained=self._restored_controls(prior, legacy, payload, default_month)
             label=self._label_with_period_notice(condition_label(json.loads(payload)), end, retained)
             rows.append([
                 label, f"{rule.category[0]}\n{rule.category[1]}", start, end, checked,
@@ -263,7 +264,7 @@ class CategoryBackfillUIPipeline:
                                 (narrow_text(category[0]), narrow_text(category[1])), "", datetime.now(timezone.utc), 1, True)
             if not valid_rule(rule, categories): continue
             payload = self._payload(rule, saved_rule=False); prior,legacy=old.get(key, ([], False))
-            start,end,checked,retained=self._restored_controls(prior, legacy, payload, self._home_month())
+            start,end,checked,retained=self._restored_controls(prior, legacy, payload, default_month)
             label=self._label_with_period_notice(
                 f"表示中: {condition_label(json.loads(payload))}", end, retained)
             rows.append([label, f"{rule.category[0]}\n{rule.category[1]}", start, end, checked,
