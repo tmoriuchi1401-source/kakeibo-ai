@@ -95,6 +95,15 @@ def test_registration_failure_survives_next_refresh_without_retrying():
     assert not db.rule_rows and db.ui[-1][4] is False
 
 
+def test_empty_proposal_is_not_a_conflict_with_an_existing_rule():
+    from test_category_backfill import condition
+    db=OperationsDB()
+    db.rule_rows=[condition().to_row()]
+    row=proposal(db)
+    assert row[2:4]==["", ""] and row[1].endswith("カテゴリを選択")
+    assert "競合" not in row[1]
+
+
 def test_decline_removes_unclassified_proposal_from_daily_queue_but_keeps_past_request():
     row=["条件","カテゴリを選択","","","登録しない",False,"group:key","id"]
     assert _item("rule",row,"url",{},combined=True) is None

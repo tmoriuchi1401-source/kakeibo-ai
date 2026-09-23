@@ -142,7 +142,7 @@ class CategoryRuleUIPipeline:
             account=identity[2]; account_text=f" / 口座={account}" if account else ""
             state=("カテゴリを選択" if not (major and minor) else ("再承認が必要" if changed else "登録待ち"))
             same=[rule for rule in rules if rule.active and rule.identity() == identity]
-            if same and not changed:
+            if same and not changed and major and minor:
                 state="登録済み" if all(rule.category == (major, minor) for rule in same) else "競合"
                 checked=False
             declined=prior.get("future") == DECLINE
