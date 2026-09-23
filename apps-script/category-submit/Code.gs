@@ -132,7 +132,7 @@ function submitCategoryInput() {
     sheet.getRange('B1').setValue(true);
     sheet.getRange('C1').setValue('受付中');
     sheet.getRange('B2').setValue('入力を保存しました。実行を依頼しています。');
-    sheet.getRange('B3').setValue(submitted);
+    sheet.getRange('B3').setValue(Utilities.formatDate(new Date(submitted), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') + ' JST');
     SpreadsheetApp.flush();
     let response;
     try {
