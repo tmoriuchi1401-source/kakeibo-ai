@@ -5,7 +5,7 @@ The workflow shares the production writer lock. A claimed request is never
 automatically replayed after an uncertain write or a cancelled runner.
 """
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -141,7 +141,9 @@ class SheetRequestStore:
         current = self.read()
         if current[0] != metadata[0]:
             raise StateError("category_request_replaced")
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        instant = datetime.now(timezone.utc)
+        now = instant.isoformat(timespec="seconds")
+        display_time = instant.astimezone(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S JST")
         metadata[1], metadata[5] = state, message
         if state == "running": metadata[3], metadata[6] = now, run_id
         else: metadata[4] = now
@@ -151,7 +153,7 @@ class SheetRequestStore:
             {"range": f"'{CATEGORY_REQUEST_SHEET}'!A2:J2", "values": [metadata]},
             {"range": f"'{CATEGORY_WORKFLOW_SHEET}'!C1", "values": [[label]]},
             {"range": f"'{CATEGORY_WORKFLOW_SHEET}'!B2", "values": [[message]]},
-            {"range": f"'{CATEGORY_WORKFLOW_SHEET}'!B3", "values": [[now]]},
+            {"range": f"'{CATEGORY_WORKFLOW_SHEET}'!B3", "values": [[display_time]]},
         ]
         if state != "running":
             data.append({"range": f"'{CATEGORY_WORKFLOW_SHEET}'!B1", "values": [[False]]})
