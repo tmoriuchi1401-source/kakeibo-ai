@@ -150,3 +150,27 @@ def test_post_writer_sort_runs_after_success_only(monkeypatch):
     assert not seen
     assert flow.finish_ledger_updates({}, {"written": 1}, apply=True)["ledger_order_sheets"] == 2
     assert seen == [True]
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_categories_scope_consumes_only_category_requests(monkeypatch,capsys,apply):
+    import json
+    seen=[]
+    monkeypatch.setattr(flow.sys,"argv",["production_flow","--scope","categories","--mode","apply" if apply else "preview"])
+    for key,value in dict(valid_env(),GITHUB_EVENT_NAME="workflow_dispatch").items():monkeypatch.setenv(key,value)
+    monkeypatch.setattr(flow.subprocess,"check_output",lambda *args,**kw:"a"*40)
+    monkeypatch.setattr("app.private_state_bindings.decode_environment",lambda env,**kw:(env,""))
+    monkeypatch.setattr("app.category_operations.run_category_operations",lambda env,apply:seen.append(apply) or {"category_registration_processed":1})
+    monkeypatch.setattr(flow,"assemble",lambda *args,**kw:pytest.fail("categories cannot run intake"))
+    flow.main()
+    assert seen==[apply]
+    assert json.loads(capsys.readouterr().out)["scope"]=="categories"
+
+
+@pytest.mark.parametrize("flag,value",[("bank_apply",True),("amazon_target","target"),
+    ("receipt_manifest","a"*64),("receipt_store","private"),("projection_bootstrap",True)])
+def test_categories_scope_rejects_other_source_inputs(flag,value):
+    args=dict(scope="categories",mode="apply",bank_apply=False,amazon_target="",receipt_manifest="",receipt_store="",projection_bootstrap=False)
+    args[flag]=value
+    with pytest.raises(StateError,match="categories_scope_other_source_forbidden"):
+        flow.validate_scope(SimpleNamespace(**args))

@@ -18,7 +18,7 @@ on:
       scope:
         description: All stages or isolated receipts, receipt review, or Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
         default: all
         required: true
       amazon_target:
@@ -111,6 +111,10 @@ jobs:
       BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
       BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
       CATEGORY_RULE_AUTO_APPLY_ENABLED: ${{ vars.CATEGORY_RULE_AUTO_APPLY_ENABLED }}
+      CATEGORY_RULE_UI_ENABLED: ${{ vars.CATEGORY_RULE_UI_ENABLED }}
+      CATEGORY_RULE_SAVE_ENABLED: ${{ vars.CATEGORY_RULE_SAVE_ENABLED }}
+      CATEGORY_BACKFILL_PREVIEW_ENABLED: ${{ vars.CATEGORY_BACKFILL_PREVIEW_ENABLED }}
+      CATEGORY_BACKFILL_APPLY_ENABLED: ${{ vars.CATEGORY_BACKFILL_APPLY_ENABLED }}
       # Values are RSA-wrapped fixed IDs, decrypted only inside Python.
       KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
       AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
@@ -150,7 +154,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' && inputs.scope != 'ledger_order' }}
+        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' && inputs.scope != 'ledger_order' && inputs.scope != 'categories' }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update

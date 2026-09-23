@@ -4,6 +4,7 @@ from __future__ import annotations
 from .daily_view import ReviewItem
 from .monthly_projection import ProjectionError
 from .sheets import CATEGORY_WORKFLOW_MARKERS, CATEGORY_WORKFLOW_SHEET, LEGACY_CATEGORY_RULE_UI_SHEET
+from .category_rule_choices import DECLINE, checked as _checked
 
 
 def _rows(db, properties, width, first=1):
@@ -19,10 +20,6 @@ def _url(db, properties, row):
     return f"https://docs.google.com/spreadsheets/d/{db.sid}/edit#gid={properties['sheetId']}&range=A{row}"
 
 
-def _checked(value):
-    return str(value).strip().upper() in {"TRUE", "1", "YES", "ON"}
-
-
 def _item(section, row, url, requests, *, combined):
     if section == "rule":
         key = str(row[6]).strip()
@@ -33,6 +30,8 @@ def _item(section, row, url, requests, *, combined):
         future, past = _checked(row[4]), _checked(row[5])
         held = latest.startswith("held") or "競合" in latest or "再承認" in latest
         unresolved = latest == "カテゴリを選択" or (key.startswith("group:") and latest == "登録待ち")
+        if row[4] == DECLINE:
+            held = unresolved = False
         if not (future or past or held or unresolved):
             return None  # An unused future-rule suggestion is not an unresolved issue.
         stage = "今後の自動分類" if future or not past else "過去分のプレビュー"
