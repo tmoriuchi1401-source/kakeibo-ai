@@ -10,6 +10,7 @@ from .receipt_reimport_production import TABLES, target_snapshot, digest
 from .utils import now_jst_string, canonical_hash
 
 TITLE = "領収書確認"
+SUPERSEDED_REVIEW_REASON = '同じ原本の新しい確認行あり。この旧行への追加判断は不要。'
 HEADERS = ["確認ID", "種別", "状態", "原本リンク", "確認する内容", "既存値", "候補（未確定）",
            "支払日（医療）", "発行施設（医療）", "実支払額（医療）", "カテゴリ（医療）",
            "支払方法（医療・任意）", "判断", "統合先支出ID（重複時）", "本人メモ", "反映結果"]
@@ -492,7 +493,7 @@ class ReceiptConfirmation:
             if item['kind']=='normal' and item['status']=='waiting':
                 from .receipt_review_policy import general_review_guidance
                 reason=general_review_guidance(item['source']['source_id'],self._parsed(item),**tables,categories=categories)
-            if item['status']=='superseded' and not self.needs_attention(key):reason='同じ原本の新しい確認行あり。この旧行への追加判断は不要。'
+            if item['status']=='superseded' and not self.needs_attention(key):reason=SUPERSEDED_REVIEW_REASON
             if item.get('automatic_hold') and item['status']=='waiting':
                 from .medical_auto_posting import HOLD_TEXT
                 reason='自動保留: '+HOLD_TEXT.get(item['automatic_hold'],'安全な匿名化・記帳条件を確認できません。本人確認は任意です。')

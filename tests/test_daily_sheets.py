@@ -242,3 +242,48 @@ def test_all_period_reviews_are_bounded_and_medical_inputs_are_not_read():
     assert len(reviews)==1 and reviews[0].fixed_id=="領収書確認:old-year-medical"
     assert "private" not in reviews[0].detail
     assert reads==["'領収書確認'!A2:E1001","'領収書確認'!A1002:E2001"]
+
+
+@pytest.mark.parametrize("successor_status",[None,"waiting","pending","applied","closed_user","closed_machine"])
+@pytest.mark.parametrize("old_error",["","原本の版が変更"])
+def test_daily_reviews_match_authoritative_attention_for_obsolete_rows(successor_status,old_error):
+    from app.daily_sheets import read_existing_reviews
+    from app.receipt_confirmation import TITLE, review_id
+    from tests.test_receipt_confirmation import medical
+
+    review,store,source_db,verify,source=medical()
+    old_key=review_id("medical",source)
+    source_db.rows[TITLE][0][14]="Owner note retained"
+    review.capture_inputs()
+    review.items[old_key].update(status="superseded",error=old_error)
+    if successor_status:
+        successor=dict(source,version="2")
+        review.observe_medical(successor,"synthetic-folder")
+        review.items[review_id("medical",successor)]["status"]=successor_status
+    review.render()
+    before=deepcopy(source_db.rows)
+    # Keep the successor on a different read page: exclusion must use the
+    # authoritative result, not just whichever other rows fit on this page.
+    displayed=source_db.rows[TITLE]
+    reads=[]
+    def get_raw(a1):
+        reads.append(a1)
+        return [r[:5] for r in (displayed[:1] if "A2:" in a1 else displayed[1:])]
+    db=SimpleNamespace(sid="source",get_raw=get_raw,_sheet_metadata=lambda:{"sheets":[{
+        "properties":{"title":TITLE,"sheetId":987,"gridProperties":{"rowCount":2001}}}]})
+    actual=read_existing_reviews(db)
+    expected={TITLE+":"+key for key in review.items if review.needs_attention(key)}
+    assert {item.fixed_id for item in actual}==expected
+    assert all("private" not in item.detail for item in actual)
+    assert source_db.rows==before and displayed[0][14]=="Owner note retained"
+    assert reads==["'領収書確認'!A2:E1001","'領収書確認'!A1002:E2001"]
+
+
+def test_daily_review_does_not_hide_a_real_duplicate_error():
+    from app.daily_sheets import read_existing_reviews
+    row=["duplicate","一般","要再確認","source-link","同日付近・同額の既存支出あり。重複を確認してください。"]
+    db=SimpleNamespace(sid="source",get_raw=lambda a1:[row],_sheet_metadata=lambda:{"sheets":[{
+        "properties":{"title":"領収書確認","sheetId":987,"gridProperties":{"rowCount":2}}}]})
+    reviews=read_existing_reviews(db)
+    assert len(reviews)==1 and reviews[0].status=="要再確認"
+    assert reviews[0].url.endswith("#gid=987&range=A2")
