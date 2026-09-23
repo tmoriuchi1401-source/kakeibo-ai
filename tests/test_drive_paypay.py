@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 import app.drive_paypay as drive_paypay
 from app.drive_paypay import DrivePayPayPipeline, PROCESSED_PROPERTY
 from app.settings import Settings
@@ -26,12 +28,18 @@ class FakeFiles:
     def list(self, **kwargs):
         return Request({"files": self.items})
 
+    def get(self, fileId, **kwargs):
+        if fileId == "1234567890processed":
+            return Request({"id": fileId, "mimeType": "application/vnd.google-apps.folder",
+                            "capabilities": {"canAddChildren": True}})
+        return Request(next(item for item in self.items if item["id"] == fileId))
+
     def update(self, **kwargs):
         self.updates.append(kwargs)
         target = next(item for item in self.items if item["id"] == kwargs["fileId"])
         target["appProperties"] = kwargs["body"]["appProperties"]
         if kwargs.get("addParents"):
-            target["parents"] = [kwargs["addParents"]]
+            target["parents"] = sorted((set(target["parents"]) - {kwargs["removeParents"]}) | {kwargs["addParents"]})
         return Request(target)
 
 
@@ -159,3 +167,87 @@ def test_action_only_runs_drive_paypay_when_folder_secret_is_set():
     assert "PAYPAY_DRIVE_FOLDER_ID: ${{ secrets.PAYPAY_DRIVE_FOLDER_ID }}" in workflow
     assert "env.PAYPAY_DRIVE_FOLDER_ID != ''" in workflow
     assert workflow.index("python -m app.cli drive-paypay") < workflow.index("python -m app.cli reconcile")
+
+
+def test_old_processed_csv_moves_without_download_or_append():
+    p = pipeline([drive_file(processed=True)], {}, FakeDB())
+    assert p.apply()["archived_files"] == 1
+    assert p.db.rows == []
+    assert p.service.resource.items[0]["parents"] == ["1234567890processed"]
+
+
+def test_move_preserves_unrelated_parent_and_properties():
+    file = drive_file()
+    file["parents"].append("unrelated-parent")
+    file["appProperties"]["other"] = "keep"
+    p = pipeline([file], {"f1": VALID}, FakeDB())
+    assert p.apply()["failed_files"] == 0
+    assert set(file["parents"]) == {"1234567890processed", "unrelated-parent"}
+    assert file["appProperties"]["other"] == "keep"
+
+
+def test_failed_move_replay_does_not_append_twice(monkeypatch):
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB())
+    update = p.service.resource.update
+    monkeypatch.setattr(p.service.resource, "update", lambda **kw: (_ for _ in ()).throw(TimeoutError()))
+    assert p.apply()["failed_files"] == 1
+    assert len(p.db.rows) == 1
+    assert p.service.resource.items[0]["parents"] == ["1234567890source"]
+    monkeypatch.setattr(p.service.resource, "update", update)
+    assert p.apply()["failed_files"] == 0
+    assert len(p.db.rows) == 1
+    assert p.service.resource.items[0]["parents"] == ["1234567890processed"]
+
+
+def test_missing_import_readback_never_moves(monkeypatch):
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB())
+    monkeypatch.setattr(p.db, "append", lambda *args: None)
+    assert p.apply()["failed_files"] == 1
+    assert p.service.resource.updates == []
+
+
+def test_same_folder_is_rejected_before_import():
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB(), processed_folder="1234567890source")
+    with pytest.raises(ValueError, match="processed_folder_is_inbox"):
+        p.apply()
+    assert p.db.rows == []
+
+
+def test_production_paypay_uses_its_dedicated_folder(monkeypatch):
+    from app import production_source
+    observed = {}
+    class Pipeline:
+        def __init__(self, folder, db, processed):
+            observed.update(folder=folder, processed=processed)
+        def apply(self):
+            return dict(imported_files=0, skipped_files=0, failed_files=0)
+    monkeypatch.setattr(production_source, "DrivePayPayPipeline", Pipeline)
+    monkeypatch.setattr(production_source, "SheetsDB", lambda sid: object())
+    settings = Settings(spreadsheet_id="sheet", paypay_drive_folder_id="1234567890source",
+                        processed_drive_folder_id="receipt-folder",
+                        paypay_processed_drive_folder_id="1234567890processed")
+    production_source.paypay(settings, apply=True)
+    assert observed["processed"] == "1234567890processed"
+
+
+def test_move_response_loss_after_commit_is_not_reimported(monkeypatch):
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB())
+    update = p.service.resource.update
+    def lost(**kwargs):
+        update(**kwargs)
+        raise TimeoutError()
+    monkeypatch.setattr(p.service.resource, "update", lost)
+    assert p.apply()["failed_files"] == 1
+    monkeypatch.setattr(p.service.resource, "update", update)
+    # Even a stale listing must not append or repeat the move.
+    assert p.apply()["archived_files"] == 1
+    assert len(p.db.rows) == 1
+    assert len(p.service.resource.updates) == 1
+
+
+def test_move_readback_mismatch_is_reported(monkeypatch):
+    p = pipeline([drive_file()], {"f1": VALID}, FakeDB())
+    monkeypatch.setattr(p.service.resource, "update", lambda **kw: Request({"id": "f1"}))
+    assert p.apply()["failed_files"] == 1
+    assert "processed_move_readback_failed" in p.apply()["files"][0]["skip_reason"]
+    assert len(p.db.rows) == 1

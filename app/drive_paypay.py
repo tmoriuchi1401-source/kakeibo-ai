@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 
+from .drive_processed import move_processed, validate_processed_folder
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file, drive_service
 from .paypay_pipeline import PayPayPipeline
@@ -102,16 +103,28 @@ class DrivePayPayPipeline:
             "fields": "id,parents,appProperties", "supportsAllDrives": True,
         }
         if self.processed_folder_id:
-            kwargs["addParents"] = self.processed_folder_id
-            kwargs["removeParents"] = ",".join(file.get("parents", []))
+            move_processed(self.service, file["id"], self.folder_id,
+                           self.processed_folder_id, properties)
+            return
         self.service.files().update(**kwargs).execute()
 
     def apply(self) -> dict:
         if self.db is None:
             raise ValueError("drive-paypay applyにはSheetsDBが必要です")
+        if self.processed_folder_id:
+            validate_processed_folder(self.service, self.folder_id, self.processed_folder_id)
         files = self._files()
         details = []
         for file in files:
+            if is_csv_file(file) and self._processed(file) and self.processed_folder_id:
+                inspected = self._inspect(file)[0]
+                try:
+                    self._mark_processed(file)
+                    inspected["result"] = "archived"
+                except Exception as exc:
+                    inspected.update(result="error", skip_reason=f"移動エラー: {exc}")
+                details.append(inspected)
+                continue
             inspected, data = self._inspect(file)
             if not inspected["processable"] or data is None:
                 inspected["result"] = (
@@ -132,6 +145,7 @@ class DrivePayPayPipeline:
         return {
             "target_csvs": sum(is_csv_file(file) for file in files),
             "imported_files": sum(item.get("result") == "imported" for item in details),
+            "archived_files": sum(item.get("result") == "archived" for item in details),
             "skipped_files": sum(item.get("result") == "skipped" for item in details),
             "failed_files": sum(item.get("result") == "error" for item in details),
             "files": details,

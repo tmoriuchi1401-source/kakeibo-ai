@@ -225,6 +225,8 @@ def integrated(monkeypatch, tmp_path):
     from test_projection_refresh import Store
     money_store=Store();money_store.data["money"]=empty_book(cutover_day="2026-09-01",legacy={})
     monkeypatch.setattr("app.amazon_money_runtime.money_writer",lambda db,*args:MoneyWriter(money_store,MoneyLedger(db)))
+    metadata["paypay-processed-fixture"] = {"id": "paypay-processed-fixture",
+        "mimeType": "application/vnd.google-apps.folder", "parents": [], "capabilities": {"canAddChildren": True}}
     bindings = {}
     for source, native in flow.STATE_SOURCES.items():
         identity = f"{source}-state"
@@ -256,6 +258,7 @@ def integrated(monkeypatch, tmp_path):
     settings = Settings(spreadsheet_id=SID, gmail_token_json="synthetic", gemini_api_key="synthetic",
                         receipt_drive_folder_id=RECEIPTS, paypay_drive_folder_id=PAYPAY,
                         bank_pdf_drive_folder_id=BANK, processed_drive_folder_id=ARCHIVE,
+                        paypay_processed_drive_folder_id="paypay-processed-fixture",
                         medical_review_shadow_enabled=False)
     for module in (cli, production_source):
         monkeypatch.setattr(module, "Settings", lambda: settings)
@@ -348,6 +351,7 @@ def test_shared_transport_cli_preview_apply_and_replay(integrated):
     assert not any(row[10] == card[0] for row in f.rows["支出明細"][1:])
     assert f.metadata["receipt-fixture"]["appProperties"]["kakeiboReceiptClass"] == "normal"
     assert f.metadata["private-fixture"]["parents"] == [RECEIPTS]
+    assert f.metadata["paypay-fixture"]["parents"] == ["paypay-processed-fixture"]
     assert f.ai_calls == [b"synthetic-normal-receipt"]
     for source in ("amazon", "aupay_card"):
         assert validate(f.payloads[f"{source}-state"], f.bindings[source])["phase"] == "ready"

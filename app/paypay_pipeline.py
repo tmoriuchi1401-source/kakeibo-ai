@@ -164,4 +164,6 @@ class PayPayPipeline:
             stats["new"] += 1
             stats["unclassified_paypay"] += 1
         self.db.append("取込データ", rows)
+        if rows and not {str(row[0]) for row in rows}.issubset(self.db.import_ids()):
+            raise RuntimeError("paypay_import_readback_failed")
         return stats

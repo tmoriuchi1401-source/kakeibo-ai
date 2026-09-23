@@ -21,6 +21,8 @@ class Settings:
     payroll_drive_folder_id: str = os.getenv("PAYROLL_DRIVE_FOLDER_ID", "")
     bank_pdf_drive_folder_id: str = os.getenv("BANK_PDF_DRIVE_FOLDER_ID", "")
     amazon_order_history_folder_id: str = os.getenv("AMAZON_ORDER_HISTORY_FOLDER_ID", "")
+    paypay_processed_drive_folder_id: str = os.getenv("PAYPAY_PROCESSED_DRIVE_FOLDER_ID", "")
+    bank_pdf_processed_drive_folder_id: str = os.getenv("BANK_PDF_PROCESSED_DRIVE_FOLDER_ID", "")
     processed_drive_folder_id: str = os.getenv("PROCESSED_DRIVE_FOLDER_ID", "")
     backup_drive_folder_id: str = os.getenv("BACKUP_DRIVE_FOLDER_ID", "")
     drive_backup_token_json: str = os.getenv("GOOGLE_DRIVE_BACKUP_TOKEN_JSON", "")

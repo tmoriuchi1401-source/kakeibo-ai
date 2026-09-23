@@ -43,8 +43,18 @@ class _Files:
         self.query = kwargs
         return _Request(self.response)
 
+    def get(self, fileId, **kwargs):
+        if fileId == "B" * 20:
+            return _Request({"id": fileId, "mimeType": "application/vnd.google-apps.folder",
+                             "capabilities": {"canAddChildren": True}})
+        return _Request(next(f for f in self.response["files"] if f["id"] == fileId))
+
     def update(self, **kwargs):
         self.updated.append(kwargs)
+        if kwargs.get("addParents"):
+            file = next(f for f in self.response["files"] if f["id"] == kwargs["fileId"])
+            file["parents"] = sorted((set(file["parents"]) - {kwargs["removeParents"]}) | {kwargs["addParents"]})
+            file["appProperties"] = kwargs["body"]["appProperties"]
         return _Request({"id": kwargs["fileId"]})
 
 
@@ -322,3 +332,84 @@ def test_synthetic_recurring_apply_uses_standing_authority_without_manual_approv
     assert observed["selected_source_identities"] == (identity,)
     assert "approval_file" not in observed
     assert len(drive._files.updated) == 1
+
+
+@pytest.mark.parametrize("mode", ["duplicate", "write", "review", "income_disabled", "empty", "partial_write", "preview"])
+def test_bank_archive_only_after_complete_processing(tmp_path, monkeypatch, mode):
+    from types import SimpleNamespace
+    provider = ProtectedBankRecurringAuthorityProvider(_authority_file(tmp_path), repo_root=Path.cwd())
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    file = {"id": "pdf", "mimeType": "application/pdf", "parents": ["A" * 20, "unrelated"], "appProperties": {}}
+    drive = _Drive({"files": [file]})
+    ids = ("bankpdf:expense",) if mode in {"write", "partial_write", "preview"} else ()
+    daily = SimpleNamespace(expense_candidate_identities=ids, summary={
+        "parsed": 0 if mode == "empty" else 1, "true_unknown": int(mode == "review"),
+        "collision": 0, "new_income": int(mode == "income_disabled"),
+    })
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: daily)
+    monkeypatch.setattr("app.bank_pdf_recurring.run_bank_recurring_production_batch",
+                        lambda *a, **k: {"confirmed_count": 0 if mode == "partial_write" else 1})
+    result = run_bank_pdf_recurring(drive_service=drive, db=_DB(), state=state,
+        authority_provider=provider, repo_root=Path.cwd(),
+        now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"), dry_run=mode == "preview",
+        processed_folder_id="B" * 20, download=lambda _: b"synthetic",
+        audit_key_file=tmp_path / "audit.json")
+    if mode in {"duplicate", "write"}:
+        assert set(file["parents"]) == {"B" * 20, "unrelated"}
+        assert file["appProperties"][BANK_PROCESSED_PROPERTY]
+    else:
+        assert drive._files.updated == []
+        assert "A" * 20 in file["parents"]
+    if mode == "partial_write":
+        assert result["status"] == "failed"
+        assert state.successful_window_end() is None
+
+
+def test_bank_archive_failure_replay_has_no_duplicate_append(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    provider = ProtectedBankRecurringAuthorityProvider(_authority_file(tmp_path), repo_root=Path.cwd())
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    file = {"id": "pdf", "mimeType": "application/pdf", "parents": ["A" * 20], "appProperties": {}}
+    drive = _Drive({"files": [file]})
+    db = _DB()
+    daily = SimpleNamespace(expense_candidate_identities=("bankpdf:expense",), summary={"parsed": 1})
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: daily)
+    writes = []
+    def append(*a, **k):
+        writes.append(1)
+        db.rows.append(["bankpdf:expense"])
+        return {"confirmed_count": 1}
+    monkeypatch.setattr("app.bank_pdf_recurring.run_bank_recurring_production_batch", append)
+    update = drive._files.update
+    monkeypatch.setattr(drive._files, "update", lambda **kw: (_ for _ in ()).throw(TimeoutError()))
+    options = dict(drive_service=drive, db=db, state=state, authority_provider=provider,
+        repo_root=Path.cwd(), now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"),
+        dry_run=False, processed_folder_id="B" * 20, download=lambda _: b"synthetic",
+        audit_key_file=tmp_path / "audit.json")
+    assert run_bank_pdf_recurring(**options)["status"] == "failed"
+    assert state.successful_window_end() is None
+    monkeypatch.setattr(drive._files, "update", update)
+    assert run_bank_pdf_recurring(**options)["status"] == "noop"
+    assert writes == [1]
+    assert file["parents"] == ["B" * 20]
+
+
+def test_overlapping_pdf_is_not_archived_before_first_write_succeeds(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    provider = ProtectedBankRecurringAuthorityProvider(_authority_file(tmp_path), repo_root=Path.cwd())
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    drive = _Drive({"files": [{"id": str(i), "mimeType": "application/pdf",
+                              "parents": ["A" * 20], "appProperties": {}} for i in range(2)]})
+    daily = SimpleNamespace(expense_candidate_identities=("bankpdf:overlap",), summary={"parsed": 1})
+    monkeypatch.setattr("app.bank_pdf_recurring.build_bank_daily_preview", lambda *a, **k: daily)
+    def fail(*a, **k):
+        raise TimeoutError("write failed")
+    monkeypatch.setattr("app.bank_pdf_recurring.run_bank_recurring_production_batch", fail)
+    result = run_bank_pdf_recurring(drive_service=drive, db=_DB(), state=state,
+        authority_provider=provider, repo_root=Path.cwd(),
+        now=datetime.fromisoformat("2026-09-14T12:00:00+09:00"), dry_run=False,
+        processed_folder_id="B" * 20, download=lambda _: b"synthetic",
+        audit_key_file=tmp_path / "audit.json")
+    assert result["status"] == "failed"
+    assert drive._files.updated == []
+    assert state.successful_window_end() is None
