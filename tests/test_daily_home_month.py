@@ -47,7 +47,7 @@ def test_unknown_empty_month_is_not_zero_but_recorded_net_zero_is_preserved():
     records=[[grid.data[SHEETS["_候補"][0],HOME_LOOKUP_ROW+i,c] for c in range(4)] for i in range(3)]
     assert records==[["2026-09","未集計","未集計","取込状況未確認"],
                      ["2026-08",0,0,"完了"],["2026-07",0,2,"取込状況未確認"]]
-    assert grid.data[SHEETS["ホーム"][0],5,1]==123  # All-period unresolved.
+    assert grid.data[SHEETS["ホーム"][0],5,1]=="='確認'!$B$4"  # All-period unresolved, across every page.
     # Month rollover replaces the fixed lookup table and refreshes candidates.
     requests=home_requests(summary,"2026-10",123,"now")
     daily.update_outputs(requests)
