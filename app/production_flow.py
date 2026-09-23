@@ -27,6 +27,15 @@ COMMON_PREVIEWS = {"review_apply": "review-apply-preview", "reconcile": "reconci
                   "auto_expense": "auto-expense-preview", "review_refresh": "review-preview",
                   "expenses_refresh": "expenses-preview"}
 
+# The existing production ledger and source runners remain the single authority.
+# A scheduled Drive run selects only its own source and its needed downstream steps.
+DRIVE_SCHEDULE_SCOPES = {
+    "core": frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank"},
+    "drive_receipts": frozenset({"receipts"}),
+    "drive_paypay": frozenset({"paypay"}),
+    "drive_bank": frozenset({"bank"}),
+}
+
 
 def verify_execution_boundary(env: dict, head: str) -> None:
     if (env.get("GITHUB_ACTIONS") != "true" or env.get("GITHUB_REF") != "refs/heads/main"
@@ -245,6 +254,10 @@ def validate_scope(args) -> None:
         if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
                 or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
             raise StateError(args.scope + "_scope_other_source_forbidden")
+    if args.scope in DRIVE_SCHEDULE_SCOPES and (
+            (args.bank_apply and args.scope != "drive_bank")
+            or getattr(args, "projection_bootstrap", False)):
+        raise StateError(args.scope + "_scope_other_source_forbidden")
     if args.scope == "projection":
         if args.bank_apply or args.amazon_target or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
             raise StateError("projection_scope_other_source_forbidden")
@@ -281,11 +294,22 @@ def finish_ledger_updates(env, result, *, apply):
     return result
 
 
+def needs_ledger_order(scope: str, report: dict, *, bank_apply: bool) -> bool:
+    """Only accounting writes from an isolated Drive run need the final sort."""
+    if scope == "drive_paypay":
+        return False  # Intake rows are handled by the next existing core run.
+    if scope == "drive_bank":
+        return bank_apply  # Scheduled Bank is always a read-only preview.
+    if scope == "drive_receipts":
+        return report["sources"]["receipts"]["counts"].get("written", 0) > 0
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories", *DRIVE_SCHEDULE_SCOPES), default="all")
     parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--canary-source",choices=("amazon","aupay_card"),default="amazon")
@@ -375,8 +399,12 @@ def main():
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
                                ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary")
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
-                                    amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,receipts_only=args.scope == "receipts")
-        if report["success"] and args.mode == "apply":
+                                    amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,
+                                    receipts_only=args.scope == "receipts",
+                                    selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope),
+                                    require_omitted_ready=args.scope == "core")
+        if report["success"] and args.mode == "apply" and needs_ledger_order(
+                args.scope, report, bank_apply=args.bank_apply):
             report["ledger_order"] = finish_ledger_updates(env, {}, apply=True)
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
@@ -397,7 +425,7 @@ def main():
         if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
             if key in COUNT_KEYS and type(value) is int and value>=0}
         report["scope"] = args.scope
-        report["bank_mode"] = "not_run" if args.scope in {"amazon_canary", "receipts"} else "apply" if args.bank_apply else "preview"
+        report["bank_mode"] = ("apply" if args.bank_apply else "preview") if "bank" in report["sources"] else "not_run"
     except Exception as exc:
         report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
         from .category_operations import CategoryOperationFailure

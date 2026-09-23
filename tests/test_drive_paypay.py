@@ -103,6 +103,15 @@ def test_same_csv_reprocessing_does_not_duplicate_transactions():
     assert result["files"][0]["import"]["unchanged"] == 1
 
 
+def test_empty_paypay_inbox_is_safe_noop():
+    db = FakeDB()
+    result = pipeline([], {}, db).apply()
+    assert result["target_csvs"] == 0
+    assert result["imported_files"] == 0
+    assert result["failed_files"] == 0
+    assert db.rows == []
+
+
 def test_non_csv_and_non_paypay_csv_are_skipped():
     files = [drive_file("txt", "memo.txt"), drive_file("csv", "other.csv")]
     p = pipeline(files, {"txt": b"ignored", "csv": b"name,amount\nfoo,100\n"})

@@ -150,7 +150,9 @@ def run_durable_source(store: DurableState, directory: Path,
 
 
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
-                   preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False,canary_source: str = "amazon") -> dict:
+                   preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False,
+                   canary_source: str = "amazon", selected_sources: frozenset[str] | None = None,
+                   require_omitted_ready: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -159,9 +161,16 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
     """
     if amazon_canary and receipts_only:
         raise StateError('conflicting_source_scopes')
+    if selected_sources is not None and (not selected_sources or not selected_sources <= DEPENDENCIES.keys()
+                                         or amazon_canary or receipts_only):
+        raise StateError('invalid_source_scope')
+    if require_omitted_ready and selected_sources is None:
+        raise StateError('invalid_source_scope')
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and not amazon_canary):raise StateError("money_canary_source_invalid")
     outcomes = {}
     for source, dependencies in DEPENDENCIES.items():
+        if selected_sources is not None and source not in selected_sources:
+            continue
         if receipts_only and source != 'receipts':
             continue
         if amazon_canary and source != canary_source:
@@ -170,7 +179,10 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
         previous = (history or {}).get(source, {})
         outcome = {"status": "skipped", "error": "dependency_failed", "counts": {},
                    "last_success": previous.get("last_success"), "duration_seconds": 0.0}
-        if amazon_canary or all(outcomes[name]["status"] == "success" for name in dependencies):
+        if amazon_canary or all(
+                outcomes[name]["status"] == "success" if name in outcomes
+                else not require_omitted_ready or (history or {}).get(name, {}).get("phase") == "ready"
+                for name in dependencies):
             try:
                 if source not in runners:
                     raise StateError("source_runner_missing")

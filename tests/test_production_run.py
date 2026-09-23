@@ -43,6 +43,35 @@ def test_postprocessing_failure_keeps_run_failed_and_allows_independent_refresh(
     assert result["success"] is False
 
 
+def test_scheduled_source_selection_keeps_failures_inside_selected_pipeline():
+    calls = []
+    selected = frozenset({"paypay"})
+    result = execute_serial(runners(calls, fail="paypay"), selected_sources=selected)
+    assert calls == ["paypay"]
+    assert set(result["sources"]) == selected
+    assert not result["success"]
+
+
+def test_scheduled_source_selection_runs_only_requested_source():
+    calls = []
+    result = execute_serial(runners(calls), selected_sources=frozenset({"bank"}))
+    assert calls == ["bank"]
+    assert result["success"]
+
+
+def test_core_accounting_waits_for_omitted_drive_source_to_be_ready():
+    calls = []
+    selected = frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank"}
+    history = {name: {"phase": "ready"} for name in DEPENDENCIES}
+    history["receipts"]["phase"] = "pending"
+    result = execute_serial(runners(calls), history=history, selected_sources=selected,
+                            require_omitted_ready=True)
+    assert calls == ["amazon", "aupay_balance"]
+    assert result["sources"]["aupay_card"]["status"] == "skipped"
+    assert result["sources"]["review_apply"]["status"] == "skipped"
+    assert not result["success"]
+
+
 @pytest.mark.parametrize("result", [{"failure": 1}, {"errors": 1}, {"failed_files": 2}, {"status": "failed"}, {"errors": "0"}, [], {}, {"status": "unexpected"}])
 def test_reported_errors_are_not_mistaken_for_success(result):
     with pytest.raises(StateError):
