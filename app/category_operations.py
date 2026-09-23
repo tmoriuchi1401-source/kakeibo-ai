@@ -48,13 +48,15 @@ def process_category_operations(db, *, apply, rule_enabled, save_enabled,
 def run_category_operations(env, *, apply=False):
     from .production_flow import verify_execution_boundary
     from .google_clients import sheets_service, read_only_sheets_service
-    from .sheets import SheetsDB
+    from .sheets import SheetsDB, SheetsReadPacer
     verify_execution_boundary(env,env.get("GITHUB_SHA",""))
     enabled=lambda name:env.get(name,"false").lower() == "true"
     if not enabled("CATEGORY_RULE_UI_ENABLED"):
         return {"category_operations_disabled":1}
+    pacer=SheetsReadPacer()
     db=SheetsDB(env.get("SPREADSHEET_ID",""),
-                service=sheets_service() if apply else read_only_sheets_service())
+                service=sheets_service() if apply else read_only_sheets_service(),
+                read_pacer=pacer,read_retry_base=20)
     try:
         result=process_category_operations(db,apply=apply,rule_enabled=True,
             save_enabled=enabled("CATEGORY_RULE_SAVE_ENABLED"),
@@ -62,7 +64,7 @@ def run_category_operations(env, *, apply=False):
             backfill_enabled=enabled("CATEGORY_BACKFILL_APPLY_ENABLED"))
         if apply:
             from .projection_runtime import run_projection
-            result.update(run_projection(env,apply=True))
+            result.update(run_projection(env,apply=True,read_pacer=pacer))
     except Exception as exc:
         raise CategoryOperationFailure(exc) from None
     return result
