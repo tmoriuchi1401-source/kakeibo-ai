@@ -235,7 +235,8 @@ def home_requests(summary,current_month,total,updated_at):
     return [cells("_候補",HOME_LOOKUP_ROW,rows,width=4),
             cells("ホーム",2,[["取込状況",lookup("D","取込状況未確認")]],width=3),
             cells("ホーム",4,[["記録済み支出",lookup("B","未集計")],
-                ["買い物件数",lookup("C","未集計")],["確認が必要",total],
+                ["買い物件数",lookup("C","未集計")],
+                ["確認が必要",{"userEnteredValue":{"formulaValue":"='確認'!$B$4"}}],
                 ["最終更新",updated_at]],width=3),
             cells("ホーム",12,[["対象月の表示はすぐ切り替わります。新しい取込・送信の反映は定期処理です。未取込はゼロではありません。"]],left=1,width=1),
             dropdown("ホーム",3,1,months)]
