@@ -2,6 +2,23 @@
 from .category_rule_ui import CategoryRuleUIPipeline
 from .category_backfill_ui import CategoryBackfillUIPipeline
 from .category_rule_choices import checked
+from .drive_run_state import StateError
+
+
+class CategoryOperationFailure(StateError):
+    """Report only code locations/status, never private API error bodies."""
+    def __init__(self, cause):
+        from pathlib import Path
+        super().__init__("category_operation_failed")
+        self.details={"category_exception":type(cause).__name__}
+        status=getattr(getattr(cause,"resp",None),"status",None)
+        if type(status) is int:self.details["category_http_status"]=status
+        frame=cause.__traceback__
+        while frame is not None:
+            source=Path(frame.tb_frame.f_code.co_filename)
+            if source.parent == Path(__file__).parent:
+                self.details["category_code_location"]=source.name+":"+str(frame.tb_lineno)
+            frame=frame.tb_next
 
 
 def process_category_operations(db, *, apply, rule_enabled, save_enabled,
@@ -38,11 +55,14 @@ def run_category_operations(env, *, apply=False):
         return {"category_operations_disabled":1}
     db=SheetsDB(env.get("SPREADSHEET_ID",""),
                 service=sheets_service() if apply else read_only_sheets_service())
-    result=process_category_operations(db,apply=apply,rule_enabled=True,
-        save_enabled=enabled("CATEGORY_RULE_SAVE_ENABLED"),
-        preview_enabled=enabled("CATEGORY_BACKFILL_PREVIEW_ENABLED"),
-        backfill_enabled=enabled("CATEGORY_BACKFILL_APPLY_ENABLED"))
-    if apply:
-        from .projection_runtime import run_projection
-        result.update(run_projection(env,apply=True))
+    try:
+        result=process_category_operations(db,apply=apply,rule_enabled=True,
+            save_enabled=enabled("CATEGORY_RULE_SAVE_ENABLED"),
+            preview_enabled=enabled("CATEGORY_BACKFILL_PREVIEW_ENABLED"),
+            backfill_enabled=enabled("CATEGORY_BACKFILL_APPLY_ENABLED"))
+        if apply:
+            from .projection_runtime import run_projection
+            result.update(run_projection(env,apply=True))
+    except Exception as exc:
+        raise CategoryOperationFailure(exc) from None
     return result

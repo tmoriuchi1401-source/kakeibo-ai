@@ -293,7 +293,8 @@ class CategoryBackfillUIPipeline:
             # A fixed preview is the terminal processing of the source UI's
             # past choice.  Consume that choice by its immutable key so the
             # next runner refresh cannot create the same request again.
-            source_key = narrow_text(cells[RULE_ID]).removeprefix("displayed:")
+            shown_key = narrow_text(cells[RULE_ID])
+            source_key = shown_key.removeprefix("displayed:") if shown_key.startswith("displayed:") else ""
             if (source_key and result.get("state") in {"previewed", "preview_empty", "held"}
                     and hasattr(self.db, "consume_category_rule_ui_past_choice")):
                 self.db.consume_category_rule_ui_past_choice(source_key, result)

@@ -104,6 +104,26 @@ def test_empty_proposal_is_not_a_conflict_with_an_existing_rule():
     assert "競合" not in row[1]
 
 
+def test_saved_rule_preview_does_not_scan_unrelated_source_checkboxes(monkeypatch):
+    from test_category_backfill import condition
+    db=OperationsDB(); db.rule_rows=[condition().to_row()]
+    run(db)
+    db.backfill[0][2:5]=["2026-08","2026-08",True]
+    monkeypatch.setattr(db,"consume_category_rule_ui_past_choice",lambda *args:pytest.fail("saved rules have no source checkbox"))
+    assert run(db)["category_previews_processed"]==1
+    assert len(db.requests)==1 and not db.category_updates
+
+
+def test_category_diagnostics_never_include_private_error_body():
+    from app.category_operations import CategoryOperationFailure
+    from types import SimpleNamespace
+    cause=RuntimeError("PRIVATE ACCOUNT DETAILS")
+    cause.resp=SimpleNamespace(status=429)
+    failure=CategoryOperationFailure(cause)
+    assert failure.details=={"category_exception":"RuntimeError","category_http_status":429}
+    assert "PRIVATE" not in str(failure)
+
+
 def test_decline_removes_unclassified_proposal_from_daily_queue_but_keeps_past_request():
     row=["条件","カテゴリを選択","","","登録しない",False,"group:key","id"]
     assert _item("rule",row,"url",{},combined=True) is None
