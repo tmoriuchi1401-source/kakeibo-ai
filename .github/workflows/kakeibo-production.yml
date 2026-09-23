@@ -18,7 +18,7 @@ on:
       scope:
         description: All stages or isolated receipts, receipt review, or Amazon canary
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily]
+        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order]
         default: all
         required: true
       amazon_target:
@@ -150,7 +150,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' }}
+        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' && inputs.scope != 'ledger_order' }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update

@@ -120,7 +120,33 @@ def test_isolated_daily_scope_runs_only_the_fixed_id_inbox(monkeypatch,capsys):
     monkeypatch.setattr(flow.subprocess,"check_output",lambda *args,**kw:"a"*40)
     monkeypatch.setattr("app.private_state_bindings.decode_environment",lambda env,**kw:(env,""))
     monkeypatch.setattr("app.daily_runtime.run_daily_requests",lambda env,apply:seen.append(apply) or {"corrections_applied":1})
+    monkeypatch.setattr("app.ledger_order.run_ledger_order",lambda env,apply:{})
     monkeypatch.setattr(flow,"assemble",lambda *args,**kw:pytest.fail("isolated daily cannot run intake"))
     flow.main()
     assert seen==[True]
     assert json.loads(capsys.readouterr().out)=={"success":True,"scope":"daily","counts":{"corrections_applied":1}}
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_ledger_order_scope_is_isolated_and_preview_does_not_apply(monkeypatch, capsys, apply):
+    import json
+    seen = []
+    monkeypatch.setattr(flow.sys, "argv", ["production_flow", "--scope", "ledger_order", "--mode", "apply" if apply else "preview"])
+    for key, value in dict(valid_env(), GITHUB_EVENT_NAME="workflow_dispatch").items(): monkeypatch.setenv(key, value)
+    monkeypatch.setattr(flow.subprocess, "check_output", lambda *args, **kw: "a" * 40)
+    monkeypatch.setattr("app.private_state_bindings.decode_environment", lambda env, **kw: (env, ""))
+    monkeypatch.setattr("app.ledger_order.run_ledger_order", lambda env, apply: seen.append(apply) or {"ledger_order_sheets": 2})
+    monkeypatch.setattr(flow, "assemble", lambda *args, **kw: pytest.fail("ordering cannot run intake"))
+    flow.main()
+    assert seen == [apply]
+    assert json.loads(capsys.readouterr().out)["counts"] == {"ledger_order_sheets": 2}
+
+
+def test_post_writer_sort_runs_after_success_only(monkeypatch):
+    seen = []
+    monkeypatch.setattr("app.ledger_order.run_ledger_order", lambda env, apply: seen.append(apply) or {"ledger_order_sheets": 2})
+    with pytest.raises(StateError): flow.finish_ledger_updates({}, {"failure": 1}, apply=True)
+    flow.finish_ledger_updates({}, {"written": 1}, apply=False)
+    assert not seen
+    assert flow.finish_ledger_updates({}, {"written": 1}, apply=True)["ledger_order_sheets"] == 2
+    assert seen == [True]

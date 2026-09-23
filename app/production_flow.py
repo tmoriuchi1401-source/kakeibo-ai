@@ -241,10 +241,10 @@ def validate_scope(args) -> None:
     canary_source=getattr(args,"canary_source","amazon")
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and args.scope!="amazon_canary"):
         raise StateError("money_canary_source_invalid")
-    if args.scope == "daily":
+    if args.scope in {"daily", "ledger_order"}:
         if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
                 or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
-            raise StateError("daily_scope_other_source_forbidden")
+            raise StateError(args.scope + "_scope_other_source_forbidden")
     if args.scope == "projection":
         if args.bank_apply or args.amazon_target or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest",""):
             raise StateError("projection_scope_other_source_forbidden")
@@ -272,11 +272,20 @@ def validate_scope(args) -> None:
         raise StateError("amazon_target_requires_canary_scope")
 
 
+def finish_ledger_updates(env, result, *, apply):
+    """Order only after all successful writers have released their row hints."""
+    require_success(result or {"errors": 0})
+    if apply:
+        from .ledger_order import run_ledger_order
+        return {**result, **run_ledger_order(env, apply=True)}
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily"), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order"), default="all")
     parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--canary-source",choices=("amazon","aupay_card"),default="amazon")
@@ -292,6 +301,13 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if args.scope == "ledger_order":
+            if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+                raise StateError("ledger_order_manual_scope_required")
+            from .ledger_order import run_ledger_order
+            result = run_ledger_order(env, apply=args.mode == "apply")
+            print(json.dumps({"success": True, "scope": args.scope, "counts": result}, sort_keys=True))
+            return
         if args.scope=="amazon_canary":
             if env.get("GITHUB_EVENT_NAME")!="workflow_dispatch":raise StateError("money_canary_manual_required")
             from .amazon_money_runtime import money_enabled
@@ -300,6 +316,7 @@ def main():
             if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":raise StateError("daily_manual_scope_required")
             from .daily_runtime import run_daily_requests
             result=run_daily_requests(env,apply=args.mode=="apply")
+            result=finish_ledger_updates(env,result,apply=args.mode=="apply")
             print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
             return
         if args.scope == "projection":
@@ -314,6 +331,7 @@ def main():
         if args.scope=='receipt_confirmation':
             if env.get('GITHUB_EVENT_NAME')!='workflow_dispatch':raise StateError('confirmation_manual_scope_required')
             result=invoke('receipt_confirmation',apply=args.mode=='apply',env=env)
+            result=finish_ledger_updates(env,result,apply=args.mode=="apply")
             print(json.dumps({'success':True,'scope':args.scope,'counts':result},sort_keys=True))
             return
         if args.scope == "receipt_reimport":
@@ -326,6 +344,7 @@ def main():
                        RECEIPT_REIMPORT_OPERATION=args.receipt_operation,
                        RECEIPT_REIMPORT_LIMIT=str(args.receipt_limit))
             result=invoke("receipt_reimport",apply=args.mode=="apply",env=env)
+            result=finish_ledger_updates(env,result,apply=args.mode=="apply")
             print(json.dumps({"success":True,"scope":args.scope,"counts":result},sort_keys=True))
             return
         if args.bank_apply and args.mode != "apply":
@@ -347,6 +366,8 @@ def main():
                                ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary")
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
                                     amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,receipts_only=args.scope == "receipts")
+        if report["success"] and args.mode == "apply":
+            report["ledger_order"] = finish_ledger_updates(env, {}, apply=True)
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True

@@ -129,7 +129,7 @@ class ProjectionRefresh:
         old_summary = self.store.read("summary") or {"months": {}, "coverage": {}, "required_routes": []}
         months = sorted(set(index.by_month) | set(old_summary["months"]) | set(getattr(self.store,"cache_months",())))
         self._save("journal", {"generation": (self.store.read("journal") or empty_journal())["generation"] + 1,
-                               "ranges": [], "append": True, "months": months})
+                               "ranges": [], "append": True, "months": months, "rebuild": True})
         summary = deepcopy(old_summary)
         for month in months:
             projection = rebuild_month(month, index, catalog,
@@ -162,6 +162,8 @@ class ProjectionRefresh:
         from .category_management import require_settled
         require_settled(self.store)
         before_journal = self.journal.read()
+        if before_journal.get("rebuild"):
+            return self.bootstrap(category_pairs)
         before_catalog = self.store.read("catalog")
         before_summary = self.store.read("summary") if getattr(self.store,"cache_months",None) is not None else None
         cache_fill = self._cache_fill(before_summary or {})
