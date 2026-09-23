@@ -2,7 +2,12 @@ name: Kakeibo unified production
 
 on:
   schedule:
+    # Existing Gmail and general accounting cadence: 06:17 / 18:17 JST.
     - cron: '17 9,21 * * *'
+    # Drive intake uses separate runs under the same production lock and ledger.
+    - cron: '31 */3 * * *'  # Receipt: every three hours, 00:31 through 21:31 UTC.
+    - cron: '47 21 * * *'   # Bank preview: 06:47 JST.
+    - cron: '11 23 * * *'   # PayPay: 08:11 JST.
   workflow_dispatch:
     inputs:
       mode:
@@ -16,9 +21,9 @@ on:
         type: string
         required: false
       scope:
-        description: All stages or isolated receipts, receipt review, or Amazon canary
+        description: All stages, scheduled-source scopes, or isolated maintenance
         type: choice
-        options: [all, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
+        options: [all, core, drive_receipts, drive_paypay, drive_bank, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
         default: all
         required: true
       amazon_target:
@@ -156,7 +161,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ inputs.scope != 'projection' && inputs.scope != 'daily' && inputs.scope != 'amazon_canary' && inputs.scope != 'ledger_order' && inputs.scope != 'categories' }}
+        if: ${{ (github.event_name == 'schedule' && github.event.schedule == '31 */3 * * *') || (github.event_name != 'schedule' && (inputs.scope == 'all' || inputs.scope == 'receipts' || inputs.scope == 'drive_receipts' || inputs.scope == 'receipt_reimport' || inputs.scope == 'receipt_confirmation')) }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update
@@ -168,6 +173,7 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
           MANUAL_MODE: ${{ inputs.mode || 'preview' }}
           MANUAL_SCOPE: ${{ inputs.scope || 'all' }}
           AMAZON_TARGET: ${{ inputs.amazon_target }}
@@ -185,6 +191,14 @@ jobs:
           args=()
           if [[ "$EVENT_NAME" == schedule ]]; then
             mode=apply
+            case "$EVENT_SCHEDULE" in
+              '17 9,21 * * *') scope=core ;;
+              '31 */3 * * *') scope=drive_receipts ;;
+              '47 21 * * *') scope=drive_bank ;;
+              '11 23 * * *') scope=drive_paypay ;;
+              *) echo 'Unrecognized production schedule'; exit 1 ;;
+            esac
+            args+=(--scope "$scope")
           else
             args+=(--scope "$MANUAL_SCOPE")
             args+=(--canary-source "$CANARY_SOURCE")

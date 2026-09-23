@@ -39,6 +39,34 @@ def test_preview_commands_never_select_apply():
         assert args[-1] in {"--dry-run", "preview"} or args[-1].endswith("preview")
 
 
+def test_scheduled_scopes_keep_gmail_cadence_and_drive_sources_independent():
+    scopes = flow.DRIVE_SCHEDULE_SCOPES
+    assert {"amazon", "aupay_card", "aupay_balance"} <= scopes["core"]
+    assert not {"receipts", "paypay", "bank"} & scopes["core"]
+    assert scopes["drive_receipts"] == {"receipts"}
+    assert scopes["drive_bank"] == {"bank"}
+    assert scopes["drive_paypay"] == {"paypay"}
+
+
+@pytest.mark.parametrize("scope", ["core", "drive_receipts", "drive_paypay"])
+def test_scheduled_scopes_reject_bank_apply(scope):
+    with pytest.raises(StateError):
+        flow.validate_scope(SimpleNamespace(scope=scope, mode="apply", bank_apply=True,
+                                            amazon_target="", receipt_store="", receipt_manifest="",
+                                            projection_bootstrap=False))
+
+
+def test_isolated_empty_drive_runs_do_not_sort_other_ledgers():
+    empty_receipts = {"sources": {"receipts": {"counts": {"written": 0}}}}
+    new_receipts = {"sources": {"receipts": {"counts": {"written": 1}}}}
+    assert not flow.needs_ledger_order("drive_bank", {}, bank_apply=False)
+    assert not flow.needs_ledger_order("drive_paypay", {}, bank_apply=False)
+    assert not flow.needs_ledger_order("drive_receipts", empty_receipts, bank_apply=False)
+    assert flow.needs_ledger_order("drive_receipts", new_receipts, bank_apply=False)
+    assert flow.needs_ledger_order("drive_bank", {}, bank_apply=True)
+    assert flow.needs_ledger_order("core", {}, bank_apply=False)
+
+
 def test_legacy_output_is_captured_and_ai_key_only_goes_to_receipt_apply(monkeypatch):
     seen = []
     def subprocess_run(args, **kwargs):

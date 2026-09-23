@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import yaml
 
@@ -27,12 +28,15 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
 
 def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     parent = workflows()["kakeibo-production.yml"]
-    assert parent["on"]["schedule"] == [{"cron": "17 9,21 * * *"}]
+    assert parent["on"]["schedule"] == [
+        {"cron": "17 9,21 * * *"}, {"cron": "31 */3 * * *"},
+        {"cron": "47 21 * * *"}, {"cron": "11 23 * * *"},
+    ]
     inputs = parent["on"]["workflow_dispatch"]["inputs"]
     assert inputs["mode"]["default"] == "preview"
     assert inputs["bank_apply"]["default"] == "false"
     assert inputs["scope"]["default"] == "all"
-    assert inputs["scope"]["options"] == ["all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories"]
+    assert inputs["scope"]["options"] == ["all", "core", "drive_receipts", "drive_paypay", "drive_bank", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories"]
     assert inputs["projection_bootstrap"]["default"] == "false"
     assert inputs["canary_source"]["options"]==["amazon","aupay_card"]
     assert inputs["canary_source"]["default"]=="amazon"
@@ -44,6 +48,12 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert "vars.KAKEIBO_LEGACY_DISABLED == 'true'" in job["if"]
     assert "vars.KAKEIBO_SCHEDULE_ENABLED == 'true'" in job["if"]
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job["if"]
+    script = next(step["run"] for step in job["steps"] if step.get("name") == "Execute sources and dependent accounting serially")
+    for cron, scope in [("17 9,21 * * *", "core"), ("31 */3 * * *", "drive_receipts"),
+                        ("47 21 * * *", "drive_bank"), ("11 23 * * *", "drive_paypay")]:
+        assert f"'{cron}') scope={scope} ;;" in script
+    assert 'args+=(--scope "$scope")' in script
+    assert job["steps"][-1]["env"]["EVENT_SCHEDULE"] == "${{ github.event.schedule }}"
     uses = [step.get("uses", "") for step in job["steps"]]
     assert not any("cache/save" in value or "upload-artifact" in value for value in uses)
     assert all("continue-on-error" not in step for step in job["steps"])
@@ -52,9 +62,19 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     guard = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("Bind verified"))
     assert 'test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"' in guard
     ocr=next(step for step in job["steps"] if step.get("name")=="Install existing OCR runtime")
-    assert "inputs.scope != 'projection'" in ocr["if"]
-    assert "inputs.scope != 'daily'" in ocr["if"]
-    assert "inputs.scope != 'amazon_canary'" in ocr["if"]
+    assert "github.event.schedule == '31 */3 * * *'" in ocr["if"]
+    assert "inputs.scope == 'drive_receipts'" in ocr["if"]
+
+
+def test_drive_schedule_jst_times_and_receipt_period():
+    jst = timezone(timedelta(hours=9))
+    bank = datetime(2026, 9, 23, 21, 47, tzinfo=timezone.utc).astimezone(jst)
+    paypay = datetime(2026, 9, 23, 23, 11, tzinfo=timezone.utc).astimezone(jst)
+    receipt_hours = [datetime(2026, 9, 24, hour, 31, tzinfo=timezone.utc).astimezone(jst).hour
+                     for hour in range(0, 24, 3)]
+    assert (bank.hour, bank.minute) == (6, 47)
+    assert (paypay.hour, paypay.minute) == (8, 11)
+    assert receipt_hours == [9, 12, 15, 18, 21, 0, 3, 6]
 
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():
