@@ -163,7 +163,8 @@ class ProjectionJournal:
         from .monthly_projection import month_key
         try:
             value = self.store.read("journal")
-            if (not isinstance(value, dict) or set(value) != {"generation", "ranges", "append", "months"}
+            if (not isinstance(value, dict) or set(value) - {"rebuild"} != {"generation", "ranges", "append", "months"}
+                    or ("rebuild" in value and type(value["rebuild"]) is not bool)
                     or type(value["generation"]) is not int or value["generation"] < 0
                     or type(value["append"]) is not bool
                     or merge_ranges(value["ranges"]) != value["ranges"]
@@ -177,11 +178,13 @@ class ProjectionJournal:
         except Exception:
             raise ProjectionError("projection_journal_invalid") from None
 
-    def mark(self, ranges=(), *, append=False):
+    def mark(self, ranges=(), *, append=False, rebuild=False):
         before = self.read()
         after = deepcopy(before)
         after["ranges"] = merge_ranges([*before["ranges"], *ranges])
-        after["append"] = before["append"] or append
+        after["append"] = before["append"] or append or rebuild
+        if rebuild:
+            after["rebuild"] = True
         if after == before:
             return
         after["generation"] += 1
