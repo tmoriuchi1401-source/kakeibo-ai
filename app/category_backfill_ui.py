@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from .category_backfill import BackfillSpec, CategoryBackfillPipeline
 from .category_rules import CategoryRule, narrow_text, parse_rules, valid_rule
 from .category_ui_order import member_keys
+from .category_past_all_months import identity, resolved_conditions
 
 BACKFILL_UI_SHEET = "カテゴリ過去反映"
 BACKFILL_CONFIRM_SHEET = "カテゴリ過去反映確認"
@@ -272,6 +273,8 @@ class CategoryBackfillUIPipeline:
                 f"表示中: {condition_label(json.loads(payload))}", end, retained)
             rows.append([label, f"{rule.category[0]}\n{rule.category[1]}", start, end, checked,
                          "表示中の条件（過去分のみ）", key, 1, payload, retained])
+        resolved=resolved_conditions(self.db)
+        rows=[row for row in rows if identity(json.loads(row[PAYLOAD])) not in resolved or _is_checked(row[PREVIEW])]
         _replace_rows(self.db, "replace_category_backfill_ui_rows",
                       BACKFILL_UI_SHEET, BACKFILL_UI_HEADERS, rows)
         return {"state": "refreshed", "conditions": len(rows), "default_period": default_period}
