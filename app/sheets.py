@@ -9,6 +9,7 @@ CATEGORY_SEPARATOR = "｜"
 CATEGORY_RULE_UI_SHEET = "カテゴリ操作"
 LEGACY_CATEGORY_RULE_UI_SHEET = "カテゴリ自動分類"
 CATEGORY_WORKFLOW_SHEET = CATEGORY_RULE_UI_SHEET
+CATEGORY_REQUEST_SHEET = "_カテゴリ実行受付"
 CATEGORY_WORKFLOW_MARKERS = {
     "rule": "■ 1. カテゴリを選ぶ・今後の自動分類",
     "backfill": "■ 2. 過去分の固定プレビュー",
@@ -611,7 +612,8 @@ class SheetsDB:
         self._invalidate_sheet_metadata()
 
     def _workflow_positions(self, blocks):
-        row_num=1; positions={}
+        row_num=6 if CATEGORY_REQUEST_SHEET in self.sheet_titles() else 1
+        positions={}
         for section in ("rule", "backfill", "confirm"):
             header,rows=blocks[section]
             positions[section]={"marker":row_num, "header":row_num+1,
@@ -669,15 +671,16 @@ class SheetsDB:
         helper=next((value for value in meta["sheets"] if value["properties"]["title"] == CATEGORY_RULE_UI_HELPER_SHEET), None)
         used=max(position["start"]+position["count"] for position in positions.values())
         requests=[]
+        offset=positions["rule"]["marker"]-1
         column_count=sheet["properties"].get("gridProperties", {}).get("columnCount", 0)
         if column_count < 27:
             requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"COLUMNS","length":27-column_count}})
         requests += [
-            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":0,"endRowIndex":sheet["properties"]["gridProperties"]["rowCount"] if self._compact_category_helper() else 1000,"startColumnIndex":0,"endColumnIndex":6}}},
+            {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":offset,"endRowIndex":used,"startColumnIndex":0,"endColumnIndex":12},"cell":{"userEnteredFormat":{"backgroundColor":{"red":1,"green":1,"blue":1},"textFormat":{"foregroundColor":{"red":0.16,"green":0.20,"blue":0.23},"bold":False},"wrapStrategy":"WRAP","verticalAlignment":"MIDDLE"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy,verticalAlignment)"}},
+            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":offset,"endRowIndex":sheet["properties"]["gridProperties"]["rowCount"] if self._compact_category_helper() else 1000,"startColumnIndex":0,"endColumnIndex":6}}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":0,"endIndex":6},"properties":{"hiddenByUser":False},"fields":"hiddenByUser"}},
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":25},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
-            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":2}},"fields":"gridProperties.frozenRowCount"}},
+            {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":4 if offset else 2}},"fields":"gridProperties.frozenRowCount"}},
         ]
         for section in ("rule", "backfill", "confirm"):
             marker=positions[section]["marker"]-1; header=positions[section]["header"]-1
@@ -728,7 +731,11 @@ class SheetsDB:
         blocks=self._category_workflow_blocks()
         self._check_category_workflow_input(prior)
         blocks[section]=(list(header), [list(row) for row in rows])
+        self._write_category_workflow_blocks(blocks)
+
+    def _write_category_workflow_blocks(self, blocks):
         self._ensure_category_workflow_sheet(); positions=self._workflow_positions(blocks)
+        offset=positions["rule"]["marker"]-1
         values=[]
         compact=bool(self._compact_category_helper())
         for key in ("rule", "backfill", "confirm"):
@@ -745,17 +752,17 @@ class SheetsDB:
             extent=sheet["properties"]["gridProperties"]["rowCount"]
             sheet_id=sheet["properties"]["sheetId"]
             requests=[]
-            if len(values)>extent:
-                requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)-extent}})
-            request=_cells(sheet_id,1,0,values,12)
-            request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values))
+            if len(values)+offset>extent:
+                requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)+offset-extent}})
+            request=_cells(sheet_id,offset+1,0,values,12)
+            request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values)+offset)
             requests.append(request)
             self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
             self._invalidate_sheet_metadata()
             self._category_workflow_last_read=None
         else:
-            self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
-            self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A1",valueInputOption="RAW",body={"values":values}).execute()
+            self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A{offset+1}:L1000")
+            self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A{offset+1}",valueInputOption="RAW",body={"values":values}).execute()
         self._configure_category_workflow(blocks, positions)
 
     def ensure_category_rule_ui_sheet(self, header):

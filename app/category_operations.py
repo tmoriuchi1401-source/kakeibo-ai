@@ -41,7 +41,11 @@ def process_category_operations(db, *, apply, rule_enabled, save_enabled,
     rules.refresh()  # Show consumed decisions and registered/held states.
     counts.update(category_registration_processed=saved.get("checked",0),
                   category_previews_processed=len(previews.get("results",[])),
-                  category_confirmations_processed=len(applied.get("results",[])))
+                  category_confirmations_processed=len(applied.get("results",[])),
+                  category_expenses_applied=sum(x.get("applied",0) for x in applied.get("results",[])),
+                  category_held=sum(x.get("state") in {"held","partial","not_found"}
+                      for x in [*[r for _,r in saved.get("results",[])],
+                                *previews.get("results",[]),*applied.get("results",[])]))
     return counts
 
 
@@ -57,6 +61,12 @@ def run_category_operations(env, *, apply=False):
     db=SheetsDB(env.get("SPREADSHEET_ID",""),
                 service=sheets_service() if apply else read_only_sheets_service(),
                 read_pacer=pacer,read_retry_base=20)
+    # Once the sheet submit surface is installed, only its captured request
+    # may consume category inputs. Scheduled/all and legacy manual runs must
+    # never pick up edits that have not been submitted.
+    from .sheets import CATEGORY_REQUEST_SHEET
+    if CATEGORY_REQUEST_SHEET in db.sheet_titles():
+        return {"category_awaiting_sheet_submission":1}
     try:
         result=process_category_operations(db,apply=apply,rule_enabled=True,
             save_enabled=enabled("CATEGORY_RULE_SAVE_ENABLED"),

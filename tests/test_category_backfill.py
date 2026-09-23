@@ -572,7 +572,9 @@ def test_unified_category_workflow_keeps_each_action_block_and_its_hidden_key_se
     assert physical[2] is True and physical[4:6] == ["", ""] and physical[6] == "CB-one"
     assert SheetsDB._workflow_logical_row("confirm", physical) == confirmation
 
-    positions=object.__new__(SheetsDB)._workflow_positions({
+    db=object.__new__(SheetsDB)
+    db.sheet_titles=lambda: []
+    positions=db._workflow_positions({
         "rule": (["h"], [["r"]]*2), "backfill": (["h"], [["b"]]*3),
         "confirm": (["h"], [["c"]]),
     })

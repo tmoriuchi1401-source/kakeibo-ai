@@ -144,7 +144,8 @@ def test_category_runtime_shares_read_budget_with_projection(monkeypatch):
     seen={}
     def db(sid,**kwargs):
         seen.update(kwargs)
-        return object()
+        from types import SimpleNamespace
+        return SimpleNamespace(sheet_titles=lambda: [])
     def projection(env,**kwargs):
         assert kwargs["read_pacer"] is seen["read_pacer"]
         return {"refreshed":1}

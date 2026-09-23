@@ -1,0 +1,53 @@
+name: Category sheet request
+run-name: Category request ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: UUID of the immutable request held in the management spreadsheet
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  category-request:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+      KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
+      KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
+      CATEGORY_RULE_UI_ENABLED: ${{ vars.CATEGORY_RULE_UI_ENABLED }}
+      CATEGORY_RULE_SAVE_ENABLED: ${{ vars.CATEGORY_RULE_SAVE_ENABLED }}
+      CATEGORY_BACKFILL_PREVIEW_ENABLED: ${{ vars.CATEGORY_BACKFILL_PREVIEW_ENABLED }}
+      CATEGORY_BACKFILL_APPLY_ENABLED: ${{ vars.CATEGORY_BACKFILL_APPLY_ENABLED }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require normal logging before private inputs
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Process captured category input and refresh displays
+        env:
+          CATEGORY_REQUEST_ID: ${{ inputs.request_id }}
+        run: python -m app.category_sheet_requests
