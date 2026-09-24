@@ -90,7 +90,7 @@ COUNT_KEYS = frozenset({
     "already_present", "duplicate", "needs_review", "review", "withheld", "deferred",
     "gemini_quota_deferred", "gemini_unavailable_deferred",
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
-    "files_seen", "files_new", "files_processed", "write_requests",
+    "files_seen", "files_new", "files_processed", "write_requests", "catch_up_pending",
     "expenses_created", "expenses_updated", "updated", "unchanged",
     "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written",
     "eligible_purchases", "new_event_rows", "new_header_rows",
@@ -185,7 +185,10 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                    "last_success": previous.get("last_success"), "duration_seconds": 0.0}
         if amazon_canary or all(
                 outcomes[name]["status"] == "success" if name in outcomes
-                else not require_omitted_ready or (history or {}).get(name, {}).get("phase") == "ready"
+                else not require_omitted_ready or (
+                    (history or {}).get(name, {}).get("phase") == "ready"
+                    and (name != "bank" or not (history or {}).get(name, {}).get("counts", {}).get("catch_up_pending"))
+                )
                 for name in dependencies):
             try:
                 if source not in runners:
@@ -195,6 +198,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 counts = {key: value for key, value in result.items()
                           if key in COUNT_KEYS and type(value) is int and value >= 0}
                 outcome.update(status="success", error="", counts=counts)
+                if source == "bank" and counts.get("catch_up_pending"):
+                    outcome.update(status="partial", error="bank_catch_up_pending")
                 if not preview:
                     outcome["last_success"] = datetime.now(timezone.utc).isoformat()
             except Exception as error:
