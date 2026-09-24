@@ -82,6 +82,19 @@ def test_legacy_output_is_captured_and_ai_key_only_goes_to_receipt_apply(monkeyp
             assert ("GEMINI_API_KEY" in kwargs["env"]) == (source == "receipts" and apply)
 
 
+@pytest.mark.parametrize("stderr,expected", [
+    ("private traceback\nRuntimeError: bank_recurring_drive_folder_mismatch", "bank_recurring_drive_folder_mismatch"),
+    ("RuntimeError: protected_bank_recurring_authority_invalid", "protected_bank_recurring_authority_invalid"),
+    ("RuntimeError: bank_recurring_drive_folder_mismatch private-id", "source_command_failed"),
+    ("RuntimeError: private-bank-filename", "source_command_failed"),
+])
+def test_bank_child_reports_only_fixed_preflight_error(monkeypatch, stderr, expected):
+    monkeypatch.setattr(flow.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=1, stdout="", stderr=stderr))
+    with pytest.raises(StateError, match=f"^{expected}$"):
+        flow.invoke("bank", apply=False, env={})
+
+
 def test_bank_default_stays_preview_when_general_sources_apply(monkeypatch, tmp_path):
     from unittest.mock import Mock
     calls = []
