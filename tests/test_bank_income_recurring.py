@@ -330,7 +330,7 @@ def test_expense_failure_after_income_does_not_repost_income_on_resume(rig, monk
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_cli_passes_explicit_flag_and_readonly_mode_to_existing_runner(rig, monkeypatch, enabled):
+def test_cli_passes_explicit_flag_and_readonly_mode_to_preview_runner(rig, monkeypatch, enabled):
     import sys
     from types import SimpleNamespace
     from app import cli
@@ -343,7 +343,7 @@ def test_cli_passes_explicit_flag_and_readonly_mode_to_existing_runner(rig, monk
     monkeypatch.setattr(cli, "read_only_sheets_service", lambda: object())
     monkeypatch.setattr(cli, "read_only_drive_service", lambda: rig.drive)
     monkeypatch.setattr(cli, "SheetsDB", lambda *a, **kw: rig.db)
-    monkeypatch.setattr(cli, "run_bank_pdf_recurring", lambda **kw: observed.update(kw) or {"status": "dry_run_noop"})
+    monkeypatch.setattr(cli, "run_bank_pdf_catch_up_preview", lambda **kw: observed.update(kw) or {"status": "dry_run_noop"})
     monkeypatch.setattr(sys, "argv", ["app.cli", "bank-pdf-recurring", "--dry-run",
         "--state-dir", str(rig.state.path.parent), "--authority-file", str(rig.path)])
     cli.main()
