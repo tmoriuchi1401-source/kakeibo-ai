@@ -128,6 +128,20 @@ def test_payroll_and_bank_count_bank_once_with_date_and_actual_amount():
     assert BankIncomePipeline(db).preview()["existing_income"] == 1
 
 
+def test_bank_writer_preserves_existing_cash_buyback_income():
+    source = "receipt:synthetic-drive-source"
+    receipt_row = [income_id(source), "2026-08-21", 155, "その他確認済収入",
+                   "合成リユース店", "", source, "receipt_buyback",
+                   "receipt_explicit_buyback", "a" * 64]
+    tx = bank()
+    db = DB([imported(tx)])
+    db.tables[INCOME_SHEET].append(receipt_row)
+    assert BankIncomePipeline(db).preview()["planned_income_writes"] == 1
+    assert apply(db, [tx.source_row_identity])["incomes_created"] == 1
+    assert monthly_income(db.tables[INCOME_SHEET][1:]) == {
+        "2026-08": 155 + tx.signed_amount}
+
+
 def test_confirmed_bank_without_payroll_and_missing_income_sheet_previews():
     db = DB([imported(bank())], installed=False)
     del db.tables["給与明細ヘッダ"]

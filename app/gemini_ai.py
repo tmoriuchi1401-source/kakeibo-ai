@@ -41,11 +41,14 @@ class GeminiAI:
                 self._blocked_receipts = set()
             self._blocked_receipts.add(fingerprint)
             raise
-        prompt = f"""あなたは日本の家計簿レシート解析器です。画像またはPDFから購入情報を抽出してください。
+        prompt = f"""あなたは日本の家計簿レシート解析器です。画像またはPDFから取引情報を抽出してください。
 カテゴリは必ず次の一覧からのみ選び、新カテゴリを作らないでください。
 {self.category_text(categories)}
 
 ルール:
+- transaction_kind は利用者が店に支払った購入ならpurchase、店が利用者から品物を買い取り代金を支払った場合はbuyback、判別できなければunknown。
+- 「買取」票の品目や現金受取額を購入支出として扱わない。店の買取代金の合計を正のtotalで返す。
+- 広告中の「買取」やポイント付与だけを根拠にbuybackとしない。商品返品・返金もbuybackとしない。
 - 商品ごとに税込の明細金額を抽出。数量が読めれば数量も。
 - 値引きが特定商品に対応すると読める場合はその商品のamountへ反映。
 - 全体値引き・クーポンは、印字された金額を負の明細として記録。二重に値引きしない。

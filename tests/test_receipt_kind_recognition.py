@@ -16,6 +16,22 @@ def test_document_structure_recognizes_shop_dining_and_parking_without_merchant_
     assert classify_receipt_text(text).classification == 'normal'
 
 
+@pytest.mark.parametrize('label,expected', [
+    ('<< 買取 >>', True), ('買 取', True), ('高価買取キャンペーン', False),
+])
+def test_local_gate_exposes_only_explicit_buyback_heading(monkeypatch, label, expected):
+    text = f'商品\n{label}\n中古品 ¥600\n合計 ¥600\n現金 ¥600'
+    monkeypatch.setattr(gate, '_extract_receipt_text', lambda *_: extracted(text))
+    result = gate.evaluate_receipt_privacy(b'synthetic', 'image/png')
+    assert result.classification == 'normal'
+    assert result.buyback_evidence is expected
+
+
+def test_buyback_heading_is_normal_receipt_without_purchase_anchor():
+    text = '2026/08/21\n<< 買取 >>\n中古品 ¥5\n小計 ¥5\n合計 ¥5\n現金 ¥5'
+    assert classify_receipt_text(text).classification == 'normal'
+
+
 @pytest.mark.parametrize('text', ['領収書 1000円', '登録番号 T1234567890123',
     '合計 ¥1000 消費税10%', '駐車場の案内 現金500円',
     '2026/01/02\nピザ ¥600\nハンバーガー ¥400',

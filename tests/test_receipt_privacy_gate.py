@@ -90,6 +90,7 @@ def test_structured_ocr_stays_private_and_can_confirm_a_local_payment(monkeypatc
         "text_present",
         "status",
         "reason_code",
+        "buyback_evidence",
         "medical_payment_amount",
         "medical_candidate_count",
         "category",

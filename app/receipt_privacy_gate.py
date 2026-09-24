@@ -22,6 +22,7 @@ from .medical_receipt_privacy import (
     ReceiptPrivacyPreview,
     SafeModelValidationError,
     build_receipt_privacy_preview,
+    explicit_buyback_heading,
     gemini_allowed_for,
 )
 from .receipt_text_extraction import (
@@ -103,6 +104,7 @@ class ReceiptPrivacyGateResult(_SafeGateModel):
     text_present: bool
     status: GateStatus
     reason_code: ReasonCode
+    buyback_evidence: bool = False
     medical_payment_amount: int | None = Field(default=None, ge=0)
     medical_candidate_count: int = Field(default=0, ge=0)
     category: Literal["医療費"] | None = None
@@ -191,8 +193,10 @@ def evaluate_receipt_privacy(
 
     from .medical_receipt_privacy import _NORMAL_RECEIPT_ANCHORS, _NORMAL_TRANSACTION_SIGNALS
     original_text = unicodedata.normalize('NFKC', extracted.text or '')
-    original_normal_evidence = (any(s in original_text for s in _NORMAL_RECEIPT_ANCHORS)
-                                and any(s in original_text for s in _NORMAL_TRANSACTION_SIGNALS))
+    original_normal_evidence = ((any(s in original_text for s in _NORMAL_RECEIPT_ANCHORS)
+                                 and any(s in original_text for s in _NORMAL_TRANSACTION_SIGNALS))
+                                or (explicit_buyback_heading(original_text)
+                                    and "合計" in original_text and "現金" in original_text))
     structural_normal = (preview.classification == 'normal'
                          and not original_normal_evidence)
     if ((structural_normal or (preview.classification == 'sensitive_unknown'
@@ -253,6 +257,8 @@ def evaluate_receipt_privacy(
 
     return ReceiptPrivacyGateResult(
         classification=preview.classification,
+        buyback_evidence=(preview.classification == "normal"
+                          and explicit_buyback_heading(extracted.text or "")),
         extraction_status=extracted.status,
         extraction_method=extracted.method,
         text_present=extracted.text_present,

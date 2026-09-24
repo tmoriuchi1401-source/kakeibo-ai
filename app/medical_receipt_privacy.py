@@ -308,6 +308,12 @@ _NORMAL_TRANSACTION_SIGNALS = (
     "お釣り",
 )
 
+
+def explicit_buyback_heading(text: str) -> bool:
+    """Recognize a transaction heading, not a shop's buyback advertisement."""
+    normalized = unicodedata.normalize("NFKC", text)
+    return bool(re.search(r"(?m)^[ \t]*[<《]*[ \t]*買[ \t]*取[ \t]*[>》]*[ \t]*$", normalized))
+
 _LABEL_RULES: tuple[tuple[str, LabelType, CandidateStrength, int], ...] = (
     ("患者支払額", "patient_responsibility", "strong", 0),
     ("患者負担額", "patient_responsibility", "strong", 0),
@@ -474,7 +480,9 @@ def classify_receipt_text(text: str | None) -> ClassificationDecision:
 
     anchors = _matched_signals(normalized, _NORMAL_RECEIPT_ANCHORS)
     transactions = _matched_signals(normalized, _NORMAL_TRANSACTION_SIGNALS)
-    if (anchors and transactions) or _structured_retail_evidence(normalized):
+    if ((anchors and transactions) or _structured_retail_evidence(normalized)
+            or (explicit_buyback_heading(normalized)
+                and {"合計", "現金"} <= transactions)):
         return ClassificationDecision(classification="normal", reason_code="normal_receipt_evidence")
     return ClassificationDecision(
         classification="sensitive_unknown", reason_code="insufficient_evidence"

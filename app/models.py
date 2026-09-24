@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 class ReceiptItem(BaseModel):
     name: str
@@ -13,6 +13,7 @@ class ReceiptItem(BaseModel):
 
 class ReceiptResult(BaseModel):
     merchant: str
+    transaction_kind: Literal["purchase", "buyback", "unknown"] = "purchase"
     date: str = Field(description="YYYY-MM-DD。読めない場合は空文字")
     total: int
     payment_method: str = ""
