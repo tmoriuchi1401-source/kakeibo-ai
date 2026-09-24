@@ -7,6 +7,8 @@ from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 from .receipt_validation import validate_receipt_result
+from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
+                          RECEIPT_BUYBACK_SOURCE, income_id, validate_income_rows)
 
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
@@ -45,7 +47,31 @@ class ReceiptPipeline:
         categories=self.db.categories()
         result=self._analyze(image_bytes,mime_type,categories,policy,destination=destination)
         ok,notes=validate_receipt_result(result,categories)
+        notes += self._kind_issues(result, gate)
+        ok = ok and not notes
         return {"status":"analyzed" if ok else "needs_review", "parsed":result.model_dump(),"issues":notes}
+
+    @staticmethod
+    def _kind_issues(result, gate):
+        if result.transaction_kind == "unknown":
+            return ["購入・買取の別が不明"]
+        if gate.buyback_evidence != (result.transaction_kind == "buyback"):
+            return ["原本の買取表示と取引種別が不一致。支出・収入とも自動記帳しない"]
+        return []
+
+    def _buyback_income(self, import_id, result, raw_hash):
+        """Return the existing row for replay, or a row safe to append."""
+        if INCOME_SHEET not in self.db.sheet_titles():
+            raise RuntimeError("receipt_income_sheet_missing")
+        if self.db.get(f"{INCOME_SHEET}!A1:J1") != [INCOME_HEADERS]:
+            raise RuntimeError("receipt_income_header_mismatch")
+        existing=validate_income_rows(self.db.get(f"{INCOME_SHEET}!A2:J"))
+        row=[income_id(import_id),result.date,result.total,"その他確認済収入",
+             result.merchant,"",import_id,RECEIPT_BUYBACK_SOURCE,
+             RECEIPT_BUYBACK_REASON,raw_hash]
+        if row[0] in existing and existing[row[0]] != row:
+            raise RuntimeError("receipt_income_existing_content_conflict")
+        return row, row[0] in existing
 
     def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
                       known_source_classification: Classification | None = None):
@@ -86,10 +112,17 @@ class ReceiptPipeline:
         self._require_ai()
         cats=self.db.categories(); result=self._analyze(image_bytes,mime_type,cats,source_policy)
         ok,notes=validate_receipt_result(result,cats)
+        notes += self._kind_issues(result, privacy)
+        ok = ok and not notes
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"
         receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]
         raw_hash=canonical_hash(result.model_dump())
+        income_row=None
+        income_exists=False
+        if ok and result.transaction_kind == "buyback":
+            # Check the shared ledger before writing even the receipt row.
+            income_row,income_exists=self._buyback_income(import_id,result,raw_hash)
         import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
         if receipt_id not in self.db.receipt_ids():
             self.db.append("レシート",[receipt_row])
@@ -97,6 +130,14 @@ class ReceiptPipeline:
             # The import row is the commit marker and must be written last.
             self.db.append("取込データ",[import_row])
             return {"status":"needs_review","receipt":result.model_dump(),"issues":notes}
+        if income_row is not None:
+            if not income_exists:
+                self.db.append_raw(INCOME_SHEET,[income_row])
+            actual=validate_income_rows(self.db.get(f"{INCOME_SHEET}!A2:J"))
+            if actual.get(income_row[0]) != income_row:
+                raise RuntimeError("receipt_income_readback_mismatch")
+            self.db.append("取込データ",[import_row])
+            return {"status":"imported","kind":"buyback","items":len(result.items),"total":result.total}
         rows=[]
         for idx,item in enumerate(result.items,1):
             spend_id=f"{receipt_id}-{idx:02d}"

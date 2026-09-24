@@ -9,6 +9,7 @@ from app import receipt_pipeline as pipeline_module
 from app.medical_inbox_handoff_shadow import MedicalInboxHandoffShadow
 from app.models import ReceiptItem, ReceiptResult
 from app.receipt_privacy_gate import ReceiptPrivacyGateResult
+from app.bank_income import INCOME_HEADERS, INCOME_SHEET, income_id, monthly_income
 
 
 class FakeDB:
@@ -16,6 +17,7 @@ class FakeDB:
         self._import_ids = set(import_ids)
         self._receipt_ids = set()
         self._expense_ids = set()
+        self.income_rows = []
         self.category_calls = 0
         self.append_calls = []
         self.ensure_expense_status_column_calls = 0
@@ -52,6 +54,23 @@ class FakeDB:
 
     def ensure_expense_status_column(self):
         self.ensure_expense_status_column_calls += 1
+
+    def sheet_titles(self):
+        return [INCOME_SHEET]
+
+    def get(self, range_name):
+        if range_name == f"{INCOME_SHEET}!A1:J1":
+            return [INCOME_HEADERS]
+        assert range_name == f"{INCOME_SHEET}!A2:J"
+        return [row.copy() for row in self.income_rows]
+
+    def append_raw(self, sheet, rows):
+        assert sheet == INCOME_SHEET
+        self.income_rows.extend(row.copy() for row in rows)
+        self.append_calls.append((sheet, rows))
+        if self.fail_after_commit == sheet and not self._failure_raised:
+            self._failure_raised = True
+            raise RuntimeError("synthetic income response failure")
 
 
 class FakeAI:
@@ -142,6 +161,77 @@ def test_normal_gate_runs_existing_receipt_pipeline_once(monkeypatch):
     assert [sheet for sheet, _ in db.append_calls] == ["レシート", "支出明細", "取込データ"]
     assert db.ensure_expense_status_column_calls == 1
     assert result == {"status": "imported", "items": 1, "total": 100}
+
+
+def _buyback_result(kind="buyback"):
+    return ReceiptResult(
+        merchant="合成リユース店", date="2026-08-21", total=155,
+        transaction_kind=kind, payment_method="現金",
+        items=[ReceiptItem(name="中古品A", amount=5, major_category="食費", minor_category="食品"),
+               ReceiptItem(name="中古品B", amount=100, major_category="食費", minor_category="食品"),
+               ReceiptItem(name="中古品C", amount=50, major_category="食費", minor_category="食品")],
+    )
+
+
+def test_explicit_buyback_posts_one_cash_income_and_no_expense(monkeypatch):
+    db = FakeDB()
+    gate = _normal_gate().model_dump(exclude={"gemini_allowed"})
+    gate["buyback_evidence"] = True
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy",
+                        Mock(return_value=ReceiptPrivacyGateResult(**gate)))
+    result = pipeline_module.ReceiptPipeline(db, FakeAI(_buyback_result())).process_bytes(
+        b"synthetic buyback", "image/png", "source-buyback")
+    assert result == {"status": "imported", "kind": "buyback", "items": 3, "total": 155}
+    assert [sheet for sheet, _ in db.append_calls] == ["レシート", INCOME_SHEET, "取込データ"]
+    assert db.ensure_expense_status_column_calls == 0
+    assert db.income_rows[0][:8] == [income_id("receipt:source-buyback"), "2026-08-21", 155,
+                                   "その他確認済収入", "合成リユース店", "", "receipt:source-buyback", "receipt_buyback"]
+    assert monthly_income(db.income_rows) == {"2026-08": 155}
+    assert pipeline_module.ReceiptPipeline(db, FakeAI(_buyback_result())).process_bytes(
+        b"synthetic buyback", "image/png", "source-buyback") == {
+            "status": "skipped", "reason": "already_imported"}
+
+
+@pytest.mark.parametrize("kind,evidence", [
+    ("purchase", True), ("buyback", False), ("unknown", True),
+])
+def test_disputed_receipt_kind_never_posts_expense_or_income(monkeypatch, kind, evidence):
+    gate = _normal_gate().model_dump(exclude={"gemini_allowed"})
+    gate["buyback_evidence"] = evidence
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy",
+                        Mock(return_value=ReceiptPrivacyGateResult(**gate)))
+    db = FakeDB()
+    result = pipeline_module.ReceiptPipeline(db, FakeAI(_buyback_result(kind))).process_bytes(
+        b"synthetic disputed", "image/png", "source-disputed")
+    assert result["status"] == "needs_review"
+    assert [sheet for sheet, _ in db.append_calls] == ["レシート", "取込データ"]
+
+
+def test_buyback_replay_after_uncertain_income_write_does_not_duplicate(monkeypatch):
+    gate = _normal_gate().model_dump(exclude={"gemini_allowed"})
+    gate["buyback_evidence"] = True
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy",
+                        Mock(return_value=ReceiptPrivacyGateResult(**gate)))
+    db = FakeDB(fail_after_commit=INCOME_SHEET)
+    pipeline = pipeline_module.ReceiptPipeline(db, FakeAI(_buyback_result()))
+    with pytest.raises(RuntimeError, match="synthetic income response failure"):
+        pipeline.process_bytes(b"synthetic", "image/png", "source-buyback")
+    assert len(db.income_rows) == 1
+    assert pipeline.process_bytes(b"synthetic", "image/png", "source-buyback")["status"] == "imported"
+    assert len(db.income_rows) == 1
+
+
+def test_buyback_requires_existing_income_schema_before_any_write(monkeypatch):
+    gate = _normal_gate().model_dump(exclude={"gemini_allowed"})
+    gate["buyback_evidence"] = True
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy",
+                        Mock(return_value=ReceiptPrivacyGateResult(**gate)))
+    db = FakeDB()
+    db.sheet_titles = lambda: []
+    with pytest.raises(RuntimeError, match="receipt_income_sheet_missing"):
+        pipeline_module.ReceiptPipeline(db, FakeAI(_buyback_result())).process_bytes(
+            b"synthetic", "image/png", "source-buyback")
+    assert db.append_calls == []
 
 
 @pytest.mark.parametrize(

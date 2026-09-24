@@ -1,4 +1,4 @@
-"""Confirmed bank deposits only; Payroll never participates in this ledger.
+"""Confirmed income ledger; Payroll never participates in this ledger.
 
 The schema is intentionally separate from SheetsDB.ensure_schema so deploying
 this module cannot create a production sheet. Recurring entry points are preview-only.
@@ -28,6 +28,8 @@ BANK_NAMESPACES = {SOURCE: "au-jibun", DOCOMO_SMTB_SOURCE: "docomo-smtb", CHIBA_
 OUTCOMES = ("confirmed_income", "transfer", "reimbursement", "other_non_income", "needs_review")
 INCOME_CATEGORIES = {"給与", "賞与", "利息", "その他確認済収入"}
 INCOME_REASONS = {"bank_salary_type", "bank_bonus_type", "bank_interest_type", "operator_confirmed_income"}
+RECEIPT_BUYBACK_SOURCE = "receipt_buyback"
+RECEIPT_BUYBACK_REASON = "receipt_explicit_buyback"
 
 
 def income_id(import_id: str) -> str:
@@ -165,7 +167,7 @@ def income_summary(decisions: list[IncomeDecision], duplicates: int = 0) -> dict
 
 
 def validate_income_rows(rows: list[list]) -> dict[str, list]:
-    """Use exact income/source IDs for read-back and dedupe; reject corruption."""
+    """Validate bank deposits and explicit cash buybacks by source identity."""
     by_id = {}
     for raw in rows:
         if not any(raw):
@@ -176,9 +178,21 @@ def validate_income_rows(rows: list[list]) -> dict[str, list]:
         if not re.fullmatch(r"[1-9][0-9]*", str(row[2])):
             raise RuntimeError("bank_income_amount_invalid")
         row[2] = int(row[2])
-        tx = NormalizedBankTransaction(row[7], row[5], row[1], row[4], row[2], 0, 0, row[6], row[9], "deposit")
-        if (not _valid_transaction(tx) or row[0] != income_id(row[6])
-                or row[3] not in INCOME_CATEGORIES or row[8] not in INCOME_REASONS):
+        if row[7] == RECEIPT_BUYBACK_SOURCE:
+            try:
+                valid_date = date.fromisoformat(row[1]).isoformat() == row[1]
+            except (ValueError, TypeError):
+                valid_date = False
+            valid = (valid_date and isinstance(row[4], str) and bool(row[4].strip()) and row[5] == ""
+                     and bool(re.fullmatch(r"receipt:[A-Za-z0-9_-]+", row[6]))
+                     and bool(re.fullmatch(r"[0-9a-f]{64}", row[9]))
+                     and row[3] == "その他確認済収入"
+                     and row[8] == RECEIPT_BUYBACK_REASON)
+        else:
+            tx = NormalizedBankTransaction(row[7], row[5], row[1], row[4], row[2], 0, 0, row[6], row[9], "deposit")
+            valid = (_valid_transaction(tx) and row[3] in INCOME_CATEGORIES
+                     and row[8] in INCOME_REASONS)
+        if (not valid or row[0] != income_id(row[6])):
             raise RuntimeError("bank_income_provenance_invalid")
         if row[0] in by_id:
             raise RuntimeError("bank_income_duplicate_existing_id")
