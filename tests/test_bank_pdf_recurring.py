@@ -13,6 +13,7 @@ from app.bank_pdf_recurring import (
     ProtectedBankRecurringAuthorityProvider,
     build_incremental_window,
     list_bounded_bank_pdfs,
+    run_bank_pdf_catch_up_preview,
     run_bank_pdf_recurring,
 )
 from app.bank_pdf_pipeline import CHIBA_BANK_SOURCE, DOCOMO_SMTB_SOURCE, SOURCE
@@ -132,6 +133,43 @@ def test_stale_bank_checkpoint_uses_first_authorized_catch_up_window(tmp_path):
     second = build_incremental_window(policy, state, now)
     assert second.start == first.end - timedelta(hours=1)
     assert second.end == now
+
+
+def test_preview_catches_up_all_missed_windows_without_advancing_apply_checkpoint(tmp_path):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path, expires_at="2026-10-01T00:00:00+09:00"), repo_root=Path.cwd(),
+    )
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    now = datetime.fromisoformat("2026-09-24T12:00:00+09:00")
+    result = run_bank_pdf_catch_up_preview(
+        drive_service=_Drive({"files": []}), db=_DB(), state=state,
+        authority_provider=provider, repo_root=Path.cwd(), now=now, dry_run=True,
+    )
+    assert result["status"] == "dry_run_noop"
+    assert result["preview_windows"] == 2
+    assert result["catch_up_pending"] == 0
+    assert result["preview_cursor_epoch"] == int(now.timestamp())
+    assert result["write_requests"] == 0
+    assert state.successful_window_end() is None
+
+
+def test_preview_resumes_after_bounded_multi_window_scan(tmp_path):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path, expires_at="2027-02-01T00:00:00+09:00"), repo_root=Path.cwd(),
+    )
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    now = datetime.fromisoformat("2027-01-10T12:00:00+09:00")
+    options = dict(drive_service=_Drive({"files": []}), db=_DB(), state=state,
+                   authority_provider=provider, repo_root=Path.cwd(), now=now, dry_run=True)
+    first = run_bank_pdf_catch_up_preview(**options)
+    assert first["preview_windows"] == 16
+    assert first["catch_up_pending"] == 1
+    second = run_bank_pdf_catch_up_preview(
+        **options, preview_cursor_epoch=first["preview_cursor_epoch"],
+    )
+    assert second["catch_up_pending"] == 0
+    assert second["preview_cursor_epoch"] == int(now.timestamp())
+    assert state.successful_window_end() is None
 
 
 def test_drive_listing_rejects_pagination_or_bound_overflow():

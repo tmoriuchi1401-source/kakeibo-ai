@@ -47,6 +47,7 @@ SAFE_SOURCE_ERRORS = frozenset({
     'bank_recurring_drive_folder_mismatch', 'protected_bank_recurring_authority_invalid',
     'bank_recurring_authority_expired_or_not_started', 'bank_recurring_target_mismatch',
     'bank_recurring_window_exceeds_authority', 'bank_recurring_file_bound_exceeded',
+    'bank_recurring_preview_cursor_invalid',
     'processed_folder_is_inbox',
 })
 
@@ -91,6 +92,7 @@ COUNT_KEYS = frozenset({
     "gemini_quota_deferred", "gemini_unavailable_deferred",
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
     "files_seen", "files_new", "files_processed", "write_requests", "catch_up_pending",
+    "preview_cursor_epoch", "preview_windows",
     "expenses_created", "expenses_updated", "updated", "unchanged",
     "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written",
     "eligible_purchases", "new_event_rows", "new_header_rows",

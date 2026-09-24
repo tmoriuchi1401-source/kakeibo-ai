@@ -43,6 +43,7 @@ from .google_clients import download_drive_file
 
 JST = ZoneInfo("Asia/Tokyo")
 BANK_PROCESSED_PROPERTY = "kakeiboBankPdfProcessedAt"
+MAX_PREVIEW_CATCH_UP_WINDOWS = 16
 
 
 @dataclass(frozen=True)
@@ -62,13 +63,20 @@ def build_incremental_window(
     state: SqliteRecurringRunState,
     now: datetime,
 ) -> BankPdfWindow:
+    checkpoint = state.successful_window_end()
+    return _window_from_boundary(policy, checkpoint or policy.initial_start, now)
+
+
+def _window_from_boundary(
+    policy: BankRecurringAuthority, boundary: datetime, now: datetime,
+) -> BankPdfWindow:
     policy.validate()
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("bank_recurring_now_timezone_required")
+    if boundary.tzinfo is None or boundary.utcoffset() is None:
+        raise ValueError("bank_recurring_window_timezone_required")
     current_end = now.astimezone(JST).replace(microsecond=0)
-    checkpoint = state.successful_window_end()
-    boundary = checkpoint.astimezone(JST) if checkpoint else policy.initial_start.astimezone(JST)
-    start = boundary - timedelta(seconds=policy.overlap_seconds)
+    start = boundary.astimezone(JST) - timedelta(seconds=policy.overlap_seconds)
     # A missed schedule must be replayed in authority-sized windows. Advancing
     # the checkpoint requires an explicit apply; preview remains read-only.
     end = min(current_end, start + timedelta(seconds=policy.max_window_seconds))
@@ -187,7 +195,10 @@ def run_bank_pdf_recurring(
     card_statement_authorities: Iterable = (),
     income_write_enabled: bool = False,
     processed_folder_id: str = "",
+    preview_window: BankPdfWindow | None = None,
 ) -> dict[str, object]:
+    if preview_window is not None and not dry_run:
+        raise ValueError("bank_preview_window_requires_dry_run")
     policy = authority_provider.load()
     if not (policy.valid_from <= now < policy.expires_at):
         raise RuntimeError("bank_recurring_authority_expired_or_not_started")
@@ -199,10 +210,17 @@ def run_bank_pdf_recurring(
             raise ValueError("processed_folder_is_inbox")
         if not dry_run:
             validate_processed_folder(drive_service, policy.expected_drive_folder_id, processed_folder_id)
-    window = build_incremental_window(policy, state, now)
+    window = preview_window or build_incremental_window(policy, state, now)
+    if preview_window is not None:
+        window.validate()
+        if (window.end - window.start).total_seconds() > policy.max_window_seconds:
+            raise ValueError("bank_recurring_window_exceeds_authority")
+        if window.end > now.astimezone(JST).replace(microsecond=0):
+            raise ValueError("bank_recurring_window_invalid")
     run_id = str(uuid4())
     summary = _base_summary(run_id, window)
     summary["catch_up_pending"] = int(window.end < now.astimezone(JST).replace(microsecond=0))
+    summary["preview_cursor_epoch"] = int(window.end.timestamp())
     expected_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=Path(repo_root), text=True,
     ).strip()
@@ -411,3 +429,62 @@ def run_bank_pdf_recurring(
         summary.update({"status": "failed", "failure": 1, "failure_reason": reason})
         state.record(summary, advance_checkpoint=False)
         return summary
+
+
+def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **kwargs) -> dict[str, object]:
+    """Preview every missed authority-sized window without advancing bank apply state.
+
+    The production ledger retains only the last fully scanned window endpoint.
+    A bounded run can resume there on the next schedule. Each underlying preview
+    still enforces the existing per-window file and row limits.
+    """
+    if kwargs.get("dry_run") is not True:
+        raise ValueError("bank_preview_requires_dry_run")
+    provider = kwargs["authority_provider"]
+    state = kwargs["state"]
+    now = kwargs["now"]
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("bank_recurring_now_timezone_required")
+    policy = provider.load()
+    current_end = now.astimezone(JST).replace(microsecond=0)
+    native_checkpoint = state.successful_window_end()
+    boundary = native_checkpoint or policy.initial_start
+    if preview_cursor_epoch is not None:
+        if type(preview_cursor_epoch) is not int or preview_cursor_epoch < 0:
+            raise ValueError("bank_recurring_preview_cursor_invalid")
+        try:
+            cursor = datetime.fromtimestamp(preview_cursor_epoch, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            raise ValueError("bank_recurring_preview_cursor_invalid") from None
+        if cursor > current_end:
+            raise ValueError("bank_recurring_preview_cursor_invalid")
+        boundary = max(boundary, cursor)
+    reports = []
+    for _ in range(MAX_PREVIEW_CATCH_UP_WINDOWS):
+        window = _window_from_boundary(policy, boundary, now)
+        report = run_bank_pdf_recurring(**kwargs, preview_window=window)
+        if report.get("failure") or report.get("status") == "failed":
+            return report
+        reports.append(report)
+        boundary = window.end
+        if boundary >= current_end:
+            break
+    if len(reports) == 1:
+        return reports[0]
+    combined = dict(reports[-1])
+    count_fields = (
+        "files_seen", "files_new", "files_processed", "files_withheld", "parsed",
+        "new_eligible", "duplicate", "review", "income", "household_income_confirmed",
+        "household_income_review", "non_expense", "withheld", "written",
+        "write_requests", "write_attempted", "planned_expense_writes",
+        "planned_import_updates",
+    )
+    for name in count_fields:
+        combined[name] = sum(int(report.get(name, 0)) for report in reports)
+    combined["status"] = ("dry_run_ready" if any(report["status"] == "dry_run_ready" for report in reports)
+                          else "dry_run_noop")
+    combined["safe_noop"] = all(report.get("safe_noop") is True for report in reports)
+    combined["catch_up_pending"] = int(boundary < current_end)
+    combined["preview_cursor_epoch"] = int(boundary.timestamp())
+    combined["preview_windows"] = len(reports)
+    return combined

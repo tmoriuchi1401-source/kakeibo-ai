@@ -82,6 +82,7 @@ from .bank_steady_state import (
 )
 from .bank_pdf_recurring import (
     ProtectedBankRecurringAuthorityProvider,
+    run_bank_pdf_catch_up_preview,
     run_bank_pdf_recurring,
 )
 
@@ -775,7 +776,12 @@ def main():
             datetime.fromisoformat(args.now)
             if args.now else datetime.now(ZoneInfo("UTC"))
         )
-        result=run_bank_pdf_recurring(
+        cursor_value = os.getenv("BANK_PREVIEW_CURSOR_EPOCH", "") if args.dry_run else ""
+        if cursor_value and not cursor_value.isdecimal():
+            raise ValueError("bank_recurring_preview_cursor_invalid")
+        result=(run_bank_pdf_catch_up_preview if args.dry_run else run_bank_pdf_recurring)(
+            **({"preview_cursor_epoch": int(cursor_value) if cursor_value else None}
+               if args.dry_run else {}),
             drive_service=(
                 read_only_drive_service() if args.dry_run else drive_service()
             ),
