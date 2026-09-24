@@ -114,6 +114,15 @@ def test_last_success_and_safe_counts_survive_failed_later_run(setup):
     assert b"1200" not in drive.payload
 
 
+def test_bank_apply_keeps_later_read_only_preview_coverage(setup):
+    _, _, ledger = setup
+    ledger.begin("bank", "a" * 32)
+    ledger.complete("bank", {"preview_cursor_epoch": 200, "catch_up_pending": 0}, 1.0)
+    ledger.begin("bank", "b" * 32)
+    ledger.complete("bank", {"preview_cursor_epoch": 100, "catch_up_pending": 1}, 1.0)
+    assert ledger.value["sources"]["bank"]["counts"]["preview_cursor_epoch"] == 200
+
+
 def test_save_failure_after_write_keeps_pending_and_requires_exact_operator_release(setup):
     binding, drive, ledger = setup
     ledger.begin("review_apply", "c" * 32)

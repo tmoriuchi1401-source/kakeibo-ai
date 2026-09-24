@@ -221,6 +221,11 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
         private = directory / source
         private.mkdir()
         prepared = source_environment(source, private, env)
+        if source == "bank" and not effective_apply and ledger is not None:
+            bank_history = ledger.value["sources"]["bank"]
+            cursor = bank_history["counts"].get("preview_cursor_epoch")
+            if bank_history["phase"] == "ready" and type(cursor) is int and cursor > 0:
+                prepared["BANK_PREVIEW_CURSOR_EPOCH"] = str(cursor)
         binding = StateBinding(STATE_SOURCES[source], env.get("SPREADSHEET_ID", ""),
                                env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
         from .google_clients import drive_service, read_only_drive_service

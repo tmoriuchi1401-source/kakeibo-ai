@@ -102,9 +102,25 @@ def test_bank_default_stays_preview_when_general_sources_apply(monkeypatch, tmp_
     monkeypatch.setattr("app.google_clients.read_only_drive_service", lambda: object())
     monkeypatch.setattr(flow, "run_durable_source", lambda store, directory, run, apply: calls.append(apply) or {"written": 0})
     runners = flow.assemble({"SPREADSHEET_ID": "sheet", "KAKEIBO_STATE_FOLDER_ID": "folder", "BANK_STATE_FILE_ID": "file"},
-                            tmp_path, apply=True, bank_apply=False, ledger=Mock())
+                            tmp_path, apply=True, bank_apply=False,
+                            ledger=Mock(value={"sources": {"bank": {"phase": "ready", "counts": {}}}}))
     runners["bank"]()
     assert calls == [False]
+
+
+def test_bank_preview_uses_last_scanned_cursor(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+    seen = []
+    monkeypatch.setattr(flow, "source_environment", lambda source, directory, env: env.copy())
+    monkeypatch.setattr("app.google_clients.read_only_drive_service", lambda: object())
+    monkeypatch.setattr(flow, "run_durable_source",
+                        lambda store, directory, run, apply: run(directory))
+    monkeypatch.setattr(flow, "invoke", lambda source, apply, env, **kw:
+                        seen.append(env.get("BANK_PREVIEW_CURSOR_EPOCH")) or {"written": 0})
+    ledger = Mock(value={"sources": {"bank": {"phase": "ready",
+                                               "counts": {"preview_cursor_epoch": 123456}}}})
+    flow.assemble({}, tmp_path, apply=False, bank_apply=False, ledger=ledger)["bank"]()
+    assert seen == ["123456"]
 
 
 def test_amazon_daily_policy_keeps_existing_bounds(tmp_path):

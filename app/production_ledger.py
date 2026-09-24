@@ -88,9 +88,16 @@ class ProductionLedger:
         value = validate_ledger(self.payload, self.binding)
         if value["sources"][source]["phase"] != "pending":
             raise StateError("ledger_begin_required")
+        counts = {key: count for key, count in result.items()
+                  if key in COUNT_KEYS and type(count) is int and count >= 0}
+        if source == "bank":
+            # An approved apply may replay an older window while a read-only
+            # preview has already covered later windows. Keep that coverage.
+            previous = value["sources"][source]["counts"].get("preview_cursor_epoch", 0)
+            counts["preview_cursor_epoch"] = max(previous, counts.get("preview_cursor_epoch", 0))
         value["sources"][source].update(
             phase="ready", attempt="", error="", last_success=datetime.now(timezone.utc).isoformat(),
-            counts={key: count for key, count in result.items() if key in COUNT_KEYS and type(count) is int and count >= 0},
+            counts=counts,
             duration_seconds=round(duration, 3),
         )
         self._save(value)
