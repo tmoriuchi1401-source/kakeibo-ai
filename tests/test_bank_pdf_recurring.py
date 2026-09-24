@@ -84,7 +84,7 @@ def _authority_file(tmp_path: Path, **overrides) -> Path:
         "source": BANK_RECURRING_SOURCE,
         "expected_spreadsheet_id": "sheet",
         "expected_drive_folder_id": "A" * 20,
-        "expected_worksheet": "�捞�f�[�^",
+        "expected_worksheet": "取込データ",
         "target_binding_version": 1,
         "canonical_schema_version": 1,
         "supported_bank_sources": [SOURCE, DOCOMO_SMTB_SOURCE, CHIBA_BANK_SOURCE],

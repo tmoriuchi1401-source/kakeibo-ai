@@ -231,7 +231,7 @@ def run_bank_pdf_recurring(
     downloader = download or (lambda file_id: download_drive_file(file_id, service=drive_service))
     existing_ids = {
         str(row[0]).strip()
-        for row in db.get("�捞�f�[�^!A2:L")
+        for row in db.get("取込データ!A2:L")
         if row and str(row[0]).strip()
     }
     candidates: list[tuple[dict, Path, tuple[str, ...], dict]] = []

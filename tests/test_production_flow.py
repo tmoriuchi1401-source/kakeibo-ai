@@ -119,7 +119,9 @@ def test_bank_preview_uses_last_scanned_cursor(monkeypatch, tmp_path):
                         seen.append(env.get("BANK_PREVIEW_CURSOR_EPOCH")) or {"written": 0})
     ledger = Mock(value={"sources": {"bank": {"phase": "ready",
                                                "counts": {"preview_cursor_epoch": 123456}}}})
-    flow.assemble({}, tmp_path, apply=False, bank_apply=False, ledger=ledger)["bank"]()
+    env = {"SPREADSHEET_ID": "sheet", "KAKEIBO_STATE_FOLDER_ID": "folder",
+           "BANK_STATE_FILE_ID": "file"}
+    flow.assemble(env, tmp_path, apply=False, bank_apply=False, ledger=ledger)["bank"]()
     assert seen == ["123456"]
 
 

@@ -137,7 +137,7 @@ def print_drive_receipt_results(results):
             print(name,res)
 
 def main():
-    p=argparse.ArgumentParser(description="�ƌv��AI")
+    p=argparse.ArgumentParser(description="家計簿AI")
     sub=p.add_subparsers(dest="cmd",required=True)
     sub.add_parser("init")
     r=sub.add_parser("receipt"); r.add_argument("image")
@@ -353,7 +353,7 @@ def main():
         for k,v in checks.items(): print(f"{'OK' if v else 'NG'}  {k}")
         if not all(checks.values()):
             raise SystemExit(1)
-        print("�J�����`�F�b�N����")
+        print("開発環境チェック完了")
     elif args.cmd=="payroll-file-preview":
         print(json.dumps(preview_payroll_file(args.file).model_dump(),ensure_ascii=False))
     elif args.cmd=="bank-income-preview":
@@ -526,7 +526,7 @@ def main():
             "identity_count":len(identities),
             "classification":"loan_repayment",
             "projected_classification":"expense",
-            "target_sheet":"�捞�f�[�^",
+            "target_sheet":"取込データ",
             "write_attempted":0,
         },ensure_ascii=False,sort_keys=True))
     elif args.cmd=="bank-pdf-loan-batch-dry-run":
@@ -799,7 +799,7 @@ def main():
         )
         print(json.dumps(result,ensure_ascii=False,sort_keys=True))
     elif args.cmd=="init":
-        s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets������/���؊���")
+        s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="general-receipt-preview":
         from .general_receipt_preview import GeneralReceiptPreviewPipeline
         data=open(args.file,"rb").read()
@@ -922,7 +922,7 @@ def main():
         print(AuPayCardPipeline(db).import_transactions(parse_aupay_card_eml(args.eml)))
     elif args.cmd=="gmail-authorize":
         authorize_gmail(args.client_json,args.token_output)
-        print(f"Gmail�ǂݎ��p�g�[�N����ۑ����܂���: {args.token_output}")
+        print(f"Gmail読み取り用トークンを保存しました: {args.token_output}")
     elif args.cmd=="reconcile-preview":
         s,db,_=make(False,read_only=True); print(ReconciliationPipeline(db,s.reconciliation_lookback_months).preview())
     elif args.cmd=="reconcile":
@@ -937,7 +937,7 @@ def main():
         s,db,_=make(False); print(ReviewApprovalPipeline(db).apply())
     elif args.cmd=="medical-review":
         if args.action == "show" and not args.review_item_id:
-            raise RuntimeError("medical-review show �ɂ�review_item_id���K�v�ł�")
+            raise RuntimeError("medical-review show にはreview_item_idが必要です")
         s = Settings()
         items = MedicalInboxHandoffShadow.read_items(s.medical_review_store_file())
         if args.action == "list":
@@ -946,7 +946,7 @@ def main():
         else:
             found = next((item for item in items if item.review_item_id == args.review_item_id), None)
             if found is None:
-                raise RuntimeError("�w�肳�ꂽreview item��������܂���")
+                raise RuntimeError("指定されたreview itemが見つかりません")
             print(json.dumps(found.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
     elif args.cmd=="expenses-preview":
         s,db,_=make(False,read_only=True); print(ExpenseViewPipeline(db).preview())
@@ -988,7 +988,7 @@ def main():
         )
         result.update({
             "target_spreadsheet_id":s.spreadsheet_id,
-            "target_sheets":["�捞�f�[�^","�x�o����"],
+            "target_sheets":["取込データ","支出明細"],
             "expected_git_head":subprocess.check_output(
                 ["git","-c",f"safe.directory={repo_root.as_posix()}",
                  "rev-parse","HEAD"],
@@ -1097,7 +1097,7 @@ def main():
         ))
     elif args.cmd=="drive-backup-authorize":
         authorize_drive_backup(args.client_json,args.token_output)
-        print(f"Drive�o�b�N�A�b�v�p�g�[�N����ۑ����܂���: {args.token_output}")
+        print(f"Driveバックアップ用トークンを保存しました: {args.token_output}")
     elif args.cmd=="receipts-cleanup-preview":
         s=Settings(); s.validate(need_processed=True)
         print(cleanup_processed_receipts(s.processed_drive_folder_id))
