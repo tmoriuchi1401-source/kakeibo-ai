@@ -40,9 +40,10 @@ function manualBootstrap() {
     id:Utilities.getUuid(),cancelId:Utilities.getUuid()};
 }
 function manualRow_(sheet,id) {
-  const values = sheet.getDataRange().getValues();
-  for (let i=1;i<values.length;i++) if (String(values[i][0]) === id) return {number:i+1,values:values[i]};
-  return null;
+  if (sheet.getLastRow() < 2) return null;
+  const found = sheet.getRange(2,1,sheet.getLastRow()-1,1)
+    .createTextFinder(id).matchEntireCell(true).findNext();
+  return found ? {number:found.getRow(),values:sheet.getRange(found.getRow(),1,1,6).getValues()[0]} : null;
 }
 function manualDispatch_(id) {
   try {

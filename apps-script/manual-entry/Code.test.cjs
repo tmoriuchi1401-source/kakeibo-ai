@@ -8,9 +8,16 @@ function harness() {
   const queue=[['request_id','state','payload_json','submitted_at','expense_id','message']];
   const cats=[['その他','未分類'],['食費','外食']];
   const calls=[];
-  const queueSheet={getDataRange:()=>({getValues:()=>queue.map(x=>x.slice())}),
+  const queueSheet={
     appendRow:r=>queue.push(r),getLastRow:()=>queue.length,
-    getRange:()=>({setValue:()=>{throw Error('unexpected status update')}})};
+    getRange:(row,col)=>({
+      createTextFinder:needle=>({matchEntireCell(){return this},findNext:()=>{
+        const index=queue.findIndex((r,i)=>i>0&&r[0]===needle);
+        return index<0?null:{getRow:()=>index+1};
+      }}),
+      getValues:()=>[queue[row-1].slice(col-1,col+5)],
+      setValue:()=>{throw Error('unexpected status update')},
+    })};
   const catSheet={getRange:()=>({getDisplayValues:()=>cats})};
   const ss={getSheetByName:name=>({'_手入力受付':queueSheet,'カテゴリ':catSheet,'支出明細':{}})[name]};
   const ctx=vm.createContext({
