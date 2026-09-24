@@ -364,6 +364,19 @@ class ReceiptConfirmation:
         self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
+            if (old['status']=='superseded' and old.get('error')=='原本の版が変更。新しい対象で再確認してください'
+                    and self.needs_attention(key)):
+                # A Drive metadata version can change while the original bytes
+                # remain identical. Revive only the same displayed owner choice.
+                try:self.verify_source(old['source'],old['folder_id'])
+                except StateError as error:
+                    if str(error)!='confirmation_source_changed':raise
+                else:
+                    live=self.ui_rows().get(key)
+                    if (live is not None and live[1][7:15]==old['inputs']
+                            and live[1][:2]+live[1][3:7]==old.get('presentation')):
+                        item=deepcopy(old);item['status']='waiting';item.pop('error',None)
+                        self.save_item(key,item);old=item
             if old['status']=='pending':
                 from .medical_local_duplicate import verify_saved_targets
                 verify_saved_targets(old,self.tables)

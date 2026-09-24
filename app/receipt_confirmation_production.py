@@ -33,6 +33,39 @@ def configure_ui(db,validation_only=False):
     db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
 
 
+def verify_receipt_source(source, original_folder, inbox_folder, processed_folder, read_metadata, read_bytes):
+    """Bind a review to unchanged bytes in an allowed receipt lifecycle location."""
+    sid=source['source_id']
+    def metadata():
+        m=read_metadata(sid)
+        if (m.get('id')!=sid or m.get('trashed') or m.get('mimeType')!=source['mime_type']
+                or not isinstance(m.get('parents'),list) or len(m['parents'])!=1):
+            raise StateError('confirmation_source_changed')
+        return m
+    before=metadata()
+    parents=before['parents']
+    in_original=parents==[original_folder]
+    moved_to_processed=(original_folder==inbox_folder and bool(processed_folder)
+                        and parents==[processed_folder] and processed_folder!=inbox_folder)
+    if not (in_original or moved_to_processed):
+        raise StateError('confirmation_source_changed')
+    saved_hash=source.get('sha256')
+    if not saved_hash:
+        # The intake scanner has not downloaded this new source yet. Its
+        # metadata must still match exactly; the caller then hashes the bytes.
+        if not in_original or before.get('version')!=source.get('version'):
+            raise StateError('confirmation_source_changed')
+    else:
+        if (not isinstance(saved_hash,str) or len(saved_hash)!=64
+                or any(c not in '0123456789abcdef' for c in saved_hash)):
+            raise StateError('confirmation_source_changed')
+        if sha256(read_bytes(sid)).hexdigest()!=saved_hash:
+            raise StateError('confirmation_source_changed')
+    if metadata()!=before:
+        raise StateError('confirmation_source_changed')
+    return before
+
+
 def open_context(env,apply):
     from .google_clients import drive_service,read_only_drive_service,read_only_sheets_service,download_drive_file
     from .settings import Settings,service_account_source
@@ -52,11 +85,13 @@ def open_context(env,apply):
         if [o['emailAddress'] for o in meta['owners']]!=[owner] or {(p['type'],p['role'],p['emailAddress']) for p in meta['permissions'] if not p.get('deleted')}!={('user','owner',owner),('user','writer',sa)}:
             raise StateError('confirmation_store_permissions_changed')
     reader=read_only_drive_service()
+    inbox=normalize_folder_id(settings.receipt_drive_folder_id)
+    processed_folder=getattr(settings,'processed_drive_folder_id','')
+    processed=normalize_folder_id(processed_folder) if processed_folder else ''
     def metadata(source,folder):
-        m=reader.files().get(fileId=source['source_id'],fields='id,parents,mimeType,version,trashed').execute(num_retries=0)
-        if m.get('trashed') or m.get('parents')!=[folder] or m.get('version')!=source['version'] or m.get('mimeType')!=source['mime_type']:
-            raise StateError('confirmation_source_changed')
-        return m
+        return verify_receipt_source(source,folder,inbox,processed,
+            lambda sid:reader.files().get(fileId=sid,fields='id,parents,mimeType,version,trashed').execute(num_retries=0),
+            lambda sid:download_drive_file(sid,reader))
     db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service(),
         read_pacer=SheetsReadPacer() if apply else None,read_retry_base=20)
     return settings,store,db,metadata
