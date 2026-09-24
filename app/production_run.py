@@ -44,6 +44,10 @@ SAFE_SOURCE_ERRORS = frozenset({
     'gemini_auth_rejected', 'gemini_quota_rejected', 'gemini_api_or_model_rejected',
     'gemini_result_invalid', 'gemini_transport_unknown', 'gemini_request_failed_unknown',
     'google_api_auth_rejected', 'google_api_quota_rejected', 'google_api_request_failed',
+    'bank_recurring_drive_folder_mismatch', 'protected_bank_recurring_authority_invalid',
+    'bank_recurring_authority_expired_or_not_started', 'bank_recurring_target_mismatch',
+    'bank_recurring_window_exceeds_authority', 'bank_recurring_file_bound_exceeded',
+    'processed_folder_is_inbox',
 })
 
 

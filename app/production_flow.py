@@ -133,6 +133,14 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
     except subprocess.TimeoutExpired:
         raise StateError('source_command_timed_out') from None
     if result.returncode != 0:
+        if source == "bank":
+            # The legacy CLI can raise before it prints JSON. Only an exact,
+            # allowlisted terminal error code may cross this private boundary.
+            from .production_run import SAFE_SOURCE_ERRORS
+            last_line = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else ""
+            match = re.fullmatch(r"(?:RuntimeError|ValueError|StateError): ([a-z][a-z0-9_]+)", last_line)
+            if match and match.group(1) in SAFE_SOURCE_ERRORS:
+                raise StateError(match.group(1))
         if source in {"receipt_confirmation", "receipts", "paypay"}:
             from .production_run import SAFE_SOURCE_ERRORS, SourceFailure
             try:
