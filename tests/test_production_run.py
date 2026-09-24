@@ -59,6 +59,25 @@ def test_scheduled_source_selection_runs_only_requested_source():
     assert result["success"]
 
 
+def test_bank_catch_up_is_reported_and_blocks_accounting():
+    calls = []
+    sources = runners(calls)
+    sources["bank"] = lambda: {"catch_up_pending": 1, "written": 0}
+    report = execute_serial(sources)
+    assert report["sources"]["bank"]["status"] == "partial"
+    assert report["sources"]["bank"]["counts"]["catch_up_pending"] == 1
+    assert report["sources"]["review_apply"]["status"] == "skipped"
+    assert not report["success"]
+
+    history = {name: {"phase": "ready", "counts": {}} for name in DEPENDENCIES}
+    history["bank"]["counts"]["catch_up_pending"] = 1
+    core = execute_serial(runners([]), history=history,
+                          selected_sources=frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank"},
+                          require_omitted_ready=True)
+    assert core["sources"]["review_apply"]["status"] == "skipped"
+    assert not core["success"]
+
+
 def test_core_accounting_waits_for_omitted_drive_source_to_be_ready():
     calls = []
     selected = frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank"}

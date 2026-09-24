@@ -65,14 +65,15 @@ def build_incremental_window(
     policy.validate()
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("bank_recurring_now_timezone_required")
-    end = now.astimezone(JST).replace(microsecond=0)
+    current_end = now.astimezone(JST).replace(microsecond=0)
     checkpoint = state.successful_window_end()
     boundary = checkpoint.astimezone(JST) if checkpoint else policy.initial_start.astimezone(JST)
     start = boundary - timedelta(seconds=policy.overlap_seconds)
+    # A missed schedule must be replayed in authority-sized windows. Advancing
+    # the checkpoint requires an explicit apply; preview remains read-only.
+    end = min(current_end, start + timedelta(seconds=policy.max_window_seconds))
     window = BankPdfWindow(start, end)
     window.validate()
-    if (end - start).total_seconds() > policy.max_window_seconds:
-        raise RuntimeError("bank_recurring_window_exceeds_authority")
     return window
 
 
@@ -201,6 +202,7 @@ def run_bank_pdf_recurring(
     window = build_incremental_window(policy, state, now)
     run_id = str(uuid4())
     summary = _base_summary(run_id, window)
+    summary["catch_up_pending"] = int(window.end < now.astimezone(JST).replace(microsecond=0))
     expected_head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=Path(repo_root), text=True,
     ).strip()

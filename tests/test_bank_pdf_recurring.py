@@ -115,6 +115,25 @@ def test_authority_and_window_are_bounded(tmp_path):
     assert window.end - window.start == timedelta(hours=37)
 
 
+def test_stale_bank_checkpoint_uses_first_authorized_catch_up_window(tmp_path):
+    provider = ProtectedBankRecurringAuthorityProvider(
+        _authority_file(tmp_path, expires_at="2026-10-01T00:00:00+09:00"), repo_root=Path.cwd(),
+    )
+    policy = provider.load()
+    state = SqliteRecurringRunState(tmp_path / "state.sqlite3", repo_root=Path.cwd())
+    now = datetime.fromisoformat("2026-09-24T12:00:00+09:00")
+    first = build_incremental_window(policy, state, now)
+    assert first.start == datetime.fromisoformat("2026-09-12T23:00:00+09:00")
+    assert first.end - first.start == timedelta(days=7)
+    assert first.end < now
+    state.record({"run_id": "first-window", "status": "noop",
+                  "source_window_start": first.start.isoformat(),
+                  "source_window_end": first.end.isoformat()}, advance_checkpoint=True)
+    second = build_incremental_window(policy, state, now)
+    assert second.start == first.end - timedelta(hours=1)
+    assert second.end == now
+
+
 def test_drive_listing_rejects_pagination_or_bound_overflow():
     window = BankPdfWindow(
         datetime.fromisoformat("2026-09-14T00:00:00+09:00"),
