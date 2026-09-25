@@ -63,7 +63,8 @@ def test_isolated_empty_drive_runs_do_not_sort_other_ledgers():
     assert not flow.needs_ledger_order("drive_paypay", {}, bank_apply=False)
     assert not flow.needs_ledger_order("drive_receipts", empty_receipts, bank_apply=False)
     assert flow.needs_ledger_order("drive_receipts", new_receipts, bank_apply=False)
-    assert flow.needs_ledger_order("drive_bank", {}, bank_apply=True)
+    assert not flow.needs_ledger_order("drive_bank", {"sources": {"bank": {"counts": {"written": 0}}}}, bank_apply=True)
+    assert flow.needs_ledger_order("drive_bank", {"sources": {"bank": {"counts": {"written": 1}}}}, bank_apply=True)
     assert flow.needs_ledger_order("core", {}, bank_apply=False)
 
 

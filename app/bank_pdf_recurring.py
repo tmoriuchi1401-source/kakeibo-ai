@@ -35,6 +35,8 @@ from .bank_recurring_authority import (
     create_bank_recurring_run_context,
 )
 from .bank_steady_state import build_bank_daily_preview
+from .bank_pdf_pipeline import BankPdfError
+from .bank_income import deposit_decisions, income_id, validate_income_rows
 from .bank_income_recurring import BankRecurringIncome, require_income_actions
 from .drive_processed import move_processed, validate_processed_folder
 from .drive_receipts import normalize_folder_id
@@ -89,17 +91,17 @@ def _drive_time(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def list_bounded_bank_pdfs(service, folder_id: str, window: BankPdfWindow, max_files: int) -> list[dict]:
-    """List only PDFs in the bounded overlap window; pagination fails closed."""
+def list_bounded_bank_pdfs(service, folder_id: str, window: BankPdfWindow, max_files: int,
+                           *, include_backlog: bool = False) -> list[dict]:
+    """List a bounded inbox; apply revisits every PDF still awaiting archive."""
     window.validate()
     folder = normalize_folder_id(folder_id)
     if not (1 <= max_files <= MAX_AUTHORITY_FILES):
         raise ValueError("bank_recurring_max_files_invalid")
-    query = (
-        f"'{folder}' in parents and trashed=false and mimeType='application/pdf' "
-        f"and modifiedTime >= '{_drive_time(window.start)}' "
-        f"and modifiedTime < '{_drive_time(window.end)}'"
-    )
+    query = f"'{folder}' in parents and trashed=false and mimeType='application/pdf'"
+    if not include_backlog:
+        query += (f" and modifiedTime >= '{_drive_time(window.start)}'"
+                  f" and modifiedTime < '{_drive_time(window.end)}'")
     response = service.files().list(
         q=query,
         pageSize=max_files + 1,
@@ -117,6 +119,37 @@ def list_bounded_bank_pdfs(service, folder_id: str, window: BankPdfWindow, max_f
 def _processed(file: Mapping[str, object]) -> bool:
     props = file.get("appProperties") or {}
     return bool(isinstance(props, Mapping) and props.get(BANK_PROCESSED_PROPERTY))
+
+
+def _in_write_window(file: Mapping[str, object], window: BankPdfWindow) -> bool:
+    try:
+        modified = datetime.fromisoformat(str(file["modifiedTime"]).replace("Z", "+00:00"))
+        return modified.tzinfo is not None and window.start <= modified < window.end
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _existing_income_settled(db, daily, import_rows, *, confirmed_internal_transfers,
+                             confirmed_non_own_classifications) -> bool:
+    """Read back previously posted deposits before archiving without income apply."""
+    decisions, _ = deposit_decisions(
+        daily.parsed_result.transactions,
+        confirmed_internal_transfers=confirmed_internal_transfers,
+        confirmed_non_own_classifications=confirmed_non_own_classifications,
+    )
+    if any(decision.outcome == "needs_review" for decision in decisions):
+        return False
+    confirmed = [decision for decision in decisions if decision.outcome == "confirmed_income"]
+    if not confirmed:
+        return True
+    imports = {str(row[0]): row for row in import_rows if row and row[0]}
+    incomes = validate_income_rows(db.get("収入明細!A2:J"))
+    return all(
+        len(imports.get(decision.transaction.source_row_identity, ())) > 8
+        and imports[decision.transaction.source_row_identity][8] == "bank_income"
+        and incomes.get(income_id(decision.transaction.source_row_identity)) == decision.row()
+        for decision in confirmed
+    )
 
 
 def _temporary_pdf(data: bytes):
@@ -158,6 +191,8 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "files_new": 0,
         "files_processed": 0,
         "files_withheld": 0,
+        "outside_write_window": 0,
+        "parse_failed": 0,
         "parsed": 0,
         "new_eligible": 0,
         "duplicate": 0,
@@ -226,20 +261,33 @@ def run_bank_pdf_recurring(
     ).strip()
     files = list_bounded_bank_pdfs(
         drive_service, policy.expected_drive_folder_id, window, policy.max_files,
+        include_backlog=not dry_run,
     )
     summary["files_seen"] = len(files)
     downloader = download or (lambda file_id: download_drive_file(file_id, service=drive_service))
+    import_rows = db.get("取込データ!A2:L")
     existing_ids = {
         str(row[0]).strip()
-        for row in db.get("取込データ!A2:L")
+        for row in import_rows
         if row and str(row[0]).strip()
     }
     candidates: list[tuple[dict, Path, tuple[str, ...], dict]] = []
     temp_paths: list[Path] = []
     pending_processed = []
+    archive_previews = {}
+
+    def income_readback_ready(file):
+        return _existing_income_settled(
+            db, archive_previews[str(file["id"])], db.get("取込データ!A2:L"),
+            confirmed_internal_transfers=confirmed_internal_transfers,
+            confirmed_non_own_classifications=confirmed_non_own_classifications,
+        )
 
     def finish_pending():
         for pending in pending_processed:
+            if not income_readback_ready(pending):
+                summary["files_withheld"] = int(summary["files_withheld"]) + 1
+                continue
             _mark_processed(drive_service, pending, policy.expected_drive_folder_id, processed_folder_id)
             summary["files_processed"] = int(summary["files_processed"]) + 1
 
@@ -264,17 +312,31 @@ def run_bank_pdf_recurring(
             summary["files_new"] = int(summary["files_new"]) + int(not already_processed)
             path = _temporary_pdf(downloader(str(file["id"])))
             temp_paths.append(path)
-            daily = build_bank_daily_preview(
-                db,
-                path,
-                target_spreadsheet_id=policy.expected_spreadsheet_id,
-                expected_git_head=expected_head,
-                account_alias=policy.account_alias or None,
-                confirmed_internal_transfers=confirmed_internal_transfers,
-                confirmed_non_own_classifications=confirmed_non_own_classifications,
-                card_statement_authorities=tuple(card_statement_authorities),
-            )
+            try:
+                daily = build_bank_daily_preview(
+                    db,
+                    path,
+                    target_spreadsheet_id=policy.expected_spreadsheet_id,
+                    expected_git_head=expected_head,
+                    account_alias=policy.account_alias or None,
+                    confirmed_internal_transfers=confirmed_internal_transfers,
+                    confirmed_non_own_classifications=confirmed_non_own_classifications,
+                    card_statement_authorities=tuple(card_statement_authorities),
+                )
+            except BankPdfError as exc:
+                if str(exc) not in {"bank_document_empty", "bank_document_unrecognized",
+                                    "native_text_unavailable", "header_geometry_unresolved",
+                                    "column_boundary_unresolved"}:
+                    raise
+                summary["parse_failed"] = int(summary["parse_failed"]) + 1
+                summary["files_withheld"] = int(summary["files_withheld"]) + 1
+                path.unlink(missing_ok=True)
+                continue
             details = daily.summary
+            parsed_result = daily.parsed_result
+            parse_ok = bool(parsed_result is not None and not parsed_result.issues
+                            and not parsed_result.balance_consistency_failures
+                            and int(details.get("parsed", 0)) > 0)
             summary["parsed"] = int(summary["parsed"]) + int(details.get("parsed", 0))
             summary["duplicate"] = int(summary["duplicate"]) + int(details.get("existing_duplicate", 0))
             file_review = int(details.get("true_unknown", 0)) + int(
@@ -295,9 +357,36 @@ def run_bank_pdf_recurring(
                 )
             )
             summary["withheld"] = int(summary["withheld"]) + int(details.get("withheld_by_classification", 0))
+            if not parse_ok or int(details.get("collision", 0)):
+                if not parse_ok:
+                    summary["parse_failed"] = int(summary["parse_failed"]) + 1
+                summary["files_withheld"] = int(summary["files_withheld"]) + 1
+                path.unlink(missing_ok=True)
+                continue
+            expense_identities = tuple(daily.expense_candidate_identities)
+            new_ids = tuple(identity for identity in expense_identities if identity not in existing_ids)
+            if not _in_write_window(file, window):
+                # The inbox scan may find older files, but the standing grant
+                # permits writes only in its original bounded time window.
+                imported = {str(row[0]) for row in import_rows if row and row[0]}
+                deposits_imported = all(
+                    tx.signed_amount <= 0 or tx.source_row_identity in imported
+                    for tx in parsed_result.transactions
+                )
+                if (file_review or new_ids or (income and not deposits_imported)
+                        or not _existing_income_settled(
+                            db, daily, import_rows,
+                            confirmed_internal_transfers=confirmed_internal_transfers,
+                            confirmed_non_own_classifications=confirmed_non_own_classifications)):
+                    summary["files_withheld"] = int(summary["files_withheld"]) + 1
+                    summary["outside_write_window"] = int(summary["outside_write_window"]) + 1
+                    path.unlink(missing_ok=True)
+                    continue
+                archive_previews[str(file["id"])] = daily
+                pending_processed.append(file)
+                path.unlink(missing_ok=True)
+                continue
             if income:
-                if int(details.get("collision", 0)):
-                    raise RuntimeError("bank_income_recurring_pdf_collision")
                 income.collect(daily, held=bool(file_review))
                 if already_processed and not processed_folder_id:
                     # Old expense-only runs could mark an income-only PDF.
@@ -305,7 +394,7 @@ def run_bank_pdf_recurring(
                     # expenses or rewrite the existing processed marker.
                     path.unlink(missing_ok=True)
                     continue
-            if file_review or int(details.get("collision", 0)):
+            if file_review:
                 summary["files_withheld"] = int(summary["files_withheld"]) + 1
                 path.unlink(missing_ok=True)
                 continue
@@ -314,12 +403,17 @@ def run_bank_pdf_recurring(
             archive_ready = not (
                 int(household.get("needs_review", {}).get("count", 0))
                 or (int(details.get("new_income", 0)) and not income)
-                or not int(details.get("parsed", 0))
             )
-            if processed_folder_id and not archive_ready:
+            if archive_ready and not income:
+                archive_ready = _existing_income_settled(
+                    db, daily, import_rows,
+                    confirmed_internal_transfers=confirmed_internal_transfers,
+                    confirmed_non_own_classifications=confirmed_non_own_classifications,
+                )
+            if not archive_ready:
                 summary["files_withheld"] = int(summary["files_withheld"]) + 1
-            expense_identities = tuple(daily.expense_candidate_identities)
-            new_ids = tuple(identity for identity in expense_identities if identity not in existing_ids)
+            else:
+                archive_previews[str(file["id"])] = daily
             existing_ids.update(new_ids)
             summary["new_eligible"] = int(summary["new_eligible"]) + len(new_ids)
             summary["planned_expense_writes"] = int(summary["planned_expense_writes"]) + len(new_ids)
@@ -327,8 +421,7 @@ def run_bank_pdf_recurring(
                 candidates.append((file, path, new_ids, {**details, "archive_ready": archive_ready}))
             else:
                 path.unlink(missing_ok=True)
-                if (not details.get("true_unknown") and not details.get("collision")
-                        and (not processed_folder_id or archive_ready)):
+                if archive_ready:
                     # A duplicate can overlap a candidate from this same run.
                     # Archive it only after those candidate writes complete.
                     pending_processed.append(file)
@@ -410,9 +503,12 @@ def run_bank_pdf_recurring(
                 summary["recurring_authority_ref"] = result.get("recurring_authority_ref", "")
                 if int(result.get("confirmed_count", 0)) != len(identities):
                     raise RuntimeError("bank_recurring_write_unverified")
-                if not processed_folder_id or details["archive_ready"]:
-                    _mark_processed(drive_service, file, policy.expected_drive_folder_id, processed_folder_id)
-                    summary["files_processed"] = int(summary["files_processed"]) + 1
+                if details["archive_ready"]:
+                    if income_readback_ready(file):
+                        _mark_processed(drive_service, file, policy.expected_drive_folder_id, processed_folder_id)
+                        summary["files_processed"] = int(summary["files_processed"]) + 1
+                    else:
+                        summary["files_withheld"] = int(summary["files_withheld"]) + 1
             finally:
                 path.unlink(missing_ok=True)
         finish_pending()
@@ -473,7 +569,8 @@ def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **
         return reports[0]
     combined = dict(reports[-1])
     count_fields = (
-        "files_seen", "files_new", "files_processed", "files_withheld", "parsed",
+        "files_seen", "files_new", "files_processed", "files_withheld", "outside_write_window",
+        "parse_failed", "parsed",
         "new_eligible", "duplicate", "review", "income", "household_income_confirmed",
         "household_income_review", "non_expense", "withheld", "written",
         "write_requests", "write_attempted", "planned_expense_writes",

@@ -7,23 +7,25 @@
 新しいschedulerは作らない。両入口の最上位は共通 `kakeibo-production` concurrency、
 main限定。統合親は旧入口停止Variableを必要とし、二重起動を許可しない。
 
-現在の銀行専用scheduleはdry-run。統合親も銀行は既定previewで、
-手動の `mode=apply` と `bank_apply=true` が揃った場合だけ銀行applyを選択する。
+銀行専用の旧入口は停止Variableで無効化する。統合親の06:47 JST
+`drive_bank` scheduleは銀行applyを選択する。手動実行は引き続き
+`mode=apply` と `bank_apply=true` が揃った場合だけ銀行applyを選択する。
 収入フラグをtrueにしてもpreviewをapplyへ昇格させない。
-統合親のstate移送・本番切替は別作業が担当する。
-今回、schedule・実行モード・有効化条件は変更しない。
+統合親のvalidated main SHA guard、共通排他、durable stateは維持する。
 
 ## 保存と再開
 
-収入フラグOFFでは従来の銀行処理を維持し、収入シートの追加読取りや書込みも行わない。
+収入フラグOFFでは収入を書かない。PDFのprocessed移動前には、
+確認済み入金の既存取込行と収入行をread-backし、未反映分があればInboxに残す。
 ONかつ新しい明示的収入scopeがある場合は、既存parser/daily previewと
 `BankIncomePipeline` の確認済みルール・銀行取引種別判定を再利用する。
 
-1. 全PDFを既存のファイル数・期間上限内で読み、保存済み取込行も読む。
+1. InboxのPDFを既存 `max_files` 上限内で再検出し、保存済み取込行も読む。
+   checkpointを通過した未archive PDFも対象にする。新規writeはauthorityの日時窓内に限る。
 2. 正の銀行入金を既存A:LへRAW保存する計画を作る。確認済みは `bank_income`、
    要確認は `needs_review`、非収入は `bank_non_expense`。判定理由を備考に保存する。
    統合先支出ID欄は空欄のまま。既存行の状態・リンク・備考を上書きしない。
-3. parse問題・ID衝突は停止。従来のファイルreviewガードを維持し、
+3. parse問題・ID衝突のPDFはInboxに保留する。従来のファイルreviewガードを維持し、
    保留ファイルの確定候補もreview状態で保存する。支出の保留を解除しない。
 4. 新規保存入金・未反映収入・新規支出のsource IDの和集合を、
    **従来のrun上限 `max_rows`（最大100）** 内に収める。
@@ -35,8 +37,8 @@ ONかつ新しい明示的収入scopeがある場合は、既存parser/daily pre
 新着0件でも保存済み未反映収入を計画に含める。
 processed PDFも取得した期間内では入金を再確認し、旧処理で保存されなかった入金を拾える。
 その場合、支出を再実行せず既存processed markerも更新しない。
-期間外の旧PDFを無制限に再走査する処理は作らない。未保存の過去分がある場合は、
-期間を限定した別の調査が必要。今回からのprocessed更新は入金保存・収入read-back成功後なので、
+期間外の旧PDFはread-onlyで再照合し、追加writeが不要と確認できた場合だけ移動する。
+未保存の過去分には別のauthorityまたは個別調査が必要。processed更新は入金保存・収入read-back成功後なので、
 後続の支出失敗でも取込行から再開できる。
 
 Payrollを収入へ加算せず、transfer・返金・借入・未確認入金を収入にしない。
@@ -77,10 +79,9 @@ append直前の対象・全列と、read-back成功の記録を残す。既存Dr
 現在のauthorityはexpense-onlyのまま。新しいscopeなしでは、フラグだけtrueでも書込み前に拒否する。
 候補ごとの手動approvalファイルを新設しない。
 
-定期書込みはさらに、入口切替側で正規の銀行段階をapplyとして運用する承認と検証が必要。
-現在の銀行scheduleはpreviewなので、収入フラグ単独では定期書込みを開始しない。
-旧銀行入口を止める条件・親の有効化・validated main SHA・state移送を同担当と合わせ、
-旧新両方を有効にしない。今回これらの設定変更・本番writeは行わない。
+銀行の支出applyと収入applyは別scopeである。06:47の銀行支出applyは、
+収入フラグOFFのままでも有効にできるが、収入未反映PDFをprocessedへ移動しない。
+収入scopeの追加は別承認が必要。旧新両入口を同時に有効にしない。
 
 ## 検証
 

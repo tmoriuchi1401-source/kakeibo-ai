@@ -50,8 +50,9 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job["if"]
     script = next(step["run"] for step in job["steps"] if step.get("name") == "Execute sources and dependent accounting serially")
     for cron, scope in [("17 9,21 * * *", "core"), ("31 */3 * * *", "drive_receipts"),
-                        ("47 21 * * *", "drive_bank"), ("11 23 * * *", "drive_paypay")]:
+                        ("11 23 * * *", "drive_paypay")]:
         assert f"'{cron}') scope={scope} ;;" in script
+    assert "'47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;" in script
     assert 'args+=(--scope "$scope")' in script
     assert job["steps"][-1]["env"]["EVENT_SCHEDULE"] == "${{ github.event.schedule }}"
     uses = [step.get("uses", "") for step in job["steps"]]

@@ -312,7 +312,7 @@ def needs_ledger_order(scope: str, report: dict, *, bank_apply: bool) -> bool:
     if scope == "drive_paypay":
         return False  # Intake rows are handled by the next existing core run.
     if scope == "drive_bank":
-        return bank_apply  # Scheduled Bank is always a read-only preview.
+        return bank_apply and report["sources"]["bank"]["counts"].get("written", 0) > 0
     if scope == "drive_receipts":
         return report["sources"]["receipts"]["counts"].get("written", 0) > 0
     return True
