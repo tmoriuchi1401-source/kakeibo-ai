@@ -26,6 +26,8 @@ def move_processed(service, file_id: str, inbox_id: str, processed_id: str,
         fileId=file_id, fields="id,parents,appProperties,trashed",
         supportsAllDrives=True,
     ).execute()
+    if current.get("id") != file_id:
+        raise RuntimeError("processed_source_id_mismatch")
     parents = current.get("parents", [])
     if current.get("trashed"):
         raise RuntimeError("processed_source_trashed")
@@ -42,5 +44,6 @@ def move_processed(service, file_id: str, inbox_id: str, processed_id: str,
         fileId=file_id, fields="id,parents,trashed", supportsAllDrives=True,
     ).execute()
     expected = (set(parents) - {inbox_id}) | {processed_id}
-    if actual.get("trashed") or set(actual.get("parents", [])) != expected:
+    if (actual.get("id") != file_id or actual.get("trashed")
+            or set(actual.get("parents", [])) != expected):
         raise RuntimeError("processed_move_readback_failed")

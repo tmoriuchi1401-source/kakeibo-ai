@@ -80,7 +80,8 @@ class Rig:
     def add(self, name, *transactions, processed=False):
         self.documents[name] = transactions
         self.drive._files.response["files"].append({"id": name, "name": name + ".pdf",
-            "mimeType": "application/pdf", "appProperties": {BANK_PROCESSED_PROPERTY: "old"} if processed else {}})
+            "mimeType": "application/pdf", "modifiedTime": "2026-09-14T02:00:00Z",
+            "appProperties": {BANK_PROCESSED_PROPERTY: "old"} if processed else {}})
 
     def run(self, **kwargs):
         options = dict(drive_service=self.drive, db=self.db, state=self.state,
@@ -193,13 +194,14 @@ def test_overlap_dedupes_identity_but_same_day_amount_separate_transactions_surv
     assert len(rig.db.tables[INCOME_SHEET]) == 3
 
 
-def test_income_off_keeps_legacy_behavior_and_does_not_read_income_sheet(rig):
+def test_income_off_withholds_unposted_deposit_without_reading_income_sheet(rig):
     rig.add("one", bank())
     del rig.db.tables[INCOME_SHEET]
     result = rig.run(income_write_enabled=False)
     assert result["status"] == "noop" and rig.db.writes == []
     assert not any(INCOME_SHEET in rng for rng in rig.db.reads)
-    assert len(rig.drive._files.updated) == 1
+    assert result["files_withheld"] == 1
+    assert rig.drive._files.updated == []
 
 
 def test_dry_run_does_not_save_deposits_income_or_processed(rig):

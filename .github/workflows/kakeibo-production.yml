@@ -6,7 +6,7 @@ on:
     - cron: '17 9,21 * * *'
     # Drive intake uses separate runs under the same production lock and ledger.
     - cron: '31 */3 * * *'  # Receipt: every three hours, 00:31 through 21:31 UTC.
-    - cron: '47 21 * * *'   # Bank preview: 06:47 JST.
+    - cron: '47 21 * * *'   # Bank recurring apply: 06:47 JST.
     - cron: '11 23 * * *'   # PayPay: 08:11 JST.
   workflow_dispatch:
     inputs:
@@ -41,7 +41,7 @@ on:
         type: boolean
         default: false
       bank_apply:
-        description: Separate approved bank apply (schedule always previews bank)
+        description: Separate approved bank apply for manual runs
         type: boolean
         default: false
         required: true
@@ -194,7 +194,7 @@ jobs:
             case "$EVENT_SCHEDULE" in
               '17 9,21 * * *') scope=core ;;
               '31 */3 * * *') scope=drive_receipts ;;
-              '47 21 * * *') scope=drive_bank ;;
+              '47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;
               '11 23 * * *') scope=drive_paypay ;;
               *) echo 'Unrecognized production schedule'; exit 1 ;;
             esac
