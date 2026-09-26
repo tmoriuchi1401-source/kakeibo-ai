@@ -10,6 +10,46 @@ from app.drive_run_state import StateError
 from app import production_flow
 
 
+def test_confirmed_corrected_candidate_removes_old_total_mismatch_only():
+    from app.models import ReceiptItem, ReceiptResult
+    from app.receipt_reimport_production import target_snapshot
+
+    parsed = ReceiptResult(
+        merchant="Synthetic shop", date="2026-01-02", total=120,
+        payment_method="現金", items=[ReceiptItem(
+            name="Synthetic item", amount=120, major_category="食費", minor_category="食品")],
+    )
+    store, db, verify = Store(), DB(), Mock()
+    old_note = "明細合計100≠レシート合計120; 所有者メモ"
+    db.rows["レシート"] = [["R-s1", parsed.date, parsed.merchant, 120,
+                           "現金", "", "要確認", "old-time", old_note]]
+    db.rows["取込データ"] = [["receipt:s1", "old-time", "receipt", "s1",
+                            parsed.date, parsed.merchant, 120, "現金", "要確認",
+                            "", "old-hash", old_note]]
+    source = {"source_id": "s1", "version": "1", "sha256": "a" * 64,
+              "mime_type": "image/png"}
+    store.value["manifest"] = {"sources": [source], "folder_id": "folder"}
+    rows = {"receipt_rows": db.rows["レシート"],
+            "import_rows": db.rows["取込データ"],
+            "expense_rows": [], "review_rows": []}
+    store.value["records"] = {"s1": {"phase": "complete",
+                                    "parsed": parsed.model_dump(),
+                                    "before": target_snapshot(rows, "s1")}}
+    service = ReceiptConfirmation(store, db, verify)
+    service.prepare_general()
+    service.render()
+    db.rows[TITLE][0][12] = "候補明細で確定"
+    service.capture_inputs()
+    assert service.apply_confirmations() == 1
+    assert db.rows["レシート"][0][6] == "解析済"
+    assert db.rows["取込データ"][0][8] == "解析済"
+    assert db.rows["支出明細"][0][4] == 120
+    assert "明細合計" not in db.rows["レシート"][0][8]
+    assert "明細合計" not in db.rows["取込データ"][0][11]
+    assert "所有者メモ" in db.rows["レシート"][0][8]
+    assert "所有者メモ" in db.rows["取込データ"][0][11]
+
+
 class Store:
     def __init__(self):self.value={'confirmation_items':{},'records':{},'manifest':{'sources':[]}};self.fail=False
     def save(self,value):
@@ -398,3 +438,4 @@ def test_normal_worker_never_downloads_medical_or_unapproved_originals(monkeypat
     assert pipeline.process_bytes.call_count==1
     assert pipeline.process_bytes.call_args.args[0]==b'normal-only'
     download.assert_not_called()
+

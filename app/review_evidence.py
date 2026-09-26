@@ -123,8 +123,16 @@ def recorded_detail_total_link(tx: ImportTransaction, *, spreadsheet_id: str,
             or not DRIVE_ID.fullmatch(spreadsheet_id)
             or type(sheet_id) is not int or sheet_id < 0):
         return "明細合計リンクなし"
+    # The receipt/import amount is the extracted header total.  The other
+    # number is an unposted AI item candidate retained in the import note;
+    # no expense rows were posted for a failed validation.  Name both values
+    # so opening the import row cannot make two header totals look like the
+    # comparison that originally failed.
+    item_total, receipt_total = map(int, matches[0])
     return ReviewResource(
-        label="明細合計を見る", role="comparison", resource_type="sheet_range",
+        label=f"判定時の解析候補{item_total:,}円とレシート{receipt_total:,}円",
+        role="comparison", resource_type="sheet_range",
         spreadsheet_id=spreadsheet_id, sheet_id=sheet_id,
         cell_range=f"L{tx.row_num}",
     ).formula()
+

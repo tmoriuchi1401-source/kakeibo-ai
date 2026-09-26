@@ -143,6 +143,46 @@ def _normal_receipt_result() -> ReceiptResult:
     )
 
 
+def test_mismatched_receipt_saves_exact_unposted_candidate_before_import(monkeypatch):
+    from app.receipt_review_snapshot import SHEET, HEADERS
+
+    class ReviewDB(FakeDB):
+        def __init__(self):
+            super().__init__()
+            self.candidates = []
+        def ensure_sheet(self, title, header):
+            assert (title, header) == (SHEET, HEADERS)
+        def get(self, range_name):
+            if range_name == f"'{SHEET}'!A2:K":
+                return [row.copy() for row in self.candidates]
+            return super().get(range_name)
+        def append_raw(self, title, rows):
+            if title == SHEET:
+                self.candidates.extend(row.copy() for row in rows)
+                self.append_calls.append((title, rows))
+            else:
+                super().append_raw(title, rows)
+
+    db = ReviewDB()
+    parsed = ReceiptResult(
+        merchant="合成店舗", date="2026-08-06", total=1368,
+        items=[ReceiptItem(name="商品A", amount=500, major_category="食費", minor_category="食品"),
+               ReceiptItem(name="商品B", amount=730, major_category="食費", minor_category="食品")],
+    )
+    monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy",
+                        Mock(return_value=_normal_gate()))
+    held = pipeline_module.ReceiptPipeline(db, FakeAI(parsed)).process_bytes(
+        b"synthetic", "image/png", "source-1")
+    assert held["status"] == "needs_review"
+    assert [name for name, _ in db.append_calls] == [SHEET, "レシート", "取込データ"]
+    assert [row[6] for row in db.candidates] == [500, 730]
+    assert db.candidates[0][10] == 1368
+    assert all(row[2] == db.append_calls[-1][1][0][10] for row in db.candidates)
+    assert db.append_calls[-1][1][0][11] == "明細合計1230≠レシート合計1368"
+    assert pipeline_module.ReceiptPipeline(db, FakeAI(parsed)).process_bytes(
+        b"synthetic", "image/png", "source-1")["status"] == "skipped"
+
+
 def test_normal_gate_runs_existing_receipt_pipeline_once(monkeypatch):
     db = FakeDB()
     ai = FakeAI(_normal_receipt_result())
@@ -477,3 +517,4 @@ def test_needs_review_partial_failure_replay_is_also_idempotent(monkeypatch, fai
         stored_ids = [row[0] for called_sheet, rows in db.append_calls
                       if called_sheet == sheet for row in rows]
         assert len(stored_ids) == len(set(stored_ids)) == 1
+
