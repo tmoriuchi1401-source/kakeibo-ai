@@ -37,7 +37,7 @@ class MemoryDB:
             "取込データ!A2:L": "取込データ",
             "Amazon注文!A2:M": "Amazon注文",
             "Amazon注文!A2:O": "Amazon注文",
-            "要確認!A2:U": "要確認",
+            "要確認!A2:V": "要確認",
             "Amazon照合候補!A2:S": "Amazon照合候補",
             "Amazon照合候補!A2:V": "Amazon照合候補",
         }
@@ -83,8 +83,8 @@ def review_row(db, import_id):
 def test_money_mode_retires_candidate_processing_and_preserves_pending_inputs(monkeypatch):
     db=MemoryDB();ReviewPipeline(db).refresh()
     row=review_row(db,"card:1")
-    row[10:16]=["Amazon注文と照合","target","日用品｜雑貨","","本人メモ","未反映"]
-    row[18:21]=[db.sheets["Amazon照合候補"][0][17],db.sheets["Amazon照合候補"][0][0],"選択済み"]
+    row[11:17]=["Amazon注文と照合","target","日用品｜雑貨","","本人メモ","未反映"]
+    row[19:22]=[db.sheets["Amazon照合候補"][0][17],db.sheets["Amazon照合候補"][0][0],"選択済み"]
     original=deepcopy(row);candidates=deepcopy(db.sheets["Amazon照合候補"])
     monkeypatch.setenv("KAKEIBO_AMAZON_MONEY_MODE","confirmed-v1")
     get=db.get
@@ -96,25 +96,25 @@ def test_money_mode_retires_candidate_processing_and_preserves_pending_inputs(mo
     assert ReviewPipeline(db).refresh()["candidates_generated"]==0
     assert db.sheets["Amazon照合候補"]==candidates
     refreshed=review_row(db,"card:1")
-    assert refreshed[10:21]==original[10:21]
-    assert "金銭確認" in refreshed[8]
+    assert refreshed[11:22]==original[11:22]
+    assert "金銭確認" in refreshed[9]
     assert ReviewApprovalPipeline(db).preview()["amazon_manual_would_match"]==0
     result=ReviewApprovalPipeline(db).apply()
     assert result["held"]==1 and result["expenses_created"]==0
     assert not db.sheets.get("updates:取込データ") and not db.sheets.get("支出明細")
-    assert "金銭確認" in review_row(db,"card:1")[15]
+    assert "金銭確認" in review_row(db,"card:1")[16]
 
 
 @pytest.mark.parametrize("action",["支出として計上","重複として除外","レシートと統合"])
 def test_money_mode_prevents_legacy_amazon_approval_but_keeps_other_receipts(monkeypatch,action):
     db=MemoryDB();ReviewPipeline(db).refresh()
-    review_row(db,"card:1")[10]=action
-    receipt=review_row(db,"receipt:1");receipt[10]="支出として計上";receipt[12]="日用品｜雑貨"
+    review_row(db,"card:1")[11]=action
+    receipt=review_row(db,"receipt:1");receipt[11]="支出として計上";receipt[13]="日用品｜雑貨"
     monkeypatch.setenv("KAKEIBO_AMAZON_MONEY_MODE","confirmed-v1")
     result=ReviewApprovalPipeline(db).apply()
     assert result["held"]==1 and result["expenses_created"]==1
     assert {r[10] for r in db.sheets["支出明細"]}=={"receipt:1"}
-    assert review_row(db,"card:1")[10]==action
+    assert review_row(db,"card:1")[11]==action
 
 
 def test_refresh_shows_only_amazon_candidates_with_top_three_and_total_count():
@@ -126,9 +126,9 @@ def test_refresh_shows_only_amazon_candidates_with_top_three_and_total_count():
     assert result["amazon_manual_matching_rows"] == 1
     assert result["candidates_generated"] == 3
     assert result["rows_with_candidates"] == 1
-    assert amazon[17] == 4
-    assert len(amazon[16].splitlines()) == 3
-    assert receipt[16:21] == ["", 0, "", "", ""]
+    assert amazon[18] == 4
+    assert len(amazon[17].splitlines()) == 3
+    assert receipt[17:22] == ["", 0, "", "", ""]
     assert len(db.sheets["Amazon照合候補"]) == 3
     assert len({row[0] for row in db.sheets["Amazon照合候補"]}) == 3
     assert all(row[15] in {"baseline", "incremental"} for row in db.sheets["Amazon照合候補"])
@@ -140,17 +140,17 @@ def test_selection_label_maps_to_candidate_id_and_survives_refresh():
     amazon = review_row(db, "card:1")
     chosen_label = db.sheets["Amazon照合候補"][1][17]
     chosen_id = db.sheets["Amazon照合候補"][1][0]
-    amazon[10] = "Amazon注文と照合"
-    amazon[14] = "ユーザー入力"
-    amazon[18] = chosen_label
+    amazon[11] = "Amazon注文と照合"
+    amazon[15] = "ユーザー入力"
+    amazon[19] = chosen_label
 
     ReviewPipeline(db).refresh()
     refreshed = review_row(db, "card:1")
-    assert refreshed[10] == "Amazon注文と照合"
-    assert refreshed[14] == "ユーザー入力"
-    assert refreshed[18] == chosen_label
-    assert refreshed[19] == chosen_id
-    assert refreshed[20] == "選択済み"
+    assert refreshed[11] == "Amazon注文と照合"
+    assert refreshed[15] == "ユーザー入力"
+    assert refreshed[19] == chosen_label
+    assert refreshed[20] == chosen_id
+    assert refreshed[21] == "選択済み"
     assert chosen_id not in chosen_label
     assert chosen_label.startswith("#" + chosen_id[-8:])
 
@@ -172,15 +172,15 @@ def test_selected_candidate_keeps_id_and_adopts_new_label_after_shipping_backfil
     candidate = db.sheets["Amazon照合候補"][0]
     old_label, chosen_id = candidate[17], candidate[0]
     row = review_row(db, "card:1")
-    row[18], row[19] = old_label, chosen_id
+    row[19], row[20] = old_label, chosen_id
     db.sheets["Amazon注文"][0][13:] = ["2026-08-20", 1]
 
     ReviewPipeline(db).refresh()
     refreshed = review_row(db, "card:1")
-    assert refreshed[19] == chosen_id
-    assert refreshed[18] != old_label
-    assert "8/20発送・同日" in refreshed[18]
-    assert refreshed[20] == "選択済み"
+    assert refreshed[20] == chosen_id
+    assert refreshed[19] != old_label
+    assert "8/20発送・同日" in refreshed[19]
+    assert refreshed[21] == "選択済み"
 
 
 def test_deleted_candidate_is_not_reassigned_to_another_order():
@@ -188,14 +188,14 @@ def test_deleted_candidate_is_not_reassigned_to_another_order():
     ReviewPipeline(db).refresh()
     chosen = db.sheets["Amazon照合候補"][0]
     row = review_row(db, "card:1")
-    row[18], row[19] = chosen[17], chosen[0]
+    row[19], row[20] = chosen[17], chosen[0]
     db.sheets["Amazon注文"] = [item for item in db.sheets["Amazon注文"] if item[1] != chosen[2]]
 
     ReviewPipeline(db).refresh()
     refreshed = review_row(db, "card:1")
-    assert refreshed[19] == chosen[0]
-    assert refreshed[18] == chosen[17]
-    assert "候補なし" in refreshed[20]
+    assert refreshed[20] == chosen[0]
+    assert refreshed[19] == chosen[17]
+    assert "候補なし" in refreshed[21]
 
 
 def test_changed_fingerprint_requires_reselection_and_keeps_original_choice():
@@ -203,15 +203,15 @@ def test_changed_fingerprint_requires_reselection_and_keeps_original_choice():
     ReviewPipeline(db).refresh()
     chosen = db.sheets["Amazon照合候補"][0]
     row = review_row(db, "card:1")
-    row[18], row[19] = chosen[17], chosen[0]
+    row[19], row[20] = chosen[17], chosen[0]
     for order in db.sheets["Amazon注文"]:
         if order[1] == chosen[2]:
             order[11] = "changed-hash"
 
     ReviewPipeline(db).refresh()
     refreshed = review_row(db, "card:1")
-    assert refreshed[19] == chosen[0]
-    assert "注文内容変更" in refreshed[20]
+    assert refreshed[20] == chosen[0]
+    assert "注文内容変更" in refreshed[21]
 
 
 def test_preview_is_read_only_and_reports_candidate_counts():
@@ -227,7 +227,7 @@ def test_amazon_action_without_selection_does_not_update_import_or_expense():
     db = MemoryDB()
     ReviewPipeline(db).refresh()
     row = review_row(db, "card:1")
-    row[10] = "Amazon注文と照合"
+    row[11] = "Amazon注文と照合"
     result = ReviewApprovalPipeline(db).apply()
     assert "Amazon注文と照合" in ReviewApprovalPipeline.ACTIONS
     assert result["applied"] == 0
@@ -242,8 +242,8 @@ def select_candidate(db, card_id="card:1", order_id="ORDER-1"):
     candidate = next(row for row in db.sheets["Amazon照合候補"]
                      if row[1] == card_id and row[2] == order_id)
     row = review_row(db, card_id)
-    row[10] = "Amazon注文と照合"
-    row[18] = candidate[17]
+    row[11] = "Amazon注文と照合"
+    row[19] = candidate[17]
     ReviewPipeline(db).refresh()
     return candidate
 
@@ -270,7 +270,7 @@ def test_phase_three_valid_candidate_updates_only_card_and_review():
     assert "カード側は支出計上しない" in card_row[11]
     assert "カード額:" in card_row[11] and "差額率:" in card_row[11]
     assert "商品数:" in card_row[11] and "データ種別:" in card_row[11]
-    assert reviewed[15] == "反映済み" and reviewed[20] == "反映済み"
+    assert reviewed[16] == "反映済み" and reviewed[21] == "反映済み"
     assert db.sheets["Amazon注文"] == original_orders
     assert db.sheets.get("支出明細", []) == []
 
@@ -296,7 +296,7 @@ def test_invalid_deleted_and_changed_candidates_do_not_update_import():
     for mutation in ("invalid_id", "deleted", "changed"):
         db = MemoryDB(); candidate = select_candidate(db)
         if mutation == "invalid_id":
-            row = review_row(db, "card:1"); row[19] = "amcand:invalid"; row[20] = "選択済み"
+            row = review_row(db, "card:1"); row[20] = "amcand:invalid"; row[21] = "選択済み"
         elif mutation == "deleted":
             db.sheets["Amazon注文"] = [row for row in db.sheets["Amazon注文"]
                                            if row[1] != candidate[2]]
@@ -305,7 +305,7 @@ def test_invalid_deleted_and_changed_candidates_do_not_update_import():
         result = ReviewApprovalPipeline(db).apply()
         assert result["amazon_manual_invalid"] == 1
         assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
-        assert review_row(db, "card:1")[15].startswith("未反映:")
+        assert review_row(db, "card:1")[16].startswith("未反映:")
 
 
 def test_resolved_manual_refund_and_installment_cards_are_rejected_at_apply():
@@ -351,9 +351,9 @@ def test_used_order_and_batch_conflicts_reject_all_rows():
 def test_amazon_unmatched_cannot_be_manually_created_as_expense():
     db = MemoryDB(); ReviewPipeline(db).refresh()
     row = review_row(db, "card:1")
-    row[10] = "支出として計上"; row[12] = "日用品｜雑貨"
+    row[11] = "支出として計上"; row[13] = "日用品｜雑貨"
     result = ReviewApprovalPipeline(db).apply()
     assert result["errors"] == 1
     assert db.sheets["取込データ"][0][8] == "amazon_unmatched"
     assert db.sheets.get("支出明細", []) == []
-    assert "Amazon注文と照合" in review_row(db, "card:1")[15]
+    assert "Amazon注文と照合" in review_row(db, "card:1")[16]

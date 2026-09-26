@@ -35,7 +35,7 @@ def test_original_link_uses_stable_file_id_for_image_and_pdf():
         drive = Drive({"id": source_id, "mimeType": mime, "trashed": False})
         link = receipt_original_link(receipt(source_id), drive)
         assert link == (f'=HYPERLINK("https://drive.google.com/file/d/{source_id}/view",'
-                        '"画像を開く")')
+                        '"原本を開く")')
         assert drive.requested[0]["fileId"] == source_id
 
 
@@ -54,16 +54,20 @@ def test_missing_mismatched_or_trashed_source_is_visible():
     assert receipt_original_link(receipt(source_id), Denied({})) == "原本リンクなし"
 
 
-def test_legacy_schema_inserts_g_without_rewriting_review_inputs():
+def test_legacy_schema_inserts_evidence_columns_without_rewriting_review_inputs():
     class Request:
         def __init__(self, result=None): self.result = result or {}
         def execute(self): return self.result
 
+    old_header = HEADERS["要確認"][:6] + HEADERS["要確認"][8:]
+    header = list(old_header)
     class Service:
         def __init__(self): self.requests = []
         def spreadsheets(self): return self
         def batchUpdate(self, **kwargs):
-            self.requests.extend(kwargs["body"]["requests"])
+            for request in kwargs["body"]["requests"]:
+                self.requests.append(request)
+                header.insert(request["insertDimension"]["range"]["startIndex"], "")
             return Request()
 
     db = SheetsDB.__new__(SheetsDB)
@@ -71,16 +75,47 @@ def test_legacy_schema_inserts_g_without_rewriting_review_inputs():
     db.svc = Service()
     db._sheet_metadata_cache = {"sheets": [{"properties": {
         "title": "要確認", "sheetId": 123}}]}
-    old_header = HEADERS["要確認"][:6] + HEADERS["要確認"][7:]
-    db.get = lambda _: [old_header]
-    db._ensure_review_original_column()
-    assert db.svc.requests == [{"insertDimension": {"range": {
-        "sheetId": 123, "dimension": "COLUMNS", "startIndex": 6, "endIndex": 7},
-        "inheritFromBefore": True}}]
+    db._sheet_metadata = lambda: {"sheets": [{"properties": {
+        "title": "要確認", "sheetId": 123}}]}
+    db.get = lambda _: [header]
+    db._ensure_review_evidence_columns()
+    assert [r["insertDimension"]["range"]["startIndex"] for r in db.svc.requests] == [6, 7]
     # A retry after the insert committed must not shift the columns again.
-    db.get = lambda _: [old_header[:6] + [""] + old_header[6:]]
-    db._ensure_review_original_column()
-    assert len(db.svc.requests) == 1
+    db._ensure_review_evidence_columns()
+    assert len(db.svc.requests) == 2
+
+
+def test_current_21_column_schema_keeps_manual_choices_during_retry():
+    old_header = HEADERS["要確認"][:6] + ["原本"] + HEADERS["要確認"][8:]
+    header = list(old_header)
+    row = ["receipt:source", "高", "2026-09-01", "receipt", "店", 100,
+           "原本を開く", "要確認", "確認", "備考", "保留", "統合先",
+           "食費｜食料品", "", "本人メモ", "未反映"] + [""] * 5
+
+    class Request:
+        def execute(self): return {}
+    class Service:
+        def __init__(self): self.requests = []
+        def spreadsheets(self): return self
+        def batchUpdate(self, **kwargs):
+            for request in kwargs["body"]["requests"]:
+                index = request["insertDimension"]["range"]["startIndex"]
+                self.requests.append(index)
+                header.insert(index, "")
+                row.insert(index, "")
+            return Request()
+
+    db = SheetsDB.__new__(SheetsDB)
+    db.sid = "sheet"
+    db.svc = Service()
+    db._sheet_metadata = lambda: {"sheets": [{"properties": {
+        "title": "要確認", "sheetId": 123}}]}
+    db.get = lambda _: [header]
+    db._ensure_review_evidence_columns()
+    db._ensure_review_evidence_columns()
+    assert db.svc.requests == [7]
+    assert row[6] == "原本を開く" and row[7] == ""
+    assert row[11:17] == ["保留", "統合先", "食費｜食料品", "", "本人メモ", "未反映"]
 
 
 def test_approval_updates_do_not_replace_original_formula():
@@ -98,14 +133,14 @@ def test_approval_updates_do_not_replace_original_formula():
     db = SheetsDB.__new__(SheetsDB)
     db.sid = "sheet"
     db.svc = Service()
-    db.update_rows("要確認", [(2, ["id"] + [""] * 14 + ["保留"] + [""] * 4 + ["選択済み"])])
-    assert [item["range"] for item in db.svc.body["data"]] == ["'要確認'!P2", "'要確認'!U2"]
-    assert all("G2" not in item["range"] for item in db.svc.body["data"])
+    db.update_rows("要確認", [(2, ["id"] + [""] * 15 + ["保留"] + [""] * 4 + ["選択済み"])])
+    assert [item["range"] for item in db.svc.body["data"]] == ["'要確認'!Q2", "'要確認'!V2"]
+    assert all("G2" not in item["range"] and "H2" not in item["range"] for item in db.svc.body["data"])
 
 
 def test_approval_migrates_before_apply_and_preview_reads_legacy_safely():
     db = SheetsDB.__new__(SheetsDB)
-    legacy = HEADERS["要確認"][:6] + HEADERS["要確認"][7:]
+    legacy = HEADERS["要確認"][:6] + HEADERS["要確認"][8:]
     old_row = ["receipt:synthetic", "高", "2026-08-06", "receipt", "店", 1368,
                "要確認", "確認", "", "保留"]
     migrated = False
@@ -117,6 +152,8 @@ def test_approval_migrates_before_apply_and_preview_reads_legacy_safely():
             return [old_row]
         if rng == "要確認!A2:U":
             return [old_row[:6] + ["原本リンクなし"] + old_row[6:]]
+        if rng == "要確認!A2:V":
+            return [old_row[:6] + ["原本リンクなし", ""] + old_row[6:]]
         raise AssertionError(rng)
 
     def ensure_sheet(title, header):
@@ -127,7 +164,7 @@ def test_approval_migrates_before_apply_and_preview_reads_legacy_safely():
     db.get = get
     db.ensure_sheet = ensure_sheet
     approval = ReviewApprovalPipeline(db)
-    assert approval._review_rows(migrate=False)[0][10] == "保留"
+    assert approval._review_rows(migrate=False)[0][11] == "保留"
     assert not migrated
-    assert approval._review_rows(migrate=True)[0][10] == "保留"
+    assert approval._review_rows(migrate=True)[0][11] == "保留"
     assert migrated

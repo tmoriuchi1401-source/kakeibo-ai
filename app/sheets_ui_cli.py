@@ -93,7 +93,7 @@ def capture_restore(service, meta, plan):
         title, sid, n = p["title"], p["sheetId"], min(p["gridProperties"]["rowCount"], CAP+1)
         if sid != IDS[title]:
             continue
-        width = {"支出一覧": 10, "要確認": 20, "Amazon要確認": 14, "支出明細": 7}[title]
+        width = {"支出一覧": 10, "要確認": 22, "Amazon要確認": 14, "支出明細": 7}[title]
         first_col = 5 if title == "支出明細" else 0
         raw = execute_backup_read(service.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID, ranges=[f"'{title}'!A1:{chr(64+width)}{n}"],

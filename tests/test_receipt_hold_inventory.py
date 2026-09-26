@@ -80,7 +80,7 @@ def test_unchanged_held_difference_does_not_reread_entire_review_ui():
     lambda t:t['expense_rows'][0].__setitem__(4,999),
     lambda t:t['expense_rows'][0].__setitem__(10,'receipt:other'),
     lambda t:t['import_rows'][0].__setitem__(9,'wrong-target'),
-    lambda t:t['review_rows'].append(['receipt:s1']+['']*9+['保留']),
+    lambda t:t['review_rows'].append(['receipt:s1']+['']*10+['保留']),
 ])
 def test_manual_closure_requires_exact_complete_owner_posting(mutation):
     _,_,_,_,parsed,tables,categories=normal_service(True)

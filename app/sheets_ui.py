@@ -105,7 +105,7 @@ def layout_requests(sheet):
     if title not in DAILY or IDS[title] != sid:
         return []
     n = min(p["gridProperties"]["rowCount"], CAP+1)
-    count = 10 if title == "支出一覧" else 21 if title == "要確認" else 14
+    count = 10 if title == "支出一覧" else 22 if title == "要確認" else 14
     req = [
         {"updateSheetProperties": {"properties": {"sheetId": sid,
             "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}},
@@ -125,9 +125,9 @@ def layout_requests(sheet):
         date_col, money_col, inputs = 0, 3, []
         req.append(dimension(sid, "COLUMNS", 9, 10, hiddenByUser=True))
     elif title == "要確認":
-        widths = [110, 48, 78, 85, 110, 90, 100, 120, 180, 180, 150,
+        widths = [110, 48, 78, 85, 110, 90, 100, 100, 120, 180, 180, 150,
                   160, 165, 120, 180, 170, 220, 75, 220, 160, 180]
-        date_col, money_col, inputs = 2, 5, [(10, 15), (18, 19)]
+        date_col, money_col, inputs = 2, 5, [(11, 16), (19, 20)]
     else:
         widths = [145, 90, 100, 78, 170, 110, 100, 200, 160, 140, 160, 160, 130, 130]
         date_col, money_col, inputs = 3, None, [(7, 8)]
@@ -218,7 +218,7 @@ def home_cells():
         (9, 1): "未分類の金額（対象月）", (9, 2): f'=SUMIFS(E2:E{end},D2:D{end},{month},F2:F{end},"未分類",G2:G{end},"<>")',
         (10, 1): "計上済みで、カテゴリだけ未確定の支出。",
         (11, 1): "取込内容の確認（全期間）",
-        (12, 1): link("要確認", "通常review →", "K1"), (12, 2): review,
+        (12, 1): link("要確認", "通常review →", "L1"), (12, 2): review,
         (13, 1): link("Amazon要確認", "Amazon review →", "H1"),
         (13, 2): f'=COUNTIFS({amz_ids},"<>",{amz_states},"<>反映済み")',
         (14, 1): "保留・反映待ちを含みます。",
@@ -243,7 +243,7 @@ def home_cells():
     }
     # A numeric HYPERLINK label retains the count and its number format. A
     # TextFormat link alone is ignored on formula cells by the native UI.
-    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "K1"), (13, IDS["Amazon要確認"], "H1")]:
+    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "L1"), (13, IDS["Amazon要確認"], "H1")]:
         cells[row, 2] = f'=HYPERLINK("#gid={sid}&range={target}",{cells[row, 2][1:]})'
     return cells
 
@@ -294,7 +294,7 @@ def home_requests(home):
     for row in [10, 11, 14, 15]:
         req.append(style(grid(HOME_ID, row-1, row, 0, 2), backgroundColorStyle=color("FFFFFF"),
                          textFormat={"fontSize": 10, "foregroundColorStyle": color("53646D")}))
-    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "K1"), (13, IDS["Amazon要確認"], "H1")]:
+    for row, sid, target in [(8, CATEGORY_UI_ID, "A1"), (12, IDS["要確認"], "L1"), (13, IDS["Amazon要確認"], "H1")]:
         req.append(dimension(HOME_ID, "ROWS", row-1, row, pixelSize=44))
         action_style = style(grid(HOME_ID, row-1, row, 1, 2),
             numberFormat={"type": "NUMBER", "pattern": '0"件　対応する →"'},

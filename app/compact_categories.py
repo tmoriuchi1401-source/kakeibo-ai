@@ -151,7 +151,7 @@ def migration_plan(snapshot, catalog):
         allowed = kind == "validation" and (
             (title == "支出明細" and row >= 1 and col in (5, 6)) or
             (title == CATEGORY_WORKFLOW_SHEET and row in rule_rows and col in (2, 3)) or
-            (title == "要確認" and row >= 1 and col == 12))
+            (title == "要確認" and row >= 1 and col == 13))
         if not allowed:
             raise ProjectionError("compact_category_reference_requires_mapping")
     rows = category_rows(catalog)
@@ -191,11 +191,11 @@ def migration_plan(snapshot, catalog):
     if review:
         review_id = review["properties"]["sheetId"]
         requests.append({"setDataValidation": {"range": {"sheetId": review_id,
-            "startRowIndex": 1, "startColumnIndex": 12, "endColumnIndex": 14}}})
+            "startRowIndex": 1, "startColumnIndex": 13, "endColumnIndex": 15}}})
         last = snapshot.get("review_last_row", 1)
         if last > 1:
             requests.append({"setDataValidation": {"range": {"sheetId": review_id,
-                "startRowIndex": 1, "endRowIndex": last, "startColumnIndex": 12, "endColumnIndex": 13},
+                "startRowIndex": 1, "endRowIndex": last, "startColumnIndex": 13, "endColumnIndex": 14},
                 "rule": {"condition": category_condition(new_helper), "strict": True, "showCustomUi": True}}})
     # Clear old spills before shrinking, then write literal stable-ID choices.
     requests.extend([
