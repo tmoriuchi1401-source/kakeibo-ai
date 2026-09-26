@@ -313,6 +313,41 @@ def test_real_expense_refresh_retains_ui_and_business_contract():
     assert refresh_layout_requests(metadata(), "支出一覧") == []
 
 
+def test_projection_refresh_also_updates_expense_sheet(monkeypatch):
+    from types import SimpleNamespace
+
+    db = StyledDB()
+    db.sheets["支出明細"] = [
+        ["e1", "2026-09-13", "スギ薬局", "新レジ袋", 3, "日用品", "消耗品", "Smart Code", "receipt", "", "i1", "", "active"],
+        ["e2", "2026-09-13", "スギ薬局", "同じ買い物", 3, "日用品", "消耗品", "au PAY", "au PAY", "", "i2", "", "duplicate_excluded"],
+    ]
+    db.sheets["支出一覧"] = [["old", "古い店名", "古い分類", 3, "日用品", "その他", "", "", "", "e1"]]
+    store = object()
+    db.projection_store = lambda: store
+
+    class Reader:
+        def __init__(self, actual_db):
+            assert actual_db is db
+            self.metrics = SimpleNamespace(requests=1, returned_cells=13)
+
+    class Projection:
+        def __init__(self, actual_store, reader):
+            assert actual_store is store and isinstance(reader, Reader)
+        def refresh(self, categories):
+            assert categories == db.categories()
+            return {"projection_months": 1}
+
+    monkeypatch.setattr("app.monthly_projection_sheets.SheetsLedgerReader", Reader)
+    monkeypatch.setattr("app.projection_refresh.ProjectionRefresh", Projection)
+    monkeypatch.setattr("app.daily_runtime.refresh_daily", lambda actual_db, actual_store: {"daily_changed_blocks": 1})
+
+    result = ExpenseViewPipeline(db).refresh()
+    assert result["projection_months"] == result["daily_changed_blocks"] == 1
+    assert result["active_expenses"] == 1 and result["total"] == 3
+    assert db.sheets["支出一覧"] == [["2026/09/13", "スギ薬局", "新レジ袋", 3,
+                                   "日用品", "消耗品", "Smart Code", "receipt", "", "e1"]]
+
+
 def test_expense_refresh_grows_only_when_needed_and_never_inserts_blank_rows():
     db=StyledDB()
     db.sheets['支出明細']=[[str(i),'2026-09-01','店','品',100,'食費','食料品','','fixture','','','','active'] for i in range(105)]
