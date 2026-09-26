@@ -96,3 +96,35 @@ def recorded_candidate_ids(tx: ImportTransaction) -> tuple[str, ...]:
         return ()
     return tuple(dict.fromkeys(value.strip() for value in notes[-1].split(",")
                                if value.strip()))
+
+
+def recorded_detail_total_link(tx: ImportTransaction, *, spreadsheet_id: str,
+                               sheet_id: int | None,
+                               unique_import_id: bool = True) -> str:
+    """Link the exact import note cell containing a recorded item/receipt total mismatch.
+
+    A failed extraction has no posted expense items. Its calculated item total
+    is retained in the import note, so that cell is the comparison authority.
+    The import row identity and recorded receipt total must agree before linking.
+    """
+    if "明細合計" not in tx.note:
+        return ""
+    matches = re.findall(
+        r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
+        tx.note)
+    if (len(matches) != 1 or int(matches[0][1]) != tx.amount
+            or not unique_import_id
+            or tx.row_num < 2 or not tx.row or str(tx.row[0]) != tx.import_id
+            or len(tx.row) <= 8 or str(tx.row[2]) != tx.source
+            or str(tx.row[8]) != tx.status
+            or len(tx.row) <= 11 or str(tx.row[11]) != tx.note
+            or (tx.source == "receipt" and
+                tx.import_id != "receipt:" + str(tx.row[3]).strip())
+            or not DRIVE_ID.fullmatch(spreadsheet_id)
+            or type(sheet_id) is not int or sheet_id < 0):
+        return "明細合計リンクなし"
+    return ReviewResource(
+        label="明細合計を見る", role="comparison", resource_type="sheet_range",
+        spreadsheet_id=spreadsheet_id, sheet_id=sheet_id,
+        cell_range=f"L{tx.row_num}",
+    ).formula()
