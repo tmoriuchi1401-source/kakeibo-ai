@@ -268,6 +268,24 @@ class ReviewApprovalPipeline:
 
     _expense_id = staticmethod(expense_id)
 
+    def _review_rows(self, *, migrate: bool) -> list[list]:
+        if migrate and isinstance(self.db, SheetsDB):
+            # In the production sequence approval precedes refresh. Complete
+            # the column migration before interpreting operator selections.
+            self.db.ensure_sheet("要確認", HEADERS["要確認"])
+        if isinstance(self.db, SheetsDB):
+            header = self.db.get("要確認!1:1")
+            actual = header[0] if header else []
+            expected = HEADERS["要確認"]
+            legacy = expected[:6] + expected[7:]
+            if actual[:len(expected)] == expected:
+                return self.db.get(REVIEW_RANGE)
+            if not migrate and actual[:len(legacy)] == legacy:
+                return [list(row[:6]) + [""] + list(row[6:])
+                        for row in self.db.get("要確認!A2:T")]
+            raise ValueError("review_schema_not_ready")
+        return self.db.get(REVIEW_RANGE)
+
     @staticmethod
     def _amazon_error(errors:tuple[str,...])->str:
         text=" ".join(errors)
@@ -311,7 +329,7 @@ class ReviewApprovalPipeline:
     def preview(self)->dict:
         from .amazon_money_runtime import money_enabled
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
-        review_rows=self.db.get(REVIEW_RANGE)
+        review_rows=self._review_rows(migrate=False)
         selected=sum(str((list(row)+[""]*11)[10]).strip()=="Amazon注文と照合"
                      for row in review_rows)
         requests,errors=self._amazon_plan(imports,review_rows) if selected and not money_enabled() else ({},{})
@@ -328,7 +346,7 @@ class ReviewApprovalPipeline:
         by_id={tx.import_id:tx for tx in imports}
         categories=set(self.db.categories())
         expense_idx=self.db.expense_index()
-        review_rows=self.db.get(REVIEW_RANGE)
+        review_rows=self._review_rows(migrate=True)
         amazon_selected=not money_mode and any(str((list(row)+[""]*11)[10]).strip()=="Amazon注文と照合"
                             for row in review_rows)
         amazon_requests,amazon_errors=self._amazon_plan(imports,review_rows) if amazon_selected else ({},{})

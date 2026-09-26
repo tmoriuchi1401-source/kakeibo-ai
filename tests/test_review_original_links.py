@@ -1,5 +1,5 @@
 from app.reconciliation import parse_import_rows
-from app.review_pipeline import receipt_original_link
+from app.review_pipeline import ReviewApprovalPipeline, receipt_original_link
 from app.sheets import HEADERS, SheetsDB
 from googleapiclient.errors import HttpError
 from httplib2 import Response
@@ -101,3 +101,33 @@ def test_approval_updates_do_not_replace_original_formula():
     db.update_rows("要確認", [(2, ["id"] + [""] * 14 + ["保留"] + [""] * 4 + ["選択済み"])])
     assert [item["range"] for item in db.svc.body["data"]] == ["'要確認'!P2", "'要確認'!U2"]
     assert all("G2" not in item["range"] for item in db.svc.body["data"])
+
+
+def test_approval_migrates_before_apply_and_preview_reads_legacy_safely():
+    db = SheetsDB.__new__(SheetsDB)
+    legacy = HEADERS["要確認"][:6] + HEADERS["要確認"][7:]
+    old_row = ["receipt:synthetic", "高", "2026-08-06", "receipt", "店", 1368,
+               "要確認", "確認", "", "保留"]
+    migrated = False
+
+    def get(rng):
+        if rng == "要確認!1:1":
+            return [HEADERS["要確認"] if migrated else legacy]
+        if rng == "要確認!A2:T":
+            return [old_row]
+        if rng == "要確認!A2:U":
+            return [old_row[:6] + ["原本リンクなし"] + old_row[6:]]
+        raise AssertionError(rng)
+
+    def ensure_sheet(title, header):
+        nonlocal migrated
+        assert title == "要確認" and header == HEADERS["要確認"]
+        migrated = True
+
+    db.get = get
+    db.ensure_sheet = ensure_sheet
+    approval = ReviewApprovalPipeline(db)
+    assert approval._review_rows(migrate=False)[0][10] == "保留"
+    assert not migrated
+    assert approval._review_rows(migrate=True)[0][10] == "保留"
+    assert migrated
