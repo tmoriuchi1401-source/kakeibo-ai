@@ -54,7 +54,7 @@ def test_recorded_detail_total_links_only_its_exact_import_note_cell():
         imports_by_id={receipt.import_id: receipt}, expense_index={},
         has_amazon_candidates=False, drive=Drive(["processed"]))
     assert "原本を開く" in target
-    assert "明細合計を見る" in comparison
+    assert "判定時の解析候補1,230円とレシート1,368円" in comparison
     assert "gid=22&range=L2" in comparison
     assert "gid=33" not in comparison
 
@@ -253,3 +253,4 @@ def test_category_rule_representative_uses_exact_ledger_row():
     assert data[0]["range"].endswith("!A7")
     assert "gid=33&range=A319:M319" in data[0]["values"][0][0]
     assert "代表取引を見る" in data[0]["values"][0][0]
+

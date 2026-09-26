@@ -19,8 +19,10 @@ from .aupay_card_pipeline import is_amazon
 from .reconciliation import ImportTransaction, parse_import_rows
 from .review_evidence import (ReviewResource, receipt_original_link,
                               recorded_candidate_ids, recorded_detail_total_link)
+from .receipt_review_snapshot import SHEET as RECEIPT_CANDIDATE_SHEET, verified_candidate_range
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 from .utils import now_jst_string
+import re
 
 
 REVIEW_WIDTH = 22
@@ -33,7 +35,8 @@ def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
                           imports_by_id: dict[str, ImportTransaction],
                           expense_index: dict[str, int], has_amazon_candidates: bool,
                           candidate_sheet_row: int | None = None,
-                          drive=None, unique_import_id: bool = True) -> tuple[str, str]:
+                          drive=None, unique_import_id: bool = True,
+                          receipt_candidate_rows=()) -> tuple[str, str]:
     """Choose links from the decision reason, using only exact stored identities."""
     if tx.source == "receipt":
         target = receipt_original_link(tx, drive)
@@ -52,6 +55,25 @@ def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
     comparison = recorded_detail_total_link(
         tx, spreadsheet_id=spreadsheet_id, sheet_id=sheet_ids.get("取込データ"),
         unique_import_id=unique_import_id)
+    own_candidates = [(number, row) for number, row in receipt_candidate_rows
+                      if len(row) > 1 and row[1] == tx.import_id]
+    if own_candidates and tx.source == "receipt" and is_reviewable_status(tx.status):
+        verified = verified_candidate_range(tx, own_candidates)
+        recorded = re.findall(
+            r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
+            tx.note)
+        if (verified and len(recorded) == 1 and unique_import_id
+                and int(recorded[0][0]) == verified[2]
+                and int(recorded[0][1]) == tx.amount
+                and RECEIPT_CANDIDATE_SHEET in sheet_ids and spreadsheet_id):
+            first, last, total = verified
+            comparison = ReviewResource(
+                label=f"判定時の解析候補{total:,}円の各行を見る", role="comparison",
+                resource_type="sheet_range", spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_ids[RECEIPT_CANDIDATE_SHEET],
+                cell_range=f"A{first}:K{last}").formula()
+        else:
+            comparison = "解析候補の保存内容と判定記録が不整合"
     if not comparison and tx.target_id:
         if tx.target_id in expense_index and "支出明細" in sheet_ids:
             comparison = ReviewResource.sheet_row(
@@ -135,7 +157,9 @@ def review_items(transactions: list[ImportTransaction], *, money_mode=False) -> 
             elif status == "needs_review_transfer":
                 recommendation="チャージ・送金・資金移動かを確認"
             elif tx.source == "receipt":
-                recommendation="レシート画像・合計・カテゴリを確認"
+                recommendation=("原本と未計上の解析候補明細の合計を確認"
+                                if "明細合計" in tx.note else
+                                "レシート画像・合計・カテゴリを確認")
             else:
                 recommendation="重複候補を確認し、統合先を選択"
         elif status == "amazon_unmatched":
@@ -245,9 +269,23 @@ class ReviewPipeline:
                       for s in self.db._sheet_metadata()["sheets"]}
                      if isinstance(self.db, SheetsDB) else getattr(self.db, "review_sheet_ids", {}))
         spreadsheet_id = getattr(self.db, "sid", "")
+        receipt_candidate_rows = (list(enumerate(
+            self.db.get(f"'{RECEIPT_CANDIDATE_SHEET}'!A2:K"), start=2))
+            if RECEIPT_CANDIDATE_SHEET in sheet_ids else [])
         expense_index = self.db.expense_index() if any(item.transaction.target_id for item in items) else {}
         existing={r[0]:(list(r)+[""]*max(0,REVIEW_WIDTH-len(r)))[:REVIEW_WIDTH]
                   for r in self.db.get(REVIEW_RANGE) if r}
+        visible_ids = {item.transaction.import_id for item in items}
+        for transaction in tx:
+            old = existing.get(transaction.import_id)
+            if (old and transaction.source == "receipt"
+                    and transaction.import_id not in visible_ids
+                    and str(old[16]).strip() != "反映済み"
+                    and any(str(value).strip() for value in old[11:16])):
+                # A corrected source status is not authority to discard an
+                # operator's pending decision or notes during regeneration.
+                items.append(ReviewItem(transaction, "高", "本人入力が残っているため内容を確認"))
+                visible_ids.add(transaction.import_id)
         old_candidates={}
         old_labels={}
         for raw in ([] if money_mode else self.db.get("Amazon照合候補!A2:V")):
@@ -325,7 +363,8 @@ class ReviewPipeline:
                 review_row=len(rows)+2, imports_by_id=imports_by_id,
                 expense_index=expense_index, has_amazon_candidates=bool(candidates),
                 candidate_sheet_row=candidate_sheet_rows.get(tx.import_id),
-                unique_import_id=import_id_counts[tx.import_id] == 1)
+                unique_import_id=import_id_counts[tx.import_id] == 1,
+                receipt_candidate_rows=receipt_candidate_rows)
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                           target,comparison,
                           tx.status,item.recommendation,tx.note]+manual+candidate_fields)
@@ -537,3 +576,4 @@ class ReviewApprovalPipeline:
         self.db.update_rows("取込データ",import_updates)
         self.db.update_rows("要確認",review_updates)
         return stats
+
