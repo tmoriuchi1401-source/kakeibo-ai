@@ -44,6 +44,90 @@ def test_receipt_original_is_the_same_after_folder_move():
     assert "原本を開く" in formulas[0]
 
 
+def test_recorded_detail_total_links_only_its_exact_import_note_cell():
+    receipt = parse_import_rows([[
+        "receipt:" + FILE, "", "receipt", FILE, "2026-09-01", "店", 1368,
+        "", "要確認", "", "", "明細合計1230≠レシート合計1368",
+    ]])[0]
+    target, comparison = review_evidence_cells(
+        receipt, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=2,
+        imports_by_id={receipt.import_id: receipt}, expense_index={},
+        has_amazon_candidates=False, drive=Drive(["processed"]))
+    assert "原本を開く" in target
+    assert "明細合計を見る" in comparison
+    assert "gid=22&range=L2" in comparison
+    assert "gid=33" not in comparison
+
+    other_source = parse_import_rows([[
+        "scan:exact", "", "scan", "source-key", "2026-09-01", "店", 1368,
+        "", "needs_review_total", "", "", "明細合計1230≠レシート合計1368",
+    ]])[0]
+    _, generic_comparison = review_evidence_cells(
+        other_source, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=4,
+        imports_by_id={}, expense_index={}, has_amazon_candidates=False)
+    assert "gid=22&range=L2" in generic_comparison
+
+    unrelated = tx("card:new", "au PAYカード", "needs_review_transfer")
+    _, unrelated_comparison = review_evidence_cells(
+        unrelated, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=3,
+        imports_by_id={}, expense_index={}, has_amazon_candidates=False)
+    assert unrelated_comparison == ""
+
+    stale = receipt.__class__(**{**receipt.__dict__, "amount": 967})
+    _, unavailable = review_evidence_cells(
+        stale, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=2,
+        imports_by_id={}, expense_index={}, has_amazon_candidates=False,
+        drive=Drive(["processed"]))
+    assert unavailable == "明細合計リンクなし"
+
+    _, duplicate = review_evidence_cells(
+        receipt, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=2,
+        imports_by_id={}, expense_index={}, has_amazon_candidates=False,
+        drive=Drive(["processed"]), unique_import_id=False)
+    assert duplicate == "明細合計リンクなし"
+
+    oversized = receipt.__class__(**{**receipt.__dict__,
+        "note": "明細合計" + "9" * 5000 + "≠レシート合計1368"})
+    _, malformed = review_evidence_cells(
+        oversized, spreadsheet_id=SID, sheet_ids=SHEETS, review_row=2,
+        imports_by_id={}, expense_index={}, has_amazon_candidates=False,
+        drive=Drive(["processed"]))
+    assert malformed == "明細合計リンクなし"
+
+
+def test_detail_total_link_survives_review_regeneration_without_changing_controls(monkeypatch):
+    monkeypatch.setattr("app.review_pipeline.receipt_original_link",
+                        lambda _, drive=None: "原本を開く")
+    class DB:
+        sid = SID
+        review_sheet_ids = SHEETS
+        def __init__(self):
+            self.sheets = {
+                "取込データ": [["receipt:" + FILE, "", "receipt", FILE,
+                            "2026-09-01", "店", 1368, "", "要確認", "", "",
+                            "明細合計1230≠レシート合計1368"]],
+                "要確認": [], "Amazon照合候補": [], "Amazon注文": [],
+            }
+        def get(self, rng): return [list(row) for row in self.sheets[rng.split("!")[0]]]
+        def categories(self): return []
+        def ensure_sheet(self, title, header): self.sheets.setdefault(title, [])
+        def clear(self, rng): self.sheets[rng.split("!")[0]] = []
+        def append(self, title, rows): self.sheets[title].extend(rows)
+        def configure_review_validation(self, *_): pass
+
+    db = DB()
+    ReviewPipeline(db).refresh()
+    first = db.sheets["要確認"][0]
+    assert "gid=22&range=L2" in first[7]
+    first[11] = "保留"
+    first[15] = "本人入力"
+    ReviewPipeline(db).refresh()
+    second = db.sheets["要確認"][0]
+    assert second[7] == first[7]
+    assert second[11] == "保留" and second[15] == "本人入力"
+    assert db.sheets["取込データ"][0][11] == "明細合計1230≠レシート合計1368"
+
+
 def test_duplicate_links_only_exact_new_and_existing_rows():
     imported = tx("card:new", "au PAYカード", "needs_review_duplicate", "expense:known")
     target, comparison = review_evidence_cells(

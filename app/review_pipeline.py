@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 
 from .auto_expense import expense_id
 from .amazon_manual_matching import (
@@ -16,7 +17,8 @@ from .amazon_manual_matching import (
 )
 from .aupay_card_pipeline import is_amazon
 from .reconciliation import ImportTransaction, parse_import_rows
-from .review_evidence import ReviewResource, receipt_original_link, recorded_candidate_ids
+from .review_evidence import (ReviewResource, receipt_original_link,
+                              recorded_candidate_ids, recorded_detail_total_link)
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 from .utils import now_jst_string
 
@@ -31,7 +33,7 @@ def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
                           imports_by_id: dict[str, ImportTransaction],
                           expense_index: dict[str, int], has_amazon_candidates: bool,
                           candidate_sheet_row: int | None = None,
-                          drive=None) -> tuple[str, str]:
+                          drive=None, unique_import_id: bool = True) -> tuple[str, str]:
     """Choose links from the decision reason, using only exact stored identities."""
     if tx.source == "receipt":
         target = receipt_original_link(tx, drive)
@@ -47,8 +49,10 @@ def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
     else:
         target = "資料リンクなし"
 
-    comparison = ""
-    if tx.target_id:
+    comparison = recorded_detail_total_link(
+        tx, spreadsheet_id=spreadsheet_id, sheet_id=sheet_ids.get("取込データ"),
+        unique_import_id=unique_import_id)
+    if not comparison and tx.target_id:
         if tx.target_id in expense_index and "支出明細" in sheet_ids:
             comparison = ReviewResource.sheet_row(
                 label="既存明細を見る", role="comparison", spreadsheet_id=spreadsheet_id,
@@ -218,6 +222,7 @@ class ReviewPipeline:
         generated_by_card={item.import_id:result for item,result in generated}
         categories=self.db.categories()
         imports_by_id = {item.import_id: item for item in tx}
+        import_id_counts = Counter(item.import_id for item in tx)
         duplicate_groups = {
             item.transaction.import_id: [imports_by_id[candidate_id]
                 for candidate_id in recorded_candidate_ids(item.transaction)
@@ -319,7 +324,8 @@ class ReviewPipeline:
                 tx, spreadsheet_id=spreadsheet_id, sheet_ids=sheet_ids,
                 review_row=len(rows)+2, imports_by_id=imports_by_id,
                 expense_index=expense_index, has_amazon_candidates=bool(candidates),
-                candidate_sheet_row=candidate_sheet_rows.get(tx.import_id))
+                candidate_sheet_row=candidate_sheet_rows.get(tx.import_id),
+                unique_import_id=import_id_counts[tx.import_id] == 1)
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
                           target,comparison,
                           tx.status,item.recommendation,tx.note]+manual+candidate_fields)
