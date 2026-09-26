@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
-
-from googleapiclient.errors import HttpError
 
 from .auto_expense import expense_id
 from .amazon_manual_matching import (
@@ -19,38 +16,79 @@ from .amazon_manual_matching import (
 )
 from .aupay_card_pipeline import is_amazon
 from .reconciliation import ImportTransaction, parse_import_rows
+from .review_evidence import ReviewResource, receipt_original_link, recorded_candidate_ids
 from .sheets import CATEGORY_SEPARATOR, HEADERS, SheetsDB
 from .utils import now_jst_string
 
 
-REVIEW_WIDTH = 21
-REVIEW_RANGE = "要確認!A2:U"
+REVIEW_WIDTH = 22
+REVIEW_RANGE = "要確認!A2:V"
+EVIDENCE_HEADERS = ["確認対象", "比較候補", "日付", "店舗", "金額", "原本"]
 
 
-def receipt_original_link(tx: ImportTransaction, drive=None) -> str:
-    """Use the source file ID stored in 取込データ, never its parent folder."""
-    if tx.source != "receipt":
-        return "対象外"
-    source_id = str(tx.row[3]).strip()
-    if (not re.fullmatch(r"[A-Za-z0-9_-]{10,}", source_id)
-            or tx.import_id != "receipt:" + source_id):
-        return "原本リンクなし"
-    try:
-        if drive is None:
-            from .google_clients import drive_service
-            drive = drive_service()
-        file = drive.files().get(fileId=source_id,
-            fields="id,mimeType,trashed",supportsAllDrives=True).execute()
-    except HttpError as error:
-        status = int(getattr(error.resp, "status", 0) or 0)
-        return "原本リンクなし" if status in (403, 404) else "原本確認不可"
-    except Exception:
-        return "原本確認不可"
-    mime = str(file.get("mimeType", ""))
-    if (file.get("id") != source_id or file.get("trashed")
-            or not (mime.startswith("image/") or mime == "application/pdf")):
-        return "原本リンクなし"
-    return f'=HYPERLINK("https://drive.google.com/file/d/{source_id}/view","画像を開く")'
+def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
+                          sheet_ids: dict[str, int], review_row: int,
+                          imports_by_id: dict[str, ImportTransaction],
+                          expense_index: dict[str, int], has_amazon_candidates: bool,
+                          candidate_sheet_row: int | None = None,
+                          drive=None) -> tuple[str, str]:
+    """Choose links from the decision reason, using only exact stored identities."""
+    if tx.source == "receipt":
+        target = receipt_original_link(tx, drive)
+    elif spreadsheet_id and "取込データ" in sheet_ids:
+        label = ("銀行抽出行を見る" if "銀行PDF" in tx.source else
+                 "カード取込を見る" if "amazon" in tx.status.lower() else
+                 "返金情報を見る" if tx.status == "needs_review_refund" else
+                 "取込内容を見る")
+        target = ReviewResource.sheet_row(
+            label=label, role="target", spreadsheet_id=spreadsheet_id,
+            sheet_id=sheet_ids["取込データ"], row=tx.row_num,
+            last_column="L").formula()
+    else:
+        target = "資料リンクなし"
+
+    comparison = ""
+    if tx.target_id:
+        if tx.target_id in expense_index and "支出明細" in sheet_ids:
+            comparison = ReviewResource.sheet_row(
+                label="既存明細を見る", role="comparison", spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_ids["支出明細"], row=expense_index[tx.target_id],
+                last_column="M").formula()
+        elif tx.target_id in imports_by_id and "取込データ" in sheet_ids:
+            comparison = ReviewResource.sheet_row(
+                label="関連取込を見る", role="comparison", spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_ids["取込データ"], row=imports_by_id[tx.target_id].row_num,
+                last_column="L").formula()
+        else:
+            comparison = "比較先を特定できません"
+    if tx.status == "needs_review_duplicate" and comparison in {"", "比較先を特定できません"}:
+        recorded = recorded_candidate_ids(tx)
+        resolved = [imports_by_id[candidate_id] for candidate_id in recorded
+                    if candidate_id in imports_by_id and candidate_id != tx.import_id]
+        missing = len(recorded) - len(resolved)
+        if len(resolved) == 1 and spreadsheet_id and "取込データ" in sheet_ids:
+            label = "候補明細を見る" + (f"（他{missing}件不明）" if missing else "")
+            comparison = ReviewResource.sheet_row(
+                label=label, role="comparison", spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_ids["取込データ"], row=resolved[0].row_num,
+                last_column="L").formula()
+        elif len(resolved) > 1 and candidate_sheet_row is not None and "確認材料" in sheet_ids:
+            comparison = ReviewResource(
+                label=f"比較候補{len(resolved)}件を見る", role="comparison",
+                resource_type="sheet_range", spreadsheet_id=spreadsheet_id,
+                sheet_id=sheet_ids["確認材料"],
+                cell_range=f"A{candidate_sheet_row}:F{candidate_sheet_row+len(resolved)-1}").formula()
+        elif not comparison:
+            comparison = "候補を特定できません"
+    if (comparison in {"", "比較先を特定できません"}
+            and has_amazon_candidates and spreadsheet_id and "要確認" in sheet_ids):
+        comparison = ReviewResource(
+            label="注文候補を見る", role="comparison", resource_type="sheet_range",
+            spreadsheet_id=spreadsheet_id, sheet_id=sheet_ids["要確認"],
+            cell_range=f"R{review_row}:V{review_row}").formula()
+    elif not comparison and tx.status == "amazon_unmatched":
+        comparison = "注文候補なし"
+    return target, comparison
 
 
 @dataclass(frozen=True)
@@ -179,8 +217,30 @@ class ReviewPipeline:
         generated=self._candidate_rows(tx)
         generated_by_card={item.import_id:result for item,result in generated}
         categories=self.db.categories()
+        imports_by_id = {item.import_id: item for item in tx}
+        duplicate_groups = {
+            item.transaction.import_id: [imports_by_id[candidate_id]
+                for candidate_id in recorded_candidate_ids(item.transaction)
+                if candidate_id in imports_by_id and candidate_id != item.transaction.import_id]
+            for item in items if item.transaction.status == "needs_review_duplicate"
+        }
         self.db.ensure_sheet("要確認",HEADERS["要確認"])
         if not money_mode:self.db.ensure_sheet("Amazon照合候補",HEADERS["Amazon照合候補"])
+        has_evidence_sheet = ("確認材料" in self.db.sheet_titles()
+                              if isinstance(self.db, SheetsDB)
+                              else "確認材料" in getattr(self.db, "sheets", {}))
+        if has_evidence_sheet and isinstance(self.db, SheetsDB):
+            header = self.db.get("確認材料!1:1")
+            if not header or header[0][:len(EVIDENCE_HEADERS)] != EVIDENCE_HEADERS:
+                raise ValueError("review_evidence_sheet_not_owned")
+        if any(len(group) > 1 for group in duplicate_groups.values()):
+            self.db.ensure_sheet("確認材料", EVIDENCE_HEADERS)
+            has_evidence_sheet = True
+        sheet_ids = ({s["properties"]["title"]: s["properties"]["sheetId"]
+                      for s in self.db._sheet_metadata()["sheets"]}
+                     if isinstance(self.db, SheetsDB) else getattr(self.db, "review_sheet_ids", {}))
+        spreadsheet_id = getattr(self.db, "sid", "")
+        expense_index = self.db.expense_index() if any(item.transaction.target_id for item in items) else {}
         existing={r[0]:(list(r)+[""]*max(0,REVIEW_WIDTH-len(r)))[:REVIEW_WIDTH]
                   for r in self.db.get(REVIEW_RANGE) if r}
         old_candidates={}
@@ -192,14 +252,29 @@ class ReviewPipeline:
                 if row[17]: old_labels[str(row[17])]=str(row[0])
         self.db.clear(REVIEW_RANGE)
         if not money_mode:self.db.clear("Amazon照合候補!A2:V")
+        if has_evidence_sheet:self.db.clear("確認材料!A2:F")
         rows=[]
         candidate_rows=[]
+        evidence_rows=[]
+        candidate_sheet_rows={}
         validation_options={}
         generated_at=now_jst_string()
         for item in items:
             tx=item.transaction
+            duplicate_candidates = duplicate_groups.get(tx.import_id, [])
+            if len(duplicate_candidates) > 1:
+                candidate_sheet_rows[tx.import_id] = len(evidence_rows) + 2
+                for candidate in duplicate_candidates:
+                    candidate_link = ReviewResource.sheet_row(
+                        label="候補明細を見る", role="comparison", spreadsheet_id=spreadsheet_id,
+                        sheet_id=sheet_ids["取込データ"], row=candidate.row_num,
+                        last_column="L").formula()
+                    evidence_rows.append([f"{tx.merchant} {tx.amount}円", candidate_link, candidate.date,
+                                          candidate.merchant, candidate.amount,
+                                          receipt_original_link(candidate)
+                                          if candidate.source == "receipt" else ""])
             old=existing.get(tx.import_id,[""]*REVIEW_WIDTH)
-            manual=old[10:16]
+            manual=old[11:17]
             display_date=tx.date.replace("-","/") if tx.date else ""
             result=generated_by_card.get(tx.import_id)
             candidates=list(result.candidates) if result else []
@@ -219,7 +294,7 @@ class ReviewPipeline:
                     candidate.shipment_count,
                 ])
             summary="\n".join(f"{index}. {label}" for index,label in enumerate(labels,start=1))
-            selected_label=str(old[18]); selected_id=str(old[19])
+            selected_label=str(old[19]); selected_id=str(old[20])
             mapped=old_labels.get(selected_label)
             if mapped and mapped!=selected_id:
                 selected_id=mapped
@@ -238,14 +313,20 @@ class ReviewPipeline:
                     selection_state="選択済み"
             # Legacy selections remain evidence for migration; no order lookup,
             # regenerated candidates, or silent invalidation in monetary mode.
-            candidate_fields=old[16:21] if money_mode else [summary,result.total_candidate_count if result else 0,
+            candidate_fields=old[17:22] if money_mode else [summary,result.total_candidate_count if result else 0,
                           selected_label,selected_id,selection_state]
+            target, comparison = review_evidence_cells(
+                tx, spreadsheet_id=spreadsheet_id, sheet_ids=sheet_ids,
+                review_row=len(rows)+2, imports_by_id=imports_by_id,
+                expense_index=expense_index, has_amazon_candidates=bool(candidates),
+                candidate_sheet_row=candidate_sheet_rows.get(tx.import_id))
             rows.append([tx.import_id,item.priority,display_date,tx.source,tx.merchant,tx.amount,
-                          receipt_original_link(tx),
+                          target,comparison,
                           tx.status,item.recommendation,tx.note]+manual+candidate_fields)
             if labels: validation_options[len(rows)+1]=labels
         self.db.append("要確認",rows)
         if not money_mode:self.db.append("Amazon照合候補",candidate_rows)
+        if has_evidence_sheet:self.db.append("確認材料",evidence_rows)
         self.db.configure_review_validation(categories,validation_options)
         result=self._summary(items)
         result.update(self._candidate_summary(generated))
@@ -277,11 +358,15 @@ class ReviewApprovalPipeline:
             header = self.db.get("要確認!1:1")
             actual = header[0] if header else []
             expected = HEADERS["要確認"]
-            legacy = expected[:6] + expected[7:]
+            legacy_21 = expected[:6] + ["原本"] + expected[8:]
+            legacy_20 = expected[:6] + expected[8:]
             if actual[:len(expected)] == expected:
                 return self.db.get(REVIEW_RANGE)
-            if not migrate and actual[:len(legacy)] == legacy:
-                return [list(row[:6]) + [""] + list(row[6:])
+            if not migrate and actual[:len(legacy_21)] == legacy_21:
+                return [list(row[:7]) + [""] + list(row[7:])
+                        for row in self.db.get("要確認!A2:U")]
+            if not migrate and actual[:len(legacy_20)] == legacy_20:
+                return [list(row[:6]) + ["", ""] + list(row[6:])
                         for row in self.db.get("要確認!A2:T")]
             raise ValueError("review_schema_not_ready")
         return self.db.get(REVIEW_RANGE)
@@ -308,12 +393,12 @@ class ReviewApprovalPipeline:
         by_id={tx.import_id:tx for tx in imports}
         for raw in review_rows:
             row=(list(raw)+[""]*REVIEW_WIDTH)[:REVIEW_WIDTH]
-            if str(row[10]).strip()!="Amazon注文と照合": continue
-            card_id=str(row[0]); candidate_id=str(row[19]).strip()
+            if str(row[11]).strip()!="Amazon注文と照合": continue
+            card_id=str(row[0]); candidate_id=str(row[20]).strip()
             tx=by_id.get(card_id); candidate=candidates.get(candidate_id)
             errors=[]
             if tx is None: errors.append("card transaction no longer exists")
-            if str(row[20]).strip()!="選択済み": errors.append("candidate selection is not current")
+            if str(row[21]).strip()!="選択済み": errors.append("candidate selection is not current")
             if not candidate_id or candidate is None: errors.append("candidate no longer exists")
             if candidate_id in duplicate_ids: errors.append("candidate storage contains duplicate identity")
             if errors: preliminary[card_id]=tuple(errors)
@@ -330,7 +415,7 @@ class ReviewApprovalPipeline:
         from .amazon_money_runtime import money_enabled
         imports=parse_import_rows(self.db.get("取込データ!A2:L"))
         review_rows=self._review_rows(migrate=False)
-        selected=sum(str((list(row)+[""]*11)[10]).strip()=="Amazon注文と照合"
+        selected=sum(str((list(row)+[""]*12)[11]).strip()=="Amazon注文と照合"
                      for row in review_rows)
         requests,errors=self._amazon_plan(imports,review_rows) if selected and not money_enabled() else ({},{})
         conflicts=sum(any("more than once" in error for error in values)
@@ -347,7 +432,7 @@ class ReviewApprovalPipeline:
         categories=set(self.db.categories())
         expense_idx=self.db.expense_index()
         review_rows=self._review_rows(migrate=True)
-        amazon_selected=not money_mode and any(str((list(row)+[""]*11)[10]).strip()=="Amazon注文と照合"
+        amazon_selected=not money_mode and any(str((list(row)+[""]*12)[11]).strip()=="Amazon注文と照合"
                             for row in review_rows)
         amazon_requests,amazon_errors=self._amazon_plan(imports,review_rows) if amazon_selected else ({},{})
         import_updates=[]; expense_new=[]; expense_updates=[]; review_updates=[]
@@ -356,25 +441,25 @@ class ReviewApprovalPipeline:
                "amazon_manual_matched":0,"amazon_manual_invalid":0}
         for row_num,raw in enumerate(review_rows,start=2):
             row=list(raw)+[""]*max(0,REVIEW_WIDTH-len(raw)); row=row[:REVIEW_WIDTH]
-            action=str(row[10]).strip()
+            action=str(row[11]).strip()
             if not action: continue
             stats["requested"]+=1
             error=""
             tx=by_id.get(str(row[0]))
             if money_mode and action!="保留" and (action=="Amazon注文と照合" or
                     (tx is not None and (is_amazon(tx.merchant) or tx.source.lower().startswith("amazon")))):
-                row[15]="未反映: 日常画面のAmazon金銭確認で対応してください"
+                row[16]="未反映: 日常画面のAmazon金銭確認で対応してください"
                 stats["held"]+=1;review_updates.append((row_num,row));continue
             if action not in self.ACTIONS: error="許可されていない判断です"
             elif action=="保留":
-                row[15]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
+                row[16]="保留"; stats["held"]+=1; review_updates.append((row_num,row)); continue
             elif tx is None: error="元の取込データが見つかりません"
             elif action=="Amazon注文と照合":
                 request=amazon_requests.get(tx.import_id)
                 errors=amazon_errors.get(tx.import_id,())
                 if request is None or errors:
-                    row[15]="未反映: "+self._amazon_error(errors)
-                    row[20]="未反映"
+                    row[16]="未反映: "+self._amazon_error(errors)
+                    row[21]="未反映"
                     stats["errors"]+=1; stats["amazon_manual_invalid"]+=1
                     review_updates.append((row_num,row)); continue
                 candidate=request.candidate; audit=audit_information(candidate)
@@ -393,7 +478,7 @@ class ReviewApprovalPipeline:
                     expense=list(expense_raw)+[""]*max(0,13-len(expense_raw)); expense=expense[:13]
                     expense[12]="duplicate_excluded"
                     expense_updates.append((expense_row_num,expense)); stats["expenses_excluded"]+=1
-                row[15]="反映済み"; row[20]="反映済み"
+                row[16]="反映済み"; row[21]="反映済み"
                 review_updates.append((row_num,row)); stats["applied"]+=1
                 stats["amazon_manual_matched"]+=1; continue
             elif not (
@@ -402,43 +487,43 @@ class ReviewApprovalPipeline:
             ):
                 error=f"既に処理済みです: {tx.status}"
             if error:
-                row[15]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue
+                row[16]="エラー: "+error; stats["errors"]+=1; review_updates.append((row_num,row)); continue
 
             target=""; new_status=""
             if action=="支出として計上":
                 if (tx.source=="au PAYカード" and is_amazon(tx.merchant)
                         and tx.status=="amazon_unmatched"):
-                    row[15]="未反映: Amazon注文と照合 または 保留 を選択してください"
+                    row[16]="未反映: Amazon注文と照合 または 保留 を選択してください"
                     stats["errors"]+=1; review_updates.append((row_num,row)); continue
-                pair=selected_category_pair(str(row[12]),str(row[13]))
+                pair=selected_category_pair(str(row[13]),str(row[14]))
                 if pair not in categories:
-                    row[15]="エラー: カテゴリマスタに存在する大・小カテゴリを選択してください"
+                    row[16]="エラー: カテゴリマスタに存在する大・小カテゴリを選択してください"
                     stats["errors"]+=1; review_updates.append((row_num,row)); continue
                 expense_id=self._expense_id(tx.import_id); target=expense_id; new_status="manual_expense"
                 expense=[expense_id,tx.date,tx.merchant,"手動計上",tx.amount,pair[0],pair[1],
-                          tx.row[7],tx.source,"",tx.import_id,str(row[14]).strip(),"active"]
+                          tx.row[7],tx.source,"",tx.import_id,str(row[15]).strip(),"active"]
                 if expense_id in expense_idx: expense_updates.append((expense_idx[expense_id],expense))
                 else: expense_new.append(expense)
                 stats["expenses_created"]+=1
             elif action=="重複として除外":
-                target=str(row[11]).strip(); new_status="manual_duplicate_excluded"
+                target=str(row[12]).strip(); new_status="manual_duplicate_excluded"
                 for expense_row_num,expense_raw in self.db.expense_rows_for_import(tx.import_id):
                     expense=list(expense_raw)+[""]*max(0,13-len(expense_raw)); expense=expense[:13]
                     expense[12]="duplicate_excluded"
                     expense_updates.append((expense_row_num,expense)); stats["expenses_excluded"]+=1
             elif action=="レシートと統合":
-                target=str(row[11]).strip(); receipt=by_id.get(target)
+                target=str(row[12]).strip(); receipt=by_id.get(target)
                 if receipt is None or receipt.source!="receipt":
-                    row[15]="エラー: 実在するレシートの取込IDを入力してください"
+                    row[16]="エラー: 実在するレシートの取込IDを入力してください"
                     stats["errors"]+=1; review_updates.append((row_num,row)); continue
                 new_status="matched_receipt"
 
             updated=list(tx.row); updated[8]=new_status; updated[9]=target
-            manual_note=str(row[14]).strip()
+            manual_note=str(row[15]).strip()
             annotation=f"スマホ判断={action}"+(f"; {manual_note}" if manual_note else "")
             updated[11]="; ".join(x for x in (tx.note,annotation) if x)
             import_updates.append((tx.row_num,updated))
-            row[15]="反映済み"; review_updates.append((row_num,row)); stats["applied"]+=1
+            row[16]="反映済み"; review_updates.append((row_num,row)); stats["applied"]+=1
 
         if expense_new or expense_updates: self.db.ensure_expense_status_column()
         self.db.append("支出明細",expense_new)

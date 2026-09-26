@@ -181,6 +181,8 @@ class CategoryRuleUIPipeline:
                     lines=row[1].split("\n")
                     row[1]="\n".join(lines[:-1]+["過去分: 全月の未分類に反映待ち",lines[-1]])
             self.db.replace_category_rule_ui_rows(rows, UI_HEADERS)
+            if hasattr(self.db, "link_category_rule_representatives"):
+                self.db.link_category_rule_representatives(rows, records)
         else:  # Minimal test and legacy adapter compatibility.
             self.db.ensure_category_rule_ui_sheet(UI_HEADERS)
             self.db.clear("カテゴリ自動分類!A2:L")

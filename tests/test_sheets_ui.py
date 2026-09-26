@@ -280,16 +280,16 @@ def test_real_review_refresh_retains_manual_inputs_and_validation_with_ui():
     ReviewPipeline(db).refresh()
     row = review_row(db, "card:1")
     label = db.sheets["Amazon照合候補"][0][17]
-    row[10:15] = ["Amazon注文と照合", "receipt:1", "日用品｜雑貨", "従来入力", "手入力メモ"]
-    row[18] = label
+    row[11:16] = ["Amazon注文と照合", "receipt:1", "日用品｜雑貨", "従来入力", "手入力メモ"]
+    row[19] = label
     ReviewPipeline(db).refresh()
     after = review_row(db, "card:1")
-    assert after[10:15] == ["Amazon注文と照合", "receipt:1", "日用品｜雑貨", "従来入力", "手入力メモ"]
-    assert after[18] == label and after[20] == "選択済み"
+    assert after[11:16] == ["Amazon注文と照合", "receipt:1", "日用品｜雑貨", "従来入力", "手入力メモ"]
+    assert after[19] == label and after[21] == "選択済み"
     sid = IDS["要確認"]
-    assert len(db.svc.validations[sid, 1, 10]["condition"]["values"]) == 5
-    assert db.svc.validations[sid, 1, 13] == {}  # Legacy free entry still allowed.
-    for col in [10, 11, 12, 13, 14, 18]:
+    assert len(db.svc.validations[sid, 1, 11]["condition"]["values"]) == 5
+    assert db.svc.validations[sid, 1, 14] == {}  # Legacy free entry still allowed.
+    for col in [11, 12, 13, 14, 15, 19]:
         assert db.svc.cells[sid, 1, col]["userEnteredFormat"]["backgroundColorStyle"] != {"rgbColor": {"red": 1, "green": 1, "blue": 1}}
         assert not db.svc.dimensions.get((sid, "COLUMNS", col), {}).get("hiddenByUser")
 
