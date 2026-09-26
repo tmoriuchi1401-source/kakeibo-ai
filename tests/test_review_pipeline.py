@@ -72,8 +72,8 @@ class FakeDB:
     def get(self,rng):
         if rng=="取込データ!A2:L":
             return [row(self.import_id,self.source,"2026-08-16",self.status)]
-        if rng in {"要確認!A2:O","要確認!A2:T"}:
-            return [[self.import_id,"中","2026-08-16",self.source,"店舗",100,self.status,
+        if rng == "要確認!A2:U":
+            return [[self.import_id,"中","2026-08-16",self.source,"店舗",100,"対象外",self.status,
                      "","","支出として計上","",self.category[0],self.category[1],"メモ",""]]
         raise AssertionError(rng)
 
@@ -102,7 +102,7 @@ def test_manual_expense_rejects_category_pair_outside_master():
     assert result["applied"]==0
     assert result["errors"]==1
     assert db.appended==[]
-    assert "カテゴリマスタ" in db.updated["要確認"][0][1][14]
+    assert "カテゴリマスタ" in db.updated["要確認"][0][1][15]
 
 
 def test_manual_expense_accepts_combined_mobile_category():

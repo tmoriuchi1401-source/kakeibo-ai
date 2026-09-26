@@ -20,7 +20,7 @@ def manual_expense_already_recorded(source_id, parsed, *, receipt_rows, import_r
             or _money(h[3])!=parsed.total or _money(i[6])!=parsed.total or _money(e[4])!=parsed.total
             or parsed.total<=0 or not h[2] or not h[2]==i[5]==e[2]
             or not h[4]==i[7]==e[7]):return False
-    return not any(r and r[0]==iid and any((list(r)+['']*15)[9:15]) for r in review_rows)
+    return not any(r and r[0]==iid and any((list(r)+['']*16)[10:16]) for r in review_rows)
 
 
 def general_review_guidance(source_id, parsed, **tables):

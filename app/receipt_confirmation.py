@@ -296,7 +296,7 @@ class ReceiptConfirmation:
             raise ValueError('既存取込または支出があるため同一性を再確認してください')
         if any(len(r)>9 and r[0]!=iid and r[9] for r in before['import_rows']):
             raise ValueError('照合済み支払いを保護しています。既存値維持を選ぶか照合を確認してください')
-        if any(any(r[9:15]) for r in before['review_rows']):
+        if any(any(r[10:16]) for r in before['review_rows']):
             raise ValueError('既存の本人判断を保護しています')
         candidates=[]
         if automatic and item['kind']=='medical':

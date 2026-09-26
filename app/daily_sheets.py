@@ -210,7 +210,7 @@ class DailySheets:
 def read_existing_reviews(db):
     """All-year unresolved queues; no ledger history read and no input writes."""
     from .receipt_confirmation import SUPERSEDED_REVIEW_REASON
-    specs={"要確認":(15,14),"Amazon要確認":(12,None),"領収書確認":(5,2)}
+    specs={"要確認":(16,15),"Amazon要確認":(12,None),"領収書確認":(5,2)}
     metadata=db._sheet_metadata()
     result=[]
     for sheet in metadata.get("sheets",[]):
@@ -238,8 +238,8 @@ def read_existing_reviews(db):
                     detail="専用画面で確認してください。" if str(row[1]) in {"医療","受付保留"} else str(row[4])
                 else:
                     if str(row[status_col])=="反映済み":continue
-                    status="保留" if str(row[9])=="保留" else "要確認"
-                    detail=str(row[7])
+                    status="保留" if str(row[10])=="保留" else "要確認"
+                    detail=str(row[8])
                 url=f"https://docs.google.com/spreadsheets/d/{db.sid}/edit#gid={p['sheetId']}&range=A{first+offset}"
                 result.append(ReviewItem(title+":"+str(row[0]),title,detail,status,url))
     from .daily_category_reviews import read_category_reviews

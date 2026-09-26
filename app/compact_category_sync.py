@@ -25,7 +25,7 @@ def _validations(db,meta):
     found=[]
     for sheet in meta["sheets"]:
         props=sheet["properties"];title=props["title"]
-        col={CATEGORY_WORKFLOW_SHEET:2,"要確認":11}.get(title)
+        col={CATEGORY_WORKFLOW_SHEET:2,"要確認":12}.get(title)
         if col is None:continue
         letter=chr(65+col)
         for first in range(2,props["gridProperties"]["rowCount"]+1,2000):

@@ -104,7 +104,7 @@ HEADERS={
               "注文金額","差額","差額率","日付差","商品数","商品概要","大カテゴリ",
               "支払方法","データ種別","注文fingerprint","選択表示","生成日時","発送日","発送日差","発送数"],
 "商品マスタ":["商品ID","商品名","大カテゴリ","小カテゴリ","備考","最終更新日時"],
-"要確認":["確認ID","優先度","日付","データ元","店舗","金額","状態","推奨対応","備考",
+"要確認":["確認ID","優先度","日付","データ元","店舗","金額","原本","状態","推奨対応","備考",
        "ユーザー判断","統合先取込ID","カテゴリ（大｜小）","小カテゴリ（従来）","ユーザー備考","反映結果",
        "Amazon候補","Amazon候補数","Amazon注文候補選択","Amazon候補ID","Amazon選択状態"],
 "支出一覧":["日付","店舗","商品名","金額","大カテゴリ","小カテゴリ","支払方法","データ元","備考","支出ID"],
@@ -206,6 +206,7 @@ class SheetsDB:
             self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":req}).execute()
             self._invalidate_sheet_metadata()
         for title, hdr in HEADERS.items():
+            if title == "要確認": self._ensure_review_original_column()
             existing=self.get(f"{title}!1:1")
             if not existing or existing[0][:len(hdr)] != hdr:
                 self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",body={"values":[hdr]}).execute()
@@ -285,12 +286,34 @@ class SheetsDB:
                 }}}]},
             ).execute()
             self._invalidate_sheet_metadata()
+        if title == "要確認": self._ensure_review_original_column()
         existing=self.get(f"{title}!1:1")
         if not existing or existing[0][:len(header)] != header:
             self.svc.spreadsheets().values().update(
                 spreadsheetId=self.sid,range=f"{title}!A1",valueInputOption="RAW",
                 body={"values":[header]},
             ).execute()
+    def _ensure_review_original_column(self):
+        """Insert G once, retaining all existing review inputs and filter ranges."""
+        legacy = HEADERS["要確認"][:6] + HEADERS["要確認"][7:]
+        existing = self.get("'要確認'!A1:U1")
+        if not existing or not existing[0]: return
+        header = existing[0]
+        if header[:len(HEADERS["要確認"])] == HEADERS["要確認"]: return
+        # The insert may have committed even if the following header update
+        # did not; a rerun must finish that migration without inserting twice.
+        if (header[:6] == legacy[:6] and not (header[6] if len(header)>6 else "")
+                and header[7:7+len(legacy)-6] == legacy[6:]):
+            return
+        if header[:len(legacy)] != legacy:
+            raise ValueError("review_header_changed_before_original_link_migration")
+        sheet = next(s for s in self._sheet_metadata()["sheets"]
+                     if s["properties"]["title"] == "要確認")
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":[
+            {"insertDimension":{"range":{"sheetId":sheet["properties"]["sheetId"],
+               "dimension":"COLUMNS","startIndex":6,"endIndex":7},"inheritFromBefore":True}}
+        ]}).execute()
+        self._invalidate_sheet_metadata()
     def configure_review_validation(self, categories:list[tuple[str,str]],
                                     amazon_options_by_row:dict[int,list[str]]|None=None):
         from .amazon_money_runtime import money_enabled
@@ -308,12 +331,12 @@ class SheetsDB:
              "startColumnIndex":2,"endColumnIndex":3},
              "cell":{"userEnteredFormat":{"numberFormat":{"type":"DATE","pattern":"yyyy/mm/dd"}}},
              "fields":"userEnteredFormat.numberFormat"}},
-            rule(9,10,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
-                 actions]}),
-            rule(11,12,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
-                 for x in combined_category_options(categories)]}),
-            {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
-             "startColumnIndex":12,"endColumnIndex":13}}},
+             rule(10,11,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x} for x in
+                  actions]}),
+             rule(12,13,{"type":"ONE_OF_LIST","values":[{"userEnteredValue":x}
+                  for x in combined_category_options(categories)]}),
+             {"setDataValidation":{"range":{"sheetId":sheet_id,"startRowIndex":1,
+              "startColumnIndex":13,"endColumnIndex":14}}},
         ]
         from .compact_categories import compact_helper, category_condition
         compact = compact_helper(meta)
@@ -333,7 +356,7 @@ class SheetsDB:
             if options:
                 requests.append({"setDataValidation":{"range":{"sheetId":sheet_id,
                     "startRowIndex":row_num-1,"endRowIndex":row_num,
-                    "startColumnIndex":17,"endColumnIndex":18},
+                     "startColumnIndex":18,"endColumnIndex":19},
                     "rule":{"condition":{"type":"ONE_OF_LIST","values":[
                         {"userEnteredValue":value} for value in options
                     ]},"strict":True,"showCustomUi":True}}})
@@ -375,6 +398,18 @@ class SheetsDB:
     def update_rows(self,sheet:str,rows:list[tuple[int,list]]):
         if not rows:return
         self._invalidate_expense_projection(sheet,[(n,n) for n,_ in rows if n>=2])
+        if sheet == "要確認":
+            # Approval reads displayed values. Writing the full row would turn
+            # G's HYPERLINK formula into its displayed label.
+            data = [{"range":f"'要確認'!P{row_num}","values":[[row[15]]]}
+                    for row_num,row in rows]
+            data += [{"range":f"'要確認'!U{row_num}","values":[[row[20]]]}
+                     for row_num,row in rows]
+            self.svc.spreadsheets().values().batchUpdate(
+                spreadsheetId=self.sid,
+                body={"valueInputOption":"RAW","data":data},
+            ).execute()
+            return
         section={"カテゴリ自動分類":"rule", "カテゴリ過去反映":"backfill",
                  "カテゴリ過去反映確認":"confirm"}.get(sheet)
         if section and CATEGORY_WORKFLOW_SHEET in set(self.sheet_titles()):
