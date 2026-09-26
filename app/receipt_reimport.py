@@ -108,7 +108,7 @@ def compare_receipt(
     if any(len(r) > 9 and r[0] != iid and r[9] in set(keys + [rid, iid])
            for r in import_rows if r):
         reasons.append("linked_payment_requires_review")
-    if any(r and r[0] == iid and any(_row(r, 15)[9:15]) for r in review_rows):
+    if any(r and r[0] == iid and any(_row(r, 16)[10:16]) for r in review_rows):
         reasons.append("manual_review_protected")
 
     valid_categories = set(map(tuple, categories))

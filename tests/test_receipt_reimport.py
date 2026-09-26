@@ -42,7 +42,7 @@ def test_import_marker_does_not_hide_missing_details():
     (lambda r: r["expense_rows"][0].__setitem__(12, "inactive"), "protected_expense_status"),
     (lambda r: r["import_rows"][0].__setitem__(8, "matched"), "existing_decision_requires_review"),
     (lambda r: r["expense_rows"].append(list(r["expense_rows"][0])), "duplicate_expense_identity"),
-    (lambda r: r["review_rows"].append(["receipt:s1"] + [""]*8 + ["保留"]), "manual_review_protected"),
+    (lambda r: r["review_rows"].append(["receipt:s1"] + [""]*9 + ["保留"]), "manual_review_protected"),
     (lambda r: r["import_rows"].append(["card:other"] + [""]*8 + ["R-s1-01"]), "linked_payment_requires_review"),
 ])
 def test_differences_and_existing_decisions_are_held(change, reason):

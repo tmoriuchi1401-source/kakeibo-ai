@@ -63,7 +63,7 @@ def test_suggestions_require_one_catalog_valid_pair_and_never_modify_inputs():
 
 def test_home_actions_keep_numeric_counts_and_existing_review_destinations():
     plan = build_plan(metadata())
-    targets = [(7, CATEGORY_UI_ID, "A1"), (11, IDS["要確認"], "J1"), (12, IDS["Amazon要確認"], "H1")]
+    targets = [(7, CATEGORY_UI_ID, "A1"), (11, IDS["要確認"], "K1"), (12, IDS["Amazon要確認"], "H1")]
     for row, sid, address in targets:
         links = [r["repeatCell"] for r in plan["requests"] if "repeatCell" in r
             and r["repeatCell"]["range"]["sheetId"] == HOME_ID
