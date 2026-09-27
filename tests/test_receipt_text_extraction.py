@@ -67,6 +67,31 @@ def test_corrupt_jpeg_is_a_safe_failure():
     assert result.text_present is False
 
 
+def test_image_ocr_applies_exif_orientation_to_text_and_tokens(monkeypatch):
+    image = Image.new('RGB', (20, 10), 'red')
+    image.paste('blue', (10, 0, 20, 10))
+    exif = Image.Exif()
+    exif[274] = 6
+    output = BytesIO()
+    image.save(output, format='JPEG', exif=exif)
+    observed = []
+
+    def inspect(normalized, *args, **kwargs):
+        observed.append((normalized.size, normalized.mode,
+                         normalized.getpixel((5, 5)), normalized.getpixel((5, 15))))
+        return 'レシート 商品 合計 100円' if len(observed) == 1 else ()
+
+    monkeypatch.setattr(extraction, '_run_image_ocr', inspect)
+    monkeypatch.setattr(extraction, '_run_image_ocr_tokens', inspect)
+    result = extraction.extract_receipt_text(output.getvalue(), 'image/jpeg')
+    assert result.extraction_status == 'extracted'
+    assert len(observed) == 2
+    assert observed[0] == observed[1]
+    assert observed[0][:2] == ((10, 20), 'RGB')
+    assert observed[0][2][0] > observed[0][2][2]  # red moves to the top
+    assert observed[0][3][2] > observed[0][3][0]  # blue moves to the bottom
+
+
 def test_corrupt_pdf_is_a_safe_failure():
     result = extraction.extract_receipt_text(b"not-a-pdf", "application/pdf")
 

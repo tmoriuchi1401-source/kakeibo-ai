@@ -85,7 +85,7 @@ def dropdown_requests(review, sid, rows):
         if not row[12] or row[12] in choices:
             validation(n, 12, choices)
         if kind == 'intake':
-            validation(n, 14, ['一般の買物', '医療', '対象外', '再撮影が必要'], strict=False)
+            validation(n, 14, ['一般の買物', '医療', '対象外'])
         if kind == 'medical':
             candidate = item.get('medical_candidates', {})
             issuer = candidate.get('issuer', '') if candidate.get('source') == item['source'] else ''

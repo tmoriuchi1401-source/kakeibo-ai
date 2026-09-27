@@ -1,4 +1,5 @@
 import json
+import base64
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -80,6 +81,31 @@ def test_known_sensitive_source_never_reaches_ocr_or_transport(monkeypatch):
 
     extraction.assert_not_called()
     assert interactions.request is None
+
+
+def test_heic_is_normalized_and_rechecked_as_exact_png_before_transport(monkeypatch):
+    from PIL import Image
+    from app import receipt_text_extraction
+
+    image = Image.new('RGB', (10, 20), 'white')
+    monkeypatch.setattr(receipt_text_extraction, '_normalized_image',
+                        lambda content, mime: image.copy())
+    observed = []
+    def extracted(content, mime):
+        observed.append((content, mime))
+        return _ReceiptTextExtraction('extracted', 'image_ocr', 'レシート 商品 合計 100円')
+    monkeypatch.setattr(receipt_privacy_gate, '_extract_receipt_text', extracted)
+    interactions = FakeInteractions()
+    ai = object.__new__(GeminiAI)
+    ai.client = SimpleNamespace(interactions=interactions)
+    ai.model = 'test-model'
+
+    ai.analyze_receipt(b'synthetic-heic', 'image/heic', [('食費', '食品')])
+    media = interactions.request['input'][1]
+    assert media['mime_type'] == 'image/png'
+    sent = base64.b64decode(media['data'])
+    assert sent.startswith(b'\x89PNG\r\n\x1a\n')
+    assert observed == [(sent, 'image/png')]
 
 
 def test_direct_adapter_blocks_medical_ocr_result(monkeypatch):

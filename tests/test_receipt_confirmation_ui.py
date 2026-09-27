@@ -86,5 +86,5 @@ def test_intake_kind_is_optional_dropdown_without_granting_posting_authority():
     review.render()
     requests = dropdown_requests(review, 7, review.ui_rows())
     assert options(requests, 12, 3) == ['保留']
-    assert options(requests, 14, 3) == ['一般の買物', '医療', '対象外', '再撮影が必要']
-    assert not rules(requests, 14, 3)[0]['strict']
+    assert options(requests, 14, 3) == ['一般の買物', '医療', '対象外']
+    assert rules(requests, 14, 3)[0]['strict']

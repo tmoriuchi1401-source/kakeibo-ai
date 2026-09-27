@@ -30,7 +30,7 @@ ExtractionStatus = Literal[
 ]
 ExtractionMethod = Literal["pdf_text", "image_ocr", "pdf_ocr", "none"]
 
-_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg"})
+_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg", "image/heic", "image/heif"})
 _PYPDF_EXTRACTION_LOCK = threading.Lock()
 _MAX_PDF_OCR_PAGES = 3
 _PDF_OCR_RENDER_SCALE = 3
@@ -305,20 +305,28 @@ def _run_image_ocr_tokens(image, page: int) -> tuple[_StructuredOcrToken, ...]:
     return tuple(tokens)
 
 
-def _extract_image_ocr_tokens(content: bytes) -> tuple[_StructuredOcrToken, ...]:
-    from PIL import Image
-
-    with Image.open(BytesIO(content)) as image:
-        image.load()
+def _extract_image_ocr_tokens(content: bytes, mime_type: str) -> tuple[_StructuredOcrToken, ...]:
+    with _normalized_image(content, mime_type) as image:
         return _run_image_ocr_tokens(image, page=1)
 
 
-def _extract_image_text(content: bytes) -> str | None:
-    from PIL import Image
-
-    with Image.open(BytesIO(content)) as image:
-        image.load()
+def _extract_image_text(content: bytes, mime_type: str) -> str | None:
+    with _normalized_image(content, mime_type) as image:
         return _run_image_ocr(image)
+
+
+def _normalized_image(content: bytes, mime_type: str | None = None):
+    """Decode one complete image, apply EXIF orientation, and give OCR RGB pixels."""
+    from PIL import Image, ImageOps
+
+    if (mime_type or '').strip().lower() in {'image/heic', 'image/heif'}:
+        from pillow_heif import register_heif_opener
+        register_heif_opener(thumbnails=False)
+    with Image.open(BytesIO(content)) as image:
+        if getattr(image, 'n_frames', 1) != 1:
+            raise ValueError('multi_frame_image_requires_review')
+        image.load()
+        return ImageOps.exif_transpose(image).convert('RGB')
 
 
 def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _ReceiptTextExtraction:
@@ -354,14 +362,14 @@ def _extract_receipt_text(content: bytes | None, mime_type: str | None) -> _Rece
 
     if normalized_mime in _IMAGE_MIME_TYPES:
         try:
-            text = _extract_image_text(content)
+            text = _extract_image_text(content, normalized_mime)
         except Exception:
             # PIL/Tesseract failures are document-processing failures, not normal input.
             return _ReceiptTextExtraction("extraction_failed", "image_ocr", None)
         if not text or not text.strip():
             return _ReceiptTextExtraction("ocr_empty", "image_ocr", None)
         try:
-            tokens = _extract_image_ocr_tokens(content)
+            tokens = _extract_image_ocr_tokens(content, normalized_mime)
         except Exception:
             tokens = ()
         return _ReceiptTextExtraction("extracted", "image_ocr", text, tokens, bool(tokens))
