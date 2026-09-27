@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import date
 from hashlib import sha256
+import re
 
 from .drive_run_state import StateError
 from .models import ReceiptResult, ReceiptItem
@@ -67,6 +68,13 @@ def _intake_hold_reason(gate):
     return ('種類を判定できずAI未送信。'+detail+
             '原本で種類を確認し、本人メモの選択肢から「一般の買物／医療／対象外」を選んでください。'
             '医療なら専用確認へ、判読不能なら原本を再撮影してください。')
+
+
+def _without_resolved_total_mismatch(note):
+    """A validated replacement must not inherit the old candidate's failure."""
+    parts = [part.strip() for part in str(note).split(";")]
+    return "; ".join(part for part in parts if part and not re.fullmatch(
+        r"明細合計[0-9]{1,12}≠レシート合計[0-9]{1,12}", part))
 
 
 class ReceiptConfirmation:
@@ -370,10 +378,15 @@ class ReceiptConfirmation:
         receipt=[rid,parsed.date,parsed.merchant,parsed.total,parsed.payment_method,
                  'https://drive.google.com/file/d/'+sid+'/view','解析済',
                  old_receipt[7] if old_receipt and len(old_receipt)>7 else now_jst_string(),
-                 ((str(old_receipt[8])+'; ') if old_receipt and len(old_receipt)>8 and old_receipt[8] else '')+origin+'（'+item['kind']+'）']
+                 "; ".join(part for part in (
+                     _without_resolved_total_mismatch(old_receipt[8])
+                     if old_receipt and len(old_receipt)>8 else "",
+                     origin+'（'+item['kind']+'）') if part)]
         imported=[iid,old_import[1] if old_import else now_jst_string(),'receipt',sid,parsed.date,parsed.merchant,
                   parsed.total,parsed.payment_method,'matched_receipt' if linked else '解析済',linked or '',canonical_hash(parsed.model_dump()),
-                  ((str(old_import[11])+'; ') if old_import and len(old_import)>11 and old_import[11] else '')+origin]
+                  "; ".join(part for part in (
+                      _without_resolved_total_mismatch(old_import[11])
+                      if old_import and len(old_import)>11 else "", origin) if part)]
         expected.append(['レシート',receipt])
         if not linked:
             if len(before['expense_rows'])>len(parsed.items):raise ValueError('既存明細の削除を伴う変更は自動反映しません')

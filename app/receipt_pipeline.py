@@ -7,6 +7,7 @@ from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
 from .receipt_validation import validate_receipt_result
+from .receipt_review_snapshot import save_candidate
 from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
                           RECEIPT_BUYBACK_SOURCE, income_id, validate_income_rows)
 
@@ -124,6 +125,10 @@ class ReceiptPipeline:
             # Check the shared ledger before writing even the receipt row.
             income_row,income_exists=self._buyback_income(import_id,result,raw_hash)
         import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
+        if any(note.startswith("明細合計") for note in notes):
+            # The rejected item list never reaches 支出明細. Save the values
+            # actually used by validation before the import commit marker.
+            save_candidate(self.db, import_id, raw_hash, result)
         if receipt_id not in self.db.receipt_ids():
             self.db.append("レシート",[receipt_row])
         if not ok:
@@ -148,3 +153,4 @@ class ReceiptPipeline:
         # A present import ID means all earlier receipt materialization completed.
         self.db.append("取込データ",[import_row])
         return {"status":"imported","items":len(rows),"total":result.total}
+
