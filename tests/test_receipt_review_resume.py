@@ -41,6 +41,35 @@ def test_kind_note_cannot_grant_normal_ai_authority(answer):
     assert len(review.items)==1 and not db.rows['支出明細']
 
 
+def test_general_answer_stays_held_until_offline_gate_confirms_normal():
+    review,store,db,verify,source=intake('一般の買物')
+    key=review_id('intake',source)
+    unknown=SimpleNamespace(classification='sensitive_unknown',reason_code='sensitive_signal_insufficient',
+                            extraction_status='extracted')
+    assert not review.observe_intake_hold(source,'folder',unknown)
+    review.render()
+    assert review.items[key]['status']=='waiting'
+    assert '一般の買物の選択だけでは通常AIへ送信できません' in db.rows[TITLE][0][4]
+    assert not review.resolve_intake_kind(source,'folder',unknown)
+    normal=SimpleNamespace(classification='normal',reason_code='normal_receipt_evidence',
+                           extraction_status='extracted')
+    assert review.resolve_intake_kind(source,'folder',normal)
+    review.render()
+    assert review.items[key]['status']=='closed_machine'
+    assert db.rows[TITLE][0][14]=='一般の買物'
+    assert not review.resolve_intake_kind(source,'folder',normal)
+    assert not db.rows['レシート'] and not db.rows['取込データ'] and not db.rows['支出明細']
+
+
+def test_general_answer_changed_in_live_ui_cannot_close_intake():
+    review,store,db,verify,source=intake('一般の買物')
+    normal=SimpleNamespace(classification='normal',reason_code='normal_receipt_evidence',
+                           extraction_status='extracted')
+    db.rows[TITLE][0][14]='医療'
+    assert not review.resolve_intake_kind(source,'folder',normal)
+    assert review.items[review_id('intake',source)]['status']=='waiting'
+
+
 def test_owner_exclusion_does_not_create_receipt_or_move_source():
     review,store,db,verify,source=intake('対象外')
     assert review.route_owner_intake(source,'folder')=='対象外'

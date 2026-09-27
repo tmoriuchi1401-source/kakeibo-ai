@@ -56,7 +56,7 @@ def _rows(db, title):
     return db.get(f"'{title}'!A2:T")
 
 
-def _intake_hold_reason(gate):
+def _intake_hold_reason(gate, *, owner_general=False):
     extraction = getattr(gate, 'extraction_status', 'unknown')
     reason = getattr(gate, 'reason_code', 'insufficient_evidence')
     if extraction != 'extracted':
@@ -65,7 +65,9 @@ def _intake_hold_reason(gate):
         detail = '文字は読めましたが、医療等の可能性を安全に除外できませんでした。'
     else:
         detail = '文字は読めましたが、取引の種類を裏付ける見出し・明細・支払情報が揃いませんでした。'
-    return ('種類を判定できずAI未送信。'+detail+
+    owner_note = ('一般の買物の選択だけでは通常AIへ送信できません。'
+                  if owner_general else '')
+    return ('種類を判定できずAI未送信。'+detail+owner_note+
             '原本で種類を確認し、本人メモの選択肢から「一般の買物／医療／対象外」を選んでください。'
             '医療なら専用確認へ、判読不能なら原本を再撮影してください。')
 
@@ -164,9 +166,11 @@ class ReceiptConfirmation:
                  'extraction':getattr(gate,'extraction_status','unknown')}
         if key in self.items:
             old=self.items[key]
-            if old['status']=='waiting' and not any(old['inputs']) and (
-                    old.get('gate')!=details or old.get('reason')!=_intake_hold_reason(gate)):
-                item=deepcopy(old);item.update(gate=details,reason=_intake_hold_reason(gate))
+            reason=_intake_hold_reason(gate, owner_general=old['inputs']==['']*7+['一般の買物'])
+            if (old['status']=='waiting'
+                    and (not any(old['inputs']) or old['inputs']==['']*7+['一般の買物'])
+                    and (old.get('gate')!=details or old.get('reason')!=reason)):
+                item=deepcopy(old);item.update(gate=details,reason=reason)
                 self.save_item(key,item)
             return False
         for old_key,old in list(self.items.items()):
@@ -188,9 +192,13 @@ class ReceiptConfirmation:
         """Retire a same-content kind question without granting posting authority."""
         if gate.classification not in {'normal','medical','payroll'}:return False
         key=_intake_key(self.items,source);old=self.items.get(key)
-        if not old or old['status']!='waiting' or any(old['inputs']):return False
+        if not old or old['status']!='waiting':return False
+        owner_general=(gate.classification=='normal' and old['inputs']==['']*7+['一般の買物'])
+        if any(old['inputs']) and not owner_general:return False
         live=self.ui_rows().get(key)
-        if live and any(live[1][7:15]):return False
+        if live and (live[1][7:15]!=old['inputs']
+                     or live[1][:2]+live[1][3:7]!=old.get('presentation')):return False
+        if owner_general and live is None:return False
         self.verify_source(source,folder_id)
         if self.ui_rows().get(key)!=live:return False
         item=deepcopy(old)
@@ -199,6 +207,7 @@ class ReceiptConfirmation:
             reason=({'normal':'種類を自動識別：一般の買物・利用明細。通常の取込処理へ。',
                      'medical':'種類を自動識別：医療。専用の医療確認行へ。',
                      'payroll':'種類を自動識別：対象外の給与資料。会計処理しません。'}[gate.classification]
+                    +('本人の一般回答も確認しました。' if owner_general else '')
                     +'この判定ではAI送信・記帳を行っていません。'))
         self.save_item(key,item)
         return True
