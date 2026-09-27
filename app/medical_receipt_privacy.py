@@ -424,10 +424,22 @@ def _structured_retail_evidence(text: str) -> bool:
         return True
     if not money:
         return False
+    # Some compact till slips lose the title and subtotal in OCR, while the
+    # independent tax, payment and loyalty sections remain legible.  A date,
+    # multiple printed amounts, and an explicit points award are required;
+    # a tax or payment marker on its own is never a retail admission.
+    dated = bool(re.search(r'20[0-9]{2}(?:年|/|-)[0-9]{1,2}(?:月|/|-)[0-9]{1,2}', compact))
+    loyalty_sale = (
+        dated and ('外税' in compact or '課税' in compact)
+        and ('獲得予定' in compact and 'ポイント' in compact)
+        and payment
+        and len(re.findall(r'(?:[¥\\][0-9][0-9,]*|[0-9][0-9,]*円)', compact)) >= 3
+    )
+    if loyalty_sale:
+        return True
     tax = bool(re.search(r'(?:8|10)%(?:[^\n]{0,8})(?:対象|税)|(?:税)[^\n]{0,8}(?:8|10)%', compact))
     subtotal = '小計' in compact
     sale = '取引内容売上' in compact or '買上点数' in compact
-    dated = bool(re.search(r'20[0-9]{2}(?:年|/|-)[0-9]{1,2}(?:月|/|-)[0-9]{1,2}', compact))
     item_lines = sum(bool(re.search(r'[一-龯ぁ-ゖァ-ヺ]{3,}[^\n]*[¥\\][0-9]', line))
                      for line in compact.splitlines()
                      if not any(label in line for label in (
@@ -451,7 +463,12 @@ def classify_receipt_text(text: str | None) -> ClassificationDecision:
     sensitive_text = re.sub(r'\s+', '', normalized)
     medical = _matched_signals(sensitive_text, _MEDICAL_SIGNALS)
     payroll = _matched_signals(sensitive_text, _PAYROLL_SIGNALS)
-    medical_confirmed = bool(medical.intersection(_MEDICAL_STRONG_SIGNALS)) or len(medical) >= 2
+    # A dispensing insurance statement is medical even when a narrow screenshot
+    # makes Tesseract miss the pharmacy name and the usual clinical labels.
+    dispensing_insurance = ('調剤' in sensitive_text and '保険' in sensitive_text
+                            and ('負担' in sensitive_text or '請求' in sensitive_text))
+    medical_confirmed = (bool(medical.intersection(_MEDICAL_STRONG_SIGNALS))
+                         or len(medical) >= 2 or dispensing_insurance)
     payroll_confirmed = bool(payroll.intersection(_PAYROLL_STRONG_SIGNALS)) or len(payroll) >= 2
 
     if medical_confirmed and payroll_confirmed:

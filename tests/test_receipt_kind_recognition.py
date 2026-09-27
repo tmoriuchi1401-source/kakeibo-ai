@@ -16,6 +16,23 @@ def test_document_structure_recognizes_shop_dining_and_parking_without_merchant_
     assert classify_receipt_text(text).classification == 'normal'
 
 
+def test_dispensing_insurance_statement_is_medical_without_pharmacy_name():
+    text = '調 剤 日 令和8年8月1日\n保 険 情 報\n負 担 割 合 30%\n請 求 額 2,040円'
+    decision = classify_receipt_text(text)
+    assert decision.classification == 'medical'
+    assert decision.reason_code == 'medical_multiple_signals'
+
+
+def test_itemized_tax_and_loyalty_slip_without_title_is_retail():
+    text = ('2026年8月1日\n衣料品 ¥5,000\n外税対象額 ¥5,000\n外税 ¥500\n'
+            '電子マネー ¥5,500\n獲得予定ポイント 100P')
+    assert classify_receipt_text(text).classification == 'normal'
+    assert classify_receipt_text(text + '\n診療点数 120').classification == 'medical'
+    assert classify_receipt_text(text + '\n保険').classification == 'sensitive_unknown'
+    for omitted in ('外税', '電子マネー', '獲得予定ポイント', '2026年8月1日'):
+        assert classify_receipt_text(text.replace(omitted, '')).classification == 'sensitive_unknown'
+
+
 @pytest.mark.parametrize('label,expected', [
     ('<< 買取 >>', True), ('買 取', True), ('高価買取キャンペーン', False),
 ])
@@ -114,6 +131,19 @@ def test_multiple_passes_cannot_manufacture_sale_structure(monkeypatch):
     assert reread.reread_classification(out.getvalue(),'image/png',weak).classification == 'sensitive_unknown'
 
 
+def test_low_resolution_reread_scales_whole_image_without_cropping(monkeypatch):
+    from PIL import Image
+    import pytesseract
+
+    sizes=[]
+    def observe(image, **kwargs):
+        sizes.append(image.size)
+        return RETAIL
+    monkeypatch.setattr(pytesseract, 'image_to_string', observe)
+    assert reread._read_page(Image.new('RGB', (80, 120), 'white')) == (RETAIL, RETAIL)
+    assert sizes == [(160, 240), (160, 240)]
+
+
 def test_partial_multipage_pdf_cannot_become_normal(monkeypatch):
     from io import BytesIO
     from PIL import Image
@@ -129,7 +159,7 @@ def test_partial_multipage_pdf_cannot_become_normal(monkeypatch):
 
 
 @pytest.mark.parametrize('owner_input',[False,True])
-def test_resolved_kind_retires_only_exact_untouched_question_without_accounting(owner_input):
+def test_resolved_kind_retires_only_same_content_untouched_question_without_accounting(owner_input):
     from types import SimpleNamespace
     from unittest.mock import Mock
     from copy import deepcopy
@@ -141,7 +171,47 @@ def test_resolved_kind_retires_only_exact_untouched_question_without_accounting(
     review.render();before=deepcopy(db.rows)
     if owner_input:db.rows[TITLE][0][14]='保留してください'
     normal=SimpleNamespace(classification='normal',reason_code='normal_receipt_evidence',extraction_status='extracted')
-    assert not review.resolve_intake_kind(dict(source,version='2'),'synthetic-inbox',normal)
-    assert review.resolve_intake_kind(source,'synthetic-inbox',normal) is (not owner_input)
+    assert not review.resolve_intake_kind(dict(source,sha256='b'*64),'synthetic-inbox',normal)
+    assert review.resolve_intake_kind(dict(source,version='2'),'synthetic-inbox',normal) is (not owner_input)
     assert review.needs_attention(review_id('intake',source)) is owner_input
     assert {k:v for k,v in db.rows.items() if k!=TITLE}=={k:v for k,v in before.items() if k!=TITLE}
+
+
+def test_intake_metadata_version_change_reuses_same_review_row():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from tests.test_receipt_confirmation import Store,DB
+    from app.receipt_confirmation import ReceiptConfirmation,TITLE,review_id
+
+    store=Store();db=DB();review=ReceiptConfirmation(store,db,Mock())
+    source={'source_id':'same-file','version':'2','sha256':'a'*64,'mime_type':'image/png'}
+    gate=SimpleNamespace(classification='sensitive_unknown',reason_code='insufficient_evidence',extraction_status='extracted')
+    assert review.observe_intake_hold(source,'folder',gate)
+    review.render()
+    newer=dict(source,version='3')
+    assert not review.observe_intake_hold(newer,'folder',gate)
+    review.render()
+    assert list(review.items)==[review_id('intake',source)]
+    assert len(db.rows[TITLE])==1
+    assert not review.observe_intake_hold(newer,'folder',gate)
+    assert len(db.rows[TITLE])==1
+
+
+def test_confident_payroll_document_closes_as_other_without_accounting():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from tests.test_receipt_confirmation import Store,DB
+    from app.receipt_confirmation import ReceiptConfirmation,TITLE,review_id
+
+    source={'source_id':'payroll-file','version':'1','sha256':'c'*64,'mime_type':'application/pdf'}
+    store,db=Store(),DB()
+    review=ReceiptConfirmation(store,db,Mock())
+    unknown=SimpleNamespace(classification='sensitive_unknown',reason_code='insufficient_evidence',extraction_status='extracted')
+    review.observe_intake_hold(source,'inbox',unknown)
+    review.render()
+    payroll=SimpleNamespace(classification='payroll',reason_code='payroll_strong_signal',extraction_status='extracted')
+    assert review.resolve_intake_kind(source,'inbox',payroll)
+    review.render()
+    assert review.items[review_id('intake',source)]['status']=='closed_machine'
+    assert '対象外' in db.rows[TITLE][0][4]
+    assert all(not rows for title,rows in db.rows.items() if title != TITLE)

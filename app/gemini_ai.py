@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64
 import json
 from hashlib import sha256
+from io import BytesIO
 from google import genai
 from pydantic import ValidationError
 from .models import ReceiptResult, ProductClassificationBatch
@@ -27,9 +28,21 @@ class GeminiAI:
         # Authorize the exact immutable bytes immediately before transport.
         if not isinstance(image_bytes, bytes):
             raise ReceiptPrivacyBlocked()
+        if known_source_classification in {'medical', 'payroll', 'sensitive_unknown'}:
+            raise ReceiptPrivacyBlocked()
         fingerprint = sha256(image_bytes).digest()
         if fingerprint in getattr(self, "_blocked_receipts", ()):
             raise ReceiptPrivacyBlocked()
+        if mime_type in {'image/heic', 'image/heif'}:
+            try:
+                from .receipt_text_extraction import _normalized_image
+                with _normalized_image(image_bytes, mime_type) as normalized:
+                    output = BytesIO()
+                    normalized.save(output, format='PNG')
+                    image_bytes = output.getvalue()
+                    mime_type = 'image/png'
+            except Exception:
+                raise ReceiptPrivacyBlocked() from None
         try:
             require_receipt_ai_permission(
                 image_bytes,

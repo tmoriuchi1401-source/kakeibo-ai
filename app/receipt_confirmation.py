@@ -27,6 +27,21 @@ def review_id(kind, source):
     return "review-" + digest([kind, source["source_id"], source["version"], source["sha256"]])[:24]
 
 
+def _intake_key(items, source):
+    """Reuse an intake question when only Drive metadata changed, not bytes."""
+    exact = review_id('intake', source)
+    if exact in items and items[exact].get('status') != 'superseded':
+        return exact
+    for key, item in items.items():
+        previous = item.get('source', {})
+        if (item.get('kind') == 'intake' and item.get('status') != 'superseded'
+                and previous.get('source_id') == source.get('source_id')
+                and previous.get('mime_type') == source.get('mime_type')
+                and previous.get('sha256') == source.get('sha256')):
+            return key
+    return exact
+
+
 def same_row(title, left, right):
     sizes={"レシート":9,"取込データ":12,"支出明細":13}
     def normalized(row):
@@ -39,6 +54,22 @@ def same_row(title, left, right):
 
 def _rows(db, title):
     return db.get(f"'{title}'!A2:T")
+
+
+def _intake_hold_reason(gate, *, owner_general=False):
+    extraction = getattr(gate, 'extraction_status', 'unknown')
+    reason = getattr(gate, 'reason_code', 'insufficient_evidence')
+    if extraction != 'extracted':
+        detail = '画像/PDFから判定用の文字を取得できませんでした。向き・鮮明さ・欠け・ページ数を確認してください。'
+    elif reason in {'sensitive_signal_insufficient', 'conflicting_sensitive_evidence', 'known_sensitive_source'}:
+        detail = '文字は読めましたが、医療等の可能性を安全に除外できませんでした。'
+    else:
+        detail = '文字は読めましたが、取引の種類を裏付ける見出し・明細・支払情報が揃いませんでした。'
+    owner_note = ('一般の買物の選択だけでは通常AIへ送信できません。'
+                  if owner_general else '')
+    return ('種類を判定できずAI未送信。'+detail+owner_note+
+            '原本で種類を確認し、本人メモの選択肢から「一般の買物／医療／対象外」を選んでください。'
+            '医療なら専用確認へ、判読不能なら原本を再撮影してください。')
 
 
 def _without_resolved_total_mismatch(note):
@@ -129,16 +160,25 @@ class ReceiptConfirmation:
 
     def observe_intake_hold(self,source,folder_id,gate):
         """Record only safe gate metadata; no OCR text, AI candidate or write authority."""
-        key=review_id('intake',source)
-        if key in self.items:return False
+        key=_intake_key(self.items,source)
+        details={'classification':gate.classification,
+                 'reason':getattr(gate,'reason_code','insufficient_evidence'),
+                 'extraction':getattr(gate,'extraction_status','unknown')}
+        if key in self.items:
+            old=self.items[key]
+            reason=_intake_hold_reason(gate, owner_general=old['inputs']==['']*7+['一般の買物'])
+            if (old['status']=='waiting'
+                    and (not any(old['inputs']) or old['inputs']==['']*7+['一般の買物'])
+                    and (old.get('gate')!=details or old.get('reason')!=reason)):
+                item=deepcopy(old);item.update(gate=details,reason=reason)
+                self.save_item(key,item)
+            return False
         for old_key,old in list(self.items.items()):
             if old['kind']=='intake' and old['source']['source_id']==source['source_id'] and old['status']=='waiting':
                 item=deepcopy(old);item.update(status='superseded',reason='原本の版が変更。新しい受付行を確認。')
                 self.save_item(old_key,item)
         self.save_item(key,dict(kind='intake',source=source,folder_id=folder_id,status='waiting',
-            reason='種類を判定できずAI未送信。原本を見て、本人メモに「一般の買物／医療／対象外」のいずれかを記入。読めない画像だけ再撮影。',
-            gate={'classification':gate.classification,'reason':getattr(gate,'reason_code','insufficient_evidence'),
-                  'extraction':getattr(gate,'extraction_status','unknown')},inputs=['']*8))
+            reason=_intake_hold_reason(gate),gate=details,inputs=['']*8))
         return True
 
     def finish_intake_scan(self,blocked_sources):
@@ -149,25 +189,32 @@ class ReceiptConfirmation:
                 self.save_item(key,item)
 
     def resolve_intake_kind(self, source, folder_id, gate):
-        """Retire an exact-version kind question without granting posting authority."""
-        if gate.classification not in {'normal','medical'}:return False
-        key=review_id('intake',source);old=self.items.get(key)
-        if not old or old['status']!='waiting' or any(old['inputs']):return False
+        """Retire a same-content kind question without granting posting authority."""
+        if gate.classification not in {'normal','medical','payroll'}:return False
+        key=_intake_key(self.items,source);old=self.items.get(key)
+        if not old or old['status']!='waiting':return False
+        owner_general=(gate.classification=='normal' and old['inputs']==['']*7+['一般の買物'])
+        if any(old['inputs']) and not owner_general:return False
         live=self.ui_rows().get(key)
-        if live and any(live[1][7:15]):return False
+        if live and (live[1][7:15]!=old['inputs']
+                     or live[1][:2]+live[1][3:7]!=old.get('presentation')):return False
+        if owner_general and live is None:return False
         self.verify_source(source,folder_id)
         if self.ui_rows().get(key)!=live:return False
         item=deepcopy(old)
         item.update(status='closed_machine',gate={'classification':gate.classification,
             'reason':gate.reason_code,'extraction':gate.extraction_status},
-            reason=('種類を自動識別：一般の買物・利用明細。通常の取込処理へ。' if gate.classification=='normal'
-                    else '種類を自動識別：医療。専用の医療確認行へ。')+'この判定ではAI送信・記帳を行っていません。')
+            reason=({'normal':'種類を自動識別：一般の買物・利用明細。通常の取込処理へ。',
+                     'medical':'種類を自動識別：医療。専用の医療確認行へ。',
+                     'payroll':'種類を自動識別：対象外の給与資料。会計処理しません。'}[gate.classification]
+                    +('本人の一般回答も確認しました。' if owner_general else '')
+                    +'この判定ではAI送信・記帳を行っていません。'))
         self.save_item(key,item)
         return True
 
     def route_owner_intake(self, source, folder_id):
-        """An exact-version kind answer can narrow routing, never permit AI/posting."""
-        key=review_id('intake',source);old=self.items.get(key)
+        """A same-content kind answer can narrow routing, never permit AI/posting."""
+        key=_intake_key(self.items,source);old=self.items.get(key)
         if not old or old['status'] not in {'waiting','closed_user'}:return ''
         inputs=old['inputs']
         if any(inputs[:7]):return ''  # Includes an explicit hold.
@@ -542,4 +589,3 @@ class ReceiptConfirmation:
                 new_rows.append(managed+item.get('inputs',['']*8)+[item.get('error','')])
         self._write_new_ui_rows(new_rows)
         return len(self.ui_rows())
-

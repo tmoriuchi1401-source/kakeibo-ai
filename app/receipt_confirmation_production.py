@@ -263,6 +263,9 @@ def execute(env,apply):
                 original=directory/(sha256(f['id'].encode()).hexdigest()+'.bin')
                 original.write_bytes(payload);original.chmod(0o600)
                 plans.append(dict(source,path=str(original)))
+        elif gate.classification=='payroll':
+            # A confident non-receipt is outside accounting and external AI.
+            review.resolve_intake_kind(source,folder,gate)
         else:
             counts['blocked']+=1;blocked_sources.add(f['id'])
             review.observe_intake_hold(source,folder,gate)

@@ -4,7 +4,6 @@ Whole pages are read: no region is removed to make a document appear ordinary.
 The original OCR observation is retained when reconciling all passes. No OCR
 text, filename or image is logged, persisted, or returned in the public result.
 """
-from io import BytesIO
 from contextlib import closing
 
 from .medical_receipt_privacy import ClassificationDecision, classify_receipt_text
@@ -26,7 +25,7 @@ def _read_page(image):
 
 def reread_classification(content, mime_type, original_text, *, additional_sensitive_text=''):
     """Return a data-free decision only after every bounded pass completes."""
-    from PIL import Image
+    from .receipt_text_extraction import _normalized_image
 
     texts = [original_text or '']
     try:
@@ -44,10 +43,9 @@ def reread_classification(content, mime_type, original_text, *, additional_sensi
                             if not all(t.strip() for t in observations):
                                 return None
                             texts.extend(observations)
-        elif (mime_type or '').strip().lower() in {'image/png', 'image/jpeg', 'image/jpg'}:
-            with Image.open(BytesIO(content)) as image:
-                image.load()
-                observations = _read_page(image)
+        elif (mime_type or '').strip().lower() in {'image/png', 'image/jpeg', 'image/jpg', 'image/heic', 'image/heif'}:
+            with _normalized_image(content, mime_type) as normalized:
+                observations = _read_page(normalized)
             if not all(t.strip() for t in observations):
                 return None
             texts.extend(observations)
