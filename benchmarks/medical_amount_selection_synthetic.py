@@ -36,8 +36,8 @@ def main():
     if platform.system()!='Linux':raise RuntimeError('linux_ephemeral_runner_only')
     args=argparse.ArgumentParser();args.add_argument('--mode',choices=['cold','warm'],required=True);a=args.parse_args()
     base=Path(os.environ['RUNNER_TEMP'])/'medical-synthetic-smoke';base.mkdir(exist_ok=True)
-    models=Path(os.environ['MODEL_CACHE_PATH']);models.mkdir(parents=True,exist_ok=True)
-    output=Path(os.environ['METRICS_PATH']);output.parent.mkdir(parents=True,exist_ok=True)
+    models=Path(os.environ['MODEL_CACHE_PATH']).resolve();models.mkdir(parents=True,exist_ok=True)
+    output=Path(os.environ['METRICS_PATH']).resolve();output.parent.mkdir(parents=True,exist_ok=True)
     runtime=base/'runtime';runtime.mkdir(exist_ok=True)
     stats={'server_tree_rss_peak_bytes':0,'python_rss_peak_bytes':0,'system_available_min_bytes':2**64-1,'samples':0}
     result={'schema':'medical-synthetic-actions-smoke-v1','mode':a.mode,'synthetic_only':True,'medical_real_images':0,
@@ -67,7 +67,7 @@ def main():
         phase('runtime_extract',lambda:subprocess.run(['tar','--zstd','-xf',str(archive),'-C',str(runtime)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True,timeout=120))
         archive.unlink();result['runtime_disk_bytes']=dir_bytes(runtime)
         binary=runtime/'bin/ollama'
-        env={k:v for k,v in os.environ.items() if k in ['PATH','LANG','LC_ALL','TMPDIR']}
+        env={k:v for k,v in os.environ.items() if k in ['PATH','LANG','LC_ALL','TMPDIR','HOME']}
         env.update(OLLAMA_HOST=f'127.0.0.1:{PORT}',OLLAMA_MODELS=str(models),OLLAMA_NO_CLOUD='1',OLLAMA_VULKAN='0',OLLAMA_DEBUG='0',OLLAMA_MAX_LOADED_MODELS='1',OLLAMA_NUM_PARALLEL='1',OLLAMA_KEEP_ALIVE='10m')
         def start_server():
             nonlocal server
