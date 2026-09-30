@@ -1,0 +1,133 @@
+name: Medical amount selection synthetic smoke
+on:
+  push:
+    branches: [codex/medical-amount-selection-20261001]
+    paths:
+      - .github/workflows/medical-amount-selection-synthetic.yml
+      - benchmarks/medical_amount_selection_synthetic.py
+permissions:
+  contents: read
+concurrency:
+  group: medical-synthetic-smoke
+  cancel-in-progress: false
+jobs:
+  cold:
+    if: github.ref == 'refs/heads/codex/medical-amount-selection-20261001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODEL_CACHE_PATH: ${{ runner.temp }}/medical-public-models
+      METRICS_PATH: ${{ github.workspace }}/synthetic-metrics/cold.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record setup start
+        run: |
+          python -c "import pathlib,time; pathlib.Path('${{ runner.temp }}/setup-start-cold').write_text(str(time.time()))"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal synthetic dependencies
+        run: |
+          python - <<'PY'
+          import json,pathlib,subprocess,time
+          phases={}
+          for name,cmd in [('apt_update',['sudo','apt-get','update']),('font_install',['sudo','apt-get','install','--no-install-recommends','-y','fonts-noto-cjk','zstd']),('python_dependencies',['python','-m','pip','install','Pillow==12.1.0','psutil==7.2.2'])]:
+              t=time.monotonic()
+              subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=600)
+              phases[name]=round(time.monotonic()-t,3)
+          pathlib.Path('synthetic-metrics').mkdir(exist_ok=True)
+          pathlib.Path('synthetic-metrics/cold-setup.json').write_text(json.dumps(phases))
+          PY
+      - name: Measure runtime, model and three synthetic images
+        env:
+          MODEL_CACHE_HIT: 'false'
+        run: python benchmarks/medical_amount_selection_synthetic.py --mode cold
+      - name: Record total setup and measurement time
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,pathlib,time
+          p=pathlib.Path('synthetic-metrics/cold-setup.json')
+          if p.exists():
+              d=json.loads(p.read_text());d['setup_to_measurement_end_seconds']=round(time.time()-float(pathlib.Path('${{ runner.temp }}/setup-start-cold').read_text()),3);p.write_text(json.dumps(d))
+          PY
+      - name: Save model-only cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.MODEL_CACHE_PATH }}
+          key: medical-synthetic-qwen3vl2b-ea422f1e7365-linux-v1-20261001
+      - name: Upload synthetic metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medical-synthetic-cold-metrics
+          path: synthetic-metrics/*.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Confirm synthetic temporary cleanup
+        if: always()
+        run: test ! -d "${{ runner.temp }}/medical-synthetic-smoke"
+  warm:
+    needs: cold
+    if: github.ref == 'refs/heads/codex/medical-amount-selection-20261001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODEL_CACHE_PATH: ${{ runner.temp }}/medical-public-models
+      METRICS_PATH: ${{ github.workspace }}/synthetic-metrics/warm.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Record setup start
+        run: |
+          python -c "import pathlib,time; pathlib.Path('${{ runner.temp }}/setup-start-warm').write_text(str(time.time()))"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install minimal synthetic dependencies
+        run: |
+          python - <<'PY'
+          import json,pathlib,subprocess,time
+          phases={}
+          for name,cmd in [('apt_update',['sudo','apt-get','update']),('font_install',['sudo','apt-get','install','--no-install-recommends','-y','fonts-noto-cjk','zstd']),('python_dependencies',['python','-m','pip','install','Pillow==12.1.0','psutil==7.2.2'])]:
+              t=time.monotonic()
+              subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=600)
+              phases[name]=round(time.monotonic()-t,3)
+          pathlib.Path('synthetic-metrics').mkdir(exist_ok=True)
+          pathlib.Path('synthetic-metrics/warm-setup.json').write_text(json.dumps(phases))
+          PY
+      - name: Restore model cache
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.MODEL_CACHE_PATH }}
+          key: medical-synthetic-qwen3vl2b-ea422f1e7365-linux-v1-20261001
+      - name: Measure runtime, model and three synthetic images
+        env:
+          MODEL_CACHE_HIT: ${{ steps.model-cache.outputs.cache-hit }}
+        run: python benchmarks/medical_amount_selection_synthetic.py --mode warm
+      - name: Record total setup and measurement time
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,pathlib,time
+          p=pathlib.Path('synthetic-metrics/warm-setup.json')
+          if p.exists():
+              d=json.loads(p.read_text());d['setup_to_measurement_end_seconds']=round(time.time()-float(pathlib.Path('${{ runner.temp }}/setup-start-warm').read_text()),3);p.write_text(json.dumps(d))
+          PY
+      - name: Upload synthetic metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medical-synthetic-warm-metrics
+          path: synthetic-metrics/*.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Confirm synthetic temporary cleanup
+        if: always()
+        run: test ! -d "${{ runner.temp }}/medical-synthetic-smoke"
+
