@@ -163,6 +163,7 @@ class BankPdfResult:
     canonical_transactions: tuple[Transaction, ...]
     source: str = SOURCE
     adapter_key: str = JIBUN_BANK_ADAPTER.key
+    account_opening_rows: int = 0
 
     def summary(self) -> dict[str, int | dict[str, int] | str]:
         reasons = Counter(issue.reason for issue in self.issues)
@@ -184,6 +185,7 @@ class BankPdfResult:
             "duplicate_candidate_count": self.duplicate_candidates,
             "balance_consistency_failures": self.balance_consistency_failures,
             "canonical_layer_count": len(self.canonical_transactions),
+            "account_opening_rows": self.account_opening_rows,
         }
 
 
@@ -358,6 +360,12 @@ def _parse_page(
         else:
             signed_amount = -debit if debit is not None else int(credit)
 
+        # An explicit zero-balance opening is a statement event, not a deposit.
+        # Keep it in the balance chain; document-wide position checks follow.
+        opening = (description in {"新規", "口座開設"} and balance == 0
+                   and (debit, credit) in {(None, 0), (0, None), (0, 0)})
+        if opening:
+            signed_amount, amount_issue = 0, None
         if not description:
             issues.append(BankParseIssue(page.page_number, row_number, "description_missing"))
         elif amount_issue:
@@ -397,6 +405,15 @@ def parse_bank_pages(
         candidate_rows += page_candidates
         page_candidate_counts[page.page_number] = page_candidates
 
+    opening_rows = [row for row in raw_rows if row.signed_amount == 0]
+    if opening_rows:
+        chronological = raw_rows if adapter.balance_order == "ascending" else list(reversed(raw_rows))
+        if (len(opening_rows) != 1 or chronological[0] is not opening_rows[0]
+                or any(row.date < opening_rows[0].date for row in chronological[1:])):
+            issues.extend(BankParseIssue(row.page, row.row, "invalid_account_opening_row")
+                          for row in opening_rows)
+    # Event rows do not participate in hashes, occurrence numbering or writes.
+    transaction_rows = [row for row in raw_rows if row.signed_amount != 0]
     materials = [
         canonical_hash({
             "source": adapter.source,
@@ -406,12 +423,12 @@ def parse_bank_pages(
             "signed_amount": row.signed_amount,
             "post_transaction_balance": row.balance,
         })
-        for row in raw_rows
+        for row in transaction_rows
     ]
     material_counts = Counter(materials)
     occurrences: Counter[str] = Counter()
     normalized = []
-    for row, material in zip(raw_rows, materials):
+    for row, material in zip(transaction_rows, materials):
         identity = (
             f"bankpdf:{adapter.identity_namespace}:{alias}:{material[:24]}"
         )
@@ -494,6 +511,7 @@ def parse_bank_pages(
         canonical_transactions=eligible,
         source=adapter.source,
         adapter_key=adapter.key,
+        account_opening_rows=len(opening_rows),
     )
 
 

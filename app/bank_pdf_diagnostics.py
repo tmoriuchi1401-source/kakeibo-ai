@@ -108,6 +108,7 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
         "collision": details["collision"],
         "issues": [{"page": x.page, "row": x.row, "reason": x.reason} for x in parsed.issues],
         "balance_consistency_failures": parsed.balance_consistency_failures,
+        "account_opening_rows": parsed.account_opening_rows,
         "parse_ok": parse_ok, "outside_write_window": outside,
         "existing_income_settled": settled, "income_settled_error": settled_error,
         "income_ledger_error": income_error,
@@ -186,6 +187,7 @@ def main():
         if listing.get("nextPageToken") or {hashlib.sha256(x.encode()).hexdigest() for x in file_ids} != FILE_REFERENCES:
             raise RuntimeError("diagnosis_inventory_changed")
         reports = []
+        fixed_files, fixed_bytes = [], {}
         for file_id in sorted(file_ids, key=lambda x: hashlib.sha256(x.encode()).hexdigest()):
             _stage = "fixed_file_read"
             file = drive.files().get(fileId=file_id, fields="id,parents,mimeType,trashed,modifiedTime", supportsAllDrives=True).execute()
@@ -193,6 +195,8 @@ def main():
                 raise RuntimeError("diagnosis_file_changed")
             path = directory / (hashlib.sha256(file_id.encode()).hexdigest() + ".pdf")
             path.write_bytes(download_drive_file(file_id, service=drive))
+            fixed_files.append(file)
+            fixed_bytes[file_id] = path.read_bytes()
             _stage = "fixed_file_diagnosis"
             from .bank_pdf_pipeline import BankPdfError
             try:
@@ -203,11 +207,34 @@ def main():
                     "header_geometry_unresolved", "column_boundary_unresolved"}
                 reports.append({"file_ref": hashlib.sha256(file_id.encode()).hexdigest()[:24], "parse_ok": False, "archive_ready": False,
                     "reasons": [str(exc) if str(exc) in allowed else "bank_pdf_parse_error"]})
+        # Replay the real recurring decision path against the exact frozen reads.
+        # This adapter has no Drive update method and DB has no sheet writer.
+        from .bank_pdf_recurring import run_bank_pdf_recurring
+        from .aupay_card_recurring import SqliteRecurringRunState
+        from .bank_pdf_status import safe_file_statuses
+        class FixedInventory:
+            def files(self): return self
+            def list(self, **kwargs): return self
+            def execute(self): return {"files": fixed_files}
+        replay_state = SqliteRecurringRunState(directory / "replay.sqlite3", repo_root=root)
+        _stage = "fixed_inventory_read_only_replay"
+        replays = []
+        for _ in range(2):
+            replay = run_bank_pdf_recurring(drive_service=FixedInventory(), db=db,
+                state=replay_state, authority_provider=ProtectedBankRecurringAuthorityProvider(authority_path, repo_root=root),
+                repo_root=root, now=window.end, dry_run=True, preview_window=window,
+                download=lambda file_id: fixed_bytes[file_id], **rules)
+            if replay.get("failure") or replay.get("written") or replay.get("write_requests"):
+                raise RuntimeError("diagnosis_replay_failed")
+            replays.append({**{k: replay[k] for k in ("files_seen", "files_withheld", "parse_failed",
+                "outside_write_window", "duplicate", "review", "collision", "unresolved_income",
+                "files_processed", "written", "write_requests")},
+                "file_statuses": safe_file_statuses(replay["file_statuses"])})
         print(json.dumps({"schema": 1, "baseline": BASELINE, "read_only": True,
             "reference": {k: previous.get(k) for k in ("source_window_start", "source_window_end", "files_seen",
                 "duplicate", "review", "files_withheld", "parse_failed", "outside_write_window")},
             "rules_digest": hashlib.sha256(json.dumps({k: sorted(v) for k,v in rules.items()}, sort_keys=True).encode()).hexdigest(),
-            "reports": reports}, sort_keys=True))
+            "reports": reports, "replays": replays}, sort_keys=True))
 
 
 _stage = "startup"

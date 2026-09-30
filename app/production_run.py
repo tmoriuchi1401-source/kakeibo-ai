@@ -92,6 +92,8 @@ COUNT_KEYS = frozenset({
     "gemini_quota_deferred", "gemini_unavailable_deferred",
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
     "files_seen", "files_new", "files_processed", "write_requests", "catch_up_pending",
+    "files_withheld", "parse_failed", "outside_write_window", "collision", "unresolved_income",
+    "existing_content_mismatch",
     "preview_cursor_epoch", "preview_windows",
     "expenses_created", "expenses_updated", "updated", "unchanged",
     "event_rows_written", "header_rows_written", "import_rows_written", "expense_rows_written",
@@ -200,6 +202,9 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 counts = {key: value for key, value in result.items()
                           if key in COUNT_KEYS and type(value) is int and value >= 0}
                 outcome.update(status="success", error="", counts=counts)
+                if source == "bank":
+                    from .bank_pdf_status import safe_file_statuses
+                    outcome["file_statuses"] = safe_file_statuses(result.get("file_statuses", []))
                 if source == "bank" and counts.get("catch_up_pending"):
                     outcome.update(status="partial", error="bank_catch_up_pending")
                 if not preview:

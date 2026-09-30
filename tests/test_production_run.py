@@ -25,6 +25,21 @@ def test_normal_serial_order_and_safe_count_only_summary():
     assert "12345" not in json.dumps(result)
 
 
+def test_bank_hold_summary_allows_only_safe_refs_statuses_reasons():
+    safe = {"file_ref": "a" * 24, "status": "withheld", "reasons": ["transaction_review"]}
+    report = execute_serial({"bank": lambda: {"files_withheld": 4, "parse_failed": 1,
+        "outside_write_window": 4, "collision": 0, "unresolved_income": 3,
+        "files_processed": 0, "file_statuses": [safe,
+            {**safe, "filename": "PRIVATE"}, {**safe, "reasons": ["PRIVATE"]},
+            {**safe, "file_ref": "PRIVATE"}, {**safe, "status": []}]}},
+        selected_sources=frozenset({"bank"}))
+    bank = report["sources"]["bank"]
+    assert bank["file_statuses"] == [safe]
+    assert bank["counts"]["files_withheld"] == 4
+    assert bank["counts"]["unresolved_income"] == 3
+    assert "PRIVATE" not in json.dumps(report)
+
+
 def test_independent_sources_continue_but_dependent_accounting_stops():
     calls = []
     result = execute_serial(runners(calls, fail="amazon"))
