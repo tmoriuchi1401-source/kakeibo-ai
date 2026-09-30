@@ -1,0 +1,64 @@
+name: Medical independent payment synthetic smoke
+on:
+  push:
+    branches: [codex/medical-amount-selection-20261001]
+    paths:
+      - .github/workflows/medical-independent-amount-synthetic.yml
+      - benchmarks/medical_independent_amount_synthetic.py
+permissions:
+  contents: read
+concurrency:
+  group: medical-independent-synthetic-smoke
+  cancel-in-progress: false
+jobs:
+  smoke:
+    if: github.ref == 'refs/heads/codex/medical-amount-selection-20261001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODEL_CACHE_PATH: .synthetic-model-cache
+      METRICS_PATH: independent-synthetic-metrics/smoke.json
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install synthetic fixture dependencies
+        run: |
+          python - <<'PY'
+          import json,pathlib,subprocess,time
+          phases={}
+          for name,cmd in [('apt_update',['sudo','apt-get','update']),('font_install',['sudo','apt-get','install','--no-install-recommends','-y','fonts-noto-cjk','zstd']),('python_dependencies',['python','-m','pip','install','Pillow==12.1.0','psutil==7.2.2'])]:
+              t=time.monotonic();subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=600);phases[name]=round(time.monotonic()-t,3)
+          pathlib.Path('independent-synthetic-metrics').mkdir(exist_ok=True)
+          pathlib.Path('independent-synthetic-metrics/setup.json').write_text(json.dumps(phases))
+          PY
+      - name: Restore public model-only cache
+        id: model-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.MODEL_CACHE_PATH }}
+          key: medical-synthetic-qwen3vl2b-ea422f1e7365-linux-v1-20261001
+      - name: Independent extraction on three synthetic images
+        env:
+          MODEL_CACHE_HIT: ${{ steps.model-cache.outputs.cache-hit }}
+        run: python benchmarks/medical_independent_amount_synthetic.py --mode smoke
+      - name: Save public model-only cache on miss
+        if: success() && steps.model-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.MODEL_CACHE_PATH }}
+          key: medical-synthetic-qwen3vl2b-ea422f1e7365-linux-v1-20261001
+      - name: Upload synthetic scalar metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: medical-independent-synthetic-metrics
+          path: independent-synthetic-metrics/*.json
+          retention-days: 3
+          if-no-files-found: error
+      - name: Confirm synthetic temporary cleanup
+        if: always()
+        run: test ! -d "${{ runner.temp }}/medical-independent-smoke"
