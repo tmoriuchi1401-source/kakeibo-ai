@@ -15,6 +15,7 @@ from .bank_pdf_recurring import BankPdfWindow, _existing_income_settled, _in_wri
 from .bank_reconciliation import build_bank_shadow_result
 from .bank_steady_state import build_bank_daily_preview
 from .reconciliation import parse_import_rows
+from .bank_archive_evidence import completed_bank_postings
 
 BASELINE = "ae4c8a4c91e4dd8b591782b72b029b9712925a83"
 FILE_REFERENCES = frozenset({
@@ -37,6 +38,8 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
         expected_git_head=BASELINE, account_alias=account_alias, **rules)
     parsed = daily.parsed_result
     shadow = build_bank_shadow_result(parsed, existing, **rules)
+    completed = completed_bank_postings(db, parsed.transactions, imports)
+    resolved_reviews = set(daily.archive_review_identities) & completed.keys()
     by_id = defaultdict(list)
     for row in existing:
         by_id[row.import_id].append(row)
@@ -59,6 +62,8 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
             "existing_status": (matches[0].status if matches[0].status in SAFE_IMPORT_STATUSES
                 else "unrecognized_status") if matches else "missing",
             "existing_row": matches[0].row_num if matches else None,
+            "stored_posting": completed.get(tx.source_row_identity, "not_proven"),
+            "archive_review_resolved": tx.source_row_identity in resolved_reviews,
         })
     from .bank_income import deposit_decisions, income_id, validate_income_rows
     deposits, _ = deposit_decisions(parsed.transactions, **rules)
@@ -75,6 +80,14 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
         "existing_import": bool(by_id[d.transaction.source_row_identity]),
         "ledger_exact": not income_error and d.outcome == "confirmed_income"
             and incomes.get(income_id(d.transaction.source_row_identity)) == d.row(),
+        "saved_income_exact": completed.get(d.transaction.source_row_identity) == "income",
+        "state": ("A" if completed.get(d.transaction.source_row_identity) == "income" and (
+            d.outcome == "confirmed_income" and incomes.get(income_id(d.transaction.source_row_identity)) == d.row()
+            or d.outcome == "needs_review" and d.reason == "deposit_purpose_unconfirmed")
+            else "C" if d.outcome in {"transfer", "reimbursement", "other_non_income"}
+                and completed.get(d.transaction.source_row_identity) != "income"
+            else "B" if d.outcome == "confirmed_income" and income_id(d.transaction.source_row_identity) not in incomes
+            else "D"),
     } for d in deposits]
     try:
         settled = _existing_income_settled(db, daily, imports, **rules)
@@ -93,7 +106,7 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
     if details["collision"]: reasons.append("collision")
     if any(t["existing_count"] and not t["existing_exact"] for t in transactions):
         reasons.append("existing_content_mismatch")
-    if review: reasons.append("transaction_review")
+    if review > len(resolved_reviews): reasons.append("transaction_review")
     if daily.expense_candidate_identities and outside: reasons.append("new_expense_outside_write_window")
     if settled is not True: reasons.append("unresolved_income")
     if settled_error: reasons.append("income_ledger_invalid")
@@ -116,6 +129,9 @@ def diagnose_pdf(db, path, *, file, window, rules, account_alias=None):
         "duplicate_exact": sum(t["existing_exact"] for t in transactions),
         "duplicate_mismatch": sum(bool(t["existing_count"]) and not t["existing_exact"] for t in transactions),
         "review_existing_exact": sum(t["existing_exact"] and t["classification"] == "needs_review" for t in transactions),
+        "review_existing_count": sum(bool(t["existing_count"]) and t["classification"] == "needs_review" for t in transactions),
+        "review_resolved_existing": len(resolved_reviews),
+        "review_unresolved": review - len(resolved_reviews),
         "transactions": transactions, "income": income_rows,
     }
     return report
@@ -228,7 +244,7 @@ def main():
                 raise RuntimeError("diagnosis_replay_failed")
             replays.append({**{k: replay[k] for k in ("files_seen", "files_withheld", "parse_failed",
                 "outside_write_window", "duplicate", "review", "collision", "unresolved_income",
-                "files_processed", "written", "write_requests")},
+                "files_processed", "written", "write_requests", "review_resolved_existing", "review_unresolved")},
                 "file_statuses": safe_file_statuses(replay["file_statuses"])})
         print(json.dumps({"schema": 1, "baseline": BASELINE, "read_only": True,
             "reference": {k: previous.get(k) for k in ("source_window_start", "source_window_end", "files_seen",

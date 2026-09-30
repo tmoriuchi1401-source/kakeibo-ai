@@ -20,6 +20,7 @@ from .bank_reconciliation import (
     build_bank_shadow_result,
 )
 from .reconciliation import parse_import_rows
+from .bank_archive_evidence import RECLASSIFICATION_REASONS
 
 
 STEADY_STATE_MAX_ROWS = 100
@@ -40,6 +41,7 @@ class BankDailyPreview:
     expected_git_head: str
     expense_candidate_identities: tuple[str, ...] = ()
     parsed_result: object = None
+    archive_review_identities: tuple[str, ...] = ()
 
 
 def _daily_summary(
@@ -157,6 +159,9 @@ def build_bank_daily_preview(
         expected_git_head=expected_git_head,
         expense_candidate_identities=expense_candidate_identities,
         parsed_result=parsed,
+        archive_review_identities=tuple(d.classification.transaction.source_row_identity
+            for d in shadow.decisions if d.classification.classification == "needs_review"
+            and d.classification.reason in RECLASSIFICATION_REASONS),
     )
 
 

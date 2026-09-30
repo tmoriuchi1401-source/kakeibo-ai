@@ -42,6 +42,7 @@ from .drive_processed import move_processed, validate_processed_folder
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file
 from .reconciliation import parse_import_rows
+from .bank_archive_evidence import completed_bank_postings
 
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -138,9 +139,23 @@ def _existing_income_settled(db, daily, import_rows, *, confirmed_internal_trans
         confirmed_internal_transfers=confirmed_internal_transfers,
         confirmed_non_own_classifications=confirmed_non_own_classifications,
     )
-    if any(decision.outcome == "needs_review" for decision in decisions):
-        return False
     if _existing_content_mismatches(daily.parsed_result, import_rows):
+        return False
+    import_statuses = {str(row[0]): str(row[8]) for row in import_rows if len(row) > 8 and row[0]}
+    if any(d.outcome not in {"needs_review", "confirmed_income"}
+           and import_statuses.get(d.transaction.source_row_identity) == "bank_income" for d in decisions):
+        return False
+    completed = completed_bank_postings(db, daily.parsed_result.transactions, import_rows,
+        selected={d.transaction.source_row_identity for d in decisions})
+    if any(decision.outcome == "needs_review" and not (
+            decision.reason == "deposit_purpose_unconfirmed"
+            and completed.get(decision.transaction.source_row_identity) == "income")
+            for decision in decisions):
+        return False
+    # A current explicit transfer/reimbursement rule conflicting with posted
+    # income is not an absence of classification and requires review.
+    if any(d.outcome not in {"needs_review", "confirmed_income"}
+           and completed.get(d.transaction.source_row_identity) == "income" for d in decisions):
         return False
     confirmed = [decision for decision in decisions if decision.outcome == "confirmed_income"]
     if not confirmed:
@@ -229,6 +244,8 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "new_eligible": 0,
         "duplicate": 0,
         "review": 0,
+        "review_resolved_existing": 0,
+        "review_unresolved": 0,
         "income": 0,
         "household_income_confirmed": 0,
         "household_income_review": 0,
@@ -307,6 +324,7 @@ def run_bank_pdf_recurring(
     temp_paths: list[Path] = []
     pending_processed = []
     archive_previews = {}
+    archive_review_proofs = {}
 
     def file_status(file, status, reasons):
         ref = hashlib.sha256(str(file["id"]).encode()).hexdigest()[:24]
@@ -320,6 +338,10 @@ def run_bank_pdf_recurring(
         before = {str(row[0]) for row in import_rows if row and row[0]}
         required = {tx.source_row_identity for tx in daily.parsed_result.transactions} & before
         if not required <= {str(row[0]) for row in current if row and row[0]}:
+            return False
+        proofs = archive_review_proofs.get(str(file["id"]), set())
+        if proofs and not proofs <= completed_bank_postings(db, daily.parsed_result.transactions,
+                current, selected=proofs).keys():
             return False
         return _existing_income_settled(
             db, daily, current,
@@ -402,8 +424,23 @@ def run_bank_pdf_recurring(
                 details.get("operator_confirmed_non_own_review", 0)
             )
             summary["review"] = int(summary["review"]) + file_review
+            review_ids = set(getattr(daily, "archive_review_identities", ()))
+            completed = completed_bank_postings(db, parsed_result.transactions, import_rows,
+                selected=review_ids | {tx.source_row_identity for tx in parsed_result.transactions
+                    if tx.signed_amount > 0})
+            resolved = review_ids & completed.keys()
+            archive_review_proofs[str(file["id"])] = resolved
+            summary["review_resolved_existing"] += len(resolved)
+            file_review -= len(resolved)
+            summary["review_unresolved"] += file_review
             summary["income"] = int(summary["income"]) + int(details.get("new_income", 0))
             household = details.get("household_income", {}).get("classification", {})
+            deposits, _ = deposit_decisions(parsed_result.transactions,
+                confirmed_internal_transfers=confirmed_internal_transfers,
+                confirmed_non_own_classifications=confirmed_non_own_classifications)
+            resolved_income_review = sum(d.outcome == "needs_review"
+                and d.reason == "deposit_purpose_unconfirmed"
+                and completed.get(d.transaction.source_row_identity) == "income" for d in deposits)
             summary["household_income_confirmed"] += int(household.get("confirmed_income", {}).get("count", 0))
             summary["household_income_review"] += int(household.get("needs_review", {}).get("count", 0))
             summary["non_expense"] = int(summary["non_expense"]) + sum(
@@ -484,7 +521,7 @@ def run_bank_pdf_recurring(
             # An expense-only legacy marker is not proof that deposits finished.
             # Keep unresolved deposits/empty parses available for processing.
             archive_ready = not (
-                int(household.get("needs_review", {}).get("count", 0))
+                int(household.get("needs_review", {}).get("count", 0)) - resolved_income_review
                 or (int(details.get("new_income", 0)) and not income)
             )
             if archive_ready and not income:
@@ -654,7 +691,7 @@ def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **
     count_fields = (
         "files_seen", "files_new", "files_processed", "files_withheld", "outside_write_window",
         "parse_failed", "parsed", "collision", "unresolved_income", "existing_content_mismatch",
-        "new_eligible", "duplicate", "review", "income", "household_income_confirmed",
+        "new_eligible", "duplicate", "review", "review_resolved_existing", "review_unresolved", "income", "household_income_confirmed",
         "household_income_review", "non_expense", "withheld", "written",
         "write_requests", "write_attempted", "planned_expense_writes",
         "planned_import_updates",
