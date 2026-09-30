@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MODEL_CACHE_PATH: ${{ runner.temp }}/medical-public-models
-      METRICS_PATH: ${{ github.workspace }}/synthetic-metrics/cold.json
+      MODEL_CACHE_PATH: .synthetic-model-cache
+      METRICS_PATH: synthetic-metrics/cold.json
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,8 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MODEL_CACHE_PATH: ${{ runner.temp }}/medical-public-models
-      METRICS_PATH: ${{ github.workspace }}/synthetic-metrics/warm.json
+      MODEL_CACHE_PATH: .synthetic-model-cache
+      METRICS_PATH: synthetic-metrics/warm.json
     steps:
       - uses: actions/checkout@v4
         with:
