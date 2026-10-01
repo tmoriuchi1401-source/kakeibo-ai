@@ -78,7 +78,7 @@ def dropdown_requests(review, sid, rows):
         # Preserve an in-progress/legacy owner decision, even if no longer offered.
         if row[12] in CHOICES and row[12] not in choices:
             choices.append(row[12])
-        if not row[12] or row[12] in choices:
+        if kind == 'medical' or not row[12] or row[12] in choices:
             validation(n, 12, choices)
         if kind == 'intake':
             validation(n, 14, ['一般の買物', '医療', '対象外'])

@@ -80,6 +80,16 @@ def test_duplicate_dropdown_contains_only_matching_active_external_expenses():
     assert options(dropdown_requests(review, 7, review.ui_rows()), 13) == ['wrong-amount']
 
 
+def test_retired_medical_decision_keeps_owner_text_but_removes_candidate_option():
+    review, store, db, _, source = medical()
+    db.rows[TITLE][0][12] = '候補で医療費を確定'
+    before = deepcopy((store.value, db.rows))
+    requests = dropdown_requests(review, 7, review.ui_rows())
+    assert '医療費を確定' in options(requests, 12)
+    assert '候補で医療費を確定' not in options(requests, 12)
+    assert (store.value, db.rows) == before
+
+
 def test_intake_kind_is_optional_dropdown_without_granting_posting_authority():
     review, _, db, _, source = medical()
     review.observe_intake_hold(dict(source, source_id='other'), 'folder', SimpleNamespace(classification='sensitive_unknown'))
