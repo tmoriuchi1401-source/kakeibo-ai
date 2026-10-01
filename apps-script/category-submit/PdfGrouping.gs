@@ -6,6 +6,12 @@ const PDF_UI = 'PDFページ確認';
 const PDF_QUEUE = '_PDF確認受付';
 const PDF_WORKFLOW = 'pdf-grouping-review.yml';
 
+function pdfGroupingDispatchEnabled_() {
+  // Limited live introduction captures human intent only. An absent property
+  // must never dispatch a worker, including when existing category auth exists.
+  return PropertiesService.getScriptProperties().getProperty('PDF_GROUPING_DISPATCH_ENABLED') === 'true';
+}
+
 function pdfGroupingEdited(e) {
   if (!e || !e.range || e.range.getSheet().getName() !== PDF_UI ||
       e.range.getNumRows() !== 1 || e.range.getNumColumns() !== 1 ||
@@ -31,15 +37,17 @@ function submitPdfGroupingRow_(rowNumber) {
     // Never replace/resend a captured request whose delivery may be ambiguous.
     if (prior.some(r => ['dispatching','accepted'].includes(String(r[1])) &&
         (() => {try {return JSON.parse(r[2])[14] === snapshot[14];} catch (_) {return true;}})())) return;
-    if (!PropertiesService.getUserProperties().getProperty('CATEGORY_GITHUB_TOKEN')) {
+    const dispatchEnabled = pdfGroupingDispatchEnabled_();
+    if (dispatchEnabled && !PropertiesService.getUserProperties().getProperty('CATEGORY_GITHUB_TOKEN')) {
       sheet.getRange(rowNumber,10).setValue('既存のカテゴリ操作連携設定を確認してください。');
       return;
     }
     const id = Utilities.getUuid();
     if (queue.getLastRow() >= 1001) throw new Error('受付履歴が上限です。処理済み履歴を管理者に確認してください。');
-    queue.appendRow([id,'dispatching',JSON.stringify(snapshot),new Date().toISOString(),'','']);
+    queue.appendRow([id,dispatchEnabled ? 'dispatching' : 'accepted',JSON.stringify(snapshot),new Date().toISOString(),'','']);
     sheet.getRange(rowNumber,10).setValue('受付中・Drive保存待ち');
     SpreadsheetApp.flush();
+    if (!dispatchEnabled) return; // Manual operator processes the captured UUID.
     let response;
     try {
       response = categoryFetch_('/actions/workflows/' + PDF_WORKFLOW + '/dispatches','post',
@@ -57,6 +65,9 @@ function submitPdfGroupingRow_(rowNumber) {
 }
 
 function refreshPdfGrouping() {
+  if (!pdfGroupingDispatchEnabled_()) {
+    throw new Error('候補の更新は管理者に依頼してください。確認操作は受付できます。');
+  }
   const response = categoryFetch_('/actions/workflows/' + PDF_WORKFLOW + '/dispatches','post',
     {ref:'main',inputs:{mode:'refresh'}});
   if (response.getResponseCode() !== 204) throw new Error('PDF確認画面の更新受付を確認できません。');

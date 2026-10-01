@@ -1,8 +1,11 @@
 # Private Drive grouping authority and management review UI
 
-Draft PR #91 implements a manual, disabled-by-default review path. This phase
-does not install a live UI, create a live state file, change Actions settings,
-run production Actions or merge main. Confirmation stops at authority storage.
+Draft PR #91 implements a manual, disabled-by-default review path. The initial
+implementation did not install a live UI or state. The later
+[limited live validation](pdf-grouping-live-validation.md) provisions the
+dedicated state and capture-only UI; the Actions worker remains disabled.
+Confirmation stops at authority storage. No main merge or accounting activation
+has occurred.
 
 ## Existing infrastructure
 
@@ -72,7 +75,8 @@ and the [official Python HttpRequest callback interface](https://googleapis.gith
 The v2 [isolated live preflight](pdf-grouping-v2-preflight.md) verified current-tag
 HTTP 200, stale-tag HTTP 412, new-tag HTTP 200 and exact content read-back using
 the same service account. The preflight file contains synthetic data only and
-is not an authority file. Real authority/UI activation remains a separate phase.
+is not an authority file. The subsequent limited authority/UI installation is
+documented separately; worker activation remains a separate phase.
 A failed preflight must stop, not trigger new auth/permissions or a weaker path.
 
 ## Spreadsheet projection
@@ -95,11 +99,15 @@ No public page previews or sharing changes are created.
 `PdfGrouping.gs` joins the existing category-submit Apps Script project. Its
 updated `Code.gs` delegates PDF edits through the existing installed edit trigger
 and provides a manual candidate refresh menu. The auth manifest is unchanged.
-It uses the existing `CATEGORY_GITHUB_TOKEN` user property and UUID-only dispatch;
-no new token/scopes/triggers or source values in GitHub inputs are needed.
+Dispatch, when separately enabled, uses the existing `CATEGORY_GITHUB_TOKEN`
+user property and UUID-only inputs. By default, the absent
+`PDF_GROUPING_DISPATCH_ENABLED` script property means capture only: no token is
+needed and no HTTP request is made. A manual operator processes the captured
+UUID. No new token/scopes/triggers or source values in GitHub inputs are needed.
 
 After reviewing the original and candidate, choose **確定** in 操作: one edit
-captures and submits the confirmation request. For 分割/結合, select the target
+captures the confirmation request. Automatic dispatch requires explicit opt-in.
+For 分割/結合, select the target
 first: `1` splits Group 1 into singleton pages; `1+2` joins adjacent Groups 1/2.
 Edits with an actually changed partition allocate a new unconfirmed proposal and
 revision; review it and explicitly confirm. An unchanged partition preserves
@@ -147,12 +155,14 @@ the existing mechanism does not securely attest an individual Google reviewer,
 and the SA/owner is not inferred as actor. Stale attempts are audited when the
 Drive state is valid/writable; unavailable/corrupt Drive cannot save its own audit.
 
-## Activation (not performed)
+## Worker activation (not performed)
 
 The added `pdf-grouping-review.yml` is workflow_dispatch only, defaults to
 disabled, requires explicitly enabled review and validated main, and has no
 schedule, Gemini key or processed-folder binding. Existing scheduled workflow
-files, Variables/Secrets and Apps Script auth scopes are unchanged.
+files, existing Variables/Secrets and Apps Script auth scopes are unchanged. The
+limited installation adds only `PDF_GROUPING_BINDING`; review enablement remains
+unset. It does not alter the validated main SHA.
 
 After a separately authorized deployment, the owner must precreate the dedicated
 file using existing inherited private grants. Operator initialization uses
@@ -164,8 +174,8 @@ and `owner_digest = _digest(owner_email)`, using the existing SA key.
 Verify isolated ACL/ETag/conditional-update/read-back, install the owned tabs and
 update the existing Apps Script files before enabling the dedicated manual path.
 Stop if that requires authentication/permission changes or conflicts with the
-existing state platform. Only the isolated synthetic v2 preflight has occurred;
-live authority provisioning, UI installation and workflow activation have not.
+existing state platform. The limited live validation has provisioned state and
+installed the capture-only UI. Workflow activation has not occurred.
 
 ## Closed boundaries and next phase
 
@@ -181,8 +191,9 @@ interface. It validates Drive plus fresh original observations, returns no units
 on mismatch, never initializes/repairs state and never consults local authority.
 Read-only normal-unit analysis still needs separately authorized AI/destination
 scope, fresh member/composite gates and results storage without accounting writes.
-Live state/UI activation remains a production prerequisite. The isolated v2
-preflight has passed, but does not grant any processing authority.
+The live canary and explicit human confirmation remain prerequisites for the
+next phase. Neither provisioning nor successful conditional writes grant
+accounting, Medical, archive or AI-send authority.
 
 ## Original authority/UI verification
 

@@ -125,6 +125,12 @@ class GroupingSheet:
             elif (found['sheetId'] != sid or self._get(title, 'A1:' + ('P' if title == TITLE else 'F') + '1') != [headers]):
                 raise StateError('grouping_ui_schema_mismatch')
         requests += [{'updateDimensionProperties': {'range': {'sheetId': SHEET_ID, 'dimension': 'COLUMNS',
+            'startIndex': 0, 'endIndex': 1}, 'properties': {'hiddenByUser': True}, 'fields': 'hiddenByUser'}},
+            {'repeatCell': {'range': {'sheetId': SHEET_ID, 'startRowIndex': 0, 'endRowIndex': 1},
+                'cell': {'userEnteredFormat': {'backgroundColor': {'red': .94, 'green': .94, 'blue': .94},
+                                              'textFormat': {'bold': True}}},
+                'fields': 'userEnteredFormat.backgroundColor,userEnteredFormat.textFormat.bold'}},
+            {'updateDimensionProperties': {'range': {'sheetId': SHEET_ID, 'dimension': 'COLUMNS',
             'startIndex': 10, 'endIndex': 16}, 'properties': {'hiddenByUser': True}, 'fields': 'hiddenByUser'}},
             {'repeatCell': {'range': {'sheetId': SHEET_ID, 'startRowIndex': 0, 'endRowIndex': 1001},
                 'cell': {'userEnteredFormat': {'wrapStrategy': 'WRAP', 'verticalAlignment': 'TOP'}},

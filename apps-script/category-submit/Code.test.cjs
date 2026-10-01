@@ -86,7 +86,7 @@ test('definitive dispatch failure allows repair and preserves source edits',()=>
   assert.equal(h.rows[2][0],'private purchase');
 });
 
-function pdfHarness({response=204, throws=false, target='', operation='確定'}={}) {
+function pdfHarness({response=204, throws=false, target='', operation='確定', dispatch='true', token='github_pat_TEST'}={}) {
   const snapshot = ['pdf-review-token','未確定','2','Group 1: p1\nGroup 2: p2','一般候補','reason',
     'PRIVATE_SOURCE_LINK',operation,target,'','PRIVATE_SOURCE_ID','a'.repeat(64),'b'.repeat(64),'1','row-token',''];
   const rows=[], results=[], calls=[];
@@ -99,7 +99,8 @@ function pdfHarness({response=204, throws=false, target='', operation='確定'}=
     categoryFetch_:(path,method,payload)=>{calls.push({path,method,payload});if(throws)throw Error('network');
       return {getResponseCode:()=>response};},
     LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock:()=>{}})},
-    PropertiesService:{getUserProperties:()=>({getProperty:()=> 'github_pat_TEST'})},
+    PropertiesService:{getUserProperties:()=>({getProperty:()=> token}),
+      getScriptProperties:()=>({getProperty:()=>dispatch})},
     SpreadsheetApp:{flush:()=>{}}, Utilities:{getUuid:()=>id}, Date,JSON,
   });
   vm.runInContext(pdfSource,ctx);
@@ -137,4 +138,16 @@ test('PDF only accepts a single operation dropdown edit, never bulk/other edits'
   h.ctx.pdfGroupingEdited(event('支出明細',8));
   h.ctx.pdfGroupingEdited(event('PDFページ確認',8,2));
   assert.equal(count,0);h.ctx.pdfGroupingEdited(event('PDFページ確認',8));assert.equal(count,1);
+});
+
+test('PDF missing dispatch opt-in captures once without token, HTTP or authority',()=>{
+  for (const dispatch of [null, '', 'false', 'TRUE']) {
+    const h=pdfHarness({dispatch,token:''});h.run();h.run();
+    assert.equal(h.rows.length,1);assert.equal(h.rows[0][1],'accepted');
+    assert.equal(h.rows[0][2],JSON.stringify(h.snapshot));
+    assert.equal(h.calls.length,0);
+    assert.ok(h.results.every(v=>!v.includes('確定済み')));
+    assert.throws(()=>h.ctx.refreshPdfGrouping(),/管理者/);
+    assert.equal(h.calls.length,0);
+  }
 });
