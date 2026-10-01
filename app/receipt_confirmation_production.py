@@ -124,10 +124,8 @@ def execute(env,apply):
     settings,store,db,metadata=open_context(env,apply)
     reader=read_only_drive_service()
     review=ReceiptConfirmation(store,db,metadata)
-    from .medical_auto_posting import AUTO_POLICIES,apply_automatic,in_scope,owner_blocked
-    from .medical_local_owner import blocked as local_owner_blocked
-    from .receipt_local_ocr import enabled as local_ocr_enabled
-    policy=env.get('MEDICAL_DERIVED_AI_POLICY','');automatic=policy in AUTO_POLICIES
+    # Medical is owner-confirmed only; legacy automatic/AI policy variables
+    # cannot enable posting or derived image sending.
     if not apply:
         from copy import deepcopy
         from types import SimpleNamespace
@@ -164,31 +162,11 @@ def execute(env,apply):
         return archive_confirmations(review,normalize_folder_id(settings.receipt_drive_folder_id),
             normalize_folder_id(destination),drive_service(),lambda sid:download_drive_file(sid,reader))
     resumed_archives=archive()
-    if env.get('MEDICAL_FINALIZE_ONLY')=='true':
-        written=review.apply_confirmations();auto_written=0
-        if automatic:
-            from .settings import service_account_source
-            from .medical_crop_review import identity_key
-            key_path,key_info=service_account_source();key_info=key_info or json.loads(Path(key_path).read_bytes())
-            from .medical_auto_posting import WRITE_LIMIT
-            remaining=max(0,WRITE_LIMIT-int(env.get('MEDICAL_LOCAL_WRITTEN','0')))
-            auto_written=apply_automatic(review,identity_key=identity_key(key_info['private_key']),policy=policy,write_limit=remaining)
-        written+=auto_written;archived=resumed_archives+archive();rows=review.render()
-        if store.value.get('confirmation_ui_version')!=2:
-            configure_ui(db,validation_only=True)
-            from copy import deepcopy
-            value=deepcopy(store.value);value['confirmation_ui_version']=2;store.save(value)
-        sync_review_visibility(review)
-        if review.refresh_needed():
-            from .expense_view import ExpenseViewPipeline
-            ExpenseViewPipeline(db).refresh();review.mark_refreshed()
-        return {'found':rows,'written':written,'archived':archived,'medical_auto_written':auto_written,'failure':0,**review.review_counts(),
-            'medical_pending':sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())}
     folder=normalize_folder_id(settings.receipt_drive_folder_id)
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
         fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
-    plans=[];medical_plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
+    plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
@@ -199,63 +177,12 @@ def execute(env,apply):
         if before!=metadata(source,folder):raise StateError('confirmation_source_changed')
         source['sha256']=sha256(payload).hexdigest()
         owner_route=review.route_owner_intake(source,folder)
-        if owner_route:
-            # A kind answer is not authority to send pixels or infer amounts.
-            # Medical confirmation uses the same explicit input writer below.
-            if owner_route!='医療' or not (automatic and local_ocr_enabled()):
-                if owner_route=='医療':counts['medical_detected']+=1
-                continue
+        if owner_route and owner_route!='医療':
+            continue
         gate=evaluate_receipt_privacy(payload,f['mimeType'],**({'known_source_classification':'medical'} if f['id'] in previous_medical or owner_route=='医療' else {}))
         if gate.classification=='medical':
             review.observe_medical(source,folder);counts['medical_detected']+=1
             review.resolve_intake_kind(source,folder,gate)
-            if env.get('MEDICAL_PREPARE_DIR'):
-                from .medical_candidate_preparation import prepare
-                from .receipt_confirmation import review_id
-                import base64
-                key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True)
-                rid=review_id('medical',source)
-                if review.items[rid]['status'] in {'applied','pending','closed_user'}:
-                    continue
-                # Automatic mode is independent of saved UI coordinates and
-                # owner attestations, including malformed/old manual records.
-                crop_review=None if automatic else store.value.get('medical_crop_reviews',{}).get(rid)
-                review_key=None
-                if crop_review is not None or automatic:
-                    from .settings import service_account_source
-                    from .medical_crop_review import identity_key
-                    path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
-                    review_key=identity_key(info['private_key'])
-                owner_guard=local_owner_blocked if local_ocr_enabled() else owner_blocked
-                if automatic and (not in_scope(source,store.value,policy) or owner_guard(source,store.value)):
-                    packet,crop={'source':source,'fields':{},'status':'held','reason':'automatic_scope_or_owner_input'},None
-                else:
-                    packet,crop=prepare(source,payload,key,crop_review=crop_review,review_key=review_key,automatic=automatic,
-                                        document_key=review_key if automatic else None)
-                if packet['status']=='local_ready':
-                    from .medical_local_reading import apply_local
-                    from .medical_auto_posting import WRITE_LIMIT
-                    from .models import ReceiptResult
-                    review.render()
-                    if counts['medical_local_written']<WRITE_LIMIT:
-                        parsed=ReceiptResult.model_validate(packet['local_parsed'])
-                        from .medical_local_duplicate import existing_reader
-                        destination=normalize_folder_id(settings.processed_drive_folder_id) if getattr(settings,'processed_drive_folder_id','') else ''
-                        read_existing=existing_reader(reader,lambda sid:download_drive_file(sid,reader),destination,review_key,review)
-                        if apply_local(review,source,folder,parsed,packet['local_provenance'],read_existing=read_existing):
-                            counts['medical_local_written']+=1;counts['written']+=1
-                            counts['archived']+=archive()
-                            continue
-                        reason='existing_accounting_or_review_conflict'
-                    else:reason='automatic_run_limit'
-                    packet.pop('local_parsed',None);packet.update(status='held',reason=reason)
-                packet['review_id']=review_id('medical',source)
-                if crop is not None:
-                    # Derived pixels only; no original or OCR file is written.
-                    path=Path(env['MEDICAL_PREPARE_DIR'])/(packet['review_id']+'.png')
-                    path.write_bytes(crop);path.chmod(0o600)
-                    packet['crop_file']=path.name
-                medical_plans.append(packet)
         elif gate.classification=='normal' and gate.gemini_allowed:
             review.resolve_intake_kind(source,folder,gate)
             if env.get('RECEIPT_SCAN_PLAN'):
@@ -270,9 +197,8 @@ def execute(env,apply):
             counts['blocked']+=1;blocked_sources.add(f['id'])
             review.observe_intake_hold(source,folder,gate)
     review.finish_intake_scan(blocked_sources)
-    if not env.get('MEDICAL_PREPARE_DIR'):
-        counts['written']+=review.apply_confirmations()
-        counts['archived']+=archive()
+    counts['written']+=review.apply_confirmations()
+    counts['archived']+=archive()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     create_ui=TITLE not in db.sheet_titles()
     counts['review_rows']=review.render()
@@ -282,9 +208,6 @@ def execute(env,apply):
         value=deepcopy(store.value);value['confirmation_ui_configured']=True;store.save(value)
     sync_review_visibility(review)
     counts.update(review.review_counts())
-    if env.get('MEDICAL_PREPARE_DIR'):
-        path=Path(env['MEDICAL_PREPARE_DIR'])/'medical-plan.json'
-        path.write_text(json.dumps(medical_plans,ensure_ascii=True),encoding='utf-8');path.chmod(0o600)
     if env.get('RECEIPT_SCAN_PLAN'):
         path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans}),encoding='utf-8');path.chmod(0o600)
     if review.refresh_needed():

@@ -27,13 +27,8 @@ def response_tag(analysis_id,record,result,key):
 
 
 def send_derived(packet,payload,env):
-    child={k:env[k] for k in SENDER_ENV if k in env}
-    result=subprocess.run([sys.executable,'-m','app.medical_image_sender'],
-        input=json.dumps({'png':base64.b64encode(payload).decode(),'proof':packet['proof']}),
-        env=child,capture_output=True,text=True,encoding='utf-8',timeout=120)
-    if result.returncode:raise StateError('medical_image_response_unknown')
-    try:return PaymentAnswer.model_validate_json(result.stdout)
-    except Exception:raise StateError('medical_image_response_unknown') from None
+    # Retired production sender: legacy configuration cannot re-enable it.
+    raise StateError('medical_human_confirmation_required')
 
 
 def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_key,allow_send=True,automatic_policy=None):
@@ -137,22 +132,5 @@ def process_plans(plans,*,state,verify_source,load_crop,send,model,key,identity_
 
 
 def run_prepared(env,directory):
-    from .medical_auto_posting import AUTO_POLICIES
-    if env.get('MEDICAL_DERIVED_AI_POLICY') not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}|AUTO_POLICIES:
-        raise StateError('medical_service_terms_not_verified')
-    settings,store,db,verify_source=open_context(env,True)
-    from .settings import service_account_source
-    path,info=service_account_source();info=info or json.loads(Path(path).read_bytes())
-    from .medical_crop_review import identity_key as derive_key
-    identity_key=derive_key(info['private_key'])
-    root=Path(directory).resolve();plans=json.loads((root/'medical-plan.json').read_bytes())
-    def load_crop(plan):
-        path=(root/plan['crop_file']).resolve()
-        if path.parent!=root or path.name!=plan['review_id']+'.png':
-            raise StateError('medical_crop_path_invalid')
-        return path.read_bytes()
-    sender_env=dict(env,GEMINI_MODEL=settings.gemini_model)
-    return process_plans(plans,state=MedicalCandidateState(store),verify_source=verify_source,load_crop=load_crop,
-        send=lambda p,b:send_derived(p,b,sender_env),model=settings.gemini_model,
-        key=base64.b64decode(env['MEDICAL_CROP_ATTESTATION_KEY'],validate=True),identity_key=identity_key,
-        allow_send=env['MEDICAL_DERIVED_AI_POLICY']!='prepare-only',automatic_policy=env['MEDICAL_DERIVED_AI_POLICY'])
+    # Compatibility entry point fails closed before opening state or pixels.
+    raise StateError('medical_human_confirmation_required')

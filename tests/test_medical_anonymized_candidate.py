@@ -1,3 +1,4 @@
+from unittest.mock import Mock
 """Synthetic only: no fixed production amount, original, ID or OCR fixture."""
 import base64
 from hashlib import sha256
@@ -197,20 +198,13 @@ def answer(amount=321):
         {'amount_yen':amount,'label':'領収額','region':[0,0,1000,1000]}],'reason':''})
 
 
-def test_only_exact_attested_pixels_and_constant_prompt_reach_existing_client():
+def test_retired_medical_api_rejects_even_valid_attested_pixels():
     image,_,_=glyph_fixture();payload=png(image);key=b'x'*32;proof=seal_crop(payload,'領収額',key)
-    calls=[]
-    def create(**kw):calls.append(kw);return SimpleNamespace(output_text=answer().model_dump_json())
-    client=SimpleNamespace(interactions=SimpleNamespace(create=create))
-    result=request_payment(client,'synthetic-model',payload,proof,key)
-    assert result.candidates[0].amount_yen==321
-    assert set(calls[0])=={'model','input','response_format','store'} and calls[0]['store'] is False
-    assert base64.b64decode(calls[0]['input'][1]['data'])==payload
-    assert set(calls[0]['input'][1])=={'type','mime_type','data'}
-    tampered=png(Image.new('RGB',image.size,'black'))
-    with pytest.raises(ValueError):request_payment(client,'synthetic-model',tampered,proof,key)
-    with pytest.raises(ValueError):request_payment(client,'synthetic-model',payload,proof,b'y'*32)
-    assert len(calls)==1
+    client=Mock()
+    for data,token in [(payload,key),(png(Image.new('RGB',image.size,'black')),key),(payload,b'y'*32)]:
+        with pytest.raises(ValueError,match='medical_manual_input_required'):
+            request_payment(client,'synthetic-model',data,proof,token)
+    client.interactions.create.assert_not_called()
 
 
 def test_result_admission_remains_separate_from_human_and_write_authority():
@@ -236,24 +230,14 @@ def test_abstention_never_supplies_an_amount(status,reason):
     with pytest.raises(ValueError):PaymentAnswer(status=status,candidates=answer().candidates,reason=reason)
 
 
-def test_sender_has_no_source_credentials_and_disables_automatic_retry(monkeypatch):
+def test_retired_sender_never_constructs_an_ai_client(monkeypatch):
     from app import medical_image_sender as sender
-    calls=[]
-    class AI:
-        def __init__(self,key,model,**kwargs):
-            calls.append(kwargs);self.model=model
-            self.client=SimpleNamespace(interactions=SimpleNamespace(create=lambda **kw:SimpleNamespace(output_text=answer().model_dump_json())),close=lambda:None)
-    monkeypatch.setattr(sender,'GeminiAI',AI)
-    key=b'x'*32;payload=png(glyph_fixture()[0])
-    packet={'png':base64.b64encode(payload).decode(),'proof':seal_crop(payload,'領収額',key)}
-    env={'GEMINI_API_KEY':'synthetic-key','GEMINI_MODEL':'synthetic-model',
-        'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(key).decode(),'MEDICAL_DERIVED_AI_POLICY':'reviewed-v1:paid'}
-    assert sender.execute(packet,env)['status']=='readable'
-    assert calls==[{'request_attempts':1}]
-    with pytest.raises(ValueError):sender.execute(dict(packet,source_id='synthetic-id'),env)
-    with pytest.raises(ValueError):sender.execute(packet,dict(env,GOOGLE_SERVICE_ACCOUNT_FILE='private.json'))
-    with pytest.raises(ValueError):sender.execute(packet,dict(env,MEDICAL_DERIVED_AI_POLICY='unknown'))
-    assert len(calls)==1
+    ai=Mock(side_effect=AssertionError('AI client prohibited'))
+    monkeypatch.setattr(sender,'GeminiAI',ai,raising=False)
+    for policy in ['off','auto-v1:free','reviewed-v1:paid','unknown']:
+        with pytest.raises(ValueError,match='medical_human_confirmation_required'):
+            sender.execute({'png':'synthetic','proof':{}},{'GEMINI_API_KEY':'synthetic','MEDICAL_DERIVED_AI_POLICY':policy})
+    ai.assert_not_called()
 
 
 def test_issuer_and_date_use_separate_non_ai_evidence():

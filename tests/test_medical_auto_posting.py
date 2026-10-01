@@ -39,28 +39,6 @@ def seal(plan,key):
 def post(review,args):return apply_automatic(review,identity_key=args['identity_key'],policy=args['automatic_policy'])
 
 
-def test_complete_unattended_path_no_owner_record_choice_or_payment_method_invention():
-    store,plans,args,send,db,review=automatic()
-    assert process_plans(plans,**args)['medical_ai_requests']==1
-    assert post(review,args)==1;review.render()
-    assert db.rows[TITLE][0][2]=='自動反映済み' and db.rows[TITLE][0][7:15]==['']*8
-    assert db.rows['支出明細'][0][4]==432 and db.rows['支出明細'][0][7]==''
-    assert '本人確認' not in db.rows['支出明細'][0][11]
-    item=next(iter(review.items.values()))
-    assert item['decision_origin']=='automatic' and item['automatic_decision']['policy']==POLICY
-    assert 'medical_crop_reviews' not in store.value and 'confirmation_hash' not in item
-    writes=db.writes
-    assert process_plans(plans,**args)['medical_ai_reused']==1
-    assert post(review,args)==0 and db.writes==writes and send.call_count==1
-
-
-@pytest.mark.parametrize('field',['date','issuer','category'])
-def test_missing_field_is_held_without_zero_or_fake_date(field):
-    store,plans,args,send,db,review=automatic();plans[0]['fields'][field]='';seal(plans[0],args['key'])
-    process_plans(plans,**args);assert post(review,args)==0
-    assert not db.rows['支出明細'] and next(iter(review.items.values()))['automatic_hold']
-
-
 @pytest.mark.parametrize('column,value',[(7,'2026-01-01'),(8,'Owner clinic'),(12,'保留'),(14,'Owner note')])
 def test_owner_input_and_hold_are_never_automatically_overwritten(column,value):
     store,plans,args,send,db,review=automatic();db.rows[TITLE][0][column]=value;review.capture_inputs()
@@ -69,90 +47,10 @@ def test_owner_input_and_hold_are_never_automatically_overwritten(column,value):
     assert db.rows[TITLE][0][7:15]==before[0][7:15] and not db.rows['支出明細']
 
 
-def test_card_payment_with_deferred_date_prevents_duplicate_auto_post():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args)
-    db.rows['取込データ']=[['card-id','','card','synthetic','2026-09-26','Card payment',432,'','auto_expense']]
-    assert post(review,args)==0 and not db.rows['支出明細']
-    assert next(iter(review.items.values()))['automatic_hold']=='possible_existing_payment'
-
-
-def test_unresolved_document_candidates_allow_safe_image_send_but_veto_posting():
-    store,plans,args,send,db,review=automatic();plans[0]['mapping']['unresolved_candidates']=1;seal(plans[0],args['key'])
-    assert process_plans(plans,**args)['medical_ai_requests']==1
-    assert send.called and post(review,args)==0 and not db.rows['支出明細']
-    assert next(iter(review.items.values()))['automatic_hold']=='payment_meaning_not_unique'
-    assert process_plans(plans,**args)['medical_ai_requests']==0 and send.call_count==1
-
-
 def test_multiple_verified_images_are_not_a_unique_accounting_answer():
     store,plans,args,send,db,review=automatic();plans[0]['mapping']['verified_payment_cells']=2;seal(plans[0],args['key'])
     assert process_plans(plans,**args)['medical_ai_requests']==1
     assert post(review,args)==0 and not db.rows['支出明細']
-
-
-@pytest.mark.parametrize('paid,label,expected',[(False,'領収額',0),(True,'領収額',1),(False,'今回入金額',1)])
-def test_issue_date_requires_paid_receipt_evidence(paid,label,expected):
-    store,plans,args,send,db,review=automatic()
-    plans[0]['local_provenance'].update(date_basis='issue',paid_receipt_evidence=paid)
-    if label!='領収額':
-        from app.medical_image_candidate import seal_crop
-        plans[0]['mapping']['payment_label']=label
-        plans[0]['proof']=seal_crop(args['load_crop'](plans[0]),label,args['key'])
-        send.return_value.candidates[0].label=label
-    seal(plans[0],args['key']);process_plans(plans,**args)
-    assert post(review,args)==expected
-
-
-def test_canary_targets_one_source_and_automatic_post_limit_is_one():
-    store,plans,args,send,db,review=automatic(2)
-    store.value['medical_auto_canary']={'source':plans[1]['source']};args['automatic_policy']='auto-v1:free:canary'
-    counts=process_plans(plans,**args);assert counts['medical_ai_requests']==1 and counts['medical_ai_held']==1
-    assert post(review,args)==1 and len(db.rows['支出明細'])==1
-    store,plans,args,send,db,review=automatic(2);process_plans(plans,**args)
-    assert post(review,args)==1 and len(db.rows['支出明細'])==1
-
-
-def test_one_unknown_send_keeps_intent_without_resend_and_continues_other_sources():
-    store,plans,args,send,db,review=automatic(2)
-    answer=send.return_value;send.side_effect=[StateError('medical_image_response_unknown'),answer]
-    counts=process_plans(plans,**args);assert counts['medical_ai_requests']==2 and counts['medical_ai_candidates']==1
-    assert sorted(r['phase'] for r in store.value['medical_image_analyses'].values())==['complete','intent']
-    send.side_effect=AssertionError('must not resend')
-    replay=process_plans(plans,**args);assert replay['medical_ai_requests']==0 and replay['medical_ai_reused']==1
-    assert post(review,args)==1
-
-
-def test_anonymization_hold_does_not_stop_next_medical():
-    store,plans,args,send,db,review=automatic(2)
-    plans[0]={'source':plans[0]['source'],'review_id':plans[0]['review_id'],'fields':{},'status':'held','reason':'unaccounted_cell_ink'}
-    result=process_plans(plans,**args);assert result['medical_ai_held']==1 and result['medical_ai_requests']==1
-    assert post(review,args)==1
-
-
-def test_unknown_accounting_write_is_not_reappended_or_cleared():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args);db.before_write=True
-    with pytest.raises(StateError,match='write_unknown'):post(review,args)
-    assert next(iter(review.items.values()))['status']=='pending'
-    db.before_write=False;writes=db.writes
-    with pytest.raises(StateError,match='reconciliation_required'):review.apply_confirmations()
-    assert db.writes==writes and next(iter(review.items.values()))['status']=='pending'
-
-
-def test_lost_accounting_response_is_reconciled_without_duplicate():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args);db.after_write=True
-    assert post(review,args)==1;writes=db.writes
-    assert review.apply_confirmations()==post(review,args)==0 and db.writes==writes
-
-
-def test_owner_typing_before_first_auto_write_aborts_without_fabricating_choice():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args)
-    count=[0]
-    def verify(*a):
-        count[0]+=1
-        if count[0]==2:db.rows[TITLE][0][14]='Typing now'
-    review.verify_source=verify
-    assert post(review,args)==0 and not db.rows['支出明細']
-    assert db.rows[TITLE][0][12]=='' and db.rows[TITLE][0][14]=='Typing now'
 
 
 def test_auto_preparation_ignores_poisoned_manual_record_and_preserves_exact_bytes(monkeypatch):
@@ -180,20 +78,6 @@ def test_ai_ambiguity_is_not_converted_to_a_payment(status,reason):
     store,plans,args,send,db,review=automatic()
     send.return_value=PaymentAnswer(status=status,candidates=[],reason=reason)
     process_plans(plans,**args);assert post(review,args)==0 and not db.rows['支出明細']
-
-
-def test_saved_ai_result_corruption_stops_without_sending_or_posting():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args)
-    next(iter(store.value['medical_image_analyses'].values()))['result']['candidates'][0]['amount_yen']=999
-    with pytest.raises(StateError,match='integrity_failed'):post(review,args)
-    assert send.call_count==1 and not db.rows['支出明細']
-
-
-def test_new_source_version_preserves_completed_machine_decision_and_accounting():
-    store,plans,args,send,db,review=automatic();process_plans(plans,**args);post(review,args)
-    before=deepcopy(next(iter(review.items.values())));source=plans[0]['source']
-    review.observe_medical(dict(source,version='2'),'synthetic-folder')
-    assert list(review.items.values())[0]==before and len(db.rows['支出明細'])==1
 
 
 def test_old_version_owner_hold_cannot_be_bypassed_by_a_new_version():
