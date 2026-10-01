@@ -75,6 +75,7 @@ class CapturedCategoryDB:
     def __init__(self, db, blocks):
         self.db = db
         self.blocks = deepcopy(blocks)
+        self._representative_records = None
 
     def __getattr__(self, name):
         return getattr(self.db, name)
@@ -86,6 +87,17 @@ class CapturedCategoryDB:
     def replace_category_rule_ui_rows(self, rows, header): self._replace("rule", rows, header)
     def replace_category_backfill_ui_rows(self, rows, header): self._replace("backfill", rows, header)
     def replace_category_backfill_confirmation_rows(self, rows, header): self._replace("confirm", rows, header)
+
+    def link_category_rule_representatives(self, rows, records):
+        # Candidate regeneration can grow the rule block. Native links must
+        # wait for the final merged layout or they can overwrite the next
+        # section's marker at the old row positions.
+        self._representative_records = deepcopy(records)
+
+    def write_representative_links(self, merged):
+        if self._representative_records is not None and hasattr(self.db, "link_category_rule_representatives"):
+            self.db.link_category_rule_representatives(
+                merged["rule"][1], self._representative_records)
 
     def _replace(self, section, rows, header):
         self.blocks[section] = (deepcopy(header), deepcopy(rows))
@@ -254,6 +266,7 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
         db._category_workflow_blocks()
         db._check_category_workflow_input(prior)
         db._write_category_workflow_blocks(merged)
+        adapter.write_representative_links(merged)
         result["category_later_edits_retained"] = retained
         if bank_counts:
             confirmed = bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']
@@ -263,8 +276,12 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
             finally:
                 # Even a failed settlement retains its confirmed meaning. Show
                 # fresh ledger state and preserve unsent edits before reporting.
-                if bank_refresh is not None:
+                if enabled("BANK_REVIEW_ENABLED") and bank_refresh is not None:
                     result.update(bank_refresh())
+        elif enabled("BANK_REVIEW_ENABLED") and bank_refresh is not None:
+            # Submitting without a meaning answer also refreshes candidates;
+            # it never authorizes a financial replay or approves a group.
+            result.update(bank_refresh())
         result.update(refresh_projection())
         message = (f"登録処理 {result['category_registration_processed']}件 / "
             f"プレビュー {result['category_previews_processed']}件 / "
