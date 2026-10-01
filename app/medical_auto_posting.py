@@ -148,53 +148,5 @@ def possible_duplicate(parsed,tables):
 
 
 def apply_automatic(review, *, identity_key, policy, write_limit=WRITE_LIMIT):
-    if policy not in AUTO_POLICIES:return 0
-    written=0
-    for key,old in list(review.items.items()):
-        if old['kind']!='medical' or old['status']!='waiting':continue
-        if not in_scope(old['source'],review.store.value,policy):continue
-        if owner_blocked(old['source'],review.store.value):continue
-        live=review.ui_rows().get(key)
-        if live is None or live[1][7:15]!=old['inputs'] or any(live[1][7:15]):continue
-        parsed,reason=decide(old,review.store.value,review.db.categories(),identity_key)
-        item=deepcopy(old)
-        if parsed is not None:
-            if written>=write_limit:reason='automatic_run_limit';parsed=None
-            elif possible_duplicate(parsed,review.tables()):reason='possible_existing_payment';parsed=None
-        if parsed is None:
-            if item.get('automatic_hold')!=reason:
-                item['automatic_hold']=reason;review.save_item(key,item)
-            continue
-        try:
-            review.verify_source(item['source'],item['folder_id'])
-            plan=review._plan(item,parsed,'',automatic=True)
-        except ValueError:
-            item['automatic_hold']='existing_accounting_or_review_conflict';review.save_item(key,item);continue
-        except StateError as error:
-            if str(error)!='confirmation_source_changed':raise
-            item['automatic_hold']='source_changed';review.save_item(key,item);continue
-        # No fabricated M-column choice or human signature. The separate
-        # machine decision and full write intent precede every accounting call.
-        from .medical_accounting_roles import ACCOUNTING_SCOPE
-        from .medical_payment_units import POLICY as PAYMENT_POLICY
-        item.update(status='pending',plan=plan,decision_origin='automatic',automatic_decision={
-            'policy':POLICY,'source':deepcopy(item['source']),
-            'accounting_scope':ACCOUNTING_SCOPE,
-            'duplicate_policy':PAYMENT_POLICY,
-            'candidate_id':item['medical_candidates']['candidate_id'],
-            'analysis_id':item['medical_candidates']['provenance']['analysis_id'],
-            'accounting_evaluation_id':item['medical_candidates']['provenance'].get('accounting_evaluation_id')})
-        item.pop('automatic_hold',None);review.save_item(key,item)
-        try:review.verify_source(item['source'],item['folder_id'])
-        except StateError as error:
-            if str(error)!='confirmation_source_changed':raise
-            item.update(status='waiting',automatic_hold='source_changed',aborted_before_accounting=True)
-            item.pop('plan',None);review.save_item(key,item);continue
-        live=review.ui_rows().get(key)
-        if live is None or any(live[1][7:15]):
-            # This invocation made zero writes. Earlier pending intents are
-            # reconciled by the existing writer, never reset through this path.
-            item.update(status='waiting',automatic_hold='owner_input_changed',aborted_before_accounting=True)
-            item.pop('plan',None);review.save_item(key,item);continue
-        review._write_accounting_plan(key,item);written+=1
-    return written
+    """Retired operational entry: Medical requires complete owner input."""
+    return 0

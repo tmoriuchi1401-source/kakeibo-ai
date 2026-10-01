@@ -75,26 +75,6 @@ def command(source: str, *, apply: bool, canary_target: str = "", money_canary: 
 
 
 def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", money_canary: bool = False) -> dict:
-    if (source=='receipt_confirmation' and apply and env.get('MEDICAL_DERIVED_AI_POLICY')
-            and not env.get('MEDICAL_PREPARE_DIR') and not env.get('MEDICAL_FINALIZE_ONLY')):
-        from .medical_auto_posting import AUTO_POLICIES
-        if env['MEDICAL_DERIVED_AI_POLICY'] not in {'prepare-only','reviewed-v1:paid','reviewed-v1:free'}|AUTO_POLICIES:
-            raise StateError('medical_service_terms_not_verified')
-        import base64
-        from .medical_candidate_runtime import run_prepared
-        with tempfile.TemporaryDirectory(prefix='medical-derived-',dir=env.get('RUNNER_TEMP')) as directory:
-            prepared=dict(env,MEDICAL_PREPARE_DIR=directory,
-                MEDICAL_CROP_ATTESTATION_KEY=base64.b64encode(os.urandom(32)).decode())
-            scan=invoke(source,apply=True,env=prepared)
-            scan.update(run_prepared(prepared,directory))
-            final=invoke(source,apply=True,env=dict(env,MEDICAL_FINALIZE_ONLY='true',MEDICAL_LOCAL_WRITTEN=str(scan.get('medical_local_written',0))))
-            scan['written']=scan.get('written',0)+final['written']
-            scan['archived']=scan.get('archived',0)+final.get('archived',0)
-            scan['medical_pending']=final['medical_pending']
-            scan['medical_auto_written']=final.get('medical_auto_written',0)
-            for name in ('review_pending','normal_review_pending','medical_review_pending','intake_review_pending'):
-                if name in final:scan[name]=final[name]
-            return scan
     if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
         raise StateError('receipt_confirmation_binding_required')
     if source=='receipts' and apply and env.get('RECEIPT_CONFIRMATION_BINDING') and not env.get('RECEIPT_SCAN_PLAN'):

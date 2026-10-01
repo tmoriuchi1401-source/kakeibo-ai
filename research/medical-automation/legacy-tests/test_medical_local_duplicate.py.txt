@@ -26,6 +26,21 @@ def setup(monkeypatch):
     return review,store,db,verify,source,p,reader
 
 
+def test_exact_document_links_once_without_new_or_changed_expense(monkeypatch):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    item=review.items[review_id('medical',source)]
+    assert db.rows['支出明細']==before
+    assert len(db.rows['レシート'])==len(db.rows['取込データ'])==2
+    assert db.rows['取込データ'][-1][8:10]==['matched_receipt',before[0][0]]
+    assert item['decision_origin']=='automatic' and 'confirmation_hash' not in item
+    assert item['local_decision']['reconciliation']['linked_expense_id']==before[0][0]
+    assert reader.call_count==2
+    assert not apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    assert db.rows['支出明細']==before
+
+
 @pytest.mark.parametrize('change',['other_key','no_evidence','amount','unposted','two_targets','unrelated_card','incomplete_receipt'])
 def test_ambiguous_or_unverified_duplicate_cannot_link_or_post(monkeypatch,change):
     review,store,db,verify,source,p,reader=setup(monkeypatch)
@@ -44,6 +59,17 @@ def test_ambiguous_or_unverified_duplicate_cannot_link_or_post(monkeypatch,chang
     reader.return_value=record;before=deepcopy(db.rows)
     assert not apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
     assert db.rows==before
+
+
+def test_verified_distinct_same_day_same_amount_bill_posts_once(monkeypatch):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    reader.return_value['identity']=evidence(monkeypatch,number='765432',source='b')
+    before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    assert len(db.rows['支出明細'])==2 and db.rows['支出明細'][0]==before[0]
+    item=review.items[review_id('medical',source)]
+    assert item['local_decision']['reconciliation']['operation']=='post_distinct'
+    assert not apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
 
 
 @pytest.mark.parametrize('change',['source','target','new_duplicate','owner','reader_error'])
@@ -75,6 +101,16 @@ def test_capability_does_not_replay_from_json_or_changed_snapshot(monkeypatch):
     with pytest.raises(ValueError):review._plan(item,parsed(),decision.linked_expense_id,automatic=True,local_duplicate=decision)
 
 
+def test_target_change_after_accounting_is_detected_in_recovery(monkeypatch):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    item=review.items[review_id('medical',source)]
+    db.rows['支出明細'][0][4]=999
+    with pytest.raises(StateError,match='medical_duplicate_target_changed'):verify_saved_targets(item,review.tables())
+    item['status']='pending'
+    with pytest.raises(StateError,match='medical_duplicate_target_changed'):review.apply_confirmations()
+
+
 def test_existing_reader_checks_current_bytes_and_preserves_historical_binding(monkeypatch):
     from hashlib import sha256
     from app.medical_local_duplicate import existing_reader
@@ -100,3 +136,62 @@ def test_existing_reader_checks_current_bytes_and_preserves_historical_binding(m
     meta['parents']=['unrelated-folder'];download.reset_mock()
     assert read('existing-medical') is None
     download.assert_not_called()
+
+
+def test_duplicate_target_change_blocks_archiving_before_drive_call(monkeypatch):
+    from app.receipt_confirmation_archive import archive_confirmations
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    db.rows['支出明細'][0][12]='inactive';drive=Mock()
+    with pytest.raises(StateError,match='medical_duplicate_target_changed'):
+        archive_confirmations(review,'synthetic-folder','processed',drive,Mock())
+    drive.files.assert_not_called()
+
+
+def test_an_existing_verified_alias_does_not_hide_canonical_receipt(monkeypatch):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    root=deepcopy(db.rows['支出明細'])
+    db.rows['レシート'].append(['R-prior-copy','2026-09-01','Synthetic clinic',1234,'','','解析済','',''])
+    db.rows['取込データ'].append(['receipt:prior-copy','','receipt','prior-copy','2026-09-01','Synthetic clinic',1234,'',
+                                'matched_receipt',root[0][0],'b'*64,''])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)
+    assert db.rows['支出明細']==root
+    assert db.rows['取込データ'][-1][9]==root[0][0]
+
+
+@pytest.mark.parametrize('contacts_agree',[True,False])
+def test_distinct_bill_with_name_variation_requires_both_fresh_contact_fields(monkeypatch,contacts_agree):
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    p['document_identity']['issuer_contacts']={'telephone':'c'*64,'fax':'d'*64}
+    reader.return_value['identity']=evidence(monkeypatch,number='765432',source='b',merchant='Synthetic cIinic')
+    reader.return_value['identity']['issuer_contacts']={'telephone':'c'*64,'fax':('d' if contacts_agree else 'e')*64}
+    before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader) is contacts_agree
+    assert db.rows['支出明細'][:1]==before
+    assert len(db.rows['支出明細'])==1+int(contacts_agree)
+    if contacts_agree:
+        item=review.items[review_id('medical',source)]
+        assert item['local_decision']['reconciliation']['operation']=='post_distinct'
+        assert item['local_decision']['external_requests']==0
+
+
+@pytest.mark.parametrize('changed_after_intent',[False,True])
+def test_distinct_provider_evidence_is_fresh_and_never_modifies_existing_expense(monkeypatch,changed_after_intent):
+    from test_medical_issuer_locality import pair
+    review,store,db,verify,source,p,reader=setup(monkeypatch)
+    current,other=pair(monkeypatch)
+    p['document_identity']=current;reader.return_value['identity']=other
+    for title,column in [('レシート',1),('取込データ',4),('支出明細',1)]:db.rows[title][0][column]='2026-08-31'
+    record=deepcopy(reader.return_value);calls=0
+    def read(sid):
+        nonlocal calls
+        calls+=1
+        result=deepcopy(record)
+        if calls==2 and changed_after_intent:result['identity']['issuer_locality']={}
+        return result
+    reader.side_effect=read;before=deepcopy(db.rows['支出明細'])
+    assert apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader) is not changed_after_intent
+    assert db.rows['支出明細'][:1]==before
+    assert len(db.rows['支出明細'])==1+int(not changed_after_intent)
+    if not changed_after_intent:
+        assert not apply_local(review,source,'synthetic-folder',parsed(),p,read_existing=reader)

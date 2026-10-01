@@ -112,6 +112,16 @@ def test_two_vertical_date_labels_or_invalid_date_remain_unknown():
     obs=[token('発行日',(50,0,100,20)),token('令和8年2月30日',(20,25,130,45),line=2)]
     assert receipt_date(obs)[0]==''
 
+def test_local_write_intent_readback_and_idempotency_without_owner_choice():
+    review,store,db,verify,source=medical()
+    assert local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    item=next(iter(review.items.values()))
+    assert item['status']=='applied' and item['local_decision']['external_requests']==0
+    assert item['decision_origin']=='automatic' and 'confirmation_hash' not in item
+    assert db.rows[TITLE][0][7:15]==['']*8
+    assert len(db.rows['支出明細'])==1 and db.rows['支出明細'][0][4]==1234
+    assert not local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    assert len(db.rows['支出明細'])==1
 
 @pytest.mark.parametrize('change',['owner','duplicate','source','binding'])
 def test_local_authority_vetoes_do_not_write(change):
@@ -123,6 +133,22 @@ def test_local_authority_vetoes_do_not_write(change):
     assert not local.apply_local(review,source,'synthetic-folder',parsed(),p)
     assert not db.rows['支出明細'] and next(iter(review.items.values()))['status']=='waiting'
 
+def test_owner_change_after_durable_intent_aborts_before_write():
+    review,store,db,verify,source=medical()
+    def change(*a):
+        if verify.call_count==2:db.rows[TITLE][0][14]='Owner typing'
+    verify.side_effect=change
+    assert not local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    assert not db.rows['支出明細'] and db.rows[TITLE][0][14]=='Owner typing'
+
+def test_partial_write_remains_pending_and_cannot_be_replayed():
+    review,store,db,verify,source=medical();db.before_write=True
+    with pytest.raises(StateError,match='confirmation_write_unknown'):
+        local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    assert next(iter(review.items.values()))['status']=='pending'
+    db.before_write=False
+    assert not local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    with pytest.raises(StateError,match='confirmation_write_reconciliation_required'):review.apply_confirmations()
 
 def test_local_ocr_missing_models_fails_before_engine_or_download(tmp_path,monkeypatch):
     from app import receipt_local_ocr as ocr
@@ -157,7 +183,7 @@ def test_local_prepare_consumes_no_cloud_crop_or_network(monkeypatch):
     assert packet['status']=='local_ready' and packet['local_parsed']['total']==1234 and pixels is None
     crop.assert_not_called()
 
-def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp_path):
+def test_intake_posts_one_local_result_and_never_exports_it_to_cloud(monkeypatch,tmp_path):
     import base64,json
     from hashlib import sha256
     from app import receipt_confirmation_production as runtime,google_clients,medical_candidate_preparation as prep
@@ -177,14 +203,28 @@ def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp
     def prepare(source,*a,**kw):
         p=proof();p['document_binding']['source_sha256']=source['sha256']
         return dict(source=source,status='local_ready',fields=fields(),local_provenance=p,local_parsed=parsed().model_dump()),None
-    prepare=Mock(side_effect=AssertionError('Medical extraction prohibited'));monkeypatch.setattr(prep,'prepare',prepare)
+    monkeypatch.setattr(prep,'prepare',prepare)
     env={'MEDICAL_PREPARE_DIR':str(tmp_path),'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(b'synthetic').decode(),'MEDICAL_DERIVED_AI_POLICY':'auto-v1:free'}
     result=runtime.execute(env,True)
-    assert result['written']==result['medical_local_written']==0
-    assert not db.rows['支出明細'] and result['medical_pending']==2
-    assert not list(tmp_path.iterdir())
+    assert result['written']==result['medical_local_written']==1
+    assert len(db.rows['支出明細'])==1 and result['medical_pending']==1
+    plans=json.loads((tmp_path/'medical-plan.json').read_bytes())
+    assert len(plans)==1 and plans[0]['status']=='held' and 'local_parsed' not in plans[0]
+    assert not list(tmp_path.glob('*.png'))
     assert all(row[7:15]==['']*8 for row in db.rows[TITLE])
-    identities=set(store.value['confirmation_items'])
+    # Repeated scans cannot duplicate the applied payment.
     assert runtime.execute(env,True)['written']==0
-    assert set(store.value['confirmation_items'])==identities and len(db.rows[TITLE])==2
-    prepare.assert_not_called()
+    assert len(db.rows['支出明細'])==1
+
+
+def test_local_positive_empty_confirmation_is_preserved_without_fabricating_fields():
+    from app.medical_local_owner import MISSING_FIELDS
+    review,store,db,verify,source=medical()
+    db.rows[TITLE][0][12]='候補で医療費を確定';review.capture_inputs()
+    item=next(iter(review.items.values()));item['error']=MISSING_FIELDS
+    before=deepcopy(db.rows[TITLE][0][7:15])
+    assert local.apply_local(review,source,'synthetic-folder',parsed(),proof())
+    item=next(iter(review.items.values()))
+    assert item['decision_origin']=='automatic' and 'confirmation_hash' not in item
+    assert db.rows[TITLE][0][7:15]==before and item['inputs']==before
+    assert 'error' not in item and len(db.rows['支出明細'])==1
