@@ -197,6 +197,24 @@ class BankReviewRefresh:
         return {**counts, "bank_ui_updates": 1, "bank_usage_metadata_writes": usage_writes}
 
 
+def refresh_bank_review_after_sources(env, *, scope, source_success, apply=False):
+    """Refresh bank-only UI after successful scopes that read bank originals."""
+    if (not source_success or scope not in {"all", "drive_bank"}
+            or env.get("BANK_REVIEW_ENABLED", "false") != "true"):
+        return {}
+    from .google_clients import sheets_service, read_only_sheets_service
+    from .sheets import SheetsDB, SheetsReadPacer, CATEGORY_REQUEST_SHEET
+    from .drive_run_state import StateError
+    from .production_flow import verify_execution_boundary
+    verify_execution_boundary(env, env.get("GITHUB_SHA", ""))
+    db = SheetsDB(env.get("SPREADSHEET_ID", ""),
+        service=sheets_service() if apply else read_only_sheets_service(),
+        read_pacer=SheetsReadPacer(), read_retry_base=20)
+    if CATEGORY_REQUEST_SHEET not in db.sheet_titles():
+        raise StateError("bank_review_submit_surface_required")
+    return run_bank_review_refresh(db, env, apply=apply)
+
+
 def run_bank_review_refresh(db, env, *, apply=False):
     if env.get("BANK_REVIEW_ENABLED", "false") != "true":
         return {"bank_review_disabled": 1}

@@ -433,6 +433,10 @@ def main():
         for source, outcome in report["sources"].items():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
+        from .bank_review_refresh import refresh_bank_review_after_sources
+        category_counts.update(refresh_bank_review_after_sources(
+            env, scope=args.scope, source_success=report["success"],
+            apply=args.mode == "apply"))
         report["mode"] = args.mode
         if category_counts:report["category_operations"]=category_counts
         if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
