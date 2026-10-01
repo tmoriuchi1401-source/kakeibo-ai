@@ -12,7 +12,7 @@ metadata confirmed the existing Drive-backed `領収書確認` and the
 `カテゴリ操作`/captured-request mechanism. No business or Medical data was read
 for that investigation.
 
-The new path reuses `DriveStateTransport`, existing service-account scopes and
+The new path reuses the private state bindings, existing service-account scopes and
 credential selection, RSA-wrapped bindings, category-submit Apps Script user
 credential/edit trigger, and the `kakeibo-production` concurrency group. It uses
 a dedicated precreated JSON file in the same private folder. Existing recurring,
@@ -56,20 +56,24 @@ ACL checks before every state read/write require exactly owner + existing SA
 writer. They never modify permissions. The binding uses an owner identity digest,
 not a reviewer identity or a plaintext owner address in Actions Variables.
 
-Optional methods added to the existing transport leave legacy read/write behavior
-unchanged. `read_versioned` binds media to a strong HTTP ETag using metadata reads
-around download. `replace_versioned` compares expected bytes/tag, sends `If-Match`
-on a single file update, and requires exact read-back. A server 412 becomes
+PDF grouping alone uses `ConditionalDriveStateTransportV2`. Drive v3's File
+resource has no `etag`; a live metadata probe also returned no ETag header.
+The existing v3 `DriveStateTransport` and its legacy callers remain unchanged.
+The separate v2 adapter uses the File `etag` and rejects missing, weak, malformed
+or wildcard tags. `read_versioned` binds media to that strong ETag using metadata
+reads around download. `replace_versioned` compares expected bytes/tag, sends
+`If-Match` on a single file update, and requires exact read-back. A server 412 becomes
 `stale_proposal`. Writes never retry; ambiguous delivery is acknowledged only by
 exact read-back. No ETag or weak ETag means `state_conditional_write_unavailable`
 and zero writes, with no unconditional fallback.
 
 Request shapes were checked against [Drive's conditional-update guidance](https://developers.google.com/workspace/drive/api/guides/performance)
 and the [official Python HttpRequest callback interface](https://googleapis.github.io/google-api-python-client/docs/epy/googleapiclient.http.HttpRequest-class.html).
-The server conflict/response behavior is mocked in this phase. Isolated live
-ETag/conditional-update/read-back verification remains an activation prerequisite;
-documentation alone does not prove it. A failed preflight must stop, not trigger
-new auth/permissions or a weaker persistence path.
+The v2 [isolated live preflight](pdf-grouping-v2-preflight.md) verified current-tag
+HTTP 200, stale-tag HTTP 412, new-tag HTTP 200 and exact content read-back using
+the same service account. The preflight file contains synthetic data only and
+is not an authority file. Real authority/UI activation remains a separate phase.
+A failed preflight must stop, not trigger new auth/permissions or a weaker path.
 
 ## Spreadsheet projection
 
@@ -160,7 +164,8 @@ and `owner_digest = _digest(owner_email)`, using the existing SA key.
 Verify isolated ACL/ETag/conditional-update/read-back, install the owned tabs and
 update the existing Apps Script files before enabling the dedicated manual path.
 Stop if that requires authentication/permission changes or conflicts with the
-existing state platform. None of these live steps occurred in this PR.
+existing state platform. Only the isolated synthetic v2 preflight has occurred;
+live authority provisioning, UI installation and workflow activation have not.
 
 ## Closed boundaries and next phase
 
@@ -176,9 +181,10 @@ interface. It validates Drive plus fresh original observations, returns no units
 on mismatch, never initializes/repairs state and never consults local authority.
 Read-only normal-unit analysis still needs separately authorized AI/destination
 scope, fresh member/composite gates and results storage without accounting writes.
-Live state/UI activation and isolated preflight remain production prerequisites.
+Live state/UI activation remains a production prerequisite. The isolated v2
+preflight has passed, but does not grant any processing authority.
 
-## Verification
+## Original authority/UI verification
 
 - Full Python suite: **3254 passed**; two existing dependency deprecation warnings.
 - Medical selection: **690 passed**; all unchanged existing Medical tests are
@@ -193,9 +199,10 @@ Live state/UI activation and isolated preflight remain production prerequisites.
 - Compilation and `git diff --check`: successful. Medical code/dedicated tests,
   page observation, privacy gate, receipt pipeline, Gemini adapter, Drive intake,
   legacy OCR, existing workflow files and Apps Script OAuth manifest unchanged.
-- Independent fake workers share one durable state; actual transport requests
+- Independent fake workers share one durable state; synthetic transport requests
   are checked for `If-Match`, single media update, no move/create/permissions
-  mutations and exact read-back. Native live deployment/preflight was not run.
+  mutations and exact read-back. Native live deployment was not run. The later
+  v2 preflight and its regression checks are documented separately.
 
 ```text
 python -m pytest -q --basetemp ../.pytest-drive-authority-verified

@@ -10,7 +10,10 @@ import os
 from pathlib import Path
 import re
 
-from .drive_run_state import DriveStateTransport, StateError
+from .drive_run_state import StateError
+from .conditional_drive_state_v2 import (
+    ConditionalDriveStateTransportV2, conditional_drive_state_service_v2,
+)
 from .pdf_grouping_authority import DriveGroupingStore, DurablePdfGrouping
 from .pdf_grouping_ui import GroupingSheet, process_request
 from .receipt_pdf_units import _digest, observe_pdf
@@ -101,7 +104,7 @@ def open_context(env):
     binding = GroupingBinding(folder, file_id)
     drive = drive_service()
     preflight_permissions(drive, binding, config['owner_digest'], info['client_email'])
-    store = DriveGroupingStore(DriveStateTransport(drive, binding),
+    store = DriveGroupingStore(ConditionalDriveStateTransportV2(conditional_drive_state_service_v2(), binding),
                               _digest([folder, file_id, settings.spreadsheet_id]),
         preflight=lambda: preflight_permissions(drive, binding, config['owner_digest'], info['client_email']))
     store.load()  # Missing/invalid state or unavailable conditional writes stop before UI writes.

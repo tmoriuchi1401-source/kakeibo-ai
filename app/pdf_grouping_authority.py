@@ -1,6 +1,6 @@
 """Drive is the sole durable grouping authority; no ledger/AI/Medical clients.
 
-Reuses the private DriveStateTransport. Conditional replacement and read-back
+Uses a dedicated conditional transport. Conditional replacement and read-back
 are mandatory. Local grouping confirmations are never imported into this store.
 """
 from copy import deepcopy
