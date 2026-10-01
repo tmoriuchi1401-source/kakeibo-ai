@@ -8,7 +8,7 @@
 
 既存確認シートのH:K（支払日・施設名・実支払額・カテゴリ）を原本を見て入力する。支払方法・メモは任意。「医療費を確定」は完全な入力・本人判断に対してのみ有効。「候補で医療費を確定」は廃止し、過去にその判断が保存されていても採用しない。通常レシートの「候補明細で確定」は変更しない。
 
-source/review identity、原本の鮮度とhash、owner入力の再照合、duplicate、durable intent、会計読戻し、replay/processed管理は維持する。正常な完全手入力の確定後は従来の記帳・原本整理を利用する。過去のMedical AUTOに基づく原本移動は実行しない。過去のpending intentは会計読戻しだけで照合し、不足行を自動で再追記しない。既存review、候補、検証記録、本人入力、会計行を削除しない。
+source/review identity、原本の鮮度とhash、owner入力の再照合、duplicate、durable intent、会計読戻し、replay/processed管理は維持する。正常な完全手入力の確定後は従来の記帳・原本整理を利用する。過去のMedical AUTOに基づく原本移動は実行しない。過去のMedical AUTO pending intentは状態を凍結し、会計行の有無にかかわらず自動確定・再追記・削除しない。通常レシートと完全手入力のpending intentは既存の会計読戻しで照合し、不足行を再追記しない。既存review、候補、検証記録、本人入力、会計行を削除しない。
 
 ## 稼働を停止した入口
 
