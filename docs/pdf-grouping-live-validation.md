@@ -59,6 +59,10 @@ and saved/read back Drive authority.
 The only synthetic source is a non-Drive test identifier with two normal pages
 and hashed synthetic evidence. No real receipt/source ID or document content is
 used in that fixture.
+Synthetic identifiers are displayed as `テストデータ` with
+`テストデータ（原本ファイルなし）` instead of a non-existent Drive link. Real
+source links retain their existing URL format and permissions. This projection
+correction does not mutate Drive authority or enable actual PDF processing.
 
 | Operation | Live result |
 | --- | --- |
@@ -99,11 +103,15 @@ never be modified for invalidation testing.
 
 ## Verification and next phase
 
-All **3287 Python tests** passed, including all existing Medical tests, and
+All **3288 Python tests** passed after the synthetic-link correction, including all existing Medical tests, and
 **18 Node tests** passed. The added Node regression fixes default capture-only
 behavior (missing/false/malformed opt-in, no token requirement, no HTTP, no local
 confirmation and no duplicate capture). The focused authority/UI/v2 suite also
-passed (91 cases). Existing two dependency deprecation warnings remain.
+passed at introduction (91 cases). The authority suite passed again after the
+link correction (40 cases), including rejection of stale captured link values.
+Live read-back verified only B2/G2 changed, the fake hyperlink is absent, and
+Drive authority/audit are unchanged. Existing two dependency deprecation
+warnings remain.
 
 No Medical code, privacy gate, normal Gemini route, ReceiptPipeline, v3 state
 transport, source mover, existing recurring workflow or PDF archive setting was

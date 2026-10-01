@@ -39,12 +39,17 @@ def project(view):
     describe = lambda g: 'p' + '-p'.join(map(str, g['page_range'])) if len(g['page_numbers']) > 1 else 'p' + str(g['page_numbers'][0])
     state = {'grouping_required': '未確定', 'grouping_confirmed': '確定済み・処理保留',
              'rejected': '拒否', 'held': '保留'}[view['status']]
+    synthetic = proposal['source_file_id'].startswith('synthetic-')
+    if synthetic:
+        state = 'テストデータ・' + state
+    source_link = ('テストデータ（原本ファイルなし）' if synthetic else
+                   'https://drive.google.com/file/d/' + proposal['source_file_id'] + '/view')
     authority = view['confirmation']
     return ['pdf-review-' + token, state, proposal['page_count'],
             '\n'.join(f"Group {i}: {describe(g)}" for i, g in enumerate(groups, 1)),
             '\n'.join(f"Group {i}: {KINDS[g['proposed_group_type']]}" for i, g in enumerate(groups, 1)),
             '\n'.join(dict.fromkeys(REASONS[g['reason']] for g in groups)),
-            'https://drive.google.com/file/d/' + proposal['source_file_id'] + '/view', '', '',
+            source_link, '', '',
             view.get('result', '会計・AI・Medical・移動は未実行'), proposal['source_file_id'], proposal['source_content_hash'],
             proposal['proposal_digest'], proposal['grouping_version'], token,
             authority['confirmation_digest'] if authority else '']

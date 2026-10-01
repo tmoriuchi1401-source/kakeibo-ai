@@ -114,6 +114,24 @@ def test_normal_confirm_durable_between_independent_workers_and_readback(local_o
     assert next_worker.confirmed_units('drive-source-id') == svc.confirmed_units('drive-source-id')
 
 
+def test_synthetic_projection_has_no_broken_drive_link_and_keeps_identity_checks(local_ocr):
+    svc, live, _ = context()
+    source = 'synthetic-pdf-grouping-live-v1'
+    live.observations = replace(live.observations, source_file_id=source,
+        pages=tuple(replace(p, source_file_id=source) for p in live.observations.pages))
+    view = svc.display(source)
+    row = ui.project(view)
+    assert row[1] == 'テストデータ・未確定'
+    assert row[6] == 'テストデータ（原本ファイルなし）'
+    assert not any(str(cell).startswith('https://drive.google.com/') for cell in row)
+    row[7] = '確定'
+    captured = ui.captured_request(row, str(UUID(int=1)), view['proposal'])
+    assert captured['source_file_id'] == source
+    row[6] = 'https://drive.google.com/file/d/' + source + '/view'
+    with pytest.raises(StateError, match='stale_proposal'):
+        ui.captured_request(row, str(UUID(int=1)), view['proposal'])
+
+
 def test_edit_new_proposal_confirm_and_unchanged_edit_no_revision(local_ocr):
     svc, live, transport = context()
     view = svc.display('drive-source-id')
