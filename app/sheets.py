@@ -798,6 +798,10 @@ class SheetsDB:
         if "bank" in positions:
             from .bank_review_ui import controls
             requests.extend(controls(sheet_id, positions["bank"]["start"], blocks["bank"][1]))
+            requests.append({"updateDimensionProperties":{"range":{"sheetId":sheet_id,
+                "dimension":"ROWS","startIndex":positions["bank"]["header"]-1,
+                "endIndex":positions["bank"]["header"]},"properties":{
+                    "pixelSize":112 if "\n" in blocks["bank"][0][1] else 34},"fields":"pixelSize"}})
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
 
     def _replace_category_workflow_section(self, section, rows, header):
@@ -812,11 +816,15 @@ class SheetsDB:
         from .bank_review_ui import BANK_UI_HEADERS
         return self._category_workflow_blocks().get("bank", (list(BANK_UI_HEADERS), []))
 
-    def replace_bank_review_ui_rows(self, rows):
+    def replace_bank_review_ui_rows(self, rows, *, header=None):
         """Explicit opt-in refresh, preserving all other submitted UI blocks."""
         from .bank_review_ui import BANK_UI_HEADERS, validate_rows
         validate_rows(rows)
-        self._replace_category_workflow_section("bank", rows, BANK_UI_HEADERS)
+        header = list(BANK_UI_HEADERS if header is None else header)
+        if (len(header) != len(BANK_UI_HEADERS) or header[:1] + header[2:] != BANK_UI_HEADERS[:1] + BANK_UI_HEADERS[2:]
+                or not isinstance(header[1], str) or not header[1].startswith("対象")):
+            raise ValueError("bank_review_header_invalid")
+        self._replace_category_workflow_section("bank", rows, header)
 
     def _write_category_workflow_blocks(self, blocks):
         if "bank" in blocks:

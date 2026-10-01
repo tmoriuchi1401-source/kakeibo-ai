@@ -41,6 +41,39 @@ snapshot、claim・不確実writeを自動再試行しない構造を再利用�
 無効時に銀行の反映がチェックされた受付は、カテゴリや銀行を書き込む前に停止する。
 本番UIは対応する受付・再処理backendの配置とauthority確認後に有効化する。
 
+## 更新・ホーム・回答後の再処理
+
+`bank_review_refresh` は本番原本と3台帳を再読込し、第4欄の候補を更新する。
+用途未確定と、用途確定済みの記帳待ちを別の件数で表示する。既存明細と原本・
+取込・収入分類が完全一致した候補だけを処理済みとして外す。bank_incomeという
+取込ラベルだけで候補を消さない。未記帳の確定収入はグループ数と別に件数表示する。
+未送信の用途・収入分類・未来登録・送金元入力は保持し、原本または対象が変われば
+checkboxを解除して再確認を表示する。正本・原本・台帳・UIの直前再照合と表示の
+read-backが必須。不確実な表示更新を自動再試行しない。
+
+既存の所有ホームに「分類・ルールを整える」、支出カテゴリへのリンク、銀行確認
+件数のリンクを置く。第4欄の位置をmarkerから検索し、他ブロックの行数が変わっても
+リンクを追従させる。用途確認・記帳待ち・収入未記帳・不一致がすべて0なら銀行リンク
+を空欄にする。既存の月選択・集計・他シートは対象にしない。独自のホーム見出しなら
+自動変更を保留する。native数式の計算とスマホ実表示は本番設置時に確認する。
+
+共有受付のmetadata保存とUI結果mergeの後、`bank_review_replay` が既存の
+production_flowの銀行runnerだけを実行できる。`BANK_REVIEW_REPLAY_ENABLED=true`
+の追加の有効化が必要で、未設定は再処理無効。受付UUIDがCATEGORY_REQUEST_IDと一致し、
+main・validated SHA・dispatch・専用workflow・両銀行flag・旧scheduler停止の全条件を
+確認する。専用workflowは既存と同じkakeibo-production lockを保持する。
+他sourceやグローバル記帳stageは起動しない。
+
+銀行runnerは既存の暗号化state binding、production ledger、bank-recurring SQLite、
+standing authority、監査キー、income enabled、window/account/row boundをそのまま使う。
+この接続は古いPDFへの書込許可を増やさない。回答全件がheldなら再処理を起動しない。
+再処理完了後は親ledgerのreadyを読戻し、件数だけを受付結果へ渡す。原本保留が残れば
+受付statusはreview。失敗・応答不明の再処理は自動再試行しない。用途判断は保存済み
+のまま、台帳と原本を再読込して記帳待ちの表示を更新する。
+
+Sheetで支出と承認済みの既存duplicateに実支出明細がない／不一致の場合は、事前診断
+も`unresolved_expense`として保留する。最終archive再照合だけで停止する状態を避ける。
+
 ## 銀行専用ルール正本
 
 シート名 `銀行自動分類ルール`。18列：
@@ -109,9 +142,16 @@ Sheetルールを同時に照合する。JSONとSheetの間に優先順位は付
 hash・identity・収入分類の不一致は保留する。Receiptの照合は変更しない。
 archive直前には承認済みincome／expenseの実明細との厳密照合も必須。
 
-未完了：UI候補の本番refresh接続、意味確定後のsettlement状況の表示、既存review
-statusの安全な解消、適用件数の記録、送金元口座registryの運用、ホーム導線、
-共有受付からの銀行再処理までの一連の実行、本番配置と表示確認。
+追加実装済み：UI候補のrefresh接続、用途確認とsettlement状況の表示、未送信入力の
+保持、0件時に空欄となるホーム導線、共有受付から既存の銀行runnerへ渡す再処理経路、
+既存duplicateの欠落支出明細を事前診断で保留する判定。
+キャッシュした原本493取引・台帳・前回本番分類証拠のread-only検証では44グループ／
+88表示行と元の全境界・件数・金額が一致し、用途確定済み未記帳収入6件、不一致0件。
+現在のSecretsを使ったlive再処理や実Spreadsheetへの設置結果ではない。
+
+未完了：既存review statusの安全な解消、適用件数の記録、送金元口座registryの運用、
+archive後の非金融回答行の退避確認、古い原本に対する実settlement authorityの確認、
+本番配置・44groupのnative表示確認・本人の用途回答後の実再処理。
 通常のbounded writerへの接続は書込authorityを増やさない。古い4原本に対する
 21件・6件の実補完可否は既存のwindow・account・row bound等に従って別途確認する。
 これらの接続・検証が済むまで、目的全体の完了や本番利用可能とは報告しない。

@@ -23,6 +23,10 @@ def require_income_actions(repo_root, expected_head):
     workflow = os.environ.get("GITHUB_WORKFLOW_REF", "")
     allowed = {f"tmoriuchi1401-source/kakeibo-ai/.github/workflows/{name}@refs/heads/main"
                for name in ("bank-pdf-recurring.yml", "kakeibo-production.yml")}
+    from .bank_review_replay import WORKFLOW_REF, require_request_context
+    if workflow == WORKFLOW_REF:
+        require_request_context(dict(os.environ), expected_head, os.environ.get("BANK_REVIEW_REQUEST_ID", ""))
+        allowed.add(WORKFLOW_REF)
     if (os.environ.get("GITHUB_ACTIONS") != "true" or workflow not in allowed
             or os.environ.get("GITHUB_REF") != "refs/heads/main"
             or os.environ.get("GITHUB_SHA") != expected_head

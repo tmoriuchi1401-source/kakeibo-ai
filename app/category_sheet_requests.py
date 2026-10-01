@@ -204,7 +204,7 @@ class SheetRequestStore:
             body={"valueInputOption": "RAW", "data": data}).execute(num_retries=0)
 
 
-def execute_request(db, request_id, *, env, refresh_projection, store=None, bank_processor=None):
+def execute_request(db, request_id, *, env, refresh_projection, store=None, bank_processor=None, bank_refresh=None, bank_replay=None):
     if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", request_id):
         raise StateError("category_request_id_invalid")
     store = store or SheetRequestStore(db)
@@ -255,6 +255,16 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
         db._check_category_workflow_input(prior)
         db._write_category_workflow_blocks(merged)
         result["category_later_edits_retained"] = retained
+        if bank_counts:
+            confirmed = bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']
+            try:
+                if confirmed and bank_replay is not None:
+                    result.update(bank_replay(confirmed))
+            finally:
+                # Even a failed settlement retains its confirmed meaning. Show
+                # fresh ledger state and preserve unsent edits before reporting.
+                if bank_refresh is not None:
+                    result.update(bank_refresh())
         result.update(refresh_projection())
         message = (f"登録処理 {result['category_registration_processed']}件 / "
             f"プレビュー {result['category_previews_processed']}件 / "
@@ -266,8 +276,14 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
                         f" / 銀行ルール登録 {bank_counts['bank_rules_registered']}件")
             if bank_counts["bank_held"]:
                 message += f" / 銀行要確認 {bank_counts['bank_held']}グループ"
+            if result.get("bank_replay_completed"):
+                message += (f" / 銀行記帳 {result['bank_ledger_writes']}行"
+                            f" / 原本処理 {result.get('bank_replay_files_processed', 0)}件")
+                if result.get("bank_replay_files_withheld", 0):
+                    message += f" / 原本保留 {result['bank_replay_files_withheld']}件"
         if retained: message += f" / 実行指示後の編集 {retained}行は次回分として保持"
-        store.update(metadata, "review" if result["category_held"] or bank_counts.get("bank_held") else "complete", message)
+        store.update(metadata, "review" if result["category_held"] or bank_counts.get("bank_held")
+                     or result.get("bank_replay_files_withheld") else "complete", message)
         return result
     except Exception as exc:
         try:
@@ -284,6 +300,8 @@ def main():
     from .production_flow import verify_execution_boundary
     from .sheets import SheetsReadPacer
     from .projection_runtime import run_projection
+    from .bank_review_refresh import run_bank_review_refresh
+    from .bank_review_replay import run_bank_review_replay
     env = dict(os.environ)
     try:
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -293,7 +311,10 @@ def main():
         pacer = SheetsReadPacer()
         db = SheetsDB(env["SPREADSHEET_ID"], read_pacer=pacer, read_retry_base=20)
         result = execute_request(db, env.get("CATEGORY_REQUEST_ID", ""), env=env,
-            refresh_projection=lambda: run_projection(env, apply=True, read_pacer=pacer))
+            refresh_projection=lambda: run_projection(env, apply=True, read_pacer=pacer),
+            bank_refresh=lambda: run_bank_review_refresh(db, env, apply=True),
+            bank_replay=lambda confirmed: run_bank_review_replay(env,
+                request_id=env.get("CATEGORY_REQUEST_ID", ""), confirmed_groups=confirmed))
         print(json.dumps({"success": True, "counts": result}, sort_keys=True))
     except Exception as exc:
         from .category_operations import CategoryOperationFailure

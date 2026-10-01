@@ -93,6 +93,7 @@ COUNT_KEYS = frozenset({
     "failure", "errors", "failed_files", "imported_files", "skipped_files",
     "files_seen", "files_new", "files_processed", "write_requests", "catch_up_pending",
     "files_withheld", "parse_failed", "outside_write_window", "collision", "unresolved_income",
+    "unresolved_expense",
     "existing_content_mismatch",
     "review_resolved_existing", "review_unresolved",
     "preview_cursor_epoch", "preview_windows",

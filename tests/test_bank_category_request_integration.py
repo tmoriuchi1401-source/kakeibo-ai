@@ -1,4 +1,5 @@
 from copy import deepcopy
+import pytest
 
 from app.bank_review_decisions import DECISION_SHEET
 from app.bank_review_store import BankReviewStore
@@ -61,3 +62,73 @@ def test_shared_request_reports_held_bank_answer_without_saving_or_claiming_it_r
         store=store, bank_processor=processor(bank_db, source), refresh_projection=lambda: {})
     assert result["bank_held"] == 1 and not bank_db.calls
     assert store.states == ["running", "review"] and "個別確認" in db.bank_rows[0][1]
+
+
+def test_bank_refresh_follows_saved_answers_and_final_merge_without_consuming_later_edits():
+    bank_db, rows, source = prepared()
+    db = CombinedUI(rows)
+    store = Store(snapshot(db))
+    db.bank_rows[0][2:4] = ["対象外", ""]
+    refreshed = []
+    def refresh():
+        assert BankReviewStore(bank_db).read().records(DECISION_SHEET)
+        assert db.bank_rows[0][2:4] == ["対象外", ""]
+        assert store.states == ["running"]
+        refreshed.append(True)
+        return {"bank_confirmation_groups": 1, "bank_ui_updates": 1}
+    result = execute_request(db, REQUEST, env={**ENV, "BANK_REVIEW_ENABLED": "true"},
+        store=store, bank_processor=processor(bank_db, source), bank_refresh=refresh, refresh_projection=lambda: {})
+    assert result["bank_ui_updates"] == 1 and refreshed == [True]
+    assert store.states == ["running", "complete"]
+
+
+def test_bank_settlement_runs_between_answer_readback_and_refresh_and_reports_remaining_pdfs():
+    bank_db, rows, source = prepared()
+    db = CombinedUI(rows)
+    store = Store(snapshot(db))
+    order = []
+    def replay(confirmed):
+        assert confirmed == 1 and BankReviewStore(bank_db).read().records(DECISION_SHEET)
+        assert not db.bank_rows[0][5] and store.states == ["running"]
+        order.append("replay")
+        return {"bank_replay_completed": 1, "bank_ledger_writes": 0,
+                "bank_replay_files_processed": 0, "bank_replay_files_withheld": 4}
+    def refresh():
+        order.append("refresh")
+        return {"bank_income_missing": 6}
+    result = execute_request(db, REQUEST, env={**ENV, "BANK_REVIEW_ENABLED": "true"}, store=store,
+        bank_processor=processor(bank_db, source), bank_replay=replay, bank_refresh=refresh,
+        refresh_projection=lambda: order.append("projection") or {})
+    assert order == ["replay", "refresh", "projection"]
+    assert result["bank_replay_files_withheld"] == 4 and store.states == ["running", "review"]
+
+
+def test_failed_settlement_refreshes_display_keeps_saved_meaning_and_does_not_retry():
+    bank_db, rows, source = prepared()
+    db = CombinedUI(rows)
+    store = Store(snapshot(db))
+    order = []
+    def replay(confirmed):
+        order.append("replay")
+        raise ValueError("synthetic settlement stopped")
+    def refresh():
+        assert BankReviewStore(bank_db).read().records(DECISION_SHEET)
+        order.append("refresh")
+        return {}
+    from app.category_operations import CategoryOperationFailure
+    with pytest.raises(CategoryOperationFailure):
+        execute_request(db, REQUEST, env={**ENV, "BANK_REVIEW_ENABLED": "true"}, store=store,
+            bank_processor=processor(bank_db, source), bank_replay=replay, bank_refresh=refresh,
+            refresh_projection=lambda: pytest.fail("projection after failed settlement"))
+    assert order == ["replay", "refresh"] and store.states == ["running", "error"]
+
+
+def test_all_held_bank_answers_do_not_start_financial_replay():
+    bank_db, rows, source = prepared()
+    rows[0][2:4] = ["個別確認", ""]
+    db = CombinedUI(rows)
+    store = Store(snapshot(db))
+    execute_request(db, REQUEST, env={**ENV, "BANK_REVIEW_ENABLED": "true"}, store=store,
+        bank_processor=processor(bank_db, source), bank_replay=lambda confirmed: pytest.fail("no approved meaning"),
+        refresh_projection=lambda: {})
+    assert store.states == ["running", "review"] and not bank_db.calls

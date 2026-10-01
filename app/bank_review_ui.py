@@ -57,9 +57,13 @@ def build_rows(groups, prior_rows=()):
         old = prior.get(group["key"])
         if old and old[8] == "group" and old[10:12] == primary[10:12]:
             primary[2:6] = deepcopy(old[2:6])
+            if "\n処理結果：" in str(old[1]):
+                primary[1] += "\n処理結果：" + str(old[1]).split("\n処理結果：", 1)[1]
             old_sender = prior.get(sender[6])
             if old_sender and old_sender[8] == "sender" and old_sender[10] == sender[10]:
                 sender[2:4] = deepcopy(old_sender[2:4])
+        elif old:
+            primary[1] += "\n対象変更・以前の入力は未反映"
         output.extend((primary, sender))
     return output
 

@@ -240,6 +240,7 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "parse_failed": 0,
         "collision": 0,
         "unresolved_income": 0,
+        "unresolved_expense": 0,
         "existing_content_mismatch": 0,
         "file_statuses": [],
         "parsed": 0,
@@ -460,9 +461,18 @@ def run_bank_pdf_recurring(
             )
             summary["review"] = int(summary["review"]) + file_review
             review_ids = set(getattr(daily, "archive_review_identities", ()))
+            approved_existing_expenses = set()
+            if meaning_resolver is not None:
+                for tx in parsed_result.transactions:
+                    meaning = meaning_resolver(tx)
+                    if (tx.signed_amount < 0 and tx.source_row_identity in existing_ids
+                            and meaning["state"] == "matched" and meaning["classification"] == "expense"):
+                        approved_existing_expenses.add(tx.source_row_identity)
             completed = completed_bank_postings(db, parsed_result.transactions, import_rows,
-                selected=review_ids | {tx.source_row_identity for tx in parsed_result.transactions
+                selected=review_ids | approved_existing_expenses | {tx.source_row_identity for tx in parsed_result.transactions
                     if tx.signed_amount > 0})
+            expense_settled = all(completed.get(identity) == "expense" for identity in approved_existing_expenses)
+            summary["unresolved_expense"] += int(not expense_settled)
             resolved = review_ids & completed.keys()
             archive_review_proofs[str(file["id"])] = resolved
             summary["review_resolved_existing"] += len(resolved)
@@ -507,6 +517,7 @@ def run_bank_pdf_recurring(
             if mismatch: reasons.append("existing_content_mismatch")
             if file_review: reasons.append("transaction_review")
             if not settled: reasons.append("unresolved_income")
+            if not expense_settled: reasons.append("unresolved_expense")
             if income_error: reasons.append("income_readback_failed")
             if outside: reasons.append("outside_write_window")
             if not parse_ok or int(details.get("collision", 0)) or mismatch or income_error:
@@ -526,7 +537,7 @@ def run_bank_pdf_recurring(
                     tx.signed_amount <= 0 or tx.source_row_identity in imported
                     for tx in parsed_result.transactions
                 )
-                if (file_review or new_ids or (income and not deposits_imported) or not settled):
+                if (file_review or new_ids or (income and not deposits_imported) or not settled or not expense_settled):
                     summary["files_withheld"] = int(summary["files_withheld"]) + 1
                     if new_ids: reasons.append("new_expense_outside_write_window")
                     if income and not deposits_imported: reasons.append("deposit_outside_write_window")
@@ -558,6 +569,7 @@ def run_bank_pdf_recurring(
             archive_ready = not (
                 int(household.get("needs_review", {}).get("count", 0)) - resolved_income_review
                 or (int(details.get("new_income", 0)) and not income)
+                or not expense_settled
             )
             if archive_ready and not income:
                 archive_ready = settled
@@ -729,7 +741,7 @@ def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **
     combined = dict(reports[-1])
     count_fields = (
         "files_seen", "files_new", "files_processed", "files_withheld", "outside_write_window",
-        "parse_failed", "parsed", "collision", "unresolved_income", "existing_content_mismatch",
+        "parse_failed", "parsed", "collision", "unresolved_income", "unresolved_expense", "existing_content_mismatch",
         "new_eligible", "duplicate", "review", "review_resolved_existing", "review_unresolved", "income", "household_income_confirmed",
         "household_income_review", "non_expense", "withheld", "written",
         "write_requests", "write_attempted", "planned_expense_writes",
