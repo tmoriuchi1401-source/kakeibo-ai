@@ -152,7 +152,13 @@ class BankRecurringIncome:
             self.new_imports[row[0]] = row
             self.new_review += status == "needs_review"
 
-    def plan(self, expense_ids):
+    def plan(self, expense_ids, *, eligible_import_ids=None):
+        eligible = None if eligible_import_ids is None else set(eligible_import_ids)
+        withheld = set()
+        if eligible is not None:
+            withheld.update(set(self.new_imports) - eligible)
+            self.new_imports = {key: row for key, row in self.new_imports.items() if key in eligible}
+            self.new_review = sum(row[8] == "needs_review" for row in self.new_imports.values())
         if self.new_imports and self.db.get("取込データ!A1:L1") != [HEADERS["取込データ"]]:
             raise RuntimeError("bank_income_recurring_import_header_mismatch")
         owner = self
@@ -167,6 +173,9 @@ class BankRecurringIncome:
         if plan["conflicting_import_ids"] or plan["duplicate_import_rows"]:
             raise RuntimeError("bank_income_recurring_existing_conflict")
         self.projected_income = plan["planned_rows"]
+        if eligible is not None:
+            withheld.update(row[6] for row in self.projected_income if row[6] not in eligible)
+            self.projected_income = [row for row in self.projected_income if row[6] in eligible]
         for row in self.projected_income:
             self._scope(row[7], row[5])
         identities = set(expense_ids) | set(self.new_imports) | {row[6] for row in self.projected_income}
@@ -176,6 +185,7 @@ class BankRecurringIncome:
                 "planned_deposit_imports": len(self.new_imports), "income_existing": plan["existing_income"],
                 "planned_deposit_reviews": self.new_review,
                 "income_review_pending": plan["classification"]["needs_review"]["count"],
+                "income_scope_withheld": len(withheld),
                 "bounded_rows": len(identities)}
 
     def apply(self):

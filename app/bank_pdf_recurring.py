@@ -571,6 +571,10 @@ def run_bank_pdf_recurring(
                 file_status(file, "withheld", reasons)
                 path.unlink(missing_ok=True)
                 continue
+            if source_guard is not None and income is not None:
+                source_guard.permit_settlement(
+                    d.transaction.source_row_identity for d in deposits
+                    if d.outcome != "needs_review")
             # An expense-only legacy marker is not proof that deposits finished.
             # Keep unresolved deposits/empty parses available for processing.
             archive_ready = not (
@@ -603,7 +607,9 @@ def run_bank_pdf_recurring(
         if int(summary["new_eligible"]) > policy.max_rows:
             raise RuntimeError("bank_recurring_row_bound_exceeded")
         if income:
-            summary.update(income.plan(identity for _, _, ids, _ in candidates for identity in ids))
+            summary.update(income.plan(
+                (identity for _, _, ids, _ in candidates for identity in ids),
+                eligible_import_ids=source_guard.settlement_identities if source_guard is not None else None))
             if source_guard is not None:
                 source_guard.require_settlement_scope([*income.new_imports,
                     *(row[6] for row in income.projected_income)])
@@ -750,6 +756,7 @@ def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **
     count_fields = (
         "files_seen", "files_new", "files_processed", "files_withheld", "outside_write_window",
         "parse_failed", "parsed", "collision", "unresolved_income", "unresolved_expense", "unresolved_nonposting", "existing_content_mismatch",
+        "income_scope_withheld",
         "new_eligible", "duplicate", "review", "review_resolved_existing", "review_unresolved", "income", "household_income_confirmed",
         "household_income_review", "non_expense", "withheld", "written",
         "write_requests", "write_attempted", "planned_expense_writes",

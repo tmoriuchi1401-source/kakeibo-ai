@@ -281,9 +281,12 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
                             f" / 原本処理 {result.get('bank_replay_files_processed', 0)}件")
                 if result.get("bank_replay_files_withheld", 0):
                     message += f" / 原本保留 {result['bank_replay_files_withheld']}件"
+                if result.get("bank_replay_income_scope_withheld", 0):
+                    message += f" / 記帳条件未充足 {result['bank_replay_income_scope_withheld']}取引"
         if retained: message += f" / 実行指示後の編集 {retained}行は次回分として保持"
         store.update(metadata, "review" if result["category_held"] or bank_counts.get("bank_held")
-                     or result.get("bank_replay_files_withheld") else "complete", message)
+                     or result.get("bank_replay_files_withheld")
+                     or result.get("bank_replay_income_scope_withheld") else "complete", message)
         return result
     except Exception as exc:
         try:

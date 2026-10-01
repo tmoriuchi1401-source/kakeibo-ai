@@ -82,7 +82,9 @@ def test_bank_refresh_follows_saved_answers_and_final_merge_without_consuming_la
     assert store.states == ["running", "complete"]
 
 
-def test_bank_settlement_runs_between_answer_readback_and_refresh_and_reports_remaining_pdfs():
+@pytest.mark.parametrize("files_withheld,income_scope_withheld", [(4, 0), (0, 1)])
+def test_bank_settlement_runs_between_answer_readback_and_refresh_and_reports_remaining_pdfs(
+        files_withheld, income_scope_withheld):
     bank_db, rows, source = prepared()
     db = CombinedUI(rows)
     store = Store(snapshot(db))
@@ -92,7 +94,8 @@ def test_bank_settlement_runs_between_answer_readback_and_refresh_and_reports_re
         assert not db.bank_rows[0][5] and store.states == ["running"]
         order.append("replay")
         return {"bank_replay_completed": 1, "bank_ledger_writes": 0,
-                "bank_replay_files_processed": 0, "bank_replay_files_withheld": 4}
+                "bank_replay_files_processed": 0, "bank_replay_files_withheld": files_withheld,
+                "bank_replay_income_scope_withheld": income_scope_withheld}
     def refresh():
         order.append("refresh")
         return {"bank_income_missing": 6}
@@ -100,7 +103,7 @@ def test_bank_settlement_runs_between_answer_readback_and_refresh_and_reports_re
         bank_processor=processor(bank_db, source), bank_replay=replay, bank_refresh=refresh,
         refresh_projection=lambda: order.append("projection") or {})
     assert order == ["replay", "refresh", "projection"]
-    assert result["bank_replay_files_withheld"] == 4 and store.states == ["running", "review"]
+    assert result["bank_replay_files_withheld"] == files_withheld and store.states == ["running", "review"]
 
 
 def test_failed_settlement_refreshes_display_keeps_saved_meaning_and_does_not_retry():

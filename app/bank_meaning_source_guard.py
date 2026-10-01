@@ -9,6 +9,7 @@ class BankMeaningSourceGuard:
         self.inbox_id, self.download = inbox_id, download
         self.originals = {}
         self.identities = set()
+        self.settlement_identities = set()
 
     def __call__(self, tx):
         return self.resolver(tx)
@@ -22,9 +23,20 @@ class BankMeaningSourceGuard:
     def parsed(self, transactions):
         self.identities.update(tx.source_row_identity for tx in transactions)
 
-    def require_settlement_scope(self, identities):
-        if not set(identities) <= self.identities:
+    def permit_settlement(self, identities):
+        identities = set(identities)
+        if not identities <= self.identities:
             raise ValueError("bank_meaning_settlement_original_unavailable")
+        # Called only after the recurring runner's original, review and write
+        # window gates. Merely observing an original grants no write scope.
+        self.settlement_identities.update(identities)
+
+    def require_settlement_scope(self, identities):
+        identities = set(identities)
+        if not identities <= self.identities:
+            raise ValueError("bank_meaning_settlement_original_unavailable")
+        if not identities <= self.settlement_identities:
+            raise ValueError("bank_meaning_settlement_original_not_eligible")
 
     def require_unchanged(self):
         self.resolver.require_unchanged()

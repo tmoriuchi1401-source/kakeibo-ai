@@ -53,6 +53,11 @@ def test_changed_original_prevents_the_existing_write_or_move_dispatch(fault):
 def test_planned_income_requires_original_in_this_scan_not_only_an_import_label():
     guard, _, _, _ = fixture()
     guard.parsed([SimpleNamespace(source_row_identity="known_original")])
+    with pytest.raises(ValueError, match="settlement_original_not_eligible"):
+        guard.require_settlement_scope(iter(["known_original"]))
+    guard.permit_settlement(["known_original"])
     guard.require_settlement_scope(["known_original"])
     with pytest.raises(ValueError, match="settlement_original_unavailable"):
         guard.require_settlement_scope(["old_unseen_import"])
+    with pytest.raises(ValueError, match="settlement_original_unavailable"):
+        guard.permit_settlement(["old_unseen_import"])
