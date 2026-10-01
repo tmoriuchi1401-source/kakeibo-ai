@@ -1,0 +1,48 @@
+name: Read-only fixed bank PDF diagnosis
+
+on:
+  push:
+    branches: [fix/bank-pdf-hold-diagnostics]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  diagnose:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/fix/bank-pdf-hold-diagnostics' &&
+      vars.KAKEIBO_VALIDATED_MAIN_SHA == 'ae4c8a4c91e4dd8b591782b72b029b9712925a83'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reject debug logging before private bindings
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Diagnose fixed files without writers or state updates
+        env:
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
+          BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
+          BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
+          BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+        run: python -m app.bank_pdf_diagnostics

@@ -17,13 +17,36 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
-        if name == "synthetic-tests.yml":
+        if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml"}:
             continue
         assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name
         for job in workflow["jobs"].values():
             assert "github.ref == 'refs/heads/main'" in job["if"], name
             assert "concurrency" not in job, name  # no parent/child lock deadlock
         assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}, name
+
+
+def test_bank_diagnostic_branch_is_read_only_and_fixed_to_validated_baseline():
+    import ast
+    workflow = workflows()["bank-pdf-diagnose.yml"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}
+    assert workflow["on"]["push"]["branches"] == ["fix/bank-pdf-hold-diagnostics"]
+    job = workflow["jobs"]["diagnose"]
+    assert "github.ref == 'refs/heads/fix/bank-pdf-hold-diagnostics'" in job["if"]
+    assert "vars.KAKEIBO_VALIDATED_MAIN_SHA == 'ae4c8a4c91e4dd8b591782b72b029b9712925a83'" in job["if"]
+    run = job["steps"][-1]
+    assert run["run"] == "python -m app.bank_pdf_diagnostics"
+    assert set(run["env"]) == {"KAKEIBO_VALIDATED_MAIN_SHA", "SPREADSHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON",
+        "BANK_PDF_RECURRING_AUTHORITY_JSON", "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+        "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON", "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+        "KAKEIBO_STATE_FOLDER_ID", "BANK_STATE_FILE_ID"}
+    source = ast.parse((ROOT / "app/bank_pdf_diagnostics.py").read_text(encoding="utf-8"))
+    names = {node.func.id for node in ast.walk(source) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert {"read_only_drive_service", "read_only_sheets_service"} <= names
+    assert not {"drive_service", "sheets_service", "_mark_processed", "move_processed"} & names
+    methods = {node.func.attr for node in ast.walk(source) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+    assert not {"update", "batchUpdate", "save", "commit", "begin"} & methods
 
 
 def test_parent_is_disabled_by_default_and_only_runs_validated_main():

@@ -71,6 +71,46 @@ def test_withdrawal_deposit_comma_and_empty_opposite_cells():
     assert result.summary()["deposit_count"] == 1
 
 
+def test_zero_balance_opening_is_an_event_and_preserves_transaction_identity():
+    rows = [transaction_row("2026/09/02", "匿名入金", credit="100", balance="100", top=120)]
+    original = parse_jibun_bank_pages([page(1, *rows)])
+    result = parse_jibun_bank_pages([page(1, *rows,
+        transaction_row("2026/09/01", "新規", credit="0", balance="0", top=140))])
+    assert result.transactions == original.transactions
+    assert result.account_opening_rows == 1
+    assert result.candidate_rows == 2
+    assert not result.issues
+    assert result.balance_consistency_failures == 0
+
+
+def test_opening_event_uses_shared_ascending_and_zero_filled_adapter_rules():
+    from dataclasses import replace
+    from app.bank_pdf_pipeline import JIBUN_BANK_ADAPTER, parse_bank_pages
+    adapter = replace(JIBUN_BANK_ADAPTER, balance_order="ascending", zero_filled_opposite_amount=True)
+    result = parse_bank_pages([page(1,
+        transaction_row("2026/09/01", "口座開設", debit="0", credit="0", balance="0", top=120),
+        transaction_row("2026/09/02", "入金", debit="0", credit="100", balance="100", top=140))],
+        adapter=adapter, account_alias="test-account")
+    assert result.account_opening_rows == 1
+    assert len(result.transactions) == 1
+    assert not result.issues
+    assert result.balance_consistency_failures == 0
+
+
+@pytest.mark.parametrize("label,amount,balance,top,reason", [
+    ("匿名", "0", "0", 140, "amount_non_positive"),
+    ("新規", "0", "1", 140, "amount_non_positive"),
+    ("新規", "0", "0", 110, "invalid_account_opening_row"),
+    ("新規", "0", "0", 140, "balance"),
+])
+def test_opening_exception_cannot_hide_invalid_zero_or_balance(label, amount, balance, top, reason):
+    result = parse_jibun_bank_pages([page(1,
+        transaction_row("2026/09/02", "入金", credit="100", balance="200", top=120),
+        transaction_row("2026/09/01", label, credit=amount, balance=balance, top=top))])
+    if reason == "balance": assert result.balance_consistency_failures == 1
+    else: assert reason in {issue.reason for issue in result.issues}
+
+
 def test_same_day_same_amount_remain_distinct_by_stable_row_identity():
     geometry = page(
         1,

@@ -23,6 +23,10 @@ def require_income_actions(repo_root, expected_head):
     workflow = os.environ.get("GITHUB_WORKFLOW_REF", "")
     allowed = {f"tmoriuchi1401-source/kakeibo-ai/.github/workflows/{name}@refs/heads/main"
                for name in ("bank-pdf-recurring.yml", "kakeibo-production.yml")}
+    from .bank_review_replay import WORKFLOW_REF, require_request_context
+    if workflow == WORKFLOW_REF:
+        require_request_context(dict(os.environ), expected_head, os.environ.get("BANK_REVIEW_REQUEST_ID", ""))
+        allowed.add(WORKFLOW_REF)
     if (os.environ.get("GITHUB_ACTIONS") != "true" or workflow not in allowed
             or os.environ.get("GITHUB_REF") != "refs/heads/main"
             or os.environ.get("GITHUB_SHA") != expected_head
@@ -52,8 +56,9 @@ def _exact_present(db, sheet, expected):
 
 class IncomeAppendEvidence:
     """Append intent in the already persisted bank-recurring.sqlite3 summaries."""
-    def __init__(self, db, state, summary):
+    def __init__(self, db, state, summary, *, meaning_resolver=None):
         self.db, self.state, self.summary = db, state, summary
+        self.meaning_resolver = meaning_resolver
 
     def _record(self, status, attempt, sheet, rows):
         self.state.record({**self.summary, "run_id": str(uuid4()), "status": status,
@@ -87,6 +92,8 @@ class IncomeAppendEvidence:
     def append(self, sheet, rows):
         if not rows:
             return
+        if self.meaning_resolver is not None:
+            self.meaning_resolver.require_unchanged()
         attempt = str(uuid4())
         self._record("income_append_pending", attempt, sheet, rows)
         self.db.append_raw(sheet, rows)
@@ -100,7 +107,8 @@ class BankRecurringIncome:
         if not policy.income_enabled or db.sid != policy.expected_spreadsheet_id:
             raise RuntimeError("bank_income_recurring_authority_required")
         self.db, self.policy, self.now, self.rules = db, policy, now, rules
-        self.evidence = IncomeAppendEvidence(db, state, summary)
+        self.evidence = IncomeAppendEvidence(db, state, summary,
+            meaning_resolver=rules.get("meaning_resolver"))
         self.new_imports = {}
         self.projected_income = []
         self.initial_imports = db.get("取込データ!A2:L")
@@ -144,7 +152,13 @@ class BankRecurringIncome:
             self.new_imports[row[0]] = row
             self.new_review += status == "needs_review"
 
-    def plan(self, expense_ids):
+    def plan(self, expense_ids, *, eligible_import_ids=None):
+        eligible = None if eligible_import_ids is None else set(eligible_import_ids)
+        withheld = set()
+        if eligible is not None:
+            withheld.update(set(self.new_imports) - eligible)
+            self.new_imports = {key: row for key, row in self.new_imports.items() if key in eligible}
+            self.new_review = sum(row[8] == "needs_review" for row in self.new_imports.values())
         if self.new_imports and self.db.get("取込データ!A1:L1") != [HEADERS["取込データ"]]:
             raise RuntimeError("bank_income_recurring_import_header_mismatch")
         owner = self
@@ -159,6 +173,9 @@ class BankRecurringIncome:
         if plan["conflicting_import_ids"] or plan["duplicate_import_rows"]:
             raise RuntimeError("bank_income_recurring_existing_conflict")
         self.projected_income = plan["planned_rows"]
+        if eligible is not None:
+            withheld.update(row[6] for row in self.projected_income if row[6] not in eligible)
+            self.projected_income = [row for row in self.projected_income if row[6] in eligible]
         for row in self.projected_income:
             self._scope(row[7], row[5])
         identities = set(expense_ids) | set(self.new_imports) | {row[6] for row in self.projected_income}
@@ -168,6 +185,7 @@ class BankRecurringIncome:
                 "planned_deposit_imports": len(self.new_imports), "income_existing": plan["existing_income"],
                 "planned_deposit_reviews": self.new_review,
                 "income_review_pending": plan["classification"]["needs_review"]["count"],
+                "income_scope_withheld": len(withheld),
                 "bounded_rows": len(identities)}
 
     def apply(self):

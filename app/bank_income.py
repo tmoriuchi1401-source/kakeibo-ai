@@ -75,7 +75,7 @@ class IncomeDecision:
 
 
 def classify_deposit(tx, *, confirmed_internal_transfers=frozenset(),
-                     confirmed_non_own_classifications=frozenset()) -> IncomeDecision:
+                     confirmed_non_own_classifications=frozenset(), meaning_resolver=None) -> IncomeDecision:
     """Explicit private rules or bank transaction types, never an income label.
 
     Name-only transfers, broad reward keywords and positive direction do not
@@ -83,6 +83,16 @@ def classify_deposit(tx, *, confirmed_internal_transfers=frozenset(),
     """
     if not _valid_transaction(tx):
         return IncomeDecision(tx, "needs_review", "invalid_bank_deposit")
+    if meaning_resolver is not None:
+        meaning = meaning_resolver(tx)
+        if meaning["state"] == "held":
+            return IncomeDecision(tx, "needs_review", meaning["reason"])
+        if meaning["state"] == "matched":
+            outcome = {"income": "confirmed_income", "transfer": "transfer",
+                "reimbursement": "reimbursement", "other_nonwrite": "other_non_income"}.get(
+                    meaning["classification"], "needs_review")
+            return IncomeDecision(tx, outcome, "operator_confirmed_income" if outcome == "confirmed_income"
+                else "operator_confirmed_bank_meaning", meaning["income_category"] if outcome == "confirmed_income" else "")
     description = normalize_bank_description(tx.description)
     key = (description, "incoming", tx.account_alias)
     rules = {kind for text, direction, alias, kind in confirmed_non_own_classifications
@@ -207,12 +217,34 @@ def monthly_income(rows: list[list]) -> dict[str, int]:
     return dict(sorted(totals.items()))
 
 
+def income_row_matches(saved, expected, *, approved_meaning=False):
+    """Keep valid historical provenance when an approved bank meaning agrees.
+
+    Only the classification reason may differ. Identity, source hash, date,
+    amount, description, account and income category must still match exactly.
+    Receipt income never uses this exception.
+    """
+    if saved == expected:
+        return True
+    if not approved_meaning or saved is None:
+        return False
+    saved_rows = validate_income_rows([saved])
+    expected_rows = validate_income_rows([expected])
+    if not saved_rows or not expected_rows:
+        return False
+    left, right = next(iter(saved_rows.values())), next(iter(expected_rows.values()))
+    return (left[7] != RECEIPT_BUYBACK_SOURCE and right[7] != RECEIPT_BUYBACK_SOURCE
+            and left[:8] + left[9:] == right[:8] + right[9:])
+
+
 class BankIncomePipeline:
     def __init__(self, db, *, confirmed_internal_transfers=frozenset(),
-                 confirmed_non_own_classifications=frozenset()):
+                 confirmed_non_own_classifications=frozenset(), meaning_resolver=None):
         self.db = db
         self.rules = dict(confirmed_internal_transfers=confirmed_internal_transfers,
                           confirmed_non_own_classifications=confirmed_non_own_classifications)
+        if meaning_resolver is not None:
+            self.rules["meaning_resolver"] = meaning_resolver
 
     def _existing(self, *, required=False):
         if INCOME_SHEET not in self.db.sheet_titles():
@@ -238,7 +270,8 @@ class BankIncomePipeline:
             row = decision.row()
             if row[0] not in existing:
                 planned.append(row)
-            elif existing[row[0]] == row:
+            elif income_row_matches(existing[row[0]], row,
+                                    approved_meaning="meaning_resolver" in self.rules):
                 already += 1
             else:
                 conflicts.append(row[6])
@@ -280,6 +313,8 @@ class BankIncomePipeline:
             raise RuntimeError("bank_income_existing_content_conflict")
         rows = plan["planned_rows"]
         if rows:
+            if "meaning_resolver" in self.rules:
+                self.rules["meaning_resolver"].require_unchanged()
             self.db.append_raw(INCOME_SHEET, rows)
         actual = self._existing(required=True)
         if any(actual.get(row[0]) != row for row in rows):

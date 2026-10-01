@@ -70,7 +70,14 @@ def run_category_operations(env, *, apply=False):
     # never pick up edits that have not been submitted.
     from .sheets import CATEGORY_REQUEST_SHEET
     if CATEGORY_REQUEST_SHEET in db.sheet_titles():
-        return {"category_awaiting_sheet_submission":1}
+        result = {"category_awaiting_sheet_submission":1}
+        if env.get("BANK_REVIEW_ENABLED", "false") == "true":
+            from .bank_review_refresh import run_bank_review_refresh
+            try:
+                result.update(run_bank_review_refresh(db, env, apply=apply))
+            except Exception as exc:
+                raise CategoryOperationFailure(exc) from None
+        return result
     try:
         result=process_category_operations(db,apply=apply,rule_enabled=True,
             save_enabled=enabled("CATEGORY_RULE_SAVE_ENABLED"),

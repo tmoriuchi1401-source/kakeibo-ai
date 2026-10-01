@@ -230,6 +230,7 @@ def run_bank_production_batch(
     expected_categories: tuple[tuple[str, str], ...] | None = None,
     _recurring_context: BankRecurringRunContext | None = None,
     _recurring_launcher_authority: object | None = None,
+    meaning_resolver=None,
 ) -> dict:
     """Execute one exact supported batch append without fallback or retry."""
     recurring_mode = _recurring_context is not None
@@ -239,6 +240,8 @@ def run_bank_production_batch(
         raise RuntimeError("bank_recurring_launcher_required")
     if not recurring_mode and approval_file is None:
         raise RuntimeError("protected_canary_approval_required")
+    if meaning_resolver is not None and not recurring_mode:
+        raise RuntimeError("bank_meaning_recurring_launcher_required")
     repo = Path(repo_root).resolve()
     selected = tuple(selected_source_identities)
     selected_count = len(selected)
@@ -290,6 +293,7 @@ def run_bank_production_batch(
         confirmed_internal_transfers=confirmed_internal_transfers,
         confirmed_non_own_classifications=confirmed_non_own_classifications,
         card_statement_authorities=tuple(card_statement_authorities),
+        **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
     )
     authority = BankBatchAuthority(
         selected_source_identities=selected,
@@ -507,8 +511,12 @@ def run_bank_production_batch(
             approval_provider=approval_provider,
             clock=clock,
         )
+    transport_db = db
+    if meaning_resolver is not None:
+        from .bank_meaning_resolver import BankMeaningGuardedDB
+        transport_db = BankMeaningGuardedDB(db, meaning_resolver)
     transport = SealedCanonicalOneRowTransport(
-        db,
+        transport_db,
         binding=binding,
         inspector=inspector,
         key_provider=key_provider,
@@ -600,6 +608,7 @@ def _run_bank_recurring_production_batch(
     confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
     card_statement_authorities: tuple = (),
     steady_state: bool = True,
+    meaning_resolver=None,
 ) -> dict:
     """Recurring-launcher-only entry point; manual approval behavior stays separate."""
     if type(recurring_context) is not BankRecurringRunContext or not steady_state:
@@ -625,6 +634,7 @@ def _run_bank_recurring_production_batch(
         steady_state=True,
         _recurring_context=recurring_context,
         _recurring_launcher_authority=_BANK_RECURRING_LAUNCHER_AUTHORITY,
+        **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
     )
 
 
