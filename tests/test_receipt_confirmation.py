@@ -197,18 +197,19 @@ def test_medical_confirm_post_readback_restart_replay_no_duplicate():
     assert len(db.rows['支出明細'])==1 and db.rows[TITLE][0][2]=='反映済み'
 
 
-def test_medical_ai_candidate_requires_explicit_adoption_and_preserves_inputs():
+def test_saved_medical_candidates_never_fill_or_authorize_manual_inputs():
     from app.medical_candidate_state import MedicalCandidateState
     service,store,db,verify,s=medical();key=next(iter(service.items))
     MedicalCandidateState(store).publish(key,s,{'date':'2026-09-01','issuer':'Synthetic clinic',
         'amount_yen':123,'category':'医療・保険｜病院','provenance':{'amount':'IMAGE_AI_CANDIDATE'}})
-    service.render()
-    assert db.rows[TITLE][0][7:15]==['']*8
-    assert '画像AI' in db.rows[TITLE][0][6] and service.apply_confirmations()==0
-    # The human may correct an incorrect AI amount; those values take precedence.
+    saved=deepcopy(service.items[key]['medical_candidates']);service.render()
+    assert db.rows[TITLE][0][7:15]==['']*8 and '完全手入力' in db.rows[TITLE][0][6]
     db.rows[TITLE][0][9]=125;db.rows[TITLE][0][12]='候補で医療費を確定'
-    service.capture_inputs();assert service.apply_confirmations()==1
-    assert db.rows['支出明細'][0][4]==125
+    service.capture_inputs();assert service.apply_confirmations()==0 and not db.rows['支出明細']
+    assert service.items[key]['medical_candidates']==saved
+    assert db.rows[TITLE][0][7:9]==['','']
+    confirm(db);db.rows[TITLE][0][9]=125;service.capture_inputs()
+    assert service.apply_confirmations()==1 and db.rows['支出明細'][0][4]==125
     assert service.apply_confirmations()==0
 
 
@@ -223,7 +224,7 @@ def test_medical_changed_candidate_does_not_reuse_old_human_confirmation():
     assert service.apply_confirmations()==0 and not db.rows['支出明細']
     db.rows[TITLE][0][12]='保留';service.capture_inputs();service.render()
     db.rows[TITLE][0][12]='候補で医療費を確定';service.capture_inputs()
-    assert service.apply_confirmations()==1
+    assert service.apply_confirmations()==0 and not db.rows['支出明細']
 
 
 def test_medical_candidate_incomplete_never_posts_and_does_not_change_general_inputs():

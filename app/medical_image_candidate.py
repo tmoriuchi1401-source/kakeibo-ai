@@ -79,16 +79,8 @@ def verify_crop(payload, proof, key):
 
 
 def request_payment(client, model, payload, proof, key):
-    """Only callable with the preprocessor's exact immutable, attested bytes."""
-    import base64
-    verify_crop(payload,proof,key)
-    # Existing GeminiAI's stable-v1 client and configured production model.
-    response=client.interactions.create(model=model,
-        input=[{'type':'text','text':PROMPT},{'type':'image','mime_type':'image/png',
-            'data':base64.b64encode(payload).decode('ascii')}],
-        response_format={'type':'text','mime_type':'application/json','schema':PaymentAnswer.model_json_schema()},
-        store=False)
-    return PaymentAnswer.model_validate_json(response.output_text)
+    """Retired: even an attested/allowlisted Medical crop cannot be sent."""
+    raise ValueError('medical_manual_input_required')
 
 
 def admit_answer(answer, *, payload, mapping, model, identity_key, manual_conflict=False):

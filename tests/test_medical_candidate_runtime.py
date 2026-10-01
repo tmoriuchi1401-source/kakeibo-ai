@@ -141,36 +141,27 @@ def test_plan_unverified_runs_preparation_without_request_intent_or_network():
     assert candidate['provenance']['status']=='prepared_not_sent' and 'amount_yen' not in candidate
 
 
-def test_network_process_gets_no_original_credentials_or_source_metadata(monkeypatch):
-    store,plans,args,send=fixture();seen=[]
-    def run(command,**kw):
-        seen.append(kw);return SimpleNamespace(returncode=0,stdout=send.return_value.model_dump_json())
-    monkeypatch.setattr('app.medical_candidate_runtime.subprocess.run',run)
-    env={'GEMINI_API_KEY':'synthetic','GEMINI_MODEL':'synthetic-model','MEDICAL_DERIVED_AI_POLICY':'reviewed-v1:paid',
-        'GOOGLE_SERVICE_ACCOUNT_JSON':'must-not-pass','GOOGLE_SERVICE_ACCOUNT_FILE':'must-not-pass',
-        'GOOGLE_GMAIL_TOKEN_JSON':'must-not-pass','SPREADSHEET_ID':'must-not-pass',
-        'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(args['key']).decode()}
-    send_derived(plans[0],args['load_crop'](plans[0]),env)
-    assert all('must-not-pass'!=v for v in seen[0]['env'].values())
-    assert set(json.loads(seen[0]['input']))=={'png','proof'}
-    assert 'source_id' not in seen[0]['input'] and 'issuer' not in seen[0]['input']
+def test_retired_derived_sender_never_starts_a_network_process(monkeypatch):
+    store,plans,args,send=fixture()
+    child=Mock(side_effect=AssertionError('network process prohibited'))
+    monkeypatch.setattr('app.medical_candidate_runtime.subprocess.run',child)
+    with pytest.raises(StateError,match='medical_human_confirmation_required'):
+        send_derived(plans[0],args['load_crop'](plans[0]),{'GEMINI_API_KEY':'synthetic','MEDICAL_DERIVED_AI_POLICY':'auto-v1:free'})
+    child.assert_not_called()
 
 
-def test_parent_keeps_original_and_finalization_processes_ai_key_free(monkeypatch):
+def test_legacy_policy_cannot_restore_the_medical_coordinator(monkeypatch):
     from app import production_flow as flow
-    children=[];coordinators=[]
+    children=[]
     def run(command,**kwargs):
         children.append(kwargs['env'])
         return SimpleNamespace(returncode=0,stdout=json.dumps({'written':0,'medical_pending':1}),stderr='')
-    def coordinate(env,directory):
-        assert len(children)==1 and 'MEDICAL_PREPARE_DIR' in children[0]
-        coordinators.append(env)
-        return {'medical_ai_requests':0,'medical_ai_reused':0,'medical_ai_candidates':0,'medical_ai_held':1}
+    coordinator=Mock(side_effect=AssertionError('medical coordinator prohibited'))
     monkeypatch.setattr(flow.subprocess,'run',run)
-    monkeypatch.setattr('app.medical_candidate_runtime.run_prepared',coordinate)
+    monkeypatch.setattr('app.medical_candidate_runtime.run_prepared',coordinator)
     result=flow.invoke('receipt_confirmation',apply=True,env={'GEMINI_API_KEY':'synthetic',
-        'GOOGLE_GMAIL_TOKEN_JSON':'must-not-pass','MEDICAL_DERIVED_AI_POLICY':'prepare-only'})
-    assert len(children)==2 and len(coordinators)==1 and result['medical_ai_requests']==0
-    assert children[1]['MEDICAL_FINALIZE_ONLY']=='true'
-    assert all('GEMINI_API_KEY' not in e and 'GOOGLE_GMAIL_TOKEN_JSON' not in e for e in children)
-    assert coordinators[0]['GEMINI_API_KEY']=='synthetic'
+        'GOOGLE_GMAIL_TOKEN_JSON':'must-not-pass','MEDICAL_DERIVED_AI_POLICY':'auto-v1:free'})
+    assert len(children)==1 and result['written']==0
+    assert 'GEMINI_API_KEY' not in children[0] and 'GOOGLE_GMAIL_TOKEN_JSON' not in children[0]
+    assert 'MEDICAL_PREPARE_DIR' not in children[0] and 'MEDICAL_FINALIZE_ONLY' not in children[0]
+    coordinator.assert_not_called()

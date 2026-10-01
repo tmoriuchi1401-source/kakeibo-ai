@@ -1,0 +1,72 @@
+{
+  "baseline": "cdf1e77ef05317c9587b8e93c8e50a9a1fa66d0d",
+  "reason": "Former automatic writes are retired. Pure evidence and privacy regressions remain in tests; manual-only safety regressions replace operational AUTO success tests. Snapshots are synthetic, not executable CI suites. Reproduce old semantics at the pinned baseline.",
+  "files": [
+    {
+      "original": "tests/test_medical_accounting_roles.py",
+      "retired_operational_tests": [
+        "test_evaluation_tampering_does_not_relax_the_accounting_veto",
+        "test_partial_actual_receipt_posts_3000_not_the_bill_5000_and_reuses_response",
+        "test_policy_evaluation_reuses_signed_response_without_rewriting_mapping_or_provenance"
+      ]
+    },
+    {
+      "original": "tests/test_medical_auto_posting.py",
+      "retired_operational_tests": [
+        "test_anonymization_hold_does_not_stop_next_medical",
+        "test_canary_targets_one_source_and_automatic_post_limit_is_one",
+        "test_card_payment_with_deferred_date_prevents_duplicate_auto_post",
+        "test_complete_unattended_path_no_owner_record_choice_or_payment_method_invention",
+        "test_issue_date_requires_paid_receipt_evidence",
+        "test_lost_accounting_response_is_reconciled_without_duplicate",
+        "test_missing_field_is_held_without_zero_or_fake_date",
+        "test_new_source_version_preserves_completed_machine_decision_and_accounting",
+        "test_one_unknown_send_keeps_intent_without_resend_and_continues_other_sources",
+        "test_owner_typing_before_first_auto_write_aborts_without_fabricating_choice",
+        "test_saved_ai_result_corruption_stops_without_sending_or_posting",
+        "test_unknown_accounting_write_is_not_reappended_or_cleared",
+        "test_unresolved_document_candidates_allow_safe_image_send_but_veto_posting"
+      ]
+    },
+    {
+      "original": "tests/test_medical_local_duplicate.py",
+      "retired_operational_tests": [
+        "test_an_existing_verified_alias_does_not_hide_canonical_receipt",
+        "test_distinct_bill_with_name_variation_requires_both_fresh_contact_fields",
+        "test_distinct_provider_evidence_is_fresh_and_never_modifies_existing_expense",
+        "test_duplicate_target_change_blocks_archiving_before_drive_call",
+        "test_exact_document_links_once_without_new_or_changed_expense",
+        "test_target_change_after_accounting_is_detected_in_recovery",
+        "test_verified_distinct_same_day_same_amount_bill_posts_once"
+      ]
+    },
+    {
+      "original": "tests/test_medical_local_owner.py",
+      "retired_operational_tests": [
+        "test_live_hold_on_superseded_row_wins_before_and_after_intent",
+        "test_metadata_only_version_preserves_positive_intent_and_cloud_guard"
+      ]
+    },
+    {
+      "original": "tests/test_medical_local_reading.py",
+      "retired_operational_tests": [
+        "test_local_positive_empty_confirmation_is_preserved_without_fabricating_fields",
+        "test_local_write_intent_readback_and_idempotency_without_owner_choice",
+        "test_owner_change_after_durable_intent_aborts_before_write",
+        "test_partial_write_remains_pending_and_cannot_be_replayed"
+      ]
+    },
+    {
+      "original": "tests/test_medical_payment_units.py",
+      "retired_operational_tests": [
+        "test_automatic_post_preserves_existing_categories_and_replay_sends_or_appends_zero",
+        "test_changed_evidence_after_intent_aborts_before_any_medical_accounting",
+        "test_local_medical_can_post_with_only_verified_topup_and_replay_is_noop",
+        "test_local_medical_post_with_verified_other_purpose_never_reposts_existing_spending",
+        "test_medical_automatic_writer_and_admission_share_components_contract",
+        "test_school_collection_is_preserved_when_local_medical_posts_and_replays",
+        "test_writer_detects_matching_total_even_when_no_individual_item_matches"
+      ]
+    }
+  ]
+}

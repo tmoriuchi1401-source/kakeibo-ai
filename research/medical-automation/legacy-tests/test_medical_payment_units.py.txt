@@ -178,6 +178,43 @@ def test_refund_is_not_netted_against_a_purchase():
     assert len(comparison(tables, amount=300)) == 1
 
 
+def test_medical_automatic_writer_and_admission_share_components_contract():
+    service, store, db, _, _ = medical(); load(db, receipt())
+    item = next(iter(service.items.values()));before = deepcopy(db.rows)
+    assert not possible_duplicate(query(), service.tables())
+    assert len(service._plan(item, query(), '', automatic=True)) == 3
+    assert db.rows == before and item['inputs'] == [''] * 8
+    # The explicitly chosen human/general paths keep their existing UI contract.
+    with pytest.raises(ValueError, match='同日付近・同額の既存支出'):
+        service._plan(item, query(), '', automatic=False)
+    normal = dict(item, kind='normal', before={k: [] for k in service.tables()})
+    with pytest.raises(ValueError, match='同日付近・同額の既存支出'):
+        service._plan(normal, query(), '', automatic=True)
+
+
+def test_writer_detects_matching_total_even_when_no_individual_item_matches():
+    service, store, db, _, _ = medical(); load(db, receipt((40, 60)))
+    item = next(iter(service.items.values()))
+    with pytest.raises(ValueError, match='既存支払い'):
+        service._plan(item, query(), '', automatic=True)
+    with pytest.raises(ValueError, match='強制指定'):
+        service._plan(item, query(), '', distinct=True, automatic=True)
+
+
+def test_automatic_post_preserves_existing_categories_and_replay_sends_or_appends_zero():
+    from test_medical_auto_posting import automatic, post
+    from app.medical_candidate_runtime import process_plans
+    store, plans, args, send, db, service = automatic()
+    load(db, receipt((432, 568)));before = deepcopy(db.rows['支出明細'])
+    assert process_plans(plans, **args)['medical_ai_requests'] == 1
+    assert post(service, args) == 1
+    assert db.rows['支出明細'][:len(before)] == before
+    rows = deepcopy(db.rows); ai = deepcopy(store.value['medical_image_analyses'])
+    assert process_plans(plans, **args)['medical_ai_requests'] == 0
+    assert post(service, args) == 0 and db.rows == rows and store.value['medical_image_analyses'] == ai
+    assert send.call_count == 1
+
+
 def with_alias():
     tables=receipt((100,))
     tables['receipt_rows'].append(['R-copy',DAY,'Synthetic retailer',100,'','', '解析済','',''])
@@ -254,6 +291,19 @@ def test_unverified_or_contradictory_transfer_remains_a_candidate(change):
     assert all(m.classification != 'different' for m in comparison(tables))
 
 
+def test_local_medical_can_post_with_only_verified_topup_and_replay_is_noop():
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import proof, parsed
+    service, store, db, _, source = medical()
+    row = balance_transfer(); row[6] = parsed().total
+    db.rows['取込データ'] = [deepcopy(row)]
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert len(db.rows['支出明細']) == 1 and db.rows['取込データ'][0] == row
+    before = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == before
+
+
 def school_collection():
     from app.auto_expense import expense_id
     iid = 'bankpdf:chiba:synthetic-account:' + '1'*24; eid = expense_id(iid)
@@ -321,6 +371,45 @@ def test_school_rule_cannot_ignore_an_actual_medical_payment_or_nonmedical_query
     assert [m.classification for m in comparison(tables)].count('candidate') == 1
 
 
+def test_school_collection_is_preserved_when_local_medical_posts_and_replays():
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, _, source = medical()
+    tables = school_collection(); tables['expense_rows'][0][4] = parsed().total
+    tables['import_rows'][0][6] = -parsed().total; load(db, tables)
+    original = deepcopy(db.rows['支出明細'])
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows['支出明細'][:1] == original and len(db.rows['支出明細']) == 2
+    before = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == before
+
+
+@pytest.mark.parametrize('change', ['new_payment', 'changed_school_descriptor', 'changed_school_amount'])
+def test_changed_evidence_after_intent_aborts_before_any_medical_accounting(change):
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, verify, source = medical()
+    tables = school_collection(); tables['expense_rows'][0][4] = parsed().total
+    tables['import_rows'][0][6] = -parsed().total; load(db, tables)
+    calls = 0
+    def concurrent_change(*args):
+        nonlocal calls
+        calls += 1
+        if calls != 2: return
+        if change == 'new_payment':
+            db.rows['取込データ'].append(['new-card', '', 'card', 'notice', DAY, 'Synthetic clinic',
+                                          parsed().total, '', 'auto_expense', '', 'b'*64, ''])
+        if change == 'changed_school_descriptor': db.rows['取込データ'][0][5] = 'Unresolved counterparty'
+        if change == 'changed_school_amount': db.rows['支出明細'][0][4] = 999
+    verify.side_effect = concurrent_change
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert len(db.rows['支出明細']) == 1 and not db.rows['レシート']
+    assert not any(r[0] == 'receipt:'+source['source_id'] for r in db.rows['取込データ'])
+    item = next(iter(service.items.values()))
+    assert item['status'] == 'waiting' and item['aborted_before_accounting']
+
+
 def public_purchase(kind, posted=True):
     from app.auto_expense import expense_id
     cafe = kind == 'cafe'
@@ -384,3 +473,17 @@ def test_public_purpose_does_not_remove_a_second_actual_medical_candidate(kind):
     assert possible_duplicate(query(), tables)
     nonmedical = query(); nonmedical.items[0].major_category = 'その他'
     assert all(m.classification != 'different' for m in compare_payments(nonmedical, tables, days=31, unknown_dates=True))
+
+
+@pytest.mark.parametrize('kind', ['cafe', 'toll'])
+def test_local_medical_post_with_verified_other_purpose_never_reposts_existing_spending(kind):
+    from app.medical_local_reading import apply_local
+    from test_medical_local_reading import parsed, proof
+    service, store, db, _, source = medical()
+    tables = public_purchase(kind); tables['expense_rows'][0][4] = tables['import_rows'][0][6] = parsed().total
+    load(db, tables); before = deepcopy(db.rows['支出明細'])
+    assert apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows['支出明細'][:1] == before and len(db.rows['支出明細']) == 2
+    after = deepcopy(db.rows)
+    assert not apply_local(service, source, 'synthetic-folder', parsed(), proof())
+    assert db.rows == after
