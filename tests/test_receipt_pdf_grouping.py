@@ -14,6 +14,13 @@ from app.receipt_privacy_gate import ReceiptPrivacyBlocked
 from test_receipt_pdf_units import synthetic_pdf, local_ocr, pipeline
 
 
+@pytest.fixture(autouse=True)
+def local_development_context(monkeypatch):
+    # These tests intentionally exercise the offline/local review CLI. Actions
+    # authority is covered separately and must never restore this local JSON.
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+
+
 def service(tmp_path, evidence=None):
     proposer = grouping.AdjacentPageGrouping(lambda observations: evidence) if evidence is not None else None
     return grouping.PdfGroupingService(grouping.GroupingStore(tmp_path / 'grouping'), proposer,

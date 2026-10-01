@@ -248,6 +248,8 @@ class GroupingStore:
 
     @contextmanager
     def record(self, source_file_id):
+        if os.getenv('GITHUB_ACTIONS') == 'true':
+            raise GroupingError('local_grouping_is_not_actions_authority')
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.directory / (_digest(source_file_id) + '.json')
         lock = path.with_suffix('.lock')
@@ -356,9 +358,11 @@ class PdfGroupingService:
             elif action == 'edit':
                 candidates = [{'page_numbers': numbers, 'confidence': 1.0, 'reason': 'human_partition'}
                               for numbers in page_groups or []]
-                record['proposal'] = _proposal(snapshot, candidates, proposal['grouping_version'] + 1)
-                record['revision'] = record['proposal']['grouping_version']
-                record.pop('confirmation', None)
+                edited = _proposal(snapshot, candidates, proposal['grouping_version'] + 1)
+                if page_groups != [g['page_numbers'] for g in proposal['groups']]:
+                    record['proposal'] = edited
+                    record['revision'] = record['proposal']['grouping_version']
+                    record.pop('confirmation', None)
             elif action == 'reject':
                 record.pop('confirmation', None)
                 candidates = [{'page_numbers': g['page_numbers'], 'confidence': g['confidence'],

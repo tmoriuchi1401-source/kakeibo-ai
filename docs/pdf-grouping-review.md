@@ -1,5 +1,9 @@
 # Local PDF grouping review (Draft PR #91)
 
+Actions authority and the management UI now use the separate
+[private Drive review path](pdf-grouping-drive-ui.md). This local JSON CLI remains
+development/cache only and cannot restore Actions authority.
+
 Privacy observations and accounting transaction boundaries are separate. The
 existing all-page local PDF observation/classification path is unchanged. Normal
 single-page PDF intake still uses a freshly rendered PNG and the existing receipt
@@ -45,7 +49,8 @@ Copy its `proposal_digest` as `REVIEWED_DIGEST`. Explicit confirmation:
 python -m app.receipt_pdf_grouping confirm receipt.pdf --source-file-id DRIVE_FILE_ID --expected-proposal REVIEWED_DIGEST
 ```
 
-Editing replaces the partition and creates a new **unconfirmed** proposal. Each
+Editing a changed partition creates a new **unconfirmed** proposal. An unchanged
+partition retains its revision and confirmation. Each
 page must occur exactly once, in source order; every group must be contiguous.
 For example, split p1-p2 and retain p3 as a separate group:
 
@@ -89,8 +94,8 @@ confidence/reason and status. The digest binds the entire reviewed proposal.
 `review(..., action='confirm', expected_digest=...)` is the separate human review
 boundary used by the CLI. It revalidates the current source snapshot and reviewed
 digest, then saves a confirmed record with exact group membership and
-`authority_scope: rendered_payload_only`, `accounting_allowed: false`. Editing or
-rejecting removes that record. Atomic replace and a per-source exclusive lock
+`authority_scope: rendered_payload_only`, `accounting_allowed: false`. Changing
+the partition or rejecting removes that record. Atomic replace and a per-source exclusive lock
 prevent partially written or concurrent conflicting reviews; a busy or corrupt
 store fails closed. A stale lock must be investigated locally rather than ignored.
 
