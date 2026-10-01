@@ -103,6 +103,7 @@ def build_bank_daily_preview(
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
     card_statement_authorities: Iterable = (),
+    meaning_resolver=None,
 ) -> BankDailyPreview:
     existing = parse_import_rows(db.get(f"{STEADY_STATE_TARGET_SHEET}!A2:L"))
     parsed = BankPdfPipeline().parse(
@@ -116,6 +117,7 @@ def build_bank_daily_preview(
         confirmed_internal_transfers=confirmed_internal_transfers,
         confirmed_non_own_classifications=confirmed_non_own_classifications,
         card_statement_authorities=tuple(card_statement_authorities),
+        **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
     )
     plan = build_bank_preview_plan(shadow, existing)
     if len(plan.candidate_identities) > STEADY_STATE_MAX_ROWS:
@@ -134,6 +136,7 @@ def build_bank_daily_preview(
         parsed.transactions,
         confirmed_internal_transfers=confirmed_internal_transfers,
         confirmed_non_own_classifications=confirmed_non_own_classifications,
+        **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
     )
     summary = _daily_summary(
         shadow,

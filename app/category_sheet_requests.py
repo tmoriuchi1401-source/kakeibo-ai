@@ -204,7 +204,7 @@ class SheetRequestStore:
             body={"valueInputOption": "RAW", "data": data}).execute(num_retries=0)
 
 
-def execute_request(db, request_id, *, env, refresh_projection, store=None):
+def execute_request(db, request_id, *, env, refresh_projection, store=None, bank_processor=None):
     if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", request_id):
         raise StateError("category_request_id_invalid")
     store = store or SheetRequestStore(db)
@@ -217,9 +217,8 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
         if "bank" in captured:
             from .bank_review_ui import checked, validate_rows
             validate_rows(captured["bank"][1])
-            # Until the bank meaning writer is wired, never consume a bank
-            # approval as an ordinary category submission or report success.
-            if any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1]):
+            if (any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1])
+                    and env.get("BANK_REVIEW_ENABLED", "false") != "true"):
                 raise StateError("bank_review_execution_not_enabled")
     except Exception:
         store.update(metadata, "error", "受付内容を検証できませんでした。入力を確認して再実行してください。")
@@ -233,9 +232,20 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
                 "CATEGORY_BACKFILL_PREVIEW_ENABLED", "CATEGORY_BACKFILL_APPLY_ENABLED")):
             raise StateError("category_request_features_disabled")
         from .category_past_all_months import PAST_HEADER
+        bank_counts = {}
+        if "bank" in captured and enabled("BANK_REVIEW_ENABLED"):
+            from .bank_review_ui import checked
+            if any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1]):
+                if bank_processor is None:
+                    from .bank_review_requests import BankReviewRequestProcessor
+                    from .bank_review_source import from_environment
+                    bank_processor = BankReviewRequestProcessor(db, from_environment(db, env))
+                bank_counts, bank_rows = bank_processor.process(captured["bank"][1], request_id)
+                adapter.blocks["bank"] = (captured["bank"][0], bank_rows)
         result = process_category_operations(adapter, apply=True, rule_enabled=True,
             save_enabled=True, preview_enabled=True, backfill_enabled=True,
             all_months=captured["rule"][0][5] == PAST_HEADER)
+        result.update(bank_counts)
         # Merge once, after all processing. UI refreshes during the pipeline can
         # never consume or overwrite changes made after the captured submission.
         live = db._category_workflow_blocks()
@@ -251,8 +261,13 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
             f"過去分反映 {result['category_expenses_applied']}件")
         if result["category_held"]:
             message += f" / 要確認 {result['category_held']}件"
+        if bank_counts:
+            message += (f" / 銀行確認 {bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']}グループ"
+                        f" / 銀行ルール登録 {bank_counts['bank_rules_registered']}件")
+            if bank_counts["bank_held"]:
+                message += f" / 銀行要確認 {bank_counts['bank_held']}グループ"
         if retained: message += f" / 実行指示後の編集 {retained}行は次回分として保持"
-        store.update(metadata, "review" if result["category_held"] else "complete", message)
+        store.update(metadata, "review" if result["category_held"] or bank_counts.get("bank_held") else "complete", message)
         return result
     except Exception as exc:
         try:

@@ -36,7 +36,7 @@ from .bank_recurring_authority import (
 )
 from .bank_steady_state import build_bank_daily_preview
 from .bank_pdf_pipeline import BankPdfError
-from .bank_income import deposit_decisions, income_id, validate_income_rows
+from .bank_income import deposit_decisions, income_id, validate_income_rows, income_row_matches
 from .bank_income_recurring import BankRecurringIncome, require_income_actions
 from .drive_processed import move_processed, validate_processed_folder
 from .drive_receipts import normalize_folder_id
@@ -132,12 +132,13 @@ def _in_write_window(file: Mapping[str, object], window: BankPdfWindow) -> bool:
 
 
 def _existing_income_settled(db, daily, import_rows, *, confirmed_internal_transfers,
-                             confirmed_non_own_classifications) -> bool:
+                             confirmed_non_own_classifications, meaning_resolver=None) -> bool:
     """Read back previously posted deposits before archiving without income apply."""
     decisions, _ = deposit_decisions(
         daily.parsed_result.transactions,
         confirmed_internal_transfers=confirmed_internal_transfers,
         confirmed_non_own_classifications=confirmed_non_own_classifications,
+        **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
     )
     if _existing_content_mismatches(daily.parsed_result, import_rows):
         return False
@@ -169,7 +170,8 @@ def _existing_income_settled(db, daily, import_rows, *, confirmed_internal_trans
     return all(
         len(imports.get(decision.transaction.source_row_identity, ())) > 8
         and imports[decision.transaction.source_row_identity][8] == "bank_income"
-        and incomes.get(income_id(decision.transaction.source_row_identity)) == decision.row()
+        and income_row_matches(incomes.get(income_id(decision.transaction.source_row_identity)),
+                               decision.row(), approved_meaning=meaning_resolver is not None)
         for decision in confirmed
     )
 
@@ -280,6 +282,7 @@ def run_bank_pdf_recurring(
     income_write_enabled: bool = False,
     processed_folder_id: str = "",
     preview_window: BankPdfWindow | None = None,
+    meaning_resolver=None,
 ) -> dict[str, object]:
     if preview_window is not None and not dry_run:
         raise ValueError("bank_preview_window_requires_dry_run")
@@ -314,6 +317,12 @@ def run_bank_pdf_recurring(
     )
     summary["files_seen"] = len(files)
     downloader = download or (lambda file_id: download_drive_file(file_id, service=drive_service))
+    source_guard = None
+    if meaning_resolver is not None:
+        from .bank_meaning_source_guard import BankMeaningSourceGuard
+        source_guard = BankMeaningSourceGuard(meaning_resolver, drive_service,
+                                             policy.expected_drive_folder_id, downloader)
+        meaning_resolver = source_guard
     import_rows = db.get("取込データ!A2:L")
     existing_ids = {
         str(row[0]).strip()
@@ -325,6 +334,7 @@ def run_bank_pdf_recurring(
     pending_processed = []
     archive_previews = {}
     archive_review_proofs = {}
+    meaning_options = {"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}
 
     def file_status(file, status, reasons):
         ref = hashlib.sha256(str(file["id"]).encode()).hexdigest()[:24]
@@ -343,15 +353,33 @@ def run_bank_pdf_recurring(
         if proofs and not proofs <= completed_bank_postings(db, daily.parsed_result.transactions,
                 current, selected=proofs).keys():
             return False
+        if meaning_resolver is not None:
+            meaning_resolver.require_unchanged()
+            required_postings = {}
+            for tx in daily.parsed_result.transactions:
+                meaning = meaning_resolver(tx)
+                if meaning["state"] == "held":
+                    return False
+                if meaning["state"] == "matched" and meaning["classification"] in {"income", "expense"}:
+                    required_postings[tx.source_row_identity] = meaning["classification"]
+            saved = completed_bank_postings(db, daily.parsed_result.transactions,
+                                           current, selected=set(required_postings))
+            if any(saved.get(identity) != purpose for identity, purpose in required_postings.items()):
+                return False
         return _existing_income_settled(
             db, daily, current,
             confirmed_internal_transfers=confirmed_internal_transfers,
             confirmed_non_own_classifications=confirmed_non_own_classifications,
+            **meaning_options,
         )
 
     def mark_processed(file):
         try:
+            if meaning_resolver is not None:
+                meaning_resolver.require_unchanged()
             _mark_processed(drive_service, file, policy.expected_drive_folder_id, processed_folder_id)
+            if source_guard is not None:
+                source_guard.archived(str(file["id"]))
         except Exception:
             summary["files_withheld"] += 1
             file_status(file, "withheld", ["processed_move_failed"])
@@ -376,7 +404,8 @@ def run_bank_pdf_recurring(
                 require_income_actions(repo_root, expected_head)
             income = BankRecurringIncome(db, policy, state, summary, now, dict(
                 confirmed_internal_transfers=confirmed_internal_transfers,
-                confirmed_non_own_classifications=confirmed_non_own_classifications))
+                confirmed_non_own_classifications=confirmed_non_own_classifications,
+                **meaning_options))
             if not dry_run:
                 income.evidence.require_existing_history()
             income.evidence.reconcile(dry_run=dry_run)
@@ -390,7 +419,10 @@ def run_bank_pdf_recurring(
             summary["outside_write_window"] += int(outside)
             file_status(file, "pending", ["archive_pending"])
             summary["files_new"] = int(summary["files_new"]) + int(not already_processed)
-            path = _temporary_pdf(downloader(str(file["id"])))
+            data = downloader(str(file["id"]))
+            if source_guard is not None:
+                source_guard.observe(file, data)
+            path = _temporary_pdf(data)
             temp_paths.append(path)
             try:
                 daily = build_bank_daily_preview(
@@ -402,6 +434,7 @@ def run_bank_pdf_recurring(
                     confirmed_internal_transfers=confirmed_internal_transfers,
                     confirmed_non_own_classifications=confirmed_non_own_classifications,
                     card_statement_authorities=tuple(card_statement_authorities),
+                    **meaning_options,
                 )
             except BankPdfError as exc:
                 if str(exc) not in {"bank_document_empty", "bank_document_unrecognized",
@@ -415,6 +448,8 @@ def run_bank_pdf_recurring(
                 continue
             details = daily.summary
             parsed_result = daily.parsed_result
+            if source_guard is not None:
+                source_guard.parsed(parsed_result.transactions)
             parse_ok = bool(parsed_result is not None and not parsed_result.issues
                             and not parsed_result.balance_consistency_failures
                             and int(details.get("parsed", 0)) > 0)
@@ -437,7 +472,7 @@ def run_bank_pdf_recurring(
             household = details.get("household_income", {}).get("classification", {})
             deposits, _ = deposit_decisions(parsed_result.transactions,
                 confirmed_internal_transfers=confirmed_internal_transfers,
-                confirmed_non_own_classifications=confirmed_non_own_classifications)
+                confirmed_non_own_classifications=confirmed_non_own_classifications, **meaning_options)
             resolved_income_review = sum(d.outcome == "needs_review"
                 and d.reason == "deposit_purpose_unconfirmed"
                 and completed.get(d.transaction.source_row_identity) == "income" for d in deposits)
@@ -459,7 +494,7 @@ def run_bank_pdf_recurring(
             try:
                 settled = _existing_income_settled(db, daily, import_rows,
                     confirmed_internal_transfers=confirmed_internal_transfers,
-                    confirmed_non_own_classifications=confirmed_non_own_classifications)
+                    confirmed_non_own_classifications=confirmed_non_own_classifications, **meaning_options)
                 income_error = False
             except RuntimeError:
                 settled, income_error = False, True
@@ -549,6 +584,9 @@ def run_bank_pdf_recurring(
             raise RuntimeError("bank_recurring_row_bound_exceeded")
         if income:
             summary.update(income.plan(identity for _, _, ids, _ in candidates for identity in ids))
+            if source_guard is not None:
+                source_guard.require_settlement_scope([*income.new_imports,
+                    *(row[6] for row in income.projected_income)])
             income_changes = summary["planned_income_writes"] + summary["planned_deposit_imports"]
             if dry_run and (income_changes or candidates):
                 summary["status"] = "dry_run_ready"
@@ -615,6 +653,7 @@ def run_bank_pdf_recurring(
                     clock=lambda: datetime.now(timezone.utc),
                     sleeper=sleeper or __import__("time").sleep,
                     steady_state=True,
+                    **meaning_options,
                 )
                 summary["written"] = int(summary["written"]) + int(result.get("confirmed_count", 0))
                 summary["write_requests"] = int(summary["write_requests"]) + int(result.get("write_request_count", 0))

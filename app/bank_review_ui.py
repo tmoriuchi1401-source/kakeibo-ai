@@ -109,6 +109,7 @@ def submitted_answers(rows, *, accounts):
         if choice != "income" and category:
             raise ValueError("bank_review_income_category_not_applicable")
         source_bank, source_alias = sender[2:4]
+        source_bank = {label: bank for bank, label in BANK_LABELS.items()}.get(source_bank, source_bank)
         if choice == "transfer":
             if not safe_alias(source_alias) or (source_bank, source_alias) not in accounts:
                 raise ValueError("bank_review_source_account_unconfirmed")
@@ -147,7 +148,7 @@ def controls(sheet_id, start_row, rows):
                         "startIndex": 0, "format": {"link": {"uri": row[9]}}}]}]}],
                     "fields": "textFormatRuns"}}])
         elif row[8] == "sender":
-            requests.append(validation(number, 2, tuple(BANK_LABELS)))
+            requests.append(validation(number, 2, tuple(BANK_LABELS.values())))
             requests.append({"updateCells": {"start": {"sheetId": sheet_id,
                 "rowIndex": number - 1, "columnIndex": 3}, "rows": [{"values": [{
                     "note": "自己口座間振替の場合だけ、確認済みの相手口座aliasを入力。口座番号は入力しないでください。"}]}],

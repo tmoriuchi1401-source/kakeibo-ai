@@ -779,6 +779,10 @@ def main():
         cursor_value = os.getenv("BANK_PREVIEW_CURSOR_EPOCH", "") if args.dry_run else ""
         if cursor_value and not cursor_value.isdecimal():
             raise ValueError("bank_recurring_preview_cursor_invalid")
+        from .bank_meaning_resolver import from_environment as bank_meaning_from_environment
+        bank_meanings = bank_meaning_from_environment(db, legacy_rules=dict(
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications()))
         result=(run_bank_pdf_catch_up_preview if args.dry_run else run_bank_pdf_recurring)(
             **({"preview_cursor_epoch": int(cursor_value) if cursor_value else None}
                if args.dry_run else {}),
@@ -796,6 +800,7 @@ def main():
             processed_folder_id=s.bank_pdf_processed_drive_folder_id,
             confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
             confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+            **({"meaning_resolver": bank_meanings} if bank_meanings is not None else {}),
         )
         print(json.dumps(result,ensure_ascii=False,sort_keys=True))
     elif args.cmd=="init":

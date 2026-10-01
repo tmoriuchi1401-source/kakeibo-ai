@@ -52,8 +52,9 @@ def _exact_present(db, sheet, expected):
 
 class IncomeAppendEvidence:
     """Append intent in the already persisted bank-recurring.sqlite3 summaries."""
-    def __init__(self, db, state, summary):
+    def __init__(self, db, state, summary, *, meaning_resolver=None):
         self.db, self.state, self.summary = db, state, summary
+        self.meaning_resolver = meaning_resolver
 
     def _record(self, status, attempt, sheet, rows):
         self.state.record({**self.summary, "run_id": str(uuid4()), "status": status,
@@ -87,6 +88,8 @@ class IncomeAppendEvidence:
     def append(self, sheet, rows):
         if not rows:
             return
+        if self.meaning_resolver is not None:
+            self.meaning_resolver.require_unchanged()
         attempt = str(uuid4())
         self._record("income_append_pending", attempt, sheet, rows)
         self.db.append_raw(sheet, rows)
@@ -100,7 +103,8 @@ class BankRecurringIncome:
         if not policy.income_enabled or db.sid != policy.expected_spreadsheet_id:
             raise RuntimeError("bank_income_recurring_authority_required")
         self.db, self.policy, self.now, self.rules = db, policy, now, rules
-        self.evidence = IncomeAppendEvidence(db, state, summary)
+        self.evidence = IncomeAppendEvidence(db, state, summary,
+            meaning_resolver=rules.get("meaning_resolver"))
         self.new_imports = {}
         self.projected_income = []
         self.initial_imports = db.get("取込データ!A2:L")
