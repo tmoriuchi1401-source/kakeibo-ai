@@ -15,6 +15,15 @@ CATEGORY_WORKFLOW_MARKERS = {
     "backfill": "■ 2. 過去分の固定プレビュー",
     "confirm": "■ 3. 固定プレビューを確認して反映",
 }
+# Optional sections do not invalidate historical three-block requests.
+OPTIONAL_WORKFLOW_MARKERS = {"bank": "■ 4. 銀行取引をまとめて確認"}
+WORKFLOW_MARKERS = {**CATEGORY_WORKFLOW_MARKERS, **OPTIONAL_WORKFLOW_MARKERS}
+
+
+def workflow_sections(blocks):
+    return [key for key in WORKFLOW_MARKERS if key in blocks]
+
+
 CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
 # The shared helper sheet has two disjoint horizontal spill surfaces.  Ledger
 # G may only read B:ZY; the opt-in rule UI may only read ZZ:ALL.  Keeping this
@@ -550,6 +559,8 @@ class SheetsDB:
     @staticmethod
     def _workflow_logical_row(section, physical, *, compact=False):
         cells=list(physical)+[""]*max(0, 12-len(physical))
+        if section == "bank":
+            return cells[:12]
         if section == "backfill":
             return cells[:5]+cells[6:11]
         if section == "confirm":
@@ -567,6 +578,11 @@ class SheetsDB:
         def checkbox(value):
             text=str(value).strip().upper()
             return True if text == "TRUE" else False if text == "FALSE" else value
+        if section == "bank":
+            cells += [""]*max(0, 12-len(cells))
+            if not header and cells[8] == "group":
+                cells[5] = checkbox(cells[5])
+            return cells[:12]
         if section == "backfill":
             cells += [""]*max(0, 10-len(cells))
             cells[4]=checkbox(cells[4])
@@ -586,7 +602,7 @@ class SheetsDB:
         return cells[:12]
 
     def _category_workflow_blocks(self):
-        """Read the three independently-approved actions from one visible tab."""
+        """Read independently approved blocks, including the optional bank UI."""
         defaults=self._category_workflow_defaults(); titles=set(self.sheet_titles())
         if CATEGORY_WORKFLOW_SHEET not in titles:
             legacy={}
@@ -611,9 +627,20 @@ class SheetsDB:
             values=self.get(f"{CATEGORY_WORKFLOW_SHEET}!A1:L1000")
         markers={key: next((index for index,row in enumerate(values)
                             if row and row[0] == marker), None)
-                 for key,marker in CATEGORY_WORKFLOW_MARKERS.items()}
+                 for key,marker in WORKFLOW_MARKERS.items()}
         blocks={}
         ordered=["rule", "backfill", "confirm"]
+        if markers["bank"] is not None:
+            from .bank_review_ui import BANK_UI_HEADERS
+            from .drive_run_state import StateError
+            locations = [markers[key] for key in WORKFLOW_MARKERS]
+            if (any(position is None for position in locations)
+                    or locations != sorted(locations)
+                    or any(sum(bool(row) and row[0] == marker for row in values) != 1
+                           for marker in WORKFLOW_MARKERS.values())):
+                raise StateError("bank_review_workflow_markers_invalid")
+            defaults["bank"] = list(BANK_UI_HEADERS)
+            ordered.append("bank")
         for position,key in enumerate(ordered):
             marker=markers[key]
             if marker is None:
@@ -630,6 +657,9 @@ class SheetsDB:
             if compact and key == "rule":
                 header=defaults[key]
             blocks[key]=(header, rows)
+        if "bank" in blocks:
+            from .bank_review_ui import validate_rows
+            validate_rows(blocks["bank"][1])
         if compact:
             from .compact_categories import digest
             self._category_workflow_last_read=digest(values)
@@ -655,7 +685,7 @@ class SheetsDB:
     def _workflow_positions(self, blocks):
         row_num=6 if CATEGORY_REQUEST_SHEET in self.sheet_titles() else 1
         positions={}
-        for section in ("rule", "backfill", "confirm"):
+        for section in workflow_sections(blocks):
             header,rows=blocks[section]
             positions[section]={"marker":row_num, "header":row_num+1,
                                 "start":row_num+2, "count":len(rows)}
@@ -723,7 +753,7 @@ class SheetsDB:
             {"updateDimensionProperties":{"range":{"sheetId":sheet_id,"dimension":"COLUMNS","startIndex":6,"endIndex":25},"properties":{"hiddenByUser":True},"fields":"hiddenByUser"}},
             {"updateSheetProperties":{"properties":{"sheetId":sheet_id,"gridProperties":{"frozenRowCount":4 if offset else 2}},"fields":"gridProperties.frozenRowCount"}},
         ]
-        for section in ("rule", "backfill", "confirm"):
+        for section in workflow_sections(blocks):
             marker=positions[section]["marker"]-1; header=positions[section]["header"]-1
             requests += [
                 {"repeatCell":{"range":{"sheetId":sheet_id,"startRowIndex":marker,"endRowIndex":marker+1,"startColumnIndex":0,"endColumnIndex":6},"cell":{"userEnteredFormat":{"backgroundColor":{"red":0.11,"green":0.24,"blue":0.38},"textFormat":{"foregroundColor":{"red":1,"green":1,"blue":1},"bold":True},"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat(backgroundColor,textFormat,wrapStrategy)"}},
@@ -765,6 +795,9 @@ class SheetsDB:
             legacy=next((value for value in meta["sheets"] if value["properties"]["title"] == legacy_title), None)
             if legacy:
                 requests.append({"updateSheetProperties":{"properties":{"sheetId":legacy["properties"]["sheetId"],"hidden":True},"fields":"hidden"}})
+        if "bank" in positions:
+            from .bank_review_ui import controls
+            requests.extend(controls(sheet_id, positions["bank"]["start"], blocks["bank"][1]))
         self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
 
     def _replace_category_workflow_section(self, section, rows, header):
@@ -774,14 +807,28 @@ class SheetsDB:
         blocks[section]=(list(header), [list(row) for row in rows])
         self._write_category_workflow_blocks(blocks)
 
+    def bank_review_ui_table(self):
+        """Read the optional bank block without creating sheets or rules."""
+        from .bank_review_ui import BANK_UI_HEADERS
+        return self._category_workflow_blocks().get("bank", (list(BANK_UI_HEADERS), []))
+
+    def replace_bank_review_ui_rows(self, rows):
+        """Explicit opt-in refresh, preserving all other submitted UI blocks."""
+        from .bank_review_ui import BANK_UI_HEADERS, validate_rows
+        validate_rows(rows)
+        self._replace_category_workflow_section("bank", rows, BANK_UI_HEADERS)
+
     def _write_category_workflow_blocks(self, blocks):
+        if "bank" in blocks:
+            from .bank_review_ui import validate_rows
+            validate_rows(blocks["bank"][1])
         self._ensure_category_workflow_sheet(); positions=self._workflow_positions(blocks)
         offset=positions["rule"]["marker"]-1
         values=[]
         compact=bool(self._compact_category_helper())
-        for key in ("rule", "backfill", "confirm"):
+        for key in workflow_sections(blocks):
             block_header,block_rows=blocks[key]
-            values.append([CATEGORY_WORKFLOW_MARKERS[key]])
+            values.append([WORKFLOW_MARKERS[key]])
             values.append(self._workflow_physical_row(key, block_header, compact=compact, header=True))
             values.extend(self._workflow_physical_row(key, row, compact=compact) for row in block_rows)
             values.append([""])

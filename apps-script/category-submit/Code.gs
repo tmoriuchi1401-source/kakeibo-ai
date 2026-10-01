@@ -121,6 +121,11 @@ function submitCategoryInput() {
     if (!rows.length || rows.length > 10000) throw new Error('受付できる行数を超えています。');
     const markers = ['■ 1. カテゴリを選ぶ・今後の自動分類','■ 2. 過去分の固定プレビュー','■ 3. 固定プレビューを確認して反映'];
     if (markers.some(m => rows.filter(r => r[0] === m).length !== 1)) throw new Error('シートの見出しを確認してください。');
+    const bankMarker = '■ 4. 銀行取引をまとめて確認';
+    const bankStarts = rows.map((r,i) => r[0] === bankMarker ? i : -1).filter(i => i >= 0);
+    if (bankStarts.length > 1 || (bankStarts.length && bankStarts[0] <= rows.findIndex(r => r[0] === markers[2]))) {
+      throw new Error('銀行確認欄の見出しを確認してください。');
+    }
     const requestId = Utilities.getUuid();
     const submitted = new Date().toISOString();
     const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, JSON.stringify(rows), Utilities.Charset.UTF_8)

@@ -12,7 +12,7 @@ import re
 
 from .drive_run_state import StateError
 from .sheets import (SheetsDB, CATEGORY_REQUEST_SHEET, CATEGORY_WORKFLOW_SHEET,
-                     CATEGORY_WORKFLOW_MARKERS)
+                     CATEGORY_WORKFLOW_MARKERS, OPTIONAL_WORKFLOW_MARKERS)
 
 MAX_ROWS = 10000
 
@@ -33,9 +33,18 @@ def parse_snapshot(rows):
         if len(hits) != 1:
             raise StateError("category_snapshot_markers_invalid")
         markers[section] = hits[0]
+    for section, marker in OPTIONAL_WORKFLOW_MARKERS.items():
+        hits = [i for i, row in enumerate(rows) if row[0] == marker]
+        if len(hits) > 1:
+            raise StateError("category_snapshot_markers_invalid")
+        if hits:
+            markers[section] = hits[0]
     if list(markers.values()) != sorted(markers.values()):
         raise StateError("category_snapshot_order_invalid")
     defaults = SheetsDB._category_workflow_defaults(None)
+    if "bank" in markers:
+        from .bank_review_ui import BANK_UI_HEADERS
+        defaults["bank"] = list(BANK_UI_HEADERS)
     blocks = {}
     for section in markers:
         start = markers[section] + 2
@@ -52,6 +61,12 @@ def parse_snapshot(rows):
             # captured under the former preview-only label stays preview-only.
             header[5]=rows[markers[section]+1][5]
         blocks[section] = (header, data)
+    if "bank" in blocks:
+        from .bank_review_ui import validate_rows
+        try:
+            validate_rows(blocks["bank"][1])
+        except ValueError:
+            raise StateError("bank_review_snapshot_invalid") from None
     return blocks
 
 
@@ -100,13 +115,13 @@ def merge_results(captured, result, live):
     """
     merged = deepcopy(result)
     retained = 0
+    def normalized(row):
+        return ["TRUE" if value is True else "FALSE" if value is False else str(value)
+                for value in (row or [])]
     for section in ("rule", "backfill", "confirm"):
         key_col = 4 if section == "confirm" else 6
         key = lambda row: str(row[key_col]) if len(row) > key_col else ""
         old = {key(r): r for r in captured[section][1] if key(r)}
-        def normalized(row):
-            return ["TRUE" if v is True else "FALSE" if v is False else str(v)
-                    for v in (row or [])]
         later = {key(r): r for r in live[section][1] if key(r)
                  and normalized(r) != normalized(old.get(key(r)))}
         seen = set()
@@ -122,6 +137,28 @@ def merge_results(captured, result, live):
                 output.append(deepcopy(row))
                 retained += 1
         merged[section] = (merged[section][0], output)
+    # Historical requests know nothing about a newly installed bank block.
+    # Keep that live block, including its unsubmitted approvals, unchanged.
+    if "bank" not in captured and "bank" in live:
+        merged["bank"] = deepcopy(live["bank"])
+    elif "bank" in captured:
+        # Bank rows use G as their immutable key, including sender subrows.
+        old = {str(row[6]): row for row in captured["bank"][1]}
+        later = {str(row[6]): row for row in live.get("bank", ([], []))[1]
+                 if normalized(row) != normalized(old.get(str(row[6]))) }
+        rows = []
+        seen = set()
+        for row in merged["bank"][1]:
+            key = str(row[6])
+            rows.append(deepcopy(later.get(key, row)))
+            if key in later:
+                retained += 1
+                seen.add(key)
+        for key, row in later.items():
+            if key not in seen:
+                rows.append(deepcopy(row))
+                retained += 1
+        merged["bank"] = (merged["bank"][0], rows)
     from .category_ui_order import consolidate_blocks
     return consolidate_blocks(merged), retained
 
@@ -177,6 +214,13 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
     # Validate the complete captured input before claiming or touching ledgers.
     try:
         captured = store.snapshot(metadata)
+        if "bank" in captured:
+            from .bank_review_ui import checked, validate_rows
+            validate_rows(captured["bank"][1])
+            # Until the bank meaning writer is wired, never consume a bank
+            # approval as an ordinary category submission or report success.
+            if any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1]):
+                raise StateError("bank_review_execution_not_enabled")
     except Exception:
         store.update(metadata, "error", "受付内容を検証できませんでした。入力を確認して再実行してください。")
         raise StateError("category_request_snapshot_invalid") from None
