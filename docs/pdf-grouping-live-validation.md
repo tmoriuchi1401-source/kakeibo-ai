@@ -90,11 +90,25 @@ test. The hold/redisplay result above describes that earlier test step.
 
 ## Actual PDF canary
 
-Pending selection of one known non-Medical multipage PDF from Receipt Inbox.
-Only metadata has been listed. No actual PDF has been downloaded, observed,
-displayed or confirmed during this validation yet. The operator must display
-the fresh proposal and obtain the human's explicit partition confirmation
-before saving authority. General authorization to run the canary is not that
+The human selected one Receipt Inbox PDF. Its identity/parent/type/version were
+verified around read-only download. The unchanged local observer rejected it as
+`pdf_resource_limit_exceeded` before rendering or OCR. No proposal, page privacy
+classification, confirmation or real-source authority was created; the two
+review tabs and Drive state/audit were not updated by this attempt.
+
+A separate read-only geometry diagnostic (no rendering/OCR) found 14 pages and
+15,157,565 source bytes. At the existing scale of 3, every page exceeds the
+12,000,000-pixel limit (20,610,882 to 46,520,334 pixels); the document total is
+422,829,774 pixels against a 100,000,000-pixel limit. Original parent/type/version
+remained unchanged. Actual source identifiers and receipt contents are not
+included in this repository; private operator diagnostics hold the binding.
+
+The canary stopped without relaxing resource limits or the privacy gate. Gemini,
+accounting writes, Medical handoff and source movement were zero. Confirmation
+and replay of an actual source remain unverified. Another suitable source or a
+separately scoped bounded-rendering phase is required before continuing. The
+operator must display the fresh proposal and obtain the human's explicit
+partition confirmation before saving authority. Selecting a source is not that
 partition confirmation.
 
 Replay must re-observe the original read-only, reuse the same confirmation and

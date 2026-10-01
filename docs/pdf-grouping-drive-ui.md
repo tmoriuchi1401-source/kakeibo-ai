@@ -191,8 +191,10 @@ interface. It validates Drive plus fresh original observations, returns no units
 on mismatch, never initializes/repairs state and never consults local authority.
 Read-only normal-unit analysis still needs separately authorized AI/destination
 scope, fresh member/composite gates and results storage without accounting writes.
-The live canary and explicit human confirmation remain prerequisites for the
-next phase. Neither provisioning nor successful conditional writes grant
+The selected live canary hit the unchanged rendering resource limits before
+observation; actual-source confirmation/replay remain unverified. A successful
+live canary and explicit human confirmation remain prerequisites for the next
+phase. Neither provisioning nor successful conditional writes grant
 accounting, Medical, archive or AI-send authority.
 
 ## Original authority/UI verification
