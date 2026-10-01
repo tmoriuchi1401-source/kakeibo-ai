@@ -80,7 +80,11 @@ class DocumentUnit:
 
 
 class PageGrouping(Protocol):
-    """Future grouping boundary; v1 emits exactly one unit for each page."""
+    """Future candidate boundary; proposed groups are not accounting authority.
+
+    Only a single-page document currently gets an automatic unit. Multi-page
+    groups require a separate human confirmation boundary in the next phase.
+    """
     def units(self, pages: tuple[PageObservation, ...]) -> tuple[DocumentUnit, ...]: ...
 
 
@@ -207,7 +211,10 @@ def observe_pdf(content: bytes, source_file_id: str, *,
 
 
 def document_result(observations: PdfObservations) -> dict:
-    units = SinglePageGrouping().units(observations.pages)
+    # Page observations express privacy, not transaction boundaries. Do not
+    # manufacture accounting units for a document that still needs grouping.
+    page_count = len(observations.pages)
+    units = SinglePageGrouping().units(observations.pages) if page_count == 1 else ()
     records = []
     for unit in units:
         kind = unit.observation.classification
@@ -215,11 +222,16 @@ def document_result(observations: PdfObservations) -> dict:
         records.append({**unit.metadata(), 'status': state})
     return {'document_type': 'pdf_page_units', 'source_file_id': observations.source_file_id,
             'source_content_hash': observations.source_content_hash,
-            'observation_status': observations.status, 'status': 'needs_review',
+            'observation_status': observations.status,
+            'page_count': page_count, 'pages': [page.metadata() for page in observations.pages],
+            'status': 'grouping_required' if page_count > 1 else 'needs_review',
             'units': records, 'all_units_terminal': False, 'archive_allowed': False}
 
 
 def update_document_status(result: dict) -> None:
+    if result.get('page_count', 0) > 1 or result.get('status') == 'grouping_required':
+        result.update(status='grouping_required', all_units_terminal=False, archive_allowed=False)
+        return
     states = [unit['status'] for unit in result['units']]
     complete = bool(states) and all(state in TERMINAL_STATES for state in states)
     result['all_units_terminal'] = complete
@@ -245,15 +257,19 @@ class PdfUnitManifestStore:
                     or value['source_content_hash'] != source_content_hash):
                 raise ValueError()
             restrictions = {}
-            seen = set()
-            for unit in value['units']:
-                n, kind = unit['page_number'], unit['classification']
-                if (type(n) is not int or not 1 <= n <= MAX_PDF_PAGES or n in seen
-                        or kind not in {'normal', 'medical', 'payroll', 'sensitive_unknown'}):
-                    raise ValueError()
-                seen.add(n)
-                if kind != 'normal':
-                    restrictions[n] = kind
+            # Retain restrictions from both local observation and later image
+            # gates. Legacy PR #91 manifests only have the units collection.
+            for records in (value.get('pages', []), value['units']):
+                seen = set()
+                for unit in records:
+                    n, kind = unit['page_number'], unit['classification']
+                    if (type(n) is not int or not 1 <= n <= MAX_PDF_PAGES or n in seen
+                            or kind not in {'normal', 'medical', 'payroll', 'sensitive_unknown'}):
+                        raise ValueError()
+                    seen.add(n)
+                    if kind != 'normal':
+                        previous = restrictions.get(n, kind)
+                        restrictions[n] = kind if previous == kind else 'sensitive_unknown'
             return restrictions
         except Exception:
             raise ValueError('pdf_unit_manifest_invalid') from None

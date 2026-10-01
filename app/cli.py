@@ -132,10 +132,16 @@ def make_receipt_pipeline(settings, db, ai):
 def print_drive_receipt_results(results):
     for name,res in results:
         if res.get('document_type') == 'pdf_page_units':
-            print({'document_type': 'pdf_page_units', 'status': res['status'],
-                   'units': [{'page_number': unit['page_number'],
-                              'classification': unit['classification'], 'status': unit['status']}
-                             for unit in res['units']], 'archive_allowed': False})
+            summary = {'document_type': 'pdf_page_units', 'status': res['status'],
+                       'archive_allowed': False}
+            if res['status'] == 'grouping_required':
+                summary['pages'] = [{key: page[key] for key in
+                    ('page_number', 'classification', 'extraction_status')} for page in res['pages']]
+            else:
+                summary['units'] = [{'page_number': unit['page_number'],
+                    'classification': unit['classification'], 'status': unit['status']}
+                    for unit in res['units']]
+            print(summary)
         elif res.get("status") == "privacy_blocked":
             print(res)
         else:

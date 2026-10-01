@@ -104,11 +104,12 @@ def pipeline(tmp_path, ai=None, db=None, observer=None):
 
 
 @pytest.mark.parametrize('kinds', [
+    ('normal',), ('medical',), ('payroll',), ('unknown',), ('incomplete',), ('failed',),
     ('normal', 'normal'), ('normal', 'medical'), ('medical', 'normal'),
     ('normal', 'unknown'), ('normal', 'payroll'), ('normal', 'incomplete'),
-    ('normal', 'failed', 'normal'), ('normal',) * 5,
+    ('normal', 'failed', 'normal'), ('normal',) * 5, ('normal', 'medical', 'normal'),
 ])
-def test_all_pages_observed_before_ai_only_normal_pixels_sent(tmp_path, local_ocr, kinds):
+def test_pages_are_privacy_observations_only_single_normal_can_send(tmp_path, local_ocr, kinds):
     original = synthetic_pdf(kinds)
     ai = FakeAI(_normal_receipt_result())
     def analyze(payload, mime, cats, **policy):
@@ -127,15 +128,29 @@ def test_all_pages_observed_before_ai_only_normal_pixels_sent(tmp_path, local_oc
     observer = Mock()
     p = pipeline(tmp_path, ai=ai, observer=observer)
     result = p.process_bytes(original, 'application/pdf', 'source-pdf')
-    assert len(result['units']) == len(kinds)
-    assert ai.analyze_receipt.call_count == kinds.count('normal')
-    for n, unit in enumerate(result['units']):
-        assert unit['source_file_id'] == 'source-pdf' and unit['page_number'] == n + 1
-        assert unit['page_range'] == [n + 1, n + 1]
-        assert len(unit['page_hash']) == len(unit['source_content_hash']) == 64
-        assert unit['status'] == ('imported' if kinds[n] == 'normal' else
-                                  'medical_pending' if kinds[n] == 'medical' else 'privacy_pending')
-    assert result['status'] == ('completed' if all(k == 'normal' for k in kinds) else 'partially_processed')
+    assert len(result['pages']) == result['page_count'] == len(kinds)
+    assert set(local_ocr) >= set(kinds)
+    for n, page in enumerate(result['pages']):
+        assert page['source_file_id'] == 'source-pdf' and page['page_number'] == n + 1
+        assert len(page['page_hash']) == len(page['source_content_hash']) == 64
+        assert page['classification'] == ('sensitive_unknown' if kinds[n] in
+            {'unknown', 'failed', 'incomplete'} else kinds[n])
+    if len(kinds) > 1:
+        assert result['units'] == []
+        assert result['observation_status'] == 'observed'
+        assert result['status'] == 'grouping_required'
+        assert not result['all_units_terminal']
+        ai.analyze_receipt.assert_not_called()
+        assert p.db.append_calls == [] and p.db.income_rows == []
+        assert p.db.ensure_expense_status_column_calls == p.db.category_calls == 0
+    else:
+        assert len(result['units']) == 1
+        assert result['units'][0]['page_range'] == [1, 1]
+        assert result['units'][0]['status'] == ('imported' if kinds[0] == 'normal' else
+            'medical_pending' if kinds[0] == 'medical' else 'privacy_pending')
+        assert ai.analyze_receipt.call_count == int(kinds[0] == 'normal')
+        if kinds[0] != 'normal':
+            assert p.db.append_calls == []
     assert not should_archive_result(result) and not result['archive_allowed']
     observer.observe.assert_not_called()
     saved = json.loads(next((tmp_path / 'units').glob('*.json')).read_text())
@@ -150,8 +165,8 @@ def test_embedded_and_scan_all_observed(tmp_path, local_ocr):
     assert reader.pages[0].extract_text() == TEXTS['normal']
     assert not reader.pages[1].extract_text()
     result = pipeline(tmp_path).process_bytes(original, 'application/pdf', 'mixed')
-    assert result['units'][0]['status'] == 'imported'
-    assert result['units'][1]['status'] == 'medical_pending'
+    assert result['status'] == 'grouping_required' and result['units'] == []
+    assert [p['classification'] for p in result['pages']] == ['normal', 'medical']
     assert {'normal', 'medical'} <= set(local_ocr)
 
 
@@ -166,7 +181,7 @@ def test_embedded_sensitive_cannot_be_ignored_even_if_visual_ocr_says_normal(tmp
     p.ai.analyze_receipt.assert_not_called()
 
 
-def test_render_failure_holds_only_that_page(tmp_path, local_ocr, monkeypatch):
+def test_render_failure_keeps_page_observations_without_accounting(tmp_path, local_ocr, monkeypatch):
     render = pdf._render_png
     count = 0
     def fail_second(page):
@@ -178,9 +193,11 @@ def test_render_failure_holds_only_that_page(tmp_path, local_ocr, monkeypatch):
     monkeypatch.setattr(pdf, '_render_png', fail_second)
     p = pipeline(tmp_path)
     result = p.process_bytes(synthetic_pdf(['normal'] * 3), 'application/pdf', 'render')
-    assert [u['status'] for u in result['units']] == ['imported', 'privacy_pending', 'imported']
-    assert result['units'][1]['extraction_status'] == 'pdf_render_failed'
-    assert p.ai.analyze_receipt.call_count == 2
+    assert [p['classification'] for p in result['pages']] == ['normal', 'sensitive_unknown', 'normal']
+    assert result['pages'][1]['extraction_status'] == 'pdf_render_failed'
+    assert result['status'] == 'grouping_required' and result['units'] == []
+    p.ai.analyze_receipt.assert_not_called()
+    assert p.db.append_calls == []
 
 
 @pytest.mark.parametrize('case', ['pages', 'pixels', 'bytes', 'payload', 'encrypted', 'corrupt'])
@@ -209,9 +226,13 @@ def test_replay_and_changed_source_identities(tmp_path, local_ocr):
     before = list(db.append_calls)
     second = pipeline(tmp_path, db=db, ai=ai).process_bytes(data, 'application/pdf', 'replay')
     assert first == second
-    assert db.append_calls == before and ai.analyze_receipt.call_count == 2
-    ids = [u['unit_id'] for u in first['units']]
-    assert len(set(ids)) == 3  # identical pixels on different pages remain distinct
+    assert db.append_calls == before == []
+    assert first['status'] == 'grouping_required' and first['units'] == []
+    ai.analyze_receipt.assert_not_called()
+    observations = pdf.observe_pdf(data, 'replay')
+    # Future candidate identity remains stable, without creating ledger units.
+    ids = [u.source_id for u in pdf.SinglePageGrouping().units(observations.pages)]
+    assert len(set(ids)) == 3
     changed = pdf.observe_pdf(synthetic_pdf(['normal', 'medical', 'normal'], metadata='changed'), 'replay')
     assert not set(ids) & {u.source_id for u in pdf.SinglePageGrouping().units(changed.pages)}
     renamed = pdf.observe_pdf(data, 'other-source')
@@ -220,13 +241,13 @@ def test_replay_and_changed_source_identities(tmp_path, local_ocr):
 
 @pytest.mark.parametrize('failed_sheet', ['レシート', '支出明細', '取込データ'])
 def test_partial_ledger_failure_replay_deduplicates(tmp_path, local_ocr, failed_sheet):
-    data = synthetic_pdf(['normal', 'medical'])
+    data = synthetic_pdf(['normal'])
     db = Ledger(fail_after_commit=failed_sheet)
     p = pipeline(tmp_path, db=db)
     with pytest.raises(RuntimeError, match='synthetic'):
         p.process_bytes(data, 'application/pdf', 'interrupted')
     result = pipeline(tmp_path, db=db).process_bytes(data, 'application/pdf', 'interrupted')
-    assert result['status'] == 'partially_processed'
+    assert result['status'] == 'completed'
     for title in ['レシート', '支出明細', '取込データ']:
         ids = [row[0] for sheet, rows in db.append_calls if sheet == title for row in rows]
         assert len(ids) == len(set(ids)) == 1
@@ -248,13 +269,14 @@ def test_known_sensitive_provenance_blocks_every_page(tmp_path, local_ocr, class
     p = pipeline(tmp_path)
     result = p.process_bytes(synthetic_pdf(['normal'] * 2), 'application/pdf', 'restricted',
                              known_source_classification=classification)
-    assert all(u['classification'] != 'normal' for u in result['units'])
+    assert all(u['classification'] != 'normal' for u in result['pages'])
     p.ai.analyze_receipt.assert_not_called()
 
 
 @pytest.mark.parametrize('mime', ['application/pdf', ' Application/PDF ', 'image/png'])
-def test_adapter_and_permission_boundary_unconditionally_reject_original_pdf(monkeypatch, mime):
-    data = synthetic_pdf(['normal', 'medical'])
+@pytest.mark.parametrize('kinds', [('normal',), ('normal', 'medical')])
+def test_adapter_and_permission_boundary_unconditionally_reject_original_pdf(monkeypatch, mime, kinds):
+    data = synthetic_pdf(kinds)
     transport = Mock()
     ai = object.__new__(GeminiAI)
     ai.client = SimpleNamespace(interactions=SimpleNamespace(create=transport))
@@ -289,17 +311,18 @@ def test_source_terminality_is_conservative_and_archive_always_disabled():
 def test_real_adapter_transport_contains_only_normal_page(tmp_path, local_ocr):
     import base64
     from test_gemini_ai import FakeInteractions
-    data = synthetic_pdf(['normal', 'medical'])
+    data = synthetic_pdf(['normal'])
     ai = object.__new__(GeminiAI)
     interactions = FakeInteractions()
     ai.client = SimpleNamespace(interactions=interactions)
     ai.model = 'synthetic'
     result = pipeline(tmp_path, ai=ai).process_bytes(data, 'application/pdf', 'real-adapter')
-    assert result['status'] == 'partially_processed'
+    assert result['status'] == 'completed'
     media = interactions.request['input'][1]
     assert media['mime_type'] == 'image/png'
     sent = base64.b64decode(media['data'])
     assert sent != data
+    assert b'PRIVATE_ATTACHMENT_99' not in sent
     with Image.open(BytesIO(sent)) as image:
         assert kind_of(image) == 'normal' and image.info == {}
 
@@ -312,8 +335,9 @@ def test_replay_cannot_downgrade_previous_sensitive_observation(tmp_path, local_
     monkeypatch.setattr(extraction, '_run_image_ocr_tokens', lambda image, page:
         (extraction._StructuredOcrToken(TEXTS['normal'], page, 1, 1, 20, 5, 99, (1, 1, 1, 5)),))
     result = pipeline(tmp_path, db=db, ai=ai).process_bytes(data, 'application/pdf', 'sticky')
-    assert result['units'][1]['classification'] != 'normal'
-    assert ai.analyze_receipt.call_count == 1
+    assert result['pages'][1]['classification'] != 'normal'
+    assert result['status'] == 'grouping_required'
+    ai.analyze_receipt.assert_not_called()
 
 
 def test_transport_gate_failure_holds_unit_without_medical_handoff(tmp_path, local_ocr):
@@ -392,7 +416,7 @@ def test_gated_again_page_is_held_without_medical_observer(tmp_path, local_ocr, 
 
 def test_drive_never_moves_pdf_even_when_all_units_imported(tmp_path, local_ocr, monkeypatch):
     from app import drive_receipts
-    data = synthetic_pdf(['normal', 'normal'])
+    data = synthetic_pdf(['normal'])
     service = Mock()
     service.files().list().execute.return_value = {'files': [{
         'id': 'pdf-drive-id', 'name': 'synthetic.pdf', 'mimeType': 'application/pdf',
@@ -433,3 +457,106 @@ def test_sensitive_evidence_from_completeness_pass_cannot_be_erased(tmp_path, lo
     result = p.process_bytes(synthetic_pdf(['normal']), 'application/pdf', 'drifting')
     assert result['units'][0]['classification'] != 'normal'
     p.ai.analyze_receipt.assert_not_called()
+
+
+@pytest.mark.parametrize('kinds', [('normal', 'normal'), ('normal', 'medical'),
+    ('medical', 'normal'), ('normal', 'unknown'), ('normal', 'medical', 'normal')])
+def test_grouping_required_replay_never_touches_accounting_or_ai(tmp_path, local_ocr, monkeypatch, kinds):
+    # Fail on even read access, category loading or lazy AI initialization.
+    db, ai, observer = Mock(), Mock(), Mock()
+    factory = Mock(side_effect=AssertionError('Gemini initialization forbidden'))
+    monkeypatch.setattr(pdf.SinglePageGrouping, 'units',
+        Mock(side_effect=AssertionError('Page boundaries cannot establish accounting units')))
+    p = ReceiptPipeline(db, ai, medical_review_observer=observer, gemini_factory=factory,
+                        pdf_manifest_store=pdf.PdfUnitManifestStore(tmp_path / 'units'))
+    data = synthetic_pdf(kinds)
+    first = p.process_bytes(data, 'application/pdf', 'grouping-source')
+    # Include replay across pipeline lifetimes with the persisted manifest.
+    second = ReceiptPipeline(db, ai, medical_review_observer=observer, gemini_factory=factory,
+        pdf_manifest_store=p.pdf_manifest_store).process_bytes(data, 'application/pdf', 'grouping-source')
+    assert first == second
+    assert first['status'] == 'grouping_required' and first['units'] == []
+    assert not first['all_units_terminal'] and not first['archive_allowed']
+    assert len(first['pages']) == len(kinds)
+    assert db.mock_calls == ai.mock_calls == observer.mock_calls == factory.mock_calls == []
+
+
+def test_two_page_continued_receipt_never_becomes_two_transactions(tmp_path, local_ocr, monkeypatch):
+    monkeypatch.setitem(TEXTS, 'normal',
+        'レシート 商品 合計 100円 現金 レシート番号 SAME_RECEIPT continued')
+    data = synthetic_pdf(['normal', 'normal'], embedded=(0, 1))
+    db, ai = Mock(), Mock()
+    result = pipeline(tmp_path, ai=ai, db=db).process_bytes(data, 'application/pdf', 'continued-receipt')
+    assert [p['classification'] for p in result['pages']] == ['normal', 'normal']
+    assert result['status'] == 'grouping_required' and result['units'] == []
+    assert db.mock_calls == ai.mock_calls == []
+
+
+def test_grouping_required_cannot_be_promoted_by_terminal_page_markers():
+    result = {'page_count': 2, 'status': 'grouping_required', 'units': [
+        {'status': 'imported'}, {'status': 'confirmed'}], 'archive_allowed': True}
+    pdf.update_document_status(result)
+    assert result['status'] == 'grouping_required'
+    assert not result['all_units_terminal'] and not should_archive_result(result)
+
+
+def test_legacy_multi_page_manifest_never_authorizes_new_write(tmp_path, local_ocr):
+    data = synthetic_pdf(['normal', 'medical'])
+    observations = pdf.observe_pdf(data, 'legacy-source')
+    store = pdf.PdfUnitManifestStore(tmp_path / 'units')
+    # Model the original PR #91 partially_processed manifest and ledger IDs.
+    old_units = [{**unit.metadata(), 'status': 'imported' if unit.observation.classification == 'normal'
+                 else 'medical_pending'} for unit in pdf.SinglePageGrouping().units(observations.pages)]
+    store.save({'source_file_id': 'legacy-source', 'source_content_hash': observations.source_content_hash,
+                'status': 'partially_processed', 'units': old_units})
+    db, ai, observer = Mock(), Mock(), Mock()
+    result = ReceiptPipeline(db, ai, medical_review_observer=observer, pdf_manifest_store=store).process_bytes(
+        data, 'application/pdf', 'legacy-source')
+    assert result['status'] == 'grouping_required' and result['units'] == []
+    assert [p['classification'] for p in result['pages']] == ['normal', 'medical']
+    assert db.mock_calls == ai.mock_calls == observer.mock_calls == []
+
+
+def test_single_page_later_privacy_restriction_survives_replay(tmp_path, local_ocr, monkeypatch):
+    from test_receipt_pipeline import _medical_gate
+    data = synthetic_pdf(['normal'])
+    db, ai, observer = Mock(), Mock(), Mock()
+    db.import_ids.return_value = set()
+    with monkeypatch.context() as patch:
+        patch.setattr('app.receipt_pipeline.evaluate_receipt_privacy', lambda *a, **k: _medical_gate())
+        first = pipeline(tmp_path, ai=ai, db=db, observer=observer).process_bytes(
+            data, 'application/pdf', 'later-medical')
+    assert first['units'][0]['classification'] == 'medical'
+    db.reset_mock()
+    second = pipeline(tmp_path, ai=ai, db=db, observer=observer).process_bytes(
+        data, 'application/pdf', 'later-medical')
+    assert second['pages'][0]['classification'] != 'normal'
+    assert db.mock_calls == ai.mock_calls == observer.mock_calls == []
+
+
+def test_drive_grouping_required_never_moves_source(tmp_path, local_ocr, monkeypatch):
+    from app import drive_receipts
+    data = synthetic_pdf(['normal', 'normal'])
+    service = Mock()
+    service.files().list().execute.return_value = {'files': [{
+        'id': 'grouping-drive-id', 'name': 'synthetic.pdf', 'mimeType': 'application/pdf',
+        'parents': ['synthetic-inbox']}]}
+    monkeypatch.setattr(drive_receipts, 'drive_service', lambda: service)
+    monkeypatch.setattr(drive_receipts, 'download_drive_file', lambda *a: data)
+    db, ai, observer = Mock(), Mock(), Mock()
+    result = drive_receipts.process_inbox('synthetic-inbox',
+        pipeline(tmp_path, ai=ai, db=db, observer=observer), 'synthetic-processed')
+    assert result[0][1]['status'] == 'grouping_required'
+    assert db.mock_calls == ai.mock_calls == observer.mock_calls == []
+    service.files().update.assert_not_called()
+
+
+def test_drive_cli_shows_grouping_page_observations_without_source_data(tmp_path, local_ocr, capsys):
+    from app.cli import print_drive_receipt_results
+    result = pipeline(tmp_path).process_bytes(synthetic_pdf(['normal', 'medical']),
+        'application/pdf', 'PRIVATE_SOURCE')
+    print_drive_receipt_results([('PRIVATE_MEDICAL_NAME.pdf', result)])
+    output = capsys.readouterr().out
+    assert 'PRIVATE_' not in output
+    assert 'grouping_required' in output and 'normal' in output and 'medical' in output
+    assert 'extraction_status' in output

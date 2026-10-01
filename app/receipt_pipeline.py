@@ -99,6 +99,10 @@ class ReceiptPipeline:
             known_page_classifications=restrictions)
         report = document_result(observations)
         self.pdf_manifest_store.save(report)
+        if len(observations.pages) != 1:
+            # Observation and privacy do not establish transaction grouping.
+            # Stop before AI resolution, any ledger access or Medical handoff.
+            return report
         # observe_pdf is complete before resolving Gemini or touching the ledger.
         for unit, record in zip(SinglePageGrouping().units(observations.pages), report['units']):
             page = unit.observation
