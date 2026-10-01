@@ -65,10 +65,23 @@ def test_saved_sample_amounts_do_not_authorize_blank_manual_input(unit,amount):
     assert '候補で医療費を確定' not in CHOICES
 
 
-def test_historical_pending_automatic_intent_is_not_retried_or_discarded():
+@pytest.mark.parametrize('already_written',[False,True])
+def test_historical_pending_automatic_intent_is_not_finalized_retried_or_discarded(already_written):
     review,store,db,verify,source=medical();key=next(iter(review.items))
     review.items[key].update(status='pending',decision_origin='automatic',plan=[['支出明細',['synthetic-missing']]])
+    if already_written:db.rows['支出明細']=[['synthetic-missing']]
     before=deepcopy((store.value,db.rows))
-    with pytest.raises(StateError,match='confirmation_write_reconciliation_required'):
-        review.apply_confirmations()
-    assert (store.value,db.rows)==before and not db.rows['支出明細']
+    assert review.apply_confirmations()==0
+    assert (store.value,db.rows)==before
+    verify.assert_not_called()
+
+
+def test_complete_owner_input_replaces_retired_origin_without_using_saved_candidates():
+    review,store,db,verify,source=medical();key=next(iter(review.items))
+    review.items[key]['decision_origin']='automatic'
+    review.items[key]['medical_candidates']={'amount_yen':9999}
+    confirm(db);review.capture_inputs()
+    assert review.apply_confirmations()==1
+    assert review.items[key]['decision_origin']=='human'
+    assert review.items[key]['medical_candidates']=={'amount_yen':9999}
+    assert db.rows['支出明細'][0][4]==100 and review.apply_confirmations()==0
