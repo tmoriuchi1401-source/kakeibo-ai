@@ -126,6 +126,47 @@ def test_transfer_needs_trusted_source_bank_alias_no_account_numbers():
         submitted_answers(rows, accounts={("chiba", "1234567")})
 
 
+def test_new_source_bank_and_alias_need_explicit_captured_ownership_confirmation():
+    _, rows = prepared()
+    rows[0][2:5] = ["自己口座間振替", "", "今回のみ"]
+    rows[1][2:4] = ["確認用銀行", "another-primary"]
+    with pytest.raises(ValueError, match="source_account_unconfirmed"):
+        submitted_answers(rows, accounts=())
+    rows[1][4] = True
+    answer = submitted_answers(rows, accounts=())[0]
+    assert (answer["source_bank"], answer["source_alias"]) == ("確認用銀行", "another-primary")
+    rows[0][5] = False
+    assert submitted_answers(rows, accounts=()) == []
+
+
+@pytest.mark.parametrize("column,value", [(2, "1234567"), (3, "1234567"), (2, "確認用銀行1234567")])
+def test_owner_checkbox_does_not_accept_account_numbers(column, value):
+    _, rows = prepared()
+    rows[0][2:5] = ["自己口座間振替", "", "今回のみ"]
+    rows[1][2:5] = ["確認用銀行", "another-primary", True]
+    rows[1][column] = value
+    with pytest.raises(ValueError, match="source_account_unconfirmed"):
+        submitted_answers(rows, accounts=())
+
+
+def test_source_ownership_checkbox_cannot_apply_to_income_or_submit_alone():
+    _, rows = prepared()
+    rows[1][4] = True
+    with pytest.raises(ValueError, match="source_account_not_applicable"):
+        submitted_answers(rows, accounts=())
+    rows[1][4] = 1
+    with pytest.raises(ValueError, match="rows_invalid"):
+        submitted_answers(rows, accounts=())
+
+
+def test_ownership_input_is_retained_only_with_the_exact_group_snapshot():
+    groups, rows = prepared()
+    rows[1][2:5] = ["確認用銀行", "another-primary", True]
+    assert build_rows(groups, rows)[1][2:5] == rows[1][2:5]
+    changed = make_groups([transaction(import_exists=True, import_status="bank_income")])
+    assert build_rows(changed, rows)[1][2:5] == ["", "", False]
+
+
 def test_income_requires_existing_taxonomy_and_not_on_transfer():
     _, rows = prepared()
     rows[0][3] = "新しい分類"

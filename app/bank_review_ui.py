@@ -7,7 +7,7 @@ from copy import deepcopy
 import re
 
 from .bank_income import INCOME_CATEGORIES
-from .bank_review_groups import encoded, safe_alias, validate_snapshot
+from .bank_review_groups import encoded, safe_alias, safe_bank_reference, validate_snapshot
 
 BANK_MARKER = "■ 4. 銀行取引をまとめて確認"
 BANK_UI_HEADERS = ["条件・代表取引", "対象", "用途", "収入分類", "今後の自動判定", "反映",
@@ -51,7 +51,7 @@ def build_rows(groups, prior_rows=()):
         if any(isinstance(value, str) and len(value.encode("utf-16-le")) // 2 > 45000
                for value in primary):
             raise ValueError("bank_review_snapshot_cell_bound_exceeded")
-        sender = ["自己口座間振替の場合のみ", "送金元銀行／口座alias →", "", "", "", "",
+        sender = ["自己口座間振替の場合のみ", "相手銀行／口座alias →\nE：自分の口座と確認", "", "", False, "",
                   group["key"] + ":sender", group["id"], "sender", "",
                   group["membership_digest"], ""]
         old = prior.get(group["key"])
@@ -61,7 +61,7 @@ def build_rows(groups, prior_rows=()):
                 primary[1] += "\n処理結果：" + str(old[1]).split("\n処理結果：", 1)[1]
             old_sender = prior.get(sender[6])
             if old_sender and old_sender[8] == "sender" and old_sender[10] == sender[10]:
-                sender[2:4] = deepcopy(old_sender[2:4])
+                sender[2:5] = deepcopy(old_sender[2:5])
         elif old:
             primary[1] += "\n対象変更・以前の入力は未反映"
         output.extend((primary, sender))
@@ -78,7 +78,9 @@ def validate_rows(rows):
         if (len(group) != 12 or len(sender) != 12 or group[8] != "group" or sender[8] != "sender"
                 or group[6] in seen or sender[6] != group[6] + ":sender"
                 or group[7] != sender[7] or group[10] != sender[10] or sender[11]
-                or any(sender[column] for column in (4, 5, 9))):
+                or any(sender[column] for column in (5, 9))
+                or not (sender[4] is False or sender[4] is True
+                        or isinstance(sender[4], str) and sender[4] in {"", "FALSE", "TRUE"})):
             raise ValueError("bank_review_rows_invalid")
         seen.add(group[6])
         proof = validate_snapshot(group[11], group[6], group[10])
@@ -91,8 +93,10 @@ def validate_rows(rows):
 def submitted_answers(rows, *, accounts):
     """Only checked groups are requests; no implied meaning or future consent.
 
-    accounts is a trusted bank/alias registry, not a name extracted from an
-    amount match. The original fixed snapshot stays attached to every answer.
+    accounts contains parsed or previously owner-confirmed account aliases.
+    A new relationship needs its own explicit owner checkbox in the captured
+    sender row. A label, amount match, or the main apply checkbox cannot imply
+    ownership. The original fixed snapshot stays attached to every answer.
     """
     validate_rows(rows)
     answers = []
@@ -115,11 +119,12 @@ def submitted_answers(rows, *, accounts):
         source_bank, source_alias = sender[2:4]
         source_bank = {label: bank for bank, label in BANK_LABELS.items()}.get(source_bank, source_bank)
         if choice == "transfer":
-            if not safe_alias(source_alias) or (source_bank, source_alias) not in accounts:
+            if (not safe_bank_reference(source_bank) or not safe_alias(source_alias)
+                    or ((source_bank, source_alias) not in accounts and not checked(sender[4]))):
                 raise ValueError("bank_review_source_account_unconfirmed")
             if (source_bank, source_alias) == (proof["condition"]["bank"], proof["condition"]["account_alias"]):
                 raise ValueError("bank_review_source_account_same")
-        elif source_bank or source_alias:
+        elif source_bank or source_alias or checked(sender[4]):
             raise ValueError("bank_review_source_account_not_applicable")
         answers.append({"group_key": group[6], "group_id": group[7], "snapshot": proof,
             "snapshot_digest": group[10], "choice": choice, "income_category": category,
@@ -152,9 +157,17 @@ def controls(sheet_id, start_row, rows):
                         "startIndex": 0, "format": {"link": {"uri": row[9]}}}]}]}],
                     "fields": "textFormatRuns"}}])
         elif row[8] == "sender":
-            requests.append(validation(number, 2, tuple(BANK_LABELS.values())))
+            banks = validation(number, 2, tuple(BANK_LABELS.values()))
+            banks["setDataValidation"]["rule"].update(strict=False,
+                inputMessage="既知の銀行を選択。その他は銀行名を入力。口座番号は入力しないでください。")
+            requests.append(banks)
+            requests.append({"setDataValidation": {"range": {"sheetId": sheet_id,
+                "startRowIndex": number - 1, "endRowIndex": number,
+                "startColumnIndex": 4, "endColumnIndex": 5}, "rule": {
+                    "condition": {"type": "BOOLEAN"}, "strict": True,
+                    "inputMessage": "新しい相手口座を登録する場合は、自分の口座であると確認してチェック。用途や今後の登録は上の行で選びます。"}}})
             requests.append({"updateCells": {"start": {"sheetId": sheet_id,
                 "rowIndex": number - 1, "columnIndex": 3}, "rows": [{"values": [{
-                    "note": "自己口座間振替の場合だけ、確認済みの相手口座aliasを入力。口座番号は入力しないでください。"}]}],
+                    "note": "自己口座間振替の場合だけ、英小文字で始まる相手口座aliasを入力。新しい口座はE列で本人確認。口座番号は入力しないでください。"}]}],
                 "fields": "note"}})
     return requests

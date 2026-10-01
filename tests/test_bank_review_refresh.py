@@ -8,7 +8,7 @@ from app.bank_meaning_resolver import load
 from app.bank_meaning_rules import RULE_SHEET
 from app.bank_review_refresh import BankReviewRefresh, build_view, run_bank_review_refresh
 from app.bank_review_ui import BANK_UI_HEADERS, build_rows
-from app.bank_review_groups import digest
+from app.bank_review_groups import digest, validate_snapshot
 from test_bank_income import imported
 from test_bank_review_requests import prepared, processor, REQUEST
 
@@ -188,3 +188,65 @@ def test_unchanged_refresh_is_no_display_write_and_previous_held_reason_stays_vi
     assert refresh.refresh(apply=True)["bank_ui_updates"] == 1
     assert refresh.refresh(apply=True)["bank_ui_updates"] == 0
     assert len(ui.writes) == 1 and "JSONルールと競合" in ui.rows[0][1]
+
+
+def nonposting_rig(purpose="対象外"):
+    db, source, ui, submitted = rig()
+    submitted[0][2:6] = [purpose, "", "今回のみ", True]
+    if purpose == "自己口座間振替": submitted[1][2:4] = ["千葉銀行", "chiba-primary"]
+    _, output = processor(db, source).process(submitted, REQUEST)
+    ui.rows = output
+    return db, source, ui
+
+
+@pytest.mark.parametrize("purpose", ["対象外", "返金", "自己口座間振替"])
+@pytest.mark.parametrize("proof", ["exact", "none", "different_sha", "financial_history", "review_status", "later_edit", "ack_edit"])
+def test_removed_nonfinancial_row_requires_processed_original_and_no_unresolved_history(purpose, proof):
+    db, source, ui = nonposting_rig(purpose)
+    tx = next(iter(source.transactions.values()))
+    source.groups, source.transactions = [], {}
+    snapshot = validate_snapshot(ui.rows[0][11], ui.rows[0][6], ui.rows[0][10])
+    member = snapshot["members"][0]
+    retired = {member["file_id"]: {"pdf_sha256": member["pdf_sha256"], "fingerprint": "a" * 64}}
+    if proof == "none": retired = {}
+    if proof == "different_sha": retired[member["file_id"]]["pdf_sha256"] = "other"
+    if proof == "financial_history":
+        income = ["BI-" + "a" * 24, tx.transaction_date, tx.signed_amount, "その他確認済収入",
+            tx.description, tx.account_alias, tx.source_row_identity, tx.source, "operator_confirmed_income", tx.source_row_hash]
+        # Use the canonical ID so the ledger remains valid.
+        from app.bank_income import income_id
+        income[0] = income_id(tx.source_row_identity)
+        source.incomes = [income]
+    if proof == "review_status": source.imports = [imported(tx, **{"8": "needs_review"})]
+    if proof == "later_edit": ui.rows[0][4] = "登録する"
+    if proof == "ack_edit": ui.rows[1][4] = True
+    result = BankReviewRefresh(db, lambda: deepcopy(source), retirement_reader=lambda *_: retired).refresh(apply=True)
+    ready = proof == "exact" or proof == "ack_edit" and purpose == "自己口座間振替"
+    assert result["bank_groups_resolved"] == int(ready)
+    assert result["bank_stale_groups"] == int(not ready)
+    assert len(ui.rows) == (0 if ready else 2)
+
+
+def test_processed_original_changes_before_refresh_retains_every_existing_cell():
+    db, source, ui = nonposting_rig()
+    source.groups, source.transactions = [], {}
+    before = deepcopy(ui.rows)
+    member = validate_snapshot(ui.rows[0][11], ui.rows[0][6], ui.rows[0][10])["members"][0]
+    calls = []
+    def retired(*_):
+        calls.append(1)
+        return {member["file_id"]: {"pdf_sha256": member["pdf_sha256"], "fingerprint": str(len(calls))}}
+    with pytest.raises(ValueError, match="retirement_changed_before_refresh"):
+        BankReviewRefresh(db, lambda: deepcopy(source), retirement_reader=retired).refresh(apply=True)
+    assert ui.rows == before and not ui.writes
+
+
+@pytest.mark.parametrize("status", ["needs_review", "bank_income", "bank_non_expense"])
+def test_saved_nonfinancial_meaning_does_not_override_import_settlement_status(status):
+    db, source, ui = nonposting_rig()
+    tx = next(iter(source.transactions.values()))
+    source.imports = [imported(tx, **{"8": status})]
+    result = BankReviewRefresh(db, lambda: deepcopy(source)).refresh(apply=True)
+    assert result["bank_settlement_groups"] == int(status == "needs_review")
+    assert result["bank_confirmation_groups"] == int(status == "bank_income")
+    assert result["bank_groups_resolved"] == int(status == "bank_non_expense")

@@ -9,7 +9,7 @@ import json
 import re
 
 from .bank_income import INCOME_CATEGORIES
-from .bank_review_groups import digest, encoded, safe_alias, validate_snapshot
+from .bank_review_groups import digest, encoded, safe_alias, safe_bank_reference, validate_snapshot
 
 DECISION_SHEET = "銀行確認結果"
 DECISION_HEADERS = ["decision ID", "固定group key", "固定snapshot digest", "固定snapshot",
@@ -53,7 +53,7 @@ class BankReviewDecision:
         elif self.income_category:
             raise ValueError("bank_review_decision_income_not_applicable")
         if self.classification == "transfer":
-            if not safe_alias(self.source_alias) or not safe_alias(self.source_bank):
+            if not safe_alias(self.source_alias) or not safe_bank_reference(self.source_bank):
                 raise ValueError("bank_review_decision_source_account_invalid")
             if (self.source_bank, self.source_alias) == (proof["condition"]["bank"], proof["condition"]["account_alias"]):
                 raise ValueError("bank_review_decision_source_account_same")

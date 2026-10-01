@@ -79,3 +79,44 @@ def completed_bank_postings(db, transactions, import_rows, *, selected=None):
                 and saved[10] == tx.source_row_identity and saved[12] == "active"):
             completed[tx.source_row_identity] = "expense"
     return completed
+
+
+def approved_nonposting_holds(db, transactions, import_rows, meaning_resolver):
+    """An approved transfer/refund/exclusion cannot hide a financial posting.
+
+    Inspect linkage even when an import label is wrong or a ledger row is
+    orphaned. Exact import values alone never resolve a prior review status.
+    No non-bank transaction or existing value is changed by this check.
+    """
+    if meaning_resolver is None:
+        return {}
+    selected = []
+    for tx in transactions:
+        meaning = meaning_resolver(tx)
+        if meaning["state"] == "matched" and meaning["classification"] in {
+                "transfer", "reimbursement", "other_nonwrite"}:
+            selected.append(tx)
+    if not selected:
+        return {}
+    imports = defaultdict(list)
+    for row in parse_import_rows(import_rows):
+        imports[row.import_id].append(row)
+    incomes = validate_income_rows(db.get("収入明細!A2:J"))
+    income_links = {row[6] for row in incomes.values()}
+    expenses = db.get("支出明細!A2:M")
+    expense_ids = {str(row[0]) for row in expenses if row and row[0]}
+    expense_links = {str(row[10]) for row in expenses if len(row) > 10 and row[10]}
+    holds = {}
+    for tx in selected:
+        identity = tx.source_row_identity
+        old = imports.get(identity, [])
+        if (income_id(identity) in incomes or identity in income_links
+                or expense_id(identity) in expense_ids or identity in expense_links):
+            holds[identity] = "saved_financial_posting"
+        elif old and not import_matches(tx, old):
+            holds[identity] = "existing_import_mismatch"
+        elif old and (old[0].target_id or old[0].status in {"bank_income", "auto_expense"}):
+            holds[identity] = "posting_classification_conflict"
+        elif old and old[0].status != "bank_non_expense":
+            holds[identity] = "unresolved_import_status"
+    return holds

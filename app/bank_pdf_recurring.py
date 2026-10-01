@@ -42,7 +42,7 @@ from .drive_processed import move_processed, validate_processed_folder
 from .drive_receipts import normalize_folder_id
 from .google_clients import download_drive_file
 from .reconciliation import parse_import_rows
-from .bank_archive_evidence import completed_bank_postings
+from .bank_archive_evidence import completed_bank_postings, approved_nonposting_holds
 
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -241,6 +241,7 @@ def _base_summary(run_id: str, window: BankPdfWindow) -> dict[str, object]:
         "collision": 0,
         "unresolved_income": 0,
         "unresolved_expense": 0,
+        "unresolved_nonposting": 0,
         "existing_content_mismatch": 0,
         "file_statuses": [],
         "parsed": 0,
@@ -356,6 +357,8 @@ def run_bank_pdf_recurring(
             return False
         if meaning_resolver is not None:
             meaning_resolver.require_unchanged()
+            if approved_nonposting_holds(db, daily.parsed_result.transactions, current, meaning_resolver):
+                return False
             required_postings = {}
             for tx in daily.parsed_result.transactions:
                 meaning = meaning_resolver(tx)
@@ -473,6 +476,8 @@ def run_bank_pdf_recurring(
                     if tx.signed_amount > 0})
             expense_settled = all(completed.get(identity) == "expense" for identity in approved_existing_expenses)
             summary["unresolved_expense"] += int(not expense_settled)
+            nonposting_holds = approved_nonposting_holds(db, parsed_result.transactions, import_rows, meaning_resolver)
+            summary["unresolved_nonposting"] += int(bool(nonposting_holds))
             resolved = review_ids & completed.keys()
             archive_review_proofs[str(file["id"])] = resolved
             summary["review_resolved_existing"] += len(resolved)
@@ -518,9 +523,10 @@ def run_bank_pdf_recurring(
             if file_review: reasons.append("transaction_review")
             if not settled: reasons.append("unresolved_income")
             if not expense_settled: reasons.append("unresolved_expense")
+            if nonposting_holds: reasons.append("unresolved_nonposting")
             if income_error: reasons.append("income_readback_failed")
             if outside: reasons.append("outside_write_window")
-            if not parse_ok or int(details.get("collision", 0)) or mismatch or income_error:
+            if not parse_ok or int(details.get("collision", 0)) or mismatch or income_error or nonposting_holds:
                 if not parse_ok:
                     summary["parse_failed"] = int(summary["parse_failed"]) + 1
                 summary["files_withheld"] = int(summary["files_withheld"]) + 1
@@ -537,7 +543,8 @@ def run_bank_pdf_recurring(
                     tx.signed_amount <= 0 or tx.source_row_identity in imported
                     for tx in parsed_result.transactions
                 )
-                if (file_review or new_ids or (income and not deposits_imported) or not settled or not expense_settled):
+                if (file_review or new_ids or (income and not deposits_imported) or not settled
+                        or not expense_settled or nonposting_holds):
                     summary["files_withheld"] = int(summary["files_withheld"]) + 1
                     if new_ids: reasons.append("new_expense_outside_write_window")
                     if income and not deposits_imported: reasons.append("deposit_outside_write_window")
@@ -570,6 +577,7 @@ def run_bank_pdf_recurring(
                 int(household.get("needs_review", {}).get("count", 0)) - resolved_income_review
                 or (int(details.get("new_income", 0)) and not income)
                 or not expense_settled
+                or nonposting_holds
             )
             if archive_ready and not income:
                 archive_ready = settled
@@ -741,7 +749,7 @@ def run_bank_pdf_catch_up_preview(*, preview_cursor_epoch: int | None = None, **
     combined = dict(reports[-1])
     count_fields = (
         "files_seen", "files_new", "files_processed", "files_withheld", "outside_write_window",
-        "parse_failed", "parsed", "collision", "unresolved_income", "unresolved_expense", "existing_content_mismatch",
+        "parse_failed", "parsed", "collision", "unresolved_income", "unresolved_expense", "unresolved_nonposting", "existing_content_mismatch",
         "new_eligible", "duplicate", "review", "review_resolved_existing", "review_unresolved", "income", "household_income_confirmed",
         "household_income_review", "non_expense", "withheld", "written",
         "write_requests", "write_attempted", "planned_expense_writes",

@@ -10,7 +10,7 @@ from datetime import datetime
 import re
 
 from .bank_income import INCOME_CATEGORIES
-from .bank_review_groups import CONDITION_FIELDS, digest, encoded, safe_alias, validate_snapshot
+from .bank_review_groups import CONDITION_FIELDS, digest, encoded, safe_alias, safe_bank_reference, validate_snapshot
 from .bank_reconciliation import normalize_bank_description
 
 RULE_SHEET = "銀行自動分類ルール"
@@ -65,7 +65,7 @@ class BankMeaningRule:
         elif self.income_category:
             raise ValueError("bank_meaning_rule_income_category_not_applicable")
         if self.classification == "transfer":
-            if (self.source_bank not in {"au-jibun", "docomo-smtb", "chiba"}
+            if (not safe_bank_reference(self.source_bank)
                     or not safe_alias(self.source_alias)
                     or (self.source_bank, self.source_alias) == (self.bank, self.account_alias)):
                 raise ValueError("bank_meaning_rule_transfer_account_invalid")

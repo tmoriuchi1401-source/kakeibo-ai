@@ -57,6 +57,9 @@ class BankReviewRequestProcessor:
         rules = master.records(RULE_SHEET)
         decisions = master.records(DECISION_SHEET)
         source = self.source_reader()
+        accounts = set(source.accounts)
+        accounts.update((decision.source_bank, decision.source_alias) for decision in decisions
+                        if decision.active and decision.classification == "transfer")
         current = {group["key"]: group for group in source.groups}
         edits = {RULE_SHEET: [], DECISION_SHEET: []}
         accepted = []
@@ -64,7 +67,7 @@ class BankReviewRequestProcessor:
         for index, pair in selected:
             counts["bank_groups_checked"] += 1
             try:
-                answer = submitted_answers(pair, accounts=source.accounts)[0]
+                answer = submitted_answers(pair, accounts=accounts)[0]
                 key = answer["group_key"]
                 group = current.get(key)
                 if group is None or group["membership_digest"] != answer["snapshot_digest"]:
@@ -113,6 +116,11 @@ class BankReviewRequestProcessor:
                     edits[RULE_SHEET].append((number, rule.row()))
                     rules = [existing for existing in rules if existing.rule_id != rule.rule_id] + [rule]
                 accepted.append((index, answer, bool(decision_update), registration))
+                if answer["choice"] == "transfer":
+                    # Later groups in this same immutable request may reuse an
+                    # explicitly confirmed relationship. All accepted answers
+                    # still commit together after the second source recheck.
+                    accounts.add((answer["source_bank"], answer["source_alias"]))
             except ValueError as exc:
                 counts["bank_held"] += 1
                 _state(output[index], str(exc))

@@ -187,6 +187,48 @@ def test_transfer_uses_bank_label_and_alias_but_never_creates_income():
     assert resolution["classification"] == "transfer" and resolution["source_bank"] == "chiba"
 
 
+def test_new_owner_confirmed_bank_relation_is_saved_and_reused_without_inventing_an_account():
+    db, rows, source = prepared(future=True)
+    rows[0][2:4] = ["自己口座間振替", ""]
+    rows[1][2:5] = ["確認用銀行", "another-primary", True]
+    counts, output = processor(db, source).process(rows, REQUEST)
+    assert counts["bank_groups_confirmed"] == counts["bank_rules_registered"] == 1
+    assert counts["bank_ledger_writes"] == 0
+    master = BankReviewStore(db).read()
+    rule = master.records(RULE_SHEET)[0]
+    assert (rule.source_bank, rule.source_alias) == ("確認用銀行", "another-primary")
+    rows[1][4] = False
+    repeat, _ = processor(db, source).process(rows, REQUEST)
+    assert repeat["bank_groups_already_confirmed"] == 1 and repeat["bank_metadata_writes"] == 0
+    assert len(db.calls) == 1
+
+
+def test_one_owner_confirmation_can_cover_same_relation_in_one_atomic_request():
+    db, rows, source = prepared(future=True, other=True)
+    for index in (0, 2):
+        rows[index][2:4] = ["自己口座間振替", ""]
+        rows[index + 1][2:5] = ["確認用銀行", "another-primary", index == 0]
+    counts, _ = processor(db, source).process(rows, REQUEST)
+    assert counts["bank_groups_confirmed"] == 2 and counts["bank_metadata_writes"] == 4
+    assert len(db.calls) == 1
+    assert len(BankReviewStore(db).read().records(DECISION_SHEET)) == 2
+
+
+def test_new_relation_confirmation_is_not_saved_when_source_changes_before_commit():
+    db, rows, source = prepared(future=True)
+    rows[0][2:4] = ["自己口座間振替", ""]
+    rows[1][2:5] = ["確認用銀行", "another-primary", True]
+    calls = []
+    def read():
+        calls.append(1)
+        result = deepcopy(source)
+        if len(calls) == 2:
+            result.groups = []
+        return result
+    counts, _ = BankReviewRequestProcessor(db, read, clock=lambda: NOW).process(rows, REQUEST)
+    assert counts["bank_held"] == 1 and not db.calls and not db.tables
+
+
 @pytest.mark.parametrize("failure", ["before", "after"])
 def test_uncertain_write_is_not_retried(failure):
     db, rows, source = prepared(future=True)

@@ -166,6 +166,12 @@ def safe_alias(value):
     return isinstance(value, str) and bool(re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", value))
 
 
+def safe_bank_reference(value):
+    """A known bank key or a literal bank name, never a numeric account ID."""
+    return safe_alias(value) or isinstance(value, str) and bool(re.fullmatch(
+        r"[A-Za-z\u3041-\u3096\u30a1-\u30fa\u3400-\u9fffー・]{2,64}", value))
+
+
 def candidates_from_pdf(parsed, classifications, incomes, *, file_id, pdf_sha256,
                         import_rows, completed_postings, income_rows):
     """Use existing classifier and strict ledger proofs; never infer meaning.
