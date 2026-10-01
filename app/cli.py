@@ -131,7 +131,12 @@ def make_receipt_pipeline(settings, db, ai):
 
 def print_drive_receipt_results(results):
     for name,res in results:
-        if res.get("status") == "privacy_blocked":
+        if res.get('document_type') == 'pdf_page_units':
+            print({'document_type': 'pdf_page_units', 'status': res['status'],
+                   'units': [{'page_number': unit['page_number'],
+                              'classification': unit['classification'], 'status': unit['status']}
+                             for unit in res['units']], 'archive_allowed': False})
+        elif res.get("status") == "privacy_blocked":
             print(res)
         else:
             print(name,res)
@@ -823,6 +828,10 @@ def main():
             print({"status":"privacy_blocked","gemini_allowed":False})
     elif args.cmd=="analyze":
         s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
+        from .receipt_pdf_units import is_pdf
+        if is_pdf(data, mime):
+            print({'status': 'privacy_blocked', 'reason': 'pdf_requires_page_units', 'gemini_allowed': False})
+            return
         try:
             result=ai.analyze_receipt(
                 data,mime,db.categories(),known_source_classification=args.source_classification,

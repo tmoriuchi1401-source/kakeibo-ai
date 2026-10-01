@@ -3,6 +3,8 @@ import mimetypes, uuid
 from collections.abc import Callable
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import evaluate_receipt_privacy
+from .receipt_pdf_units import (PdfUnitManifestStore, SinglePageGrouping, document_result,
+                                is_pdf, observe_pdf, update_document_status)
 from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
@@ -13,10 +15,11 @@ from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
 
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
-                 gemini_factory:Callable[[], GeminiAI] | None=None):
+                 gemini_factory:Callable[[], GeminiAI] | None=None, pdf_manifest_store=None):
         self.db=db; self.ai=ai
         self.medical_review_observer=medical_review_observer
         self._gemini_factory=gemini_factory
+        self.pdf_manifest_store = pdf_manifest_store or PdfUnitManifestStore()
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
@@ -26,6 +29,9 @@ class ReceiptPipeline:
                 raise RuntimeError("未設定: GEMINI_API_KEY")
             self.ai=self._gemini_factory()
     def _analyze(self, image_bytes, mime_type, categories, source_policy, *, destination=None):
+        if is_pdf(image_bytes, mime_type):
+            from .receipt_privacy_gate import ReceiptPrivacyBlocked
+            raise ReceiptPrivacyBlocked()
         self._require_ai()
         if destination is not None:
             from urllib.parse import urlsplit
@@ -38,6 +44,9 @@ class ReceiptPipeline:
 
     def reanalyze_bytes(self, image_bytes, mime_type, source_id, *, destination):
         """Explicit fixed-scope caller only; no dedupe mutation or Sheets write."""
+        if is_pdf(image_bytes, mime_type):
+            return {"status":"privacy_blocked", "classification":"sensitive_unknown",
+                    "reason":"pdf_requires_page_units"}
         known=self._source_privacy.get(source_id)
         policy={"known_source_classification":known} if known else {}
         gate=evaluate_receipt_privacy(image_bytes,mime_type,**policy)
@@ -76,6 +85,59 @@ class ReceiptPipeline:
 
     def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
                       known_source_classification: Classification | None = None):
+        if is_pdf(image_bytes, mime_type):
+            return self._process_pdf(image_bytes, source_id, image_url,
+                                     known_source_classification=known_source_classification)
+        return self._process_image_bytes(image_bytes, mime_type, source_id, image_url,
+                                        known_source_classification=known_source_classification)
+
+    def _process_pdf(self, content, source_id, image_url, *, known_source_classification):
+        from hashlib import sha256
+        restrictions = self.pdf_manifest_store.restrictions(source_id, sha256(content).hexdigest())
+        observations = observe_pdf(content, source_id,
+            known_source_classification=self._source_privacy.get(source_id, known_source_classification),
+            known_page_classifications=restrictions)
+        report = document_result(observations)
+        self.pdf_manifest_store.save(report)
+        # observe_pdf is complete before resolving Gemini or touching the ledger.
+        for unit, record in zip(SinglePageGrouping().units(observations.pages), report['units']):
+            page = unit.observation
+            if page.classification != 'normal' or page._payload is None:
+                continue
+            from .receipt_privacy_gate import ReceiptPrivacyBlocked
+            try:
+                outcome = self._process_image_bytes(page._payload, 'image/png', unit.source_id,
+                                                   image_url, observe_medical=False)
+            except ReceiptPrivacyBlocked:
+                # The final exact-payload gate may fail on a later OCR pass.
+                # That unit remains private while other observed pages proceed.
+                outcome = {'status': 'privacy_blocked', 'classification': 'sensitive_unknown',
+                           'extraction_status': 'extraction_failed'}
+            state = outcome['status']
+            if state == 'skipped' and outcome.get('reason') == 'already_imported':
+                # A review import marker also suppresses replay. It does not
+                # prove the unit is resolved, so reconcile the ledger status.
+                rows = self.db.get('取込データ!A2:L')
+                matching = [row for row in rows if row and row[0] == record['import_id']]
+                state = ('imported' if len(matching) == 1 and len(matching[0]) > 8
+                         and matching[0][8] == '解析済' else 'needs_review')
+            if state == 'privacy_blocked':
+                state = 'medical_pending' if outcome['classification'] == 'medical' else 'privacy_pending'
+                record['classification'] = outcome['classification']
+                record['extraction_status'] = outcome.get('extraction_status', 'extraction_failed')
+            record['status'] = state
+            update_document_status(report)
+            self.pdf_manifest_store.save(report)
+        update_document_status(report)
+        self.pdf_manifest_store.save(report)
+        return report
+
+    def _process_image_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
+                             known_source_classification: Classification | None = None,
+                             observe_medical=True):
+        if is_pdf(image_bytes, mime_type):
+            from .receipt_privacy_gate import ReceiptPrivacyBlocked
+            raise ReceiptPrivacyBlocked()
         import_id=f"receipt:{source_id}"
         if import_id in self.db.import_ids(): return {"status":"skipped","reason":"already_imported"}
         known_source_classification = self._source_privacy.get(source_id, known_source_classification)
@@ -87,7 +149,8 @@ class ReceiptPipeline:
         if privacy.classification != "normal" or not privacy.gemini_allowed:
             self._source_privacy[source_id] = privacy.classification
             medical_shadow_status = None
-            if privacy.classification == "medical" and self.medical_review_observer is not None:
+            if (observe_medical and privacy.classification == "medical"
+                    and self.medical_review_observer is not None):
                 try:
                     observed = self.medical_review_observer.observe(source_id=source_id, gate=privacy)
                     medical_shadow_status = getattr(observed, "action", "observed")
