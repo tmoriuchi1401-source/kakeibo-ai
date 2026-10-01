@@ -150,7 +150,10 @@ def test_source_snapshot_change_revokes_authority(tmp_path, local_ocr, change):
     elif change == 'count':
         changed = replace(observations, pages=observations.pages + (replace(observations.pages[-1], page_number=3),))
     else:
-        kw = {'page_hash': 'f' * 64} if change == 'page_hash' else {'classification': 'medical'} if change == 'classification' else {'extraction_status': 'ocr_failed'}
+        kw = ({'page_hash': 'f' * 64} if change == 'page_hash' else
+              {'classification': 'medical', 'grouping_hints': None} if change == 'classification' else
+              {'extraction_status': 'ocr_failed', 'classification': 'sensitive_unknown',
+               'observation_complete': False, 'grouping_hints': None})
         changed = replace(observations, pages=(replace(observations.pages[0], **kw), observations.pages[1]))
     assert svc.prepare(changed)['status'] == 'grouping_required'
     assert svc.units(changed) == ()
@@ -258,17 +261,22 @@ def test_confirmation_tamper_is_rejected(tmp_path, local_ocr):
     assert svc.units(observations) == ()
 
 
-def test_local_ocr_evidence_provider_and_safe_failure(tmp_path, local_ocr, monkeypatch):
+def test_grouping_uses_minimised_observation_hints_without_reopening_images(tmp_path, local_ocr, monkeypatch):
+    from dataclasses import asdict
     observations = observe(['normal', 'normal'])
-    texts = iter(['店舗名: TEST\n2026-10-01\nレシート番号: R1\n1/2\n続き',
-                  '店舗名: TEST\n2026-10-01\nレシート番号: R1\n2/2\n合計'])
-    monkeypatch.setattr(grouping, '_extract_receipt_text', lambda *args: SimpleNamespace(
-        status='extracted', observation_complete=True, text=next(texts)))
+    texts = ['店舗名: TEST\n2026-10-01\nレシート番号: R1\n1/2\n続き',
+             '店舗名: TEST\n2026-10-01\nレシート番号: R1\n2/2\n合計']
+    observations = replace(observations, pages=tuple(replace(p,
+        grouping_hints=asdict(grouping.evidence_from_text(text)))
+        for p, text in zip(observations.pages, texts)))
+    ocr = Mock(side_effect=AssertionError('Grouping must not reopen observation images'))
+    monkeypatch.setattr(grouping, '_extract_receipt_text', ocr)
     svc = service(tmp_path)
     assert svc.prepare(observations)['proposal']['groups'][0]['page_numbers'] == [1, 2]
-    monkeypatch.setattr(grouping, '_extract_receipt_text', lambda *args: SimpleNamespace(status='ocr_failed'))
-    failing = service(tmp_path / 'failed')
-    assert failing.prepare(observations)['status'] == 'grouping_required'
+    no_hints = replace(observations, pages=tuple(replace(p, grouping_hints=None) for p in observations.pages))
+    view = service(tmp_path / 'no-hints').prepare(no_hints)
+    assert [g['page_numbers'] for g in view['proposal']['groups']] == [[1], [2]]
+    ocr.assert_not_called()
 
 
 def test_cli_show_edit_confirm_replay_and_offline_export(tmp_path, local_ocr, capsys):

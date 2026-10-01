@@ -12,6 +12,7 @@ from io import BytesIO
 import json
 import math
 import os
+import re
 from pathlib import Path
 import tempfile
 from typing import Protocol
@@ -19,6 +20,7 @@ from typing import Protocol
 from .medical_receipt_privacy import classify_receipt_text
 from .receipt_privacy_gate import ReceiptPrivacyGateResult, evaluate_receipt_privacy
 from .receipt_text_extraction import _extract_receipt_text, _suppress_pypdf_output
+from . import pdf_bounded_rendering as bounded
 
 MAX_PDF_PAGES = 50
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
@@ -47,9 +49,17 @@ class PageObservation:
     classification: str
     reason_code: str
     _payload: bytes | None = field(default=None, repr=False, compare=False)
+    effective_render_scale: float | None = None
+    observation_complete: bool = False
+    render_attempts: int = 0
+    grouping_hints: dict | None = None
 
     def metadata(self) -> dict:
-        return {key: value for key, value in vars(self).items() if key != '_payload'}
+        value = {key: value for key, value in vars(self).items() if key != '_payload'}
+        if self.effective_render_scale is None:  # Legacy metadata remains exact.
+            for key in ('effective_render_scale', 'observation_complete', 'render_attempts', 'grouping_hints'):
+                value.pop(key)
+        return value
 
 
 @dataclass(frozen=True)
@@ -99,20 +109,36 @@ class PdfObservations:
     source_content_hash: str
     pages: tuple[PageObservation, ...]
     status: str = 'observed'
+    work: dict = field(default_factory=dict, compare=False)
+    _page_renderer: object = field(default=None, repr=False, compare=False)
+
+    def page_payload(self, number):
+        """Future selected-member regeneration; never retains multi-page PNGs."""
+        page = self.pages[number - 1]
+        if page.classification != 'normal':
+            raise ValueError('pdf_payload_privacy_blocked')
+        if page._payload is not None:  # Existing one-page intake / explicit mocks.
+            return page._payload
+        if self._page_renderer is None:
+            raise ValueError('pdf_payload_unavailable')
+        return self._page_renderer(page)
 
 
-def _render_png(page) -> bytes:
+def _render_png(page, scale=RENDER_SCALE, pixel_budget=MAX_PAGE_PIXELS) -> bytes:
     """Encode a new image from RGB samples, carrying no source metadata."""
-    from PIL import Image
-    with closing(page.render(scale=RENDER_SCALE)) as bitmap:
+    with closing(page.render(scale=scale)) as bitmap:
+        if bitmap.width * bitmap.height > pixel_budget or bitmap.width * bitmap.height > MAX_PAGE_PIXELS:
+            raise bounded.RenderHold('render_pixel_budget_exceeded')
         with bitmap.to_pil() as image, image.convert('RGB') as rgb:
-            with Image.frombytes('RGB', rgb.size, rgb.tobytes()) as clean:
-                output = BytesIO()
-                clean.save(output, format='PNG')
-                return output.getvalue()
+            # convert creates fresh RGB samples. Drop inherited image metadata
+            # before encoding; avoid another full raster and tobytes copy.
+            rgb.info.clear()
+            output = BytesIO()
+            rgb.save(output, format='PNG')
+            return output.getvalue()
 
 
-def _checked_gate(payload: bytes, known: str | None):
+def _checked_gate(payload: bytes, known: str | None, *, observation=None):
     # Kind observation completeness is distinct from Medical's payment-region
     # diagnostics. Keep that Medical policy and its amount decisions untouched.
     extracted = _extract_receipt_text(payload, 'image/png')
@@ -126,11 +152,118 @@ def _checked_gate(payload: bytes, known: str | None):
     }:
         # No subsequent reading may erase sensitive evidence from this pass.
         known = first_decision.classification
+    if observation is not None:
+        from dataclasses import asdict
+        from .receipt_pdf_grouping import evidence_from_text
+        observation['sensitive'] = (first_decision.classification if first_decision.reason_code in {
+            'medical_strong_signal', 'medical_multiple_signals', 'payroll_strong_signal',
+            'payroll_multiple_signals', 'conflicting_sensitive_evidence', 'sensitive_signal_insufficient'} else None)
+        observation['hints'] = asdict(evidence_from_text(extracted.text or '')) if complete else None
+        observation['failed'] = extracted.status != 'extracted'
     result = evaluate_receipt_privacy(payload, 'image/png', known_source_classification=known)
     if type(result) is not ReceiptPrivacyGateResult:
         raise ValueError('invalid_page_gate')
     return ReceiptPrivacyGateResult.model_validate(
         {name: getattr(result, name) for name in ReceiptPrivacyGateResult.model_fields}, strict=True), complete
+
+
+def _sticky(kinds):
+    kinds = set(k for k in kinds if k and k != 'normal')
+    if 'sensitive_unknown' in kinds or {'medical', 'payroll'} <= kinds:
+        return 'sensitive_unknown'
+    return next(iter(kinds), None)
+
+
+def valid_render_metadata(page):
+    legacy = {'source_file_id', 'source_content_hash', 'page_number', 'page_hash',
+              'extraction_status', 'classification', 'reason_code'}
+    if set(page) == legacy:
+        return True
+    if set(page) != legacy | {'effective_render_scale', 'observation_complete', 'render_attempts', 'grouping_hints'}:
+        return False
+    scale, complete, attempts, hints = (page[k] for k in
+        ('effective_render_scale', 'observation_complete', 'render_attempts', 'grouping_hints'))
+    if (type(scale) not in (int, float) or not math.isfinite(scale) or
+            not (scale == 0 or bounded.MIN_SCALE <= scale <= bounded.MAX_SCALE) or
+            type(complete) is not bool or type(attempts) is not int or not 0 <= attempts <= bounded.MAX_PAGE_ATTEMPTS or
+            (complete and (not attempts or not scale or page['extraction_status'] != 'extracted')) or
+            (page['classification'] == 'normal' and not complete)):
+        return False
+    if hints is None:
+        return True
+    return (page['classification'] == 'normal' and complete and type(hints) is dict and
+        set(hints) == {'issuer', 'date', 'receipt', 'printed_page', 'printed_count', 'has_total', 'continuation'} and
+        all(type(hints[k]) is str and (not hints[k] or re.fullmatch(r'[0-9a-f]{64}', hints[k]))
+            for k in ('issuer', 'date', 'receipt')) and
+        all(type(hints[k]) is int and 0 <= hints[k] <= 99 for k in ('printed_page', 'printed_count')) and
+        all(type(hints[k]) is bool for k in ('has_total', 'continuation')))
+
+
+def _observe_page(page, embedded, source_id, source_hash, number, known, budget, *, retain=False):
+    payload = retained = None
+    page_hash = _digest([source_hash, number, 'unobserved'])
+    scale, attempts, complete = 0.0, 0, False
+    status, kind, reason = 'pdf_render_failed', 'sensitive_unknown', 'render_failed'
+    embedded_kind = classify_receipt_text(embedded).classification if embedded.strip() else None
+    sticky = _sticky((known, embedded_kind))
+    hints = None
+    try:
+        width, height = page.get_size()
+        for attempt in range(bounded.MAX_PAGE_ATTEMPTS):
+            cap = min(MAX_PAGE_PIXELS, bounded.STANDARD_PAGE_PIXELS if attempt == 0 else bounded.REREAD_PAGE_PIXELS)
+            try:
+                scale, pixels = bounded.render_scale(width, height, cap)
+            except bounded.RenderHold as error:
+                if attempt == 0 and str(error) == 'page_too_large_at_minimum_scale':
+                    # The standard resolution may be smaller than the minimum
+                    # scale permits. Only the bounded second pass may fit it.
+                    continue
+                raise
+            with budget.page(pixels):
+                attempts += 1
+                status, reason = 'pdf_render_failed', 'render_failed'
+                payload = _render_png(page, scale, cap)
+                if len(payload) > MAX_PAYLOAD_BYTES:
+                    raise bounded.RenderHold('page_payload_budget_exceeded')
+                page_hash = sha256(payload).hexdigest()
+                status, reason = 'extraction_failed', 'ocr_failed'
+                info = {}
+                gate, complete = _checked_gate(payload, sticky, observation=info)
+                sticky = _sticky((sticky, info.get('sensitive'),
+                    'sensitive_unknown' if info.get('failed') else None,
+                    gate.classification if gate.classification in {'medical', 'payroll'} else None,
+                    'sensitive_unknown' if gate.reason_code in {
+                        'conflicting_sensitive_evidence', 'sensitive_signal_insufficient'} else None))
+                status = gate.extraction_status
+                complete = complete and status == 'extracted'
+                if status != 'extracted':
+                    sticky = _sticky((sticky, 'sensitive_unknown'))
+                kind = (sticky or gate.classification) if complete and status == 'extracted' else 'sensitive_unknown'
+                reason = ('ocr_failed' if status != 'extracted' else
+                          'privacy_unresolved' if kind == 'sensitive_unknown' and complete else
+                          'sticky_sensitive_evidence' if sticky and complete else
+                          gate.reason_code if complete else 'observation_incomplete')
+                hints = info.get('hints') if kind == 'normal' and complete else None
+                continuation_gap = (hints and (hints['continuation'] or hints['printed_count'] > 1)
+                    and not all(hints[k] for k in ('issuer', 'date', 'receipt')))
+                retry = not complete or kind == 'sensitive_unknown' or continuation_gap
+                if retain and kind == 'normal' and complete and (not retry or attempt == bounded.MAX_PAGE_ATTEMPTS - 1):
+                    retained = payload
+                else:
+                    retained = None
+                payload = None  # Before releasing reservation / next render.
+            if not retry:
+                break
+    except bounded.RenderHold as error:
+        status, kind, reason, complete = 'resource_budget_exceeded', 'sensitive_unknown', str(error), False
+        hints = retained = None
+    except Exception:
+        kind, complete = 'sensitive_unknown', False
+        hints = retained = None
+    finally:
+        payload = None
+    return PageObservation(source_id, source_hash, number, page_hash, status, kind, reason,
+                           retained, scale, complete, attempts, hints)
 
 
 def observe_pdf(content: bytes, source_file_id: str, *,
@@ -140,7 +273,8 @@ def observe_pdf(content: bytes, source_file_id: str, *,
 
     OCR is required even for text PDFs: embedded text cannot reveal all visible
     image content. Embedded text can only restrict the rendered image's gate.
-    Resource limits reject the whole document before any external AI call.
+    Per-page failures remain restricted observations; no multi-page observation
+    grants external AI or accounting authority.
     """
     source_hash = sha256(content).hexdigest()
     def rejected(status):
@@ -160,52 +294,43 @@ def observe_pdf(content: bytes, source_file_id: str, *,
         with closing(pdfium.PdfDocument(content)) as document:
             if len(document) != count:
                 return rejected('pdf_page_count_mismatch')
-            # Bound the complete document before allocating rendered pixels.
-            pixels = 0
-            for index in range(count):
-                with closing(document[index]) as page:
+        pages = []
+        budget = bounded.WorkBudget()
+        for index in range(count):
+            failure_status, failure_reason = 'extraction_failed', 'embedded_extraction_failed'
+            try:
+                with _suppress_pypdf_output():
+                    embedded = reader.pages[index].extract_text() or ''
+                # A fresh native document also releases decoded-image caches
+                # between pages; only source bytes and metadata survive.
+                failure_status, failure_reason = 'pdf_render_failed', 'render_failed'
+                with closing(pdfium.PdfDocument(content)) as document, closing(document[index]) as page:
+                    restriction = _sticky((known_source_classification,
+                        (known_page_classifications or {}).get(index + 1)))
+                    observed = _observe_page(page, embedded, source_file_id, source_hash,
+                        index + 1, restriction, budget, retain=count == 1)
+            except Exception:
+                observed = PageObservation(source_file_id, source_hash, index + 1,
+                    _digest([source_hash, index + 1, 'unobserved']), failure_status,
+                    'sensitive_unknown', failure_reason, None, 0.0)
+            pages.append(observed)
+        def regenerate(observation):
+            # Source bytes remain local and bounded, but no image is captured
+            # by this callable. Only an explicitly requested member renders.
+            with closing(pdfium.PdfDocument(content)) as fresh:
+                with closing(fresh[observation.page_number - 1]) as page:
                     width, height = page.get_size()
-                    if not all(math.isfinite(v) and v > 0 for v in (width, height)):
-                        return rejected('pdf_resource_limit_exceeded')
-                    page_pixels = math.ceil(width * RENDER_SCALE) * math.ceil(height * RENDER_SCALE)
-                    if page_pixels > MAX_PAGE_PIXELS:
-                        return rejected('pdf_resource_limit_exceeded')
-                    pixels += page_pixels
-            if pixels > MAX_DOCUMENT_PIXELS:
-                return rejected('pdf_resource_limit_exceeded')
-            pages = []
-            payload_size = 0
-            for index in range(count):
-                payload = None
-                page_hash = _digest([source_hash, index + 1, 'unobserved'])
-                status, kind, reason = 'pdf_render_failed', 'sensitive_unknown', 'observation_incomplete'
-                try:
-                    with closing(document[index]) as page:
-                        payload = _render_png(page)
-                    page_hash = sha256(payload).hexdigest()
-                    payload_size += len(payload)
-                    if payload_size > MAX_PAYLOAD_BYTES:
-                        return rejected('pdf_resource_limit_exceeded')
-                    status = 'extraction_failed'
-                    with _suppress_pypdf_output():
-                        embedded = reader.pages[index].extract_text() or ''
-                    embedded_kind = classify_receipt_text(embedded).classification
-                    restriction = known_source_classification or (known_page_classifications or {}).get(index + 1)
-                    if embedded.strip() and embedded_kind in {'medical', 'payroll'}:
-                        restriction = embedded_kind
-                    gate, complete = _checked_gate(payload, restriction)
-                    status, kind, reason = gate.extraction_status, gate.classification, gate.reason_code
-                    # Preserve sensitive embedded evidence even if OCR misses it.
-                    if status != 'extracted' or not complete:
-                        kind, reason = 'sensitive_unknown', 'observation_incomplete'
-                    elif embedded.strip() and embedded_kind != 'normal':
-                        kind, reason = embedded_kind, 'embedded_sensitive_or_incomplete'
-                except Exception:
-                    # Never expose parser/OCR errors or classify a failed subset.
-                    kind = 'sensitive_unknown'
-                pages.append(PageObservation(source_file_id, source_hash, index + 1,
-                    page_hash, status, kind, reason, payload if kind == 'normal' else None))
-            return PdfObservations(source_file_id, source_hash, tuple(pages))
+                    scale, pixels = bounded.render_scale(width, height, MAX_PAGE_PIXELS,
+                        preferred=observation.effective_render_scale)
+                    if scale != observation.effective_render_scale:
+                        raise ValueError('pdf_payload_scale_changed')
+                    with bounded.WorkBudget().page(pixels):
+                        payload = _render_png(page, scale, MAX_PAGE_PIXELS)
+                        if sha256(payload).hexdigest() != observation.page_hash:
+                            raise ValueError('pdf_payload_identity_changed')
+                        return payload
+        return PdfObservations(source_file_id, source_hash, tuple(pages),
+                               work=budget.metadata(), _page_renderer=regenerate)
     except Exception:
         return rejected('pdf_observation_failed')
 

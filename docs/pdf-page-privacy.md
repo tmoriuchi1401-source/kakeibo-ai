@@ -5,6 +5,8 @@ Development branch: `codex/pdf-page-privacy`. No merge or production execution.
 Grouping-safety follow-up base: `917fed5cb207ecf0187f4689aed1201e0dbaacdc`.
 Automatic accounting is now limited to single-page PDFs. A page observation
 does not establish an accounting transaction boundary in a multi-page document.
+Large scans now use [bounded sequential observation](pdf-bounded-observation.md);
+the privacy and accounting boundaries below remain unchanged.
 The follow-up changes only `app/receipt_pdf_units.py`, `app/receipt_pipeline.py`,
 `app/cli.py`, `tests/test_receipt_pdf_units.py`, and this document.
 
@@ -44,11 +46,12 @@ temporary paths outside the repository; the verified run used
 1. Identify PDF MIME or a PDF header, before legacy document-level dedupe.
 2. Hash the source bytes. Enumerate every page locally with pypdf and PDFium,
    verifying matching page counts. Encrypted/corrupt/empty PDFs go to review.
-3. Check resource limits before sending anything: 50 pages, 50 MiB source,
-   12 million pixels per page, 100 million document pixels at 3x render scale,
-   and 64 MiB of generated PNG payloads. A document exceeding any limit is
-   rejected as a whole, with no partially submitted pages.
-4. Render every page. Reconstruct fresh RGB images from the rendered samples
+3. Check source limits before sending anything: 50 pages and 50 MiB source.
+   Adapt each page to a 4-million-pixel standard pass, at most one bounded
+   12-million-pixel reread, with separate live-memory and cumulative work limits.
+   Per-page failures remain `sensitive_unknown`; no failed page is omitted.
+   The 100-million-pixel limit applies only to future composite payloads.
+4. Render every page sequentially. Reconstruct fresh RGB images from the rendered samples
    and encode PNGs without original PDF objects, metadata, or attachments.
    Observe each PNG locally for OCR completeness and through the existing
    privacy gate. The separate completeness observation keeps Medical payment
@@ -59,7 +62,7 @@ temporary paths outside the repository; the verified run used
 5. Finish all page observations before any Gemini resolution or ledger access.
    OCR/render/extraction failures are `sensitive_unknown`. Successful sibling
    observations remain recorded, but no multi-page document can auto-post.
-   Medical/payroll/unknown page payloads are discarded locally.
+   All multi-page image payloads are discarded locally, including normal pages.
 6. Store every page's privacy metadata under `pages`. For a multi-page PDF,
    store no accounting units (`units: []`), return `grouping_required` and stop.
    This is `observed -> grouping_required`, regardless of whether all pages are

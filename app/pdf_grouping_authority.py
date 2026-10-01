@@ -13,7 +13,7 @@ from .receipt_pdf_grouping import (
     AdjacentPageGrouping, ConfirmedDocumentUnit, _proposal, _snapshot,
     _valid_proposal, _unit_status, privacy_for,
 )
-from .receipt_pdf_units import _digest
+from .receipt_pdf_units import _digest, valid_render_metadata
 
 SCHEMA = 'pdf-grouping-authority-v1'
 MAX_STATE_BYTES = 8 * 1024 * 1024
@@ -77,8 +77,7 @@ def validate(value, binding):
                     not _valid_proposal(proposal, snapshot)):
                 raise ValueError()
             for n, page in enumerate(proposal['pages'], 1):
-                if (set(page) != {'source_file_id', 'source_content_hash', 'page_number', 'page_hash',
-                                  'extraction_status', 'classification', 'reason_code'} or
+                if (not valid_render_metadata(page) or
                         page['source_file_id'] != proposal['source_file_id'] or
                         page['source_content_hash'] != proposal['source_content_hash'] or
                         type(page['page_number']) is not int or page['page_number'] != n or

@@ -5,7 +5,8 @@ Actions authority and the management UI now use the separate
 development/cache only and cannot restore Actions authority.
 
 Privacy observations and accounting transaction boundaries are separate. The
-existing all-page local PDF observation/classification path is unchanged. Normal
+all-page local PDF privacy policy is unchanged, using
+[bounded sequential rendering](pdf-bounded-observation.md). Normal
 single-page PDF intake still uses a freshly rendered PNG and the existing receipt
 pipeline. PDF archival remains disabled. Multi-page production intake still stops
 at `grouping_required`, even after a local grouping confirmation.
@@ -19,7 +20,8 @@ Medical observer/review/storage or amount/identity/HMAC code is called or change
 
 `GroupingProposer` separates candidate generation from review logic and UI; the
 existing `PageGrouping` interface is retained. `AdjacentPageGrouping` v1 uses
-local OCR on already rendered normal pages. Store/facility name, date and receipt
+minimal hints from local OCR of completely observed normal pages, without
+retaining images or running OCR again. Store/facility name, date and receipt
 number must all match. An adjacent page pair also needs consistent printed page
 numbers (e.g. 1/2, 2/2) or a continuation marker. A preceding total closes the
 chain. Store/date alone, pixel/layout similarity or mere adjacency do not suffice.
@@ -28,7 +30,8 @@ candidates. Layout similarity and item continuity inference beyond explicit
 continuation markers are deferred. These are suggestions for human review.
 
 Raw OCR, names, dates and receipt identifiers are transient and are not saved.
-Only categorical reasons and confidence are persisted. Proposal generation
+Only hashed anchors, page/continuation flags, categorical reasons and confidence
+are persisted. Proposal generation
 failure retains `grouping_required`, without units or external effects.
 
 ## Human review CLI

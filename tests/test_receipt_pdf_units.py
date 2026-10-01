@@ -184,12 +184,12 @@ def test_embedded_sensitive_cannot_be_ignored_even_if_visual_ocr_says_normal(tmp
 def test_render_failure_keeps_page_observations_without_accounting(tmp_path, local_ocr, monkeypatch):
     render = pdf._render_png
     count = 0
-    def fail_second(page):
+    def fail_second(page, *args):
         nonlocal count
         count += 1
         if count == 2:
             raise RuntimeError('PRIVATE_RENDER_FAILURE')
-        return render(page)
+        return render(page, *args)
     monkeypatch.setattr(pdf, '_render_png', fail_second)
     p = pipeline(tmp_path)
     result = p.process_bytes(synthetic_pdf(['normal'] * 3), 'application/pdf', 'render')
@@ -204,7 +204,7 @@ def test_render_failure_keeps_page_observations_without_accounting(tmp_path, loc
 def test_document_limits_and_failures_never_partially_send(tmp_path, local_ocr, monkeypatch, case):
     original = synthetic_pdf(['normal'] * 2)
     if case == 'pages': monkeypatch.setattr(pdf, 'MAX_PDF_PAGES', 1)
-    if case == 'pixels': monkeypatch.setattr(pdf, 'MAX_DOCUMENT_PIXELS', 1)
+    if case == 'pixels': monkeypatch.setattr(pdf.bounded, 'MAX_TOTAL_RENDER_PIXELS', 1)
     if case == 'bytes': monkeypatch.setattr(pdf, 'MAX_SOURCE_BYTES', 1)
     if case == 'payload': monkeypatch.setattr(pdf, 'MAX_PAYLOAD_BYTES', 1)
     if case == 'corrupt': original = b'%PDF-corrupt'
@@ -213,7 +213,11 @@ def test_document_limits_and_failures_never_partially_send(tmp_path, local_ocr, 
         out = BytesIO(); writer.write(out); original = out.getvalue()
     p = pipeline(tmp_path)
     result = p.process_bytes(original, 'application/pdf', 'limit')
-    assert result['status'] == 'needs_review' and result['units'] == []
+    assert result['status'] == ('grouping_required' if case in {'pixels', 'payload'} else 'needs_review')
+    assert result['units'] == []
+    if case in {'pixels', 'payload'}:
+        assert len(result['pages']) == 2
+        assert all(p['classification'] == 'sensitive_unknown' for p in result['pages'])
     assert not result['all_units_terminal'] and not should_archive_result(result)
     p.ai.analyze_receipt.assert_not_called()
     assert p.db.append_calls == []
@@ -433,8 +437,8 @@ def test_raster_encoding_change_cannot_duplicate_same_pdf(tmp_path, local_ocr, m
     ai, db = FakeAI(_normal_receipt_result()), Ledger()
     first = pipeline(tmp_path, ai=ai, db=db).process_bytes(data, 'application/pdf', 'encoding')
     original_render = pdf._render_png
-    def uncompressed(page):
-        with Image.open(BytesIO(original_render(page))) as image:
+    def uncompressed(page, *args):
+        with Image.open(BytesIO(original_render(page, *args))) as image:
             output = BytesIO()
             image.save(output, format='PNG', compress_level=0)
             return output.getvalue()

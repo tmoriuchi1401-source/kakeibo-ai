@@ -21,6 +21,7 @@ from typing import Protocol
 from .receipt_pdf_units import (
     MAX_DOCUMENT_PIXELS, MAX_PAYLOAD_BYTES, MAX_PDF_PAGES, PdfObservations,
     PdfUnitManifestStore, _checked_gate, _digest, document_result, observe_pdf,
+    valid_render_metadata,
 )
 from .receipt_privacy_gate import require_receipt_ai_permission
 from .receipt_text_extraction import _extract_receipt_text
@@ -58,6 +59,7 @@ def _snapshot(observations):
             any(p.source_file_id != observations.source_file_id or
                 p.source_content_hash != observations.source_content_hash or
                 p.classification not in CLASSIFICATIONS or
+                not valid_render_metadata(p.metadata()) or
                 not re.fullmatch(r'[0-9a-f]{64}', p.page_hash) for p in pages)):
         raise GroupingError('grouping_observation_unavailable')
     return {'source_file_id': observations.source_file_id,
@@ -97,6 +99,10 @@ def evidence_from_text(text: str) -> PageEvidence:
 def local_evidence(observations):
     result = []
     for page in observations.pages:
+        if page.effective_render_scale is not None:
+            result.append(PageEvidence(**page.grouping_hints) if page.grouping_hints
+                          and page.classification == 'normal' and page.observation_complete else PageEvidence())
+            continue
         if page.classification != 'normal' or page._payload is None:
             result.append(PageEvidence())
             continue
@@ -396,7 +402,7 @@ class PdfGroupingService:
         try:
             for n, expected in zip(unit.page_numbers, unit.member_page_hashes):
                 page = observations.pages[n - 1]
-                payload = page._payload
+                payload = observations.page_payload(n)
                 if payload is None or sha256(payload).hexdigest() != expected:
                     raise GroupingError('grouping_payload_identity_changed')
                 gate, complete = _checked_gate(payload, page.classification)

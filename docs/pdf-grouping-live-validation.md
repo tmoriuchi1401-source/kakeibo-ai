@@ -88,7 +88,7 @@ observer/store/handoff and move writers are never invoked by this path.
 The final synthetic state is unconfirmed at revision 3 after the hash-change
 test. The hold/redisplay result above describes that earlier test step.
 
-## Actual PDF canary
+## Initial actual PDF canary stop
 
 The human selected one Receipt Inbox PDF. Its identity/parent/type/version were
 verified around read-only download. The unchanged local observer rejected it as
@@ -114,6 +114,49 @@ partition confirmation.
 Replay must re-observe the original read-only, reuse the same confirmation and
 Unit identities, and require no second confirmation. Actual source files must
 never be modified for invalidation testing.
+
+## Bounded observation follow-up
+
+The separately authorized [bounded rendering](pdf-bounded-observation.md) phase
+reused the same 14-page source read-only. Every page completed rendered local
+OCR/privacy observation. Ten pages were normal and four remained
+`sensitive_unknown` (privacy unresolved despite complete OCR); none was promoted
+by the grouping step. The conservative proposal has fourteen singleton groups,
+revision 1, `grouping_required`, and no confirmation. It was displayed in the
+existing owned review tab, with the real original link and native dropdowns.
+
+There were 23 render calls, 163,965,563 cumulative render pixels and
+1,535,793,378 conservatively reserved OCR pixel-work, all within separate work
+budgets. Peak live page count was one; the largest live raster/scratch reservation
+was 48,000,000 pixel-equivalents. Observation retained no multi-page PNGs.
+The run took 398.4 seconds and Windows reported a peak observer-process working
+set of 328,765,440 bytes (this metric does not include separate OCR subprocesses).
+
+The only mutations were one strong-v2-ETag conditional PUT to the dedicated
+grouping JSON and two POSTs to the owned review tab (row and dropdown projection).
+Both proposal state and projection were read back exactly. The new audit entry
+is `observe`, revision 0 to 1, `observed`. Existing synthetic records/audit stayed
+unchanged, all confirmations remained absent, and original parent/type/version
+were unchanged. No source PDF bytes, OCR text, amounts, names or images were
+persisted in state/audit. Actual source IDs and private binding remain outside
+this repository.
+
+Before this follow-up, three existing accounting-tab row/filter extents had
+already increased relative to the earlier installation snapshot. Read-only
+diagnostics found unchanged sentinel formulas/formats/validations and zero
+operator writes at that point. A fresh pre-canary snapshot preserved those
+existing changes instead of resetting them.
+Post-canary read-back matched all 35 non-owned sheet structures, named ranges,
+sentinel formulas/formats/validations, hidden technical columns and hidden queue.
+The review account's existing source grant and real Drive link were verified;
+no ACL or sharing change was made.
+
+All **3360 Python tests**, including every existing Medical test, and **18 Node
+tests** passed. Medical code, the existing privacy gate, Gemini/ReceiptPipeline,
+Drive mover/archive and all workflow schedules remain unchanged. Gemini,
+accounting writes, Medical handoff and source moves were zero for this canary.
+This phase stops at proposal display; human partition review is next, and no
+confirmed authority or AI-send permission has been granted.
 
 ## Verification and next phase
 
