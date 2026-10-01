@@ -11,6 +11,7 @@ from app.bank_review_decisions import DECISION_SHEET, evaluate, parse_rows
 from app.bank_review_groups import make_groups, encoded
 from app.bank_review_requests import BankReviewRequestProcessor
 from app.bank_review_store import BankReviewStore
+from app.bank_review_store import HEADERS as BANK_MASTER_HEADERS
 from app.bank_review_ui import build_rows, submitted_answers
 from test_bank_review_ui import transaction
 
@@ -44,7 +45,7 @@ class MemoryBankDB:
             if "addSheet" in request:
                 properties = request["addSheet"]["properties"]
                 title = properties["title"]
-                assert title in {RULE_SHEET, DECISION_SHEET}
+                assert title in BANK_MASTER_HEADERS
                 self.sheets[title] = deepcopy(properties)
                 self.tables[title] = []
             elif "appendDimension" in request:
@@ -54,7 +55,7 @@ class MemoryBankDB:
             elif "updateCells" in request:
                 value = request["updateCells"]
                 title = next(title for title, props in self.sheets.items() if props["sheetId"] == value["range"]["sheetId"])
-                assert title in {RULE_SHEET, DECISION_SHEET}
+                assert title in BANK_MASTER_HEADERS
                 for offset, data in enumerate(value["rows"], value["range"]["startRowIndex"]):
                     while len(self.tables[title]) <= offset:
                         self.tables[title].append([])

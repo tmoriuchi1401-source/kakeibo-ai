@@ -126,6 +126,29 @@ PDF名・Drive IDの特例ルールは作らない。
 同じ意味のinactiveルールの再開時だけrevisionを増やす。
 既存activeルールと異なる意味への変更はheldにし、自動上書きしない。
 
+### 適用件数
+
+適用件数は「現在の原本に、確認済みのactive自動分類ルールの用途判定が成立した
+取引の累計件数」。金融明細の記帳完了件数ではない。未記帳収入は引き続き別の
+settlement件数・保留条件で扱う。今回のみの回答、競合、個別確認、inactiveルールは
+自動分類ルールの適用件数に加えない。
+
+隠し運用シート「銀行ルール適用履歴」に、application ID、rule ID、初回revision、
+transaction identity、source hash、初回原本SHA256、用途、収入分類、自己口座相手
+銀行・alias、適用日時、判定証拠digestの12列を保持する。新しい確認UIは作らない。
+application IDはrule IDと既存transaction identityの組から作り、revisionを上げた
+復活や重複PDFでも同じ取引を再加算しない。過去の原本がInboxから移動しても履歴と
+累計は保持する。最初の原本hashは保持し、重複PDFのページ位置が違うだけでは増やさない。
+
+原本から生成した現在のtransactionとSheet／JSONの競合なしの判定だけを候補にする。
+previewは件数と計画だけで保存しない。applyのrefreshでは原本・台帳・銀行正本を
+直前再読込した後、適用履歴とルールの件数を同じnative batchUpdateで保存し、全行を
+read-backする。履歴行の上書きは禁止。件数と履歴の不一致は自動リセットせず保留。
+応答喪失後の再実行もapplication IDと既存履歴から照合し、二重appendしない。
+
+適用履歴や件数は用途承認・記帳authority・archive証拠の代わりに使わない。将来
+ルールには引き続きactiveな本人確認結果との一致が必要。Receipt等の記帳は対象外。
+
 「銀行確認結果」は13列の別正本：decision ID、固定group key、snapshot digest、
 固定snapshot、用途、収入分類、相手銀行、相手alias、未来登録の承認、受付UUID、
 承認日時、revision、active。今回のみの回答は、ここに固定した原本transaction
@@ -174,7 +197,9 @@ archive直前には承認済みincome／expenseの実明細との厳密照合も
 追加実装済み：新しい送金元口座の明示所有確認と確認関係の再利用、非金融回答と既存
 金融記帳の競合保留、processed原本との一致を伴う非金融回答行の安全な退避。
 
-未完了：既存review statusの安全な解消、適用件数の記録、古い原本に対する実settlement authorityの確認、
+追加実装済み：原本に対する銀行ルールの適用履歴と、再実行で増えない累計件数。
+
+未完了：既存review statusの安全な解消、古い原本に対する実settlement authorityの確認、
 本番配置・44groupのnative表示確認・本人の用途回答後の実再処理。
 通常のbounded writerへの接続は書込authorityを増やさない。古い4原本に対する
 21件・6件の実補完可否は既存のwindow・account・row bound等に従って別途確認する。
@@ -183,3 +208,14 @@ archive直前には承認済みincome／expenseの実明細との厳密照合も
 本番main・validated SHA・既存書込authorityはこの設計文書で変更しない。
 確認済み27件に限定された過去の収入backfillを、未確定21件・未記帳利息6件の
 書込authorityとして使い回さない。
+
+既存status更新の権限は通常appendと分離されている。bank_recurring_authorityの
+income_scopeはdeposit_import_append／income_append／read_backで、既存セル更新を
+含まない。既存bank_status_repairは、原本identityに対応する完全なbefore/after行、
+単一statusセルのみの差分、監査キーに結び付いたrepair_ref、保護された別承認、
+最大300秒の期限、単回capability、lease、直前読込／read-backを必要とする。
+用途checkboxの保存だけからこの修復権限を自己発行しない。
+
+今回の138件の調査snapshotでは既存needs_review行は0件で、既存取込があるのは
+bank_incomeの21件（収入明細欠落）。将来の部分回答や過去の保留取込で既存statusが
+needs_reviewの場合は、意味が確定しても状態更新権限と記帳完了の再照合を別に要求する。

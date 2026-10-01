@@ -19,6 +19,7 @@ def rig(*, saved_answer=False, future=False):
         processor(db, source).process(submitted, REQUEST)
     source.incomes, source.imports, source.expenses = [], [], []
     source.fingerprint = "a" * 64
+    source.files = ({"pdf_sha256": "b" * 64, "parsed": SimpleNamespace(transactions=tuple(source.transactions.values()))},)
     ui = SimpleNamespace(header=BANK_UI_HEADERS.copy(), rows=build_rows(source.groups), writes=[])
     def read():
         ui.before = digest(ui.rows)

@@ -5,15 +5,17 @@ error from batchUpdate is never retried: the shared request becomes terminal
 and a subsequent explicit submission must reconcile the stable IDs first.
 """
 from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass
 import hashlib
 
 from .bank_meaning_rules import RULE_HEADERS, RULE_SHEET, parse_rows as parse_rules
 from .bank_review_decisions import DECISION_HEADERS, DECISION_SHEET, parse_rows as parse_decisions
 from .bank_review_groups import digest
+from .bank_rule_usage import USAGE_HEADERS, USAGE_SHEET, parse_rows as parse_usage
 
-HEADERS = {RULE_SHEET: RULE_HEADERS, DECISION_SHEET: DECISION_HEADERS}
-PARSERS = {RULE_SHEET: parse_rules, DECISION_SHEET: parse_decisions}
+HEADERS = {RULE_SHEET: RULE_HEADERS, DECISION_SHEET: DECISION_HEADERS, USAGE_SHEET: USAGE_HEADERS}
+PARSERS = {RULE_SHEET: parse_rules, DECISION_SHEET: parse_decisions, USAGE_SHEET: parse_usage}
 MAX_METADATA_ROWS = 10000
 
 
@@ -46,7 +48,7 @@ class BankReviewStore:
             extent = properties["gridProperties"]["rowCount"]
             if extent > MAX_METADATA_ROWS or properties["gridProperties"]["columnCount"] < len(header):
                 raise ValueError("bank_review_master_extent_invalid")
-            right = "R" if title == RULE_SHEET else "M"
+            right = chr(ord("A") + len(header) - 1)
             rows = self.db.get_raw(f"'{title}'!A1:{right}{extent}")
             if not rows or rows[0] != header:
                 raise ValueError("bank_review_master_header_invalid")
@@ -81,6 +83,10 @@ class BankReviewStore:
                 if type(number) is not int or not 2 <= number <= MAX_METADATA_ROWS or len(row) != len(header):
                     raise ValueError("bank_review_write_shape_invalid")
                 PARSERS[title]([row])
+                if (title == USAGE_SHEET and number <= len(expected.tables[title])
+                        and any(expected.tables[title][number - 1])
+                        and expected.tables[title][number - 1] != row):
+                    raise ValueError("bank_rule_application_immutable")
             properties = expected.sheets.get(title)
             final_row = max(number for number, _ in updates)
             if properties is None:
@@ -89,7 +95,7 @@ class BankReviewStore:
                     raise ValueError("bank_review_sheet_id_collision")
                 used_ids.add(sheet_id)
                 requests.append({"addSheet": {"properties": {"sheetId": sheet_id, "title": title,
-                    "hidden": title == DECISION_SHEET, "gridProperties": {
+                    "hidden": title != RULE_SHEET, "gridProperties": {
                         "rowCount": max(1000, final_row), "columnCount": max(18, len(header)), "frozenRowCount": 1}}}})
                 requests.append(_cells(sheet_id, 1, 0, [header], len(header)))
                 predicted[title] = [list(header)]
@@ -104,6 +110,13 @@ class BankReviewStore:
                 predicted[title][number - 1] = list(row)
                 requests.append(_cells(sheet_id, number, 0, [row], len(header)))
             PARSERS[title](predicted[title][1:])
+        if edits.get(USAGE_SHEET):
+            applications = parse_usage(predicted[USAGE_SHEET][1:])
+            totals = Counter(entry.rule_id for entry in applications)
+            rules = {rule.rule_id: rule for rule in parse_rules(predicted[RULE_SHEET][1:])}
+            if (totals.keys() - rules.keys()
+                    or any(rule.applied_count != totals[key] for key, rule in rules.items())):
+                raise ValueError("bank_rule_application_count_mismatch")
         self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,
             body={"requests": requests}).execute(num_retries=0)
         # Never call commit again automatically after a response/read-back error.

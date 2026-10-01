@@ -11,6 +11,8 @@ from .bank_review_ui import BANK_LABELS, BANK_UI_HEADERS, PURPOSES, build_rows, 
 from .bank_review_groups import digest
 from .bank_review_groups import validate_snapshot
 from .bank_pdf_pipeline import NormalizedBankTransaction
+from .bank_rule_usage import plan_applications
+from datetime import datetime, timezone
 
 
 def build_view(source, resolver, prior_rows=(), *, retired_originals=None):
@@ -155,10 +157,11 @@ def build_view(source, resolver, prior_rows=(), *, retired_originals=None):
 
 
 class BankReviewRefresh:
-    def __init__(self, db, source_reader, *, store=None, retirement_reader=None):
+    def __init__(self, db, source_reader, *, store=None, retirement_reader=None, clock=None):
         self.db, self.source_reader = db, source_reader
         self.store = store or BankReviewStore(db)
         self.retirement_reader = retirement_reader
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     def refresh(self, *, apply=False):
         prior_header, prior = self.db.bank_review_ui_table()
@@ -168,25 +171,30 @@ class BankReviewRefresh:
             legacy_rules=source.legacy_rules, store=self.store, master=master)
         retired = self.retirement_reader(prior, source) if self.retirement_reader else {}
         counts, header, rows = build_view(source, resolver, prior, retired_originals=retired)
+        usage_edits, usage_counts = plan_applications(source, resolver, master, applied_at=self.clock().isoformat())
+        counts.update(usage_counts)
         if not apply:
-            return {**counts, "bank_ui_updates": 0}
+            return {**counts, "bank_ui_updates": 0, "bank_usage_metadata_writes": 0}
         live = self.source_reader()
         if live.fingerprint != source.fingerprint or digest(live.legacy_rules_serialized) != digest(source.legacy_rules_serialized):
             raise ValueError("bank_review_source_changed_before_refresh")
         resolver.require_unchanged()
         if self.retirement_reader and self.retirement_reader(prior, live) != retired:
             raise ValueError("bank_review_retirement_changed_before_refresh")
+        # This follows all source/master checks. Usage and count changes are
+        # one metadata batch with exact read-back, and never financial writes.
+        usage_writes = self.store.commit(master, usage_edits)
         normalized = lambda values: [["TRUE" if v is True else "FALSE" if v is False else str(v)
                                       for v in row] for row in values]
         if prior_header == header and normalized(prior) == normalized(rows):
-            return {**counts, "bank_ui_updates": 0}
+            return {**counts, "bank_ui_updates": 0, "bank_usage_metadata_writes": usage_writes}
         self.db.replace_bank_review_ui_rows(rows, header=header)
         # Verify native literals, including controls and hidden proof. An
         # uncertain write is not automatically repeated.
         actual_header, actual = self.db.bank_review_ui_table()
         if actual_header != header or normalized(actual) != normalized(rows):
             raise ValueError("bank_review_ui_readback_failed")
-        return {**counts, "bank_ui_updates": 1}
+        return {**counts, "bank_ui_updates": 1, "bank_usage_metadata_writes": usage_writes}
 
 
 def run_bank_review_refresh(db, env, *, apply=False):
