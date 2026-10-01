@@ -90,6 +90,9 @@ def test_actual_bitmap_dimensions_are_checked_before_pixel_copy():
 
 
 def test_fourteen_scan_pages_render_sequentially_without_png_retention(monkeypatch, tmp_path):
+    # This case uses the offline proposal CLI. Actual Actions authority must
+    # continue rejecting local JSON (covered by the durable authority suite).
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
     gate_passes(monkeypatch, [(_normal_gate(), True, None, None)] * 14)
     original = pdf._render_png
     live = peak = 0
