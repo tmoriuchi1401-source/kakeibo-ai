@@ -403,6 +403,8 @@ class ReceiptConfirmation:
         self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
+            if old['kind']=='medical' and old.get('decision_origin')=='automatic' and old['status']=='pending':
+                continue  # Freeze legacy AUTO intents; do not finalize, retry or discard.
             if (old['status']=='superseded' and old.get('error')=='原本の版が変更。新しい対象で再確認してください'
                     and self.needs_attention(key)):
                 # A Drive metadata version can change while the original bytes
@@ -463,6 +465,7 @@ class ReceiptConfirmation:
                 written+=1
                 continue
             item.update(status='pending',plan=plan,confirmation_hash=digest(item['inputs']))
+            if item['kind']=='medical':item['decision_origin']='human'
             self.save_item(key,item)
             try:
                 self.verify_source(item['source'],item['folder_id'])
