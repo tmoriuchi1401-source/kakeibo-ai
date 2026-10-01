@@ -70,6 +70,9 @@ used in that fixture.
 | Old revision 1 request | `stale_proposal`; current revision 2 authority unchanged |
 | Select 保留 | Confirmation revoked; authority, audit and projection all held |
 | Redisplay | Held state retained, no Units or authority revival |
+| Inject projection failure after a fresh synthetic confirmation | Drive authority/audit saved once; captured request remained recoverable |
+| Replay that request to repair projection | UI repaired; zero further Drive updates/audit additions; confirmation and Unit identities unchanged |
+| Change synthetic source hash | Old confirmed authority revoked; `grouping_required`, revision 3; real originals untouched |
 
 Each authority mutation uses the dedicated v2 conditional transport and exact
 read-back. Audit records operation/time/source identity, before/after revision,
@@ -78,6 +81,8 @@ No reviewer actor is guessed. The mutation fence permits only conditional PUT
 to the dedicated state and POST to the two owned review tabs; source reads use
 existing read-only Drive credentials. ReceiptPipeline, AI clients, Medical
 observer/store/handoff and move writers are never invoked by this path.
+The final synthetic state is unconfirmed at revision 3 after the hash-change
+test. The hold/redisplay result above describes that earlier test step.
 
 ## Actual PDF canary
 
