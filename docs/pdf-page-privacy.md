@@ -184,8 +184,10 @@ git diff ae4c8a4c91e4dd8b591782b72b029b9712925a83 -- app/medical* tests/test_med
 
 ## Remaining work
 
-- Multi-page receipt grouping is intentionally deferred. All multi-page PDFs
-  remain `grouping_required`; their pages cannot become separate transactions.
+- Multi-page production accounting remains deferred. Local proposals, human
+  confirmation and payload-only confirmed units are now implemented separately;
+  see [local grouping review](pdf-grouping-review.md). Production intake still
+  returns `grouping_required`; pages cannot become separate transactions.
 - Pending Medical units require a later authorized integration; none is created
   here. Confirmation/intentional skip and a page-aware review UI are future work.
 - PDF archive activation needs a separate reviewed change, even after all units
@@ -195,7 +197,11 @@ git diff ae4c8a4c91e4dd8b591782b72b029b9712925a83 -- app/medical* tests/test_med
   Renderer changes should still be reviewed before upgrading the ingestion
   runtime, although PNG compression changes cannot bypass replay dedupe.
 
-## Next-phase grouping design (not implemented)
+## Grouping design (implemented as a local review service)
+
+[Local grouping review](pdf-grouping-review.md) implements the proposal/human
+confirmation boundary below. Its confirmed authority is restricted to rendered
+payload generation; accounting, Medical and archive integration remain future work.
 
 Keep `PageGrouping` as the candidate-generation boundary. Extend the candidate
 model to represent ordered page membership/ranges and bind each proposal to
