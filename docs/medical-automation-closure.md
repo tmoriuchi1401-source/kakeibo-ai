@@ -25,7 +25,9 @@ source/review identity、原本の鮮度とhash、owner入力の再照合、dupl
 | Medical専用OCR施設モデルの本番準備 | 削除。通常レシート/privacy用OCRは維持 |
 | Medical Vision synthetic workflow 2本 | GitHub登録をdisabled_manuallyへ。現在mainには存在しない |
 
-repo variable `MEDICAL_DERIVED_AI_POLICY` は`off`へ固定した。これは旧checkoutへの防衛用で、現行本番コードで自動化を再開できるfeature flagではない。通常レシート・銀行・PayPay・Amazon・Payrollのworkflow、schedule、Secrets、既存writerは維持する。通常レシートのOCRモデル・pip cacheも維持する。MedicalのOllama/Qwenモデル取得・cache・定期実行は本番にない。
+repo variable `MEDICAL_DERIVED_AI_POLICY` は削除した。旧mainでは未設定により実験hookへ入らず、現行本番コードもこの変数を転送・使用しない。`off`は旧mainで無効値となり通常確認を停止するため、最終状態は未設定とした。通常レシート・銀行・PayPay・Amazon・Payrollのworkflow、schedule、Secrets、既存writerは維持する。通常レシートのOCRモデル・pip cacheも維持する。MedicalのOllama/Qwenモデル取得・cache・定期実行は本番にない。
+
+研究用の`MEDICAL_REVIEW_SHADOW_ENABLED`とreview store設定はライブラリに残るが、既定falseで本番workflowには転送しない。GitHubにMedical shadow変数・Secretや環境単位の上書きはない。通常の本番intakeから研究用observerを作らない。
 
 ## 保存と稼働の分離
 
