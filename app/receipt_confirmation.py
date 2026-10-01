@@ -15,7 +15,7 @@ SUPERSEDED_REVIEW_REASON = '同じ原本の新しい確認行あり。この旧�
 HEADERS = ["確認ID", "種別", "状態", "原本リンク", "確認する内容", "既存値", "候補（未確定）",
            "支払日（医療）", "発行施設（医療）", "実支払額（医療）", "カテゴリ（医療）",
            "支払方法（医療・任意）", "判断", "統合先支出ID（重複時）", "本人メモ", "反映結果"]
-CHOICES = ["保留", "既存値を維持", "候補明細で確定", "医療費を確定", "候補で医療費を確定", "既存支出と重複（紐付け）", "重複候補と別の支出として確定"]
+CHOICES = ["保留", "既存値を維持", "候補明細で確定", "医療費を確定", "既存支出と重複（紐付け）", "重複候補と別の支出として確定"]
 INPUT_START, INPUT_END = 7, 15
 
 
@@ -320,14 +320,6 @@ class ReceiptConfirmation:
         if item['kind']=='normal':
             return ReceiptResult.model_validate(self.store.value['records'][item['source']['source_id']]['parsed'])
         v=list(item['inputs'])
-        if v[5]=='候補で医療費を確定':
-            candidate=item.get('medical_candidates',{})
-            if candidate.get('source')!=item['source'] or not candidate.get('candidate_id'):
-                raise ValueError('現在の原本に対応する候補がありません')
-            # Explicit adoption uses only missing fields. Never edits H:O and
-            # never overwrites the user's independently entered values.
-            for i,name in enumerate(('date','issuer','amount_yen','category')):
-                if v[i]=='':v[i]=candidate.get(name,'')
         day=_date(v[0]);amount=_money(str(v[2]).replace(',',''));category=str(v[3]).split('｜')
         if not day:
             import re
@@ -343,6 +335,8 @@ class ReceiptConfirmation:
             items=[ReceiptItem(name='医療費（本人確認）',amount=int(amount),major_category=category[0],minor_category=category[1])])
 
     def _plan(self,item,parsed,linked,distinct=False,automatic=False,local_duplicate=None):
+        if item['kind']=='medical' and automatic:
+            raise ValueError('医療費は原本を確認して完全手入力してください')
         source=item['source'];sid=source['source_id'];rid='R-'+sid;iid='receipt:'+sid
         tables=self.tables();before=target_snapshot(tables,sid)
         if item['kind']=='normal' and digest(before)!=digest(item['before']):
@@ -354,27 +348,12 @@ class ReceiptConfirmation:
         if any(any(r[11:17]) for r in before['review_rows']):
             raise ValueError('既存の本人判断を保護しています')
         candidates=[]
-        if automatic and item['kind']=='medical':
-            from .medical_payment_units import compare_payments
-            matches=compare_payments(parsed,tables,days=7,unknown_dates=False)
-            from .medical_local_duplicate import LocalReconciliation
-            verified_duplicate=(isinstance(local_duplicate,LocalReconciliation)
-                and local_duplicate.valid(source,parsed,tables,linked))
-            if distinct or (linked and not verified_duplicate):
-                raise ValueError('自動処理では既存支払いの紐付け・別取引の強制指定はできません')
-            if not verified_duplicate and any(x.classification!='different' for x in matches):
-                raise ValueError('同日付近・同額の既存支払い、または支払い単位が未確定です')
-            if verified_duplicate:
-                candidates=[list(r)+['']*max(0,13-len(r)) for r in tables['expense_rows']
-                            if r[0]==linked and len(r)>12 and r[12]=='active'
-                            and _date(r[1])==parsed.date and _money(r[4])==parsed.total]
-        else:
-            for row in tables['expense_rows']:
-                r=list(row)+['']*max(0,13-len(row))
-                if r[12]!='active' or r[9]==rid or r[10]==iid:continue
-                day=_date(r[1])
-                if day and abs((date.fromisoformat(day)-date.fromisoformat(parsed.date)).days)<=7 and _money(r[4])==parsed.total:
-                    candidates.append(r)
+        for row in tables['expense_rows']:
+            r=list(row)+['']*max(0,13-len(row))
+            if r[12]!='active' or r[9]==rid or r[10]==iid:continue
+            day=_date(r[1])
+            if day and abs((date.fromisoformat(day)-date.fromisoformat(parsed.date)).days)<=7 and _money(r[4])==parsed.total:
+                candidates.append(r)
         if linked:
             selected=[r for r in candidates if r[0]==linked]
             if len(selected)!=1:raise ValueError('統合先は同日付近・同額の有効な支出IDから選択してください')
@@ -424,6 +403,8 @@ class ReceiptConfirmation:
         self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
+            if old['kind']=='medical' and old.get('decision_origin')=='automatic' and old['status']=='pending':
+                continue  # Freeze legacy AUTO intents; do not finalize, retry or discard.
             if (old['status']=='superseded' and old.get('error')=='原本の版が変更。新しい対象で再確認してください'
                     and self.needs_attention(key)):
                 # A Drive metadata version can change while the original bytes
@@ -458,7 +439,7 @@ class ReceiptConfirmation:
                     if not item['before']['expense_rows']:raise ValueError('明細が未計上です。候補明細の確認、重複先の指定、または保留を選んでください')
                     raise ValueError('既存行または表示・入力が変更されています。現在の記帳を再確認してください')
                 self.verify_source(item['source'],item['folder_id'])
-                if action not in ({'候補明細で確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'} if item['kind']=='normal' else {'医療費を確定','候補で医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
+                if action not in ({'候補明細で確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'} if item['kind']=='normal' else {'医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
                     raise ValueError('種別に対応する確定判断を選択してください')
                 parsed=self._parsed(item)
                 from .receipt_pipeline import validate_receipt_result
@@ -484,6 +465,7 @@ class ReceiptConfirmation:
                 written+=1
                 continue
             item.update(status='pending',plan=plan,confirmation_hash=digest(item['inputs']))
+            if item['kind']=='medical':item['decision_origin']='human'
             self.save_item(key,item)
             try:
                 self.verify_source(item['source'],item['folder_id'])
@@ -503,6 +485,12 @@ class ReceiptConfirmation:
         return written
 
     def _write_accounting_plan(self,key,item):
+        if item['kind']=='medical':
+            action=str(item.get('inputs',['']*8)[5])
+            if (item.get('decision_origin')=='automatic'
+                    or item.get('confirmation_hash')!=digest(item.get('inputs',[]))
+                    or action not in {'医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}):
+                raise StateError('medical_manual_input_required')
         if item['status']!='pending':raise StateError('confirmation_intent_required')
         from .medical_local_duplicate import verify_saved_targets
         verify_saved_targets(item,self.tables)
@@ -544,14 +532,8 @@ class ReceiptConfirmation:
                 prior='未記帳（この受付から会計行は追加しません）'
                 candidate='AI未送信・候補なし。種類の回答だけではAI送信・計上しません。医療は専用確認、対象外は受信フォルダ外で保管。患者名・病名・診療内容は入力不要。'
             elif medical:
-                prior='本人未確定（入力値はH:O）'
-                values=item.get('medical_candidates',{})
-                if item.get('local_decision') and item['status'] in {'pending','applied'}:
-                    local=item['local_decision']['parsed']
-                    candidate='【自動反映内容】\n日付: '+local['date']+'\n施設: '+local['merchant']+'\n実支払額: '+str(local['total'])+'\n原本をローカルで照合。外部送信なし。'
-                elif values:
-                    candidate='【未確定候補】\n日付（非AI）: '+str(values.get('date') or '不足')+'\n施設（非AI）: '+str(values.get('issuer') or '不足')+'\n実支払額（画像AI）: '+str(values.get('amount_yen') or '不足')+'\nカテゴリ候補: '+str(values.get('category') or '不足')+'\n'+str(values.get('review_message',''))
-                else:candidate='候補なし。患者名・病名・診療内容は入力不要'
+                prior='本人確認・完全手入力（H:O）。過去の記帳・検証情報は保持します。'
+                candidate='医療は完全手入力です。原本リンクを開いて支払日・施設名・実支払額・カテゴリを入力し、医療費を確定を選んでください。OCR/AIの保存済み候補は採用しません。患者名・病名・診療内容は入力不要です。'
             else:
                 r=self.store.value['records'][item['source']['source_id']];a=r['parsed']
                 current=target_snapshot(tables,item['source']['source_id'])
@@ -568,9 +550,7 @@ class ReceiptConfirmation:
                 reason=general_review_guidance(item['source']['source_id'],self._parsed(item),**tables,categories=categories)
             if item['status']=='superseded' and not self.needs_attention(key):reason=SUPERSEDED_REVIEW_REASON
             if item.get('automatic_hold') and item['status']=='waiting':
-                from .medical_auto_posting import HOLD_TEXT
-                reason='自動保留: '+HOLD_TEXT.get(item['automatic_hold'],'安全な匿名化・記帳条件を確認できません。本人確認は任意です。')
-                reason+=' 原本を確認し、候補が正しければ「候補で医療費を確定」。不足・誤りだけH:Kへ入力。判断できなければ保留。'
+                reason='過去の自動検証は終了しました。原本を確認してH:Kを完全手入力し、「医療費を確定」を選んでください。判断できなければ保留。'
             if state=='自動反映済み':
                 reason='機械検証・反映内容の読戻し済み。本人の操作は不要です。'
                 prior='自動検証済み（本人入力H:Oは保持）'

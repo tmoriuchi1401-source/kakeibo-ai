@@ -52,11 +52,11 @@ def test_medical_controls_allow_new_facilities_and_payment_methods_without_autof
     db.rows['支出明細'] = [['id', '2026-08-01', 'Past clinic', 'care', 200, '医療・保険', '病院', '独自決済']]
     before = deepcopy((store.value, db.rows))
     requests = dropdown_requests(review, 7, review.ui_rows())
-    assert options(requests, 8) == ['Candidate clinic', 'Past clinic']
-    assert not rules(requests, 8)[0]['strict'] and not rules(requests, 11)[0]['strict']
+    assert rules(requests, 8)==[None]  # Free entry; no OCR/history facility suggestions.
+    assert not rules(requests, 11)[0]['strict']
     assert '独自決済' in options(requests, 11)
     assert rules(requests, 7)[0]['condition']['type'] == 'DATE_IS_VALID'
-    assert '候補で医療費を確定' in options(requests, 12)
+    assert '候補で医療費を確定' not in options(requests, 12)
     assert not hidden(requests, 7)
     assert (store.value, db.rows) == before
     item['medical_candidates']['source'] = dict(source, version='old')
@@ -78,6 +78,16 @@ def test_duplicate_dropdown_contains_only_matching_active_external_expenses():
     assert '2026-09-01／Clinic／100円' in note
     row[9] = 200
     assert options(dropdown_requests(review, 7, review.ui_rows()), 13) == ['wrong-amount']
+
+
+def test_retired_medical_decision_keeps_owner_text_but_removes_candidate_option():
+    review, store, db, _, source = medical()
+    db.rows[TITLE][0][12] = '候補で医療費を確定'
+    before = deepcopy((store.value, db.rows))
+    requests = dropdown_requests(review, 7, review.ui_rows())
+    assert '医療費を確定' in options(requests, 12)
+    assert '候補で医療費を確定' not in options(requests, 12)
+    assert (store.value, db.rows) == before
 
 
 def test_intake_kind_is_optional_dropdown_without_granting_posting_authority():

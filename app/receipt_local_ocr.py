@@ -64,8 +64,6 @@ def main():
     # Only public weights are fetched during setup, before opening any receipt.
     from rapidocr import RapidOCR
     directory=model_directory();RapidOCR(params=parameters(directory));verify_models(directory)
-    from .medical_locality_models import prepare
-    prepare()
     print('Local OCR models verified')
 
 if __name__=='__main__':main()

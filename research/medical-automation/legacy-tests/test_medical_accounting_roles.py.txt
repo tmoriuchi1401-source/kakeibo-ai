@@ -122,6 +122,22 @@ def evidence_for_plan(plan):
     return e
 
 
+def test_policy_evaluation_reuses_signed_response_without_rewriting_mapping_or_provenance():
+    store,plans,args,send,db,review=automatic();plan=plans[0]
+    evidence=evidence_for_plan(plan);seal(plan,args['key'])
+    process_plans(plans,**args);assert post(review,args)==0
+    old=deepcopy(store.value['medical_image_analyses'])
+    plan['accounting_evaluation']=evidence;seal(plan,args['key'])
+    counts=process_plans(plans,**args)
+    assert counts['medical_ai_requests']==0 and counts['medical_ai_reused']==1 and send.call_count==1
+    assert store.value['medical_image_analyses']==old
+    assert post(review,args)==1
+    writes=db.writes
+    assert process_plans(plans,**args)['medical_ai_requests']==0 and post(review,args)==0 and db.writes==writes
+    assert len(store.value['medical_accounting_evaluations'])==1
+    assert store.value['medical_image_analyses']==old
+
+
 @pytest.mark.parametrize('kind',['source','crop','legacy_count'])
 def test_new_evaluation_cannot_be_attached_to_different_saved_input(kind):
     store,plans,args,send,db,review=automatic();plan=plans[0]
@@ -131,6 +147,15 @@ def test_new_evaluation_cannot_be_attached_to_different_saved_input(kind):
     plan['accounting_evaluation']=e;seal(plan,args['key'])
     with pytest.raises(StateError,match='evidence_binding_changed'):process_plans(plans,**args)
     assert send.call_count==1 and not db.rows['支出明細']
+
+
+def test_evaluation_tampering_does_not_relax_the_accounting_veto():
+    store,plans,args,send,db,review=automatic();plan=plans[0]
+    plan['accounting_evaluation']=evidence_for_plan(plan);seal(plan,args['key']);process_plans(plans,**args)
+    next(iter(store.value['medical_accounting_evaluations'].values()))['evidence']['unresolved_payment_conflicts']=0
+    next(iter(store.value['medical_accounting_evaluations'].values()))['evidence']['independent_payment_fields']=2
+    with pytest.raises(StateError,match='evaluation_integrity_failed'):post(review,args)
+    assert not db.rows['支出明細']
 
 
 def settlement_fixture(*,unreadable=False,partial=False):
@@ -152,6 +177,23 @@ def test_actual_current_receipt_does_not_require_bill_balance_arithmetic(unreada
     assert e['unresolved_payment_conflicts']>0  # prior role audit is retained
     assert p['receipt_context_verified'] and p['unresolved_influence_groups']==0
     assert p['unassigned_currency_fields']==p['independent_competing_payment_fields']==0
+
+
+def test_partial_actual_receipt_posts_3000_not_the_bill_5000_and_reuses_response():
+    from app.medical_image_candidate import seal_crop
+    store,plans,args,send,db,review=automatic();plan=plans[0]
+    e,_,_,_=settlement_fixture(partial=True);m=plan['mapping']
+    m.update(payment_label='今回入金額',unresolved_candidates=e['original_cutout_unresolved'])
+    e['binding']={k:m[k] for k in e['binding']};plan['accounting_evaluation']=e
+    plan['proof']=seal_crop(args['load_crop'](plan),'今回入金額',args['key'])
+    send.return_value.candidates[0].label='今回入金額';send.return_value.candidates[0].amount_yen=3000
+    seal(plan,args['key']);process_plans(plans,**args)
+    original=deepcopy(store.value['medical_image_analyses'])
+    assert post(review,args)==1 and db.rows['支出明細'][0][4]==3000
+    assert next(iter(review.items.values()))['automatic_decision']['accounting_scope']=='medical-current-actual-payment-v1'
+    writes=db.writes
+    assert process_plans(plans,**args)['medical_ai_requests']==0 and post(review,args)==0
+    assert db.writes==writes and send.call_count==1 and store.value['medical_image_analyses']==original
 
 
 @pytest.mark.parametrize('label',['返金額','預り金','入金額調整','不明金額','取消済'])
