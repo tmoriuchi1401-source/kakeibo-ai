@@ -132,7 +132,7 @@ test('PDF edit requires selected group; confirm needs no partition input',()=>{
 
 test('PDF only accepts a single operation dropdown edit, never bulk/other edits',()=>{
   const h=pdfHarness();let count=0;h.ctx.submitPdfGroupingRow_=()=>count++;
-  const event=(tab,col,nRows=1)=>({value:'確定',range:{getSheet:()=>({getName:()=>tab}),
+  const event=(tab,col,nRows=1)=>({value:'確定',range:{getSheet:()=>({getName:()=>tab,getRange:()=>({getDisplayValue:()=> 'ページ数'})}),
     getColumn:()=>col,getRow:()=>2,getNumRows:()=>nRows,getNumColumns:()=>1}});
   h.ctx.pdfGroupingEdited(event('PDFページ確認',9));
   h.ctx.pdfGroupingEdited(event('支出明細',8));

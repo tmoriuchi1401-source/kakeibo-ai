@@ -60,6 +60,57 @@ class DrivePdfReader:
             raise StateError('grouping_refresh_limit')
         return [f['id'] for f in value.get('files', [])]
 
+    def verify_pages(self, source_id, previous, *, numbers=None):
+        """No OCR/payment extraction: rehash fresh visible pixels at saved scales.
+
+        Used ONLY for confirming an already fully observed proposal. Changed
+        bytes or renderer output invalidates the view instead of granting rights.
+        """
+        from contextlib import closing
+        import pypdfium2 as pdfium
+        from .receipt_pdf_units import (MAX_SOURCE_BYTES, MAX_PAGE_PIXELS, _render_png,
+                                        PageObservation, PdfObservations)
+        from .pdf_bounded_rendering import WorkBudget, render_scale
+        if not previous:
+            raise StateError('page_kind_source_changed')
+        before=self.metadata(source_id)
+        content=self.service.files().get_media(fileId=source_id,supportsAllDrives=True).execute(num_retries=0)
+        if (len(content)>MAX_SOURCE_BYTES or sha256(content).hexdigest()!=previous['source_content_hash'] or
+                self.metadata(source_id)!=before):
+            raise StateError('page_kind_source_changed')
+        budget=WorkBudget();pages=[]
+        try:
+            if numbers is not None and (not isinstance(numbers,list) or not numbers or
+                    any(type(n) is not int or not 1<=n<=previous['page_count'] for n in numbers)):
+                raise StateError('page_kind_page_changed')
+            for saved in previous['pages']:
+                if numbers is not None and saved['page_number'] not in numbers:
+                    # Fresh whole-PDF hash still matches. Only the requested
+                    # page(s) need pixel verification during repeated manual
+                    # owner-input checks; no rights for other pages are added.
+                    pages.append(PageObservation(**saved))
+                    continue
+                scale=saved.get('effective_render_scale')
+                if not scale:
+                    raise StateError('page_kind_page_unobserved')
+                with closing(pdfium.PdfDocument(content)) as document:
+                    if len(document)!=previous['page_count']:raise StateError('page_kind_source_changed')
+                    with closing(document[saved['page_number']-1]) as page:
+                        w,h=page.get_size()
+                        maximum,pixels=render_scale(w,h,MAX_PAGE_PIXELS)
+                        if scale>maximum:raise StateError('page_kind_page_changed')
+                        # Charge the full allowed page cap, even when smaller.
+                        with budget.page(pixels):
+                            image=_render_png(page,scale,MAX_PAGE_PIXELS)
+                            if sha256(image).hexdigest()!=saved['page_hash']:
+                                raise StateError('page_kind_page_changed')
+                            image=None
+                pages.append(PageObservation(**saved))
+            if self.metadata(source_id)!=before:raise StateError('page_kind_source_changed')
+            return PdfObservations(source_id,previous['source_content_hash'],tuple(pages))
+        except StateError:raise
+        except Exception:raise StateError('page_kind_page_verification_failed') from None
+
 
 def preflight_permissions(service, binding, owner_digest, sa_email):
     # Exactly the existing owner + SA writer ACL; never add/remove permissions.
@@ -115,6 +166,10 @@ def open_context(env):
 def execute(env):
     grouping, sheet, reader = open_context(env)
     mode = env.get('PDF_GROUPING_MODE')
+    from .pdf_page_review import SCHEMA
+    if mode == 'install-pages' or sheet._get('PDFページ確認','C1') == [[SCHEMA]]:
+        from .pdf_page_review_worker import execute_shared
+        return execute_shared(env,grouping,sheet,reader,'install' if mode=='install-pages' else mode)
     if mode == 'install':
         sheet.install()
         return {'ui_installed': 1}

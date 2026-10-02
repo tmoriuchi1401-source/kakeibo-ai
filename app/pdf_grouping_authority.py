@@ -47,7 +47,9 @@ def confirmation(proposal, confirmed_at):
 
 def validate(value, binding):
     try:
-        if (not isinstance(value, dict) or set(value) != {'schema', 'binding', 'generation', 'records', 'audit'} or
+        if (not isinstance(value, dict) or set(value) not in (
+                {'schema', 'binding', 'generation', 'records', 'audit'},
+                {'schema', 'binding', 'generation', 'records', 'audit', 'page_kinds'}) or
                 value['schema'] != SCHEMA or value['binding'] != binding or
                 type(value['generation']) is not int or value['generation'] < 0 or
                 not isinstance(value['records'], dict) or not isinstance(value['audit'], list)):
@@ -100,13 +102,16 @@ def validate(value, binding):
                     raise ValueError()
             elif record['status'] == 'grouping_confirmed':
                 raise ValueError()
+        if 'page_kinds' in value:
+            from .pdf_page_kind import validate_kinds
+            validate_kinds(value['page_kinds'])
         for event in value['audit']:
             if (set(event) != {'operation', 'timestamp', 'source_file_id', 'source_content_hash',
                               'before_revision', 'after_revision', 'proposal_digest',
                               'confirmation_digest', 'result', 'request_id', 'request_digest'} or
-                    event['operation'] not in {'observe', 'confirm', 'edit', 'reject', 'hold'} or
+                    event['operation'] not in {'observe', 'confirm', 'edit', 'reject', 'hold', 'page_kind'} or
                     event['result'] not in {'observed', 'source_changed', 'proposal_failed', 'confirmed',
-                                           'proposal_updated', 'unchanged_partition', 'rejected', 'held', 'stale_proposal'} or
+                                           'proposal_updated', 'unchanged_partition', 'rejected', 'held', 'stale_proposal', 'page_kind_confirmed'} or
                     any(type(event[k]) is not int or event[k] < 0 for k in ('before_revision', 'after_revision')) or
                     not re.fullmatch(r'[0-9a-f]{64}', event['source_content_hash']) or
                     any(v and not re.fullmatch(r'[0-9a-f]{64}', v) for v in
@@ -336,8 +341,15 @@ class DurablePdfGrouping:
                     not _valid_proposal(record['proposal'], _snapshot(observations))):
                 return ()
             proposal = record['proposal']
+            from .pdf_page_kind import current_answer
+            def restricted(g):
+                classifications=[]
+                for n,automatic in zip(g['page_numbers'],g['page_classifications']):
+                    human=current_answer(value,proposal['pages'][n-1])
+                    classifications.append(privacy_for((automatic,human['human_classification'])) if human else automatic)
+                return tuple(classifications)
             return tuple(ConfirmedDocumentUnit(proposal['source_file_id'], proposal['source_content_hash'],
-                tuple(g['page_numbers']), tuple(g['member_page_hashes']), tuple(g['page_classifications']),
+                tuple(g['page_numbers']), tuple(g['member_page_hashes']), restricted(g),
                 record['revision'], proposal['proposal_digest']) for g in proposal['groups'])
         except Exception:
             return ()
