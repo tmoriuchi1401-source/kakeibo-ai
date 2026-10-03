@@ -21,6 +21,7 @@ function harness() {
   const catSheet={getRange:()=>({getDisplayValues:()=>cats})};
   const ss={getSheetByName:name=>({'_手入力受付':queueSheet,'カテゴリ':catSheet,'支出明細':{}})[name]};
   const ctx=vm.createContext({
+    Session:{getActiveUser:()=>({getEmail:()=> 'tmoriuchi1401@gmail.com'}),getEffectiveUser:()=>({getEmail:()=> 'tmoriuchi1401@gmail.com'})},
     SpreadsheetApp:{openById:()=>ss,flush:()=>{}},
     PropertiesService:{getScriptProperties:()=>({getProperty:key=>key==='MANUAL_SPREADSHEET_ID'?'sheet':'token'})},
     LockService:{getScriptLock:()=>({waitLock:()=>{},releaseLock:()=>{}})},
