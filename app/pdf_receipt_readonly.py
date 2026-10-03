@@ -27,6 +27,23 @@ from .receipt_validation import validate_receipt_result
 
 def selected_unit(value, source_id, number, expected):
     """value must come from a validated durable store load, never a UI/cache."""
+    if value.get('schema')=='pdf-grouping-authority-v2':
+        from .pdf_grouping_authority_v2 import validate as validate_v2, units, page_identity
+        validate_v2(value,expected['binding'])
+        record=value['records'].get(_digest(source_id))
+        if not record or record['status']!='grouping_confirmed':raise StateError('readonly_authority_missing')
+        p=record['proposal'];a=record['confirmation']
+        if (any(p.get(k)!=expected[k] for k in ('source_file_id','source_content_hash','page_count','proposal_digest'))
+                or record['revision']!=expected['grouping_revision'] or a['confirmation_digest']!=expected['confirmation_digest']):
+            raise StateError('readonly_authority_stale')
+        candidates=[u for u in units(value) if u.source_file_id==source_id and u.page_numbers==(number,)]
+        if type(number) is not int or len(candidates)!=1:raise StateError('readonly_single_page_unit_required')
+        unit=candidates[0];page=p['pages'][number-1]
+        if page['human_classification']!='normal':raise StateError('readonly_kind_not_normal')
+        if (unit.unit_id!=expected['unit_ids'].get(number) or page['page_identity']!=page_identity(unit.source_content_hash,number,p['page_count'])
+                or unit.member_page_identities!=(page['page_identity'],)):
+            raise StateError('readonly_page_identity_changed')
+        return unit,page,p
     validate(value,expected['binding'])
     record=value['records'].get(_digest(source_id))
     if not record or record['status']!='grouping_confirmed' or not record['confirmation']:
@@ -93,8 +110,11 @@ class ReadonlyPdfReceipts:
         stage='authority'
         try:
             unit,page,proposal=selected_unit(self.load_authority(),self.expected['source_file_id'],number,self.expected)
-            report.update(unit_id=unit.unit_id,source_content_hash=unit.source_content_hash,page_hash=page['page_hash'],
+            stable='page_identity' in page
+            report.update(unit_id=unit.unit_id,source_content_hash=unit.source_content_hash,
                           human_classification='normal',effective_classification=unit.classification)
+            if stable:report.update(page_identity=page['page_identity'],observation_render_hash=page['observation_render_hash'])
+            else:report['page_hash']=page['page_hash']
             content=self.load_source(unit.source_file_id)
             if not isinstance(content,bytes) or len(content)>MAX_SOURCE_BYTES or sha256(content).hexdigest()!=unit.source_content_hash:
                 raise StateError('readonly_source_changed')
@@ -105,12 +125,15 @@ class ReadonlyPdfReceipts:
                     report.update(status='privacy_blocked',reason='sticky_automatic_privacy',gemini_calls=0)
                     return report
                 with closing(document[number-1]) as pdfpage:
-                    scale=page['effective_render_scale']
+                    scale=(page['observation_metadata'] if stable else page)['effective_render_scale']
                     maximum,pixels=render_scale(*pdfpage.get_size(),MAX_PAGE_PIXELS)
-                    if not scale or scale>maximum:raise StateError('readonly_render_identity_changed')
+                    if stable:
+                        scale,pixels=render_scale(*pdfpage.get_size(),MAX_PAGE_PIXELS,preferred=scale or maximum)
+                    elif not scale or scale>maximum:raise StateError('readonly_render_identity_changed')
                     with self.budget.page(pixels):
                         payload=_render_png(pdfpage,scale,MAX_PAGE_PIXELS)
-                        if sha256(payload).hexdigest()!=page['page_hash']:raise StateError('readonly_page_changed')
+                        payload_hash=sha256(payload).hexdigest()
+                        if not stable and payload_hash!=page['page_hash']:raise StateError('readonly_page_changed')
                         with Image.open(BytesIO(payload)) as image:
                             if image.format!='PNG' or image.mode!='RGB' or image.info or getattr(image,'n_frames',1)!=1:
                                 raise StateError('readonly_payload_invalid')
@@ -139,7 +162,9 @@ class ReadonlyPdfReceipts:
                         if latest!=unit or sha256(self.load_source(unit.source_file_id)).hexdigest()!=unit.source_content_hash:
                             raise StateError('readonly_authority_stale')
                         stage='analysis'
-                        result,readings=self.analyze(payload,self.categories)
+                        if sha256(payload).hexdigest()!=payload_hash:raise StateError('readonly_payload_changed')
+                        result,readings=(self.analyze(payload,self.categories,expected_payload_sha256=payload_hash)
+                                        if stable else self.analyze(payload,self.categories))
                         issues,checks=receipt_checks(result,self.categories,gate,readings,extracted.text or '')
                         report.update(status='would_need_review' if issues else 'would_import',
                             date=result.date,merchant=result.merchant,total=result.total,item_count=len(result.items),

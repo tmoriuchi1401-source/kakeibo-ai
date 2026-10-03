@@ -163,6 +163,8 @@ def check_p2(proof,env,expected):
             or proof.get('source_content_hash')!=expected['source_content_hash']
             or proof.get('proposal_digest')!=expected['proposal_digest']
             or proof.get('grouping_revision')!=expected['grouping_revision']
+            or (expected.get('legacy_confirmation_digest') is not None
+                and proof.get('legacy_confirmation_digest')!=expected['legacy_confirmation_digest'])
             or proof.get('authority_unchanged') is not True or len(rows)!=1
             or rows[0].get('page_number')!=2 or rows[0].get('unit_id')!=expected['unit_ids'][2]
             or rows[0].get('status') not in {'would_import','would_need_review'}
@@ -172,7 +174,7 @@ def check_p2(proof,env,expected):
         raise StateError('readonly_p2_proof_stale')
 
 
-def open_context(env):
+def open_legacy_context(env):
     # No service-account file is created. Reuse existing JSON in runner memory.
     from googleapiclient.discovery import build
     from .google_clients import credentials, READ_ONLY_SCOPES
@@ -220,6 +222,35 @@ def open_context(env):
     return store,source,categories,expected,pem
 
 
+def open_context(env):
+    """v1 stays untouched; a uniquely bound private v2 file is the new正本."""
+    from googleapiclient.discovery import build
+    from .google_clients import credentials, READ_ONLY_SCOPES
+    from .pdf_grouping_authority_v2 import DriveGroupingV2Store, discover, units, validate
+    legacy,source,categories,old,pem=open_legacy_context(env)
+    config=json.loads(env['PDF_GROUPING_BINDING']);info=json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
+    folder=unwrap('KAKEIBO_STATE_FOLDER_ID',config['folder'],pem)
+    legacy_id=unwrap('PDF_GROUPING_STATE_FILE_ID',config['file'],pem)
+    auth=credentials(READ_ONLY_SCOPES)
+    drive=build('drive','v3',credentials=auth,cache_discovery=False)
+    v2=build('drive','v2',credentials=auth,cache_discovery=False)
+    for client in (drive,v2):readonly_http(client)
+    target=discover(drive,folder,old['binding']);binding=GroupingBinding(folder,target)
+    digest=_digest([folder,target,env['SPREADSHEET_ID']])
+    preflight=lambda:preflight_permissions(drive,binding,config['owner_digest'],info['client_email'])
+    transport=ConditionalDriveStateTransportV2(v2,binding)
+    def forbidden(*_,**__):raise StateError('readonly_authority_write_forbidden')
+    transport.replace_versioned=forbidden
+    store=DriveGroupingV2Store(transport,digest,legacy,legacy_id,preflight=preflight)
+    value=store.load();record=value['records'][SOURCE_KEY];p=record['proposal'];a=record['confirmation']
+    if value['migration']['legacy_confirmation_digest']!=CONFIRMATION:raise StateError('readonly_migration_intent_changed')
+    expected={k:p[k] for k in ('source_file_id','source_content_hash','page_count','proposal_digest')}
+    expected.update(binding=digest,grouping_revision=record['revision'],confirmation_digest=a['confirmation_digest'],
+        legacy_confirmation_digest=CONFIRMATION,unit_ids={u.page_numbers[0]:u.unit_id for u in units(value)})
+    for number in range(2,15):selected_unit(value,p['source_file_id'],number,expected)
+    return store,source,categories,expected,pem
+
+
 def receipt_analyzer(key,model):
     from .gemini_ai import GeminiAI
     from .models import ReceiptResult
@@ -247,7 +278,9 @@ def receipt_analyzer(key,model):
         except Exception:pass
         return response
     ai.client=SimpleNamespace(interactions=SimpleNamespace(create=create))
-    def analyze(png,categories):
+    def analyze(png,categories,*,expected_payload_sha256=None):
+        if expected_payload_sha256 is not None and sha256(png).hexdigest()!=expected_payload_sha256:
+            raise StateError('readonly_payload_changed')
         evidence.update(calls=0,readings=[],fingerprint=sha256(png).digest())
         result=ai.analyze_receipt(png,'image/png',categories,known_source_classification='normal')
         readings=evidence['readings'];evidence['readings']=[]
@@ -273,12 +306,14 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
         # Explicit minimal whitelist: no raw response, notes, item names, OCR or images.
         rows.append({k:v for k,v in result.items() if k in {'page_number','unit_id','source_content_hash','page_hash',
             'model','status','validation_issues','reason','date','merchant','total','item_count','checks','privacy',
-            'effective_classification','human_classification','payload_sha256','payload_mime','payload_pages'}})
+            'effective_classification','human_classification','payload_sha256','payload_mime','payload_pages',
+            'page_identity','observation_render_hash'}})
         if result['status']=='authority_held':break
     if store.load()!=initial or store.payload!=initial_bytes or store.tag!=initial_tag:
         raise StateError('readonly_authority_changed')
     value={'schema':'pdf-unit-readonly-diagnostic-v1','mode':env['PDF_READONLY_MODE'],'run_id':env['GITHUB_RUN_ID'],
-        'code_sha':checkout_sha,'source_content_hash':SOURCE_HASH,'confirmation_digest':CONFIRMATION,
+        'code_sha':checkout_sha,'source_content_hash':SOURCE_HASH,'confirmation_digest':expected['confirmation_digest'],
+        'legacy_confirmation_digest':expected.get('legacy_confirmation_digest'),
         'proposal_digest':expected['proposal_digest'],'grouping_revision':expected['grouping_revision'],
         'authority_unchanged':True,'cloud_writes':0,'medical_calls':0,'source_moves':0,'p1_rendered':0,'p1_submitted':0,
         'gemini_calls':calls,'results':rows,'budgets':runner.budget.metadata()}
