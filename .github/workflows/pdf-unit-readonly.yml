@@ -1,0 +1,117 @@
+name: PDF confirmed Unit read-only
+run-name: PDF read-only ${{ inputs.mode }}
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact reviewed PR 91 head SHA; all three CI checks must pass
+        type: string
+        required: true
+      mode:
+        type: choice
+        options: [preflight, p2, remaining]
+        default: p2
+        required: true
+      confirm:
+        description: Type READ_ONLY; no accounting, Medical, move or authority changes
+        type: string
+        required: true
+      p2_run_id:
+        description: Successful p2 run ID required for remaining; same approved SHA and authority
+        type: string
+        required: false
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  readonly:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/pdf-page-privacy') &&
+      inputs.confirm == 'READ_ONLY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Reject debug before any analysis Secret is provided
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - name: Validate exact draft PR head before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, re, urllib.request
+          sha=os.environ['APPROVED_SHA']
+          assert re.fullmatch('[0-9a-f]{40}',sha), 'Invalid approved SHA'
+          def get(path):
+              req=urllib.request.Request('https://api.github.com/repos/tmoriuchi1401-source/kakeibo-ai/'+path,
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(req,timeout=30) as response:return json.load(response)
+          p=get('pulls/91')
+          assert p['state']=='open' and p['draft'] is True, 'Draft PR required'
+          assert p['base']['ref']=='main' and p['head']['ref']=='codex/pdf-page-privacy', 'PR branch mismatch'
+          assert p['head']['repo']['full_name']=='tmoriuchi1401-source/kakeibo-ai', 'Repository mismatch'
+          assert p['head']['sha']==sha, 'Stale approved SHA'
+          required={'local-ocr-runtime','test (general, not payroll and not medical)',
+                    'test (sensitive-synthetic, payroll or medical)'}
+          checks=[r for r in get('commits/'+sha+'/check-runs?per_page=100')['check_runs'] if r['name'] in required]
+          assert len(checks)==3 and {r['name'] for r in checks}==required, 'Required CI missing'
+          assert all(r['status']=='completed' and r['conclusion']=='success' for r in checks), 'CI not successful'
+          print('Reviewed code: verified')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: tmoriuchi1401-source/kakeibo-ai
+          ref: ${{ inputs.approved_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing receipt OCR dependencies before Secrets
+        env:
+          KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-pdf-readonly-ocr
+        run: |
+          python -m pip install -r requirements.txt -r requirements-local-ocr.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+          tesseract --list-langs | grep -qx jpn
+          tesseract --list-langs | grep -qx eng
+          python -m app.receipt_local_ocr prepare
+      - name: Fixed confirmed Unit read-only evaluation
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
+          PDF_GROUPING_BINDING: ${{ vars.PDF_GROUPING_BINDING }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PDF_READONLY_APPROVED_SHA: ${{ inputs.approved_sha }}
+          PDF_READONLY_MODE: ${{ inputs.mode }}
+          PDF_READONLY_CONFIRM: ${{ inputs.confirm }}
+          PDF_READONLY_P2_RUN_ID: ${{ inputs.p2_run_id }}
+          PDF_ACCOUNTING_ENABLED: 'false'
+          PDF_MEDICAL_ENABLED: 'false'
+          PDF_ARCHIVE_ENABLED: 'false'
+          NORMAL_RECEIPT_GEMINI_MODEL: gemini-3.5-flash-lite
+          KAKEIBO_LOCAL_OCR_ENABLED: 'true'
+          RECEIPT_UNRULED_POLICY: owner-unruled-v1
+          KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-pdf-readonly-ocr
+        run: python -m app.pdf_unit_readonly_analysis
+      - name: Encrypted diagnostic only
+        if: ${{ always() && inputs.mode != 'preflight' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-unit-readonly-encrypted
+          path: ${{ runner.temp }}/pdf-unit-readonly/diagnostic.enc.json
+          retention-days: 1
+          if-no-files-found: ignore
