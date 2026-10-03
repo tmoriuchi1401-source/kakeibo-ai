@@ -134,3 +134,6 @@ def test_fake_http_status_is_not_trusted(local_ocr):
     ai.side_effect=error;report=svc.run(2)
     assert report['analysis_failure_kind']=='result_or_validation_error'
     assert 'gemini_api_status' not in report and 'PRIVATE_SECRET_OCR' not in str(report)
+    assert report['analysis_failure_class']=='runtime'
+    assert all(set(x)=={'file','line'} and '/' not in x['file'] and '\\' not in x['file']
+               for x in report['analysis_failure_sites'])

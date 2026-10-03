@@ -260,7 +260,7 @@ def receipt_analyzer(key,model):
             or destination.port not in (None,443) or destination.username or destination.password):
         raise StateError('readonly_gemini_destination_mismatch')
     original=ai.client.interactions.create
-    evidence={'calls':0,'readings':[],'fingerprint':None}
+    evidence={'calls':0,'responses':0,'readings':[],'fingerprint':None}
     def create(**kwargs):
         content=kwargs.get('input',[])
         if (len(content)!=2 or content[0].get('type')!='text' or content[1].get('type')!='image'
@@ -274,6 +274,7 @@ def receipt_analyzer(key,model):
         require_receipt_ai_permission(png,'image/png',known_source_classification='normal')
         evidence['calls']+=1
         response=original(**kwargs)
+        evidence['responses']+=1
         try:evidence['readings'].append(ReceiptResult.model_validate_json(response.output_text))
         except Exception:pass
         return response
@@ -281,7 +282,7 @@ def receipt_analyzer(key,model):
     def analyze(png,categories,*,expected_payload_sha256=None):
         if expected_payload_sha256 is not None and sha256(png).hexdigest()!=expected_payload_sha256:
             raise StateError('readonly_payload_changed')
-        evidence.update(calls=0,readings=[],fingerprint=sha256(png).digest())
+        evidence.update(calls=0,responses=0,readings=[],fingerprint=sha256(png).digest())
         result=ai.analyze_receipt(png,'image/png',categories,known_source_classification='normal')
         readings=evidence['readings'];evidence['readings']=[]
         return result,readings
@@ -301,13 +302,15 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
         model=env.get('NORMAL_RECEIPT_GEMINI_MODEL','gemini-3.5-flash-lite'))
     rows=[];calls=0
     for number in ([2] if env['PDF_READONLY_MODE']=='p2' else range(3,15)):
-        evidence['calls']=0
+        evidence['calls']=0;evidence['responses']=0
         result=runner.run(number);calls+=evidence['calls']
+        result['gemini_response_count']=evidence.get('responses',0)
         # Explicit minimal whitelist: no raw response, notes, item names, OCR or images.
         rows.append({k:v for k,v in result.items() if k in {'page_number','unit_id','source_content_hash','page_hash',
             'model','status','validation_issues','reason','date','merchant','total','item_count','checks','privacy',
             'effective_classification','human_classification','payload_sha256','payload_mime','payload_pages',
-            'page_identity','observation_render_hash','gemini_api_status','analysis_failure_kind'}})
+            'page_identity','observation_render_hash','gemini_api_status','analysis_failure_kind',
+            'analysis_failure_class','analysis_failure_sites','gemini_response_count'}})
         if result['status']=='authority_held':break
     if store.load()!=initial or store.payload!=initial_bytes or store.tag!=initial_tag:
         raise StateError('readonly_authority_changed')

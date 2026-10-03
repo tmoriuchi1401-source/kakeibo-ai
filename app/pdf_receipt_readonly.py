@@ -194,6 +194,17 @@ class ReadonlyPdfReceipts:
                     report['analysis_failure_kind']='adapter_contract_error'
                 else:
                     report['analysis_failure_kind']='result_or_validation_error'
+                from pydantic import ValidationError
+                import traceback
+                from pathlib import PurePath
+                report['analysis_failure_class']=next((label for cls,label in (
+                    (ValidationError,'schema_validation'),(TypeError,'type'),(AttributeError,'attribute'),
+                    (ValueError,'value'),(RuntimeError,'runtime')) if isinstance(error,cls)),'other')
+                # Only source-code filenames/line numbers, never traceback text,
+                # exception messages, locals, absolute paths or document values.
+                frames=traceback.extract_tb(error.__traceback__)
+                report['analysis_failure_sites']=[{'file':PurePath(f.filename).name,'line':f.lineno}
+                    for f in frames[-3:] if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*\.py',PurePath(f.filename).name)]
         finally:
             payload=content=extracted=None
         return report
