@@ -26,6 +26,16 @@ Drive正本から確定Unitを取得する際は、自動分類と現在有効�
 
 人間確認時は原本のmetadata／bytesを読み直し、保存されたscaleで対象ページを逐次再render・PNG hash照合する。全ページの再OCRや金額抽出をしない。Medical入力再照合時は対象ページに限定し、一般grouping確認時は全memberのpage hashを照合する。元PDFや生成PNGをAIへ送らない。
 
+## 一般ページだけのgrouping確認
+
+`DurablePdfGrouping.regenerate_general` はfresh原本／全ページhashを確認し、人間の種類回答から一般ページだけの候補を作り直す。`DrivePdfReader.grouping_evidence` は対象一般ページだけを逐次local OCRし、既存の隣接groupingロジックへ一時的な証拠を渡す。原本画像・OCR本文・証拠の店舗名や日付を保存しない。機微ページを飛び越えた結合は禁止。弱い証拠は単独候補にする。
+
+proposalには原本全ページの観測metadataを変更せず保持し、`grouping_page_numbers` で確認対象を限定する。`page_kind_digests` が全ページの有効な種類回答に紐付く。候補生成用のeffective normalは永続privacy分類やpayload gateを書き換えない。Medicalはこのpartitionから除外し、医療入力待ちのカードと入力を維持する。
+
+分割／隣接結合は選択範囲を全て網羅する新proposal・revisionを作り、confirmed authorityを破棄して再表示する。改めて明示「確定」を選んだ場合だけ、その一般範囲のpartitionを保存する。人間確認前の自動候補はauthorityではない。source hash/count、member hash、種類回答digest、proposal digest、revisionを再照合し、旧画面・範囲外・Medicalを含む操作は拒否する。
+
+scope付きconfirmationは一般範囲と種類回答digestを含み、Gemini／会計／Medical handoff／archive flagsを全てfalseとする。旧全ページproposal／confirmationのschemaと読込みは維持。種類回答の変更でscope confirmationを失効させ、replayは既存Unit ID・confirmation digest／時刻を再利用する。scopeの取得や同一request replayは追加authority writeを行わない。保存は従来のstrong ETag／If-Match／exact read-backのみ、412後の自動retryや無条件fallbackはない。
+
 ## Draft中の実行境界
 
 manual workflowの既存main SHA gateと `PDF_GROUPING_REVIEW_ENABLED` を維持し、自動dispatchは既定OFF。新schedule、scope、secret、トリガーは追加しない。既存Medical完全手入力への停止措置2commitをPRへ取り込み、旧AUTO/candidate経路を復活させない。live canaryは利用者が指定したpage-kindの保存と空のMedical入力欄／一般groupingの表示のみ。実医療費の記帳はownerが原本を見て手入力・明示確定した後の別操作とする。PRはDraftのまま、mainへmergeせず停止する。

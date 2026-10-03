@@ -111,6 +111,46 @@ class DrivePdfReader:
         except StateError:raise
         except Exception:raise StateError('page_kind_page_verification_failed') from None
 
+    def grouping_evidence(self, source_id, previous, numbers):
+        """Local visible-page OCR hints only; no privacy or authority changes."""
+        from contextlib import closing
+        import pypdfium2 as pdfium
+        from .receipt_pdf_units import MAX_SOURCE_BYTES, MAX_PAGE_PIXELS, _render_png
+        from .pdf_bounded_rendering import WorkBudget, render_scale
+        from .receipt_text_extraction import _extract_receipt_text
+        from .receipt_pdf_grouping import PageEvidence, evidence_from_text
+        if (not previous or not isinstance(numbers,list) or not numbers or
+                numbers != sorted(set(numbers)) or
+                any(type(n) is not int or not 1 <= n <= previous['page_count'] for n in numbers)):
+            raise StateError('grouping_evidence_incomplete')
+        before=self.metadata(source_id)
+        content=self.service.files().get_media(fileId=source_id,supportsAllDrives=True).execute(num_retries=0)
+        if (len(content)>MAX_SOURCE_BYTES or sha256(content).hexdigest()!=previous['source_content_hash'] or
+                self.metadata(source_id)!=before):
+            raise StateError('page_kind_source_changed')
+        budget=WorkBudget();result={}
+        try:
+            for n in numbers:
+                saved=previous['pages'][n-1];scale=saved.get('effective_render_scale')
+                if not scale:raise StateError('page_kind_page_unobserved')
+                with closing(pdfium.PdfDocument(content)) as document:
+                    if len(document)!=previous['page_count']:raise StateError('page_kind_source_changed')
+                    with closing(document[n-1]) as page:
+                        maximum,pixels=render_scale(*page.get_size(),MAX_PAGE_PIXELS)
+                        if scale>maximum:raise StateError('page_kind_page_changed')
+                        with budget.page(pixels):
+                            image=_render_png(page,scale,MAX_PAGE_PIXELS)
+                            if sha256(image).hexdigest()!=saved['page_hash']:raise StateError('page_kind_page_changed')
+                            extraction=_extract_receipt_text(image,'image/png')
+                            result[n]=(evidence_from_text(extraction.text) if extraction.status=='extracted'
+                                       and extraction.observation_complete else PageEvidence())
+                            # Neither text nor PNG survives the page iteration.
+                            image=extraction=None
+            if self.metadata(source_id)!=before:raise StateError('page_kind_source_changed')
+            return result
+        except StateError:raise
+        except Exception:raise StateError('grouping_evidence_incomplete') from None
+
 
 def preflight_permissions(service, binding, owner_digest, sa_email):
     # Exactly the existing owner + SA writer ACL; never add/remove permissions.

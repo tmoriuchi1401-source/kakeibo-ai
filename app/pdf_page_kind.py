@@ -101,6 +101,10 @@ class PageKindConfirmation:
         for n, a in updates.items():
             value.setdefault('page_kinds', {})[kind_key(proposal['source_file_id'], n)] = a
         after = value['records'][_digest(proposal['source_file_id'])]
+        from .pdf_general_grouping import scope_current
+        if after['confirmation'] and not scope_current(value, after['proposal']):
+            after['confirmation'] = None
+            after['status'] = 'grouping_required'
         # No OCR, names, amounts or manual payment inputs in this audit/store.
         self.grouping._event(value, 'page_kind', proposal['source_file_id'], proposal['source_content_hash'],
                              after, after, 'page_kind_confirmed', request_id=request_id, request_digest=intent_digest)

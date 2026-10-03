@@ -255,6 +255,12 @@ def _process_page_request(kinds, sheet, request_id, *, medical_factory=None):
             n=identity['page_numbers'][0]
             if n not in answers or _digest([answers[n]['confirmation_digest']])!=previous['confirmation_digest']:
                 raise StateError('stale_proposal')
+        else:
+            from .pdf_general_grouping import scope_current
+            authority=record['confirmation']
+            if (not scope_current(value,proposal) or
+                    (authority['confirmation_digest'] if authority else '')!=previous['confirmation_digest']):
+                raise StateError('stale_proposal')
         publish_current(kinds,sheet)
         sheet.finish_card(request_id,snapshot,previous['result'],g.clock())
         return previous['result']

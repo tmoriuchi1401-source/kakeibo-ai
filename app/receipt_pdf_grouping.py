@@ -130,7 +130,8 @@ class AdjacentPageGrouping:
         for i, page in enumerate(observations.pages):
             reason, confidence = 'insufficient_continuation_evidence', 0.0
             merge = False
-            if i and page.classification == observations.pages[i - 1].classification == 'normal':
+            if (i and page.page_number == observations.pages[i - 1].page_number + 1 and
+                    page.classification == observations.pages[i - 1].classification == 'normal'):
                 left, right = evidence[i - 1], evidence[i]
                 anchors = (left.issuer and left.issuer == right.issuer and
                            left.date and left.date == right.date and
@@ -154,20 +155,28 @@ class AdjacentPageGrouping:
         return groups
 
 
-def _partition(groups, page_count):
+def _partition(groups, page_count, page_numbers=None):
     try:
         ranges = [g['page_numbers'] for g in groups]
-        if (not ranges or any(not numbers or
+        coverage = list(range(1, page_count + 1)) if page_numbers is None else page_numbers
+        if (not coverage or any(type(n) is not int or not 1 <= n <= page_count for n in coverage) or
+                coverage != sorted(set(coverage)) or not ranges or any(not numbers or
                 any(type(n) is not int for n in numbers) or
                 numbers != list(range(numbers[0], numbers[-1] + 1)) for numbers in ranges) or
-                [n for numbers in ranges for n in numbers] != list(range(1, page_count + 1))):
+                [n for numbers in ranges for n in numbers] != coverage):
             raise ValueError()
     except (KeyError, TypeError, ValueError, IndexError):
         raise GroupingError('grouping_partition_invalid') from None
 
 
 def _proposal(snapshot, candidates, revision, status='proposed'):
-    _partition(candidates, snapshot['page_count'])
+    _partition(candidates, snapshot['page_count'], snapshot.get('grouping_page_numbers'))
+    if 'grouping_page_numbers' in snapshot or 'page_kind_digests' in snapshot:
+        proofs = snapshot.get('page_kind_digests')
+        if (not isinstance(snapshot.get('grouping_page_numbers'), list) or
+                not isinstance(proofs, list) or len(proofs) != snapshot['page_count'] or
+                any(not isinstance(p, str) or p and not re.fullmatch(r'[0-9a-f]{64}', p) for p in proofs)):
+            raise GroupingError('grouping_scope_invalid')
     groups = []
     for candidate in candidates:
         if (type(candidate['confidence']) not in (int, float) or
@@ -198,7 +207,11 @@ def _valid_proposal(proposal, snapshot):
             return False
         candidates = [{'page_numbers': g['page_numbers'], 'confidence': g['confidence'],
                        'reason': g['reason']} for g in proposal['groups']]
-        return proposal == _proposal(snapshot, candidates, proposal['grouping_version'], proposal['status'])
+        scoped = dict(snapshot)
+        for key in ('grouping_page_numbers', 'page_kind_digests'):
+            if key in proposal:
+                scoped[key] = proposal[key]
+        return proposal == _proposal(scoped, candidates, proposal['grouping_version'], proposal['status'])
     except (KeyError, TypeError, ValueError):
         return False
 

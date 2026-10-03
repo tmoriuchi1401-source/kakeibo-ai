@@ -14,6 +14,7 @@ from .receipt_pdf_grouping import (
     _valid_proposal, _unit_status, privacy_for,
 )
 from .receipt_pdf_units import _digest, valid_render_metadata
+from .pdf_general_grouping import SCOPE_FIELDS, scope_current, scope_snapshot, general_candidates
 
 SCHEMA = 'pdf-grouping-authority-v1'
 MAX_STATE_BYTES = 8 * 1024 * 1024
@@ -42,6 +43,9 @@ def confirmation(proposal, confirmed_at):
                   for page in proposal['pages']],
         'confirmed_partition': [g['page_numbers'] for g in proposal['groups']],
         'unit_statuses': [_unit_status(privacy_for(g['page_classifications'])) for g in proposal['groups']]}
+    if 'grouping_page_numbers' in proposal:
+        value.update({k: proposal[k] for k in SCOPE_FIELDS})
+        value['gemini_allowed'] = False
     return {**value, 'confirmation_digest': _digest(value)}
 
 
@@ -96,8 +100,10 @@ def validate(value, binding):
                 if (record['status'] != 'grouping_confirmed' or proposal['status'] != 'proposed' or
                         any(authority.get(k) is not False for k in
                             ('accounting_allowed', 'medical_handoff_allowed', 'archive_allowed')) or
+                        ('grouping_page_numbers' in proposal and authority.get('gemini_allowed') is not False) or
                         type(authority.get('grouping_revision')) is not int or
                         type(authority.get('page_count')) is not int or
+                        not scope_current(value, proposal) or
                         authority != confirmation(proposal, authority['confirmed_at'])):
                     raise ValueError()
             elif record['status'] == 'grouping_confirmed':
@@ -192,7 +198,8 @@ class DurablePdfGrouping:
             snapshot = _snapshot(observations)
         except Exception:
             snapshot = None
-        if snapshot is not None and record and record['proposal'] and _valid_proposal(record['proposal'], snapshot):
+        if (snapshot is not None and record and record['proposal'] and
+                _valid_proposal(record['proposal'], snapshot) and scope_current(value, record['proposal'])):
             return record, False
         revision = record['revision'] + 1 if record else 1
         proposal = None
@@ -210,6 +217,26 @@ class DurablePdfGrouping:
         self._event(value, 'observe', observations.source_file_id, observations.source_content_hash,
                     record, after, result)
         return after, True
+
+    def regenerate_general(self, source_id, evidence_provider):
+        """Fresh local evidence -> general-only proposal, never confirmation."""
+        value = self.store.load()
+        observations, before = self._current(value, source_id)
+        snapshot = _snapshot(observations)
+        if not before or not before['proposal'] or not _valid_proposal(before['proposal'], snapshot):
+            raise StateError('stale_proposal')
+        scoped = scope_snapshot(snapshot, value)
+        old = before['proposal']
+        if all(old.get(k) == scoped[k] for k in SCOPE_FIELDS):
+            return self.view(before)  # no OCR or authority writes on replay
+        evidence = evidence_provider(old, scoped['grouping_page_numbers'])
+        candidates = general_candidates(observations, scoped, evidence)
+        after = {'proposal': _proposal(scoped, candidates, before['revision'] + 1),
+                 'revision': before['revision'] + 1, 'confirmation': None, 'status': 'grouping_required'}
+        value['records'][_digest(source_id)] = after
+        self._event(value, 'observe', source_id, snapshot['source_content_hash'], before, after, 'observed')
+        self.store.save(value)
+        return self.view(after)
 
     @staticmethod
     def view(record, reason=None):
@@ -282,7 +309,9 @@ class DurablePdfGrouping:
         elif operation == 'edit':
             partition = request['partition']
             candidates = [{'page_numbers': n, 'reason': 'human_partition', 'confidence': 1.0} for n in partition or []]
-            edited = _proposal(_snapshot(observations), candidates, record['revision'] + 1)
+            snapshot = _snapshot(observations)
+            snapshot.update({k: proposal[k] for k in SCOPE_FIELDS if k in proposal})
+            edited = _proposal(snapshot, candidates, record['revision'] + 1)
             if partition == [g['page_numbers'] for g in proposal['groups']]:
                 result = 'unchanged_partition'
             else:
@@ -297,7 +326,9 @@ class DurablePdfGrouping:
             if operation == 'reject':
                 candidates = [{'page_numbers': g['page_numbers'], 'reason': g['reason'], 'confidence': g['confidence']}
                               for g in proposal['groups']]
-                after['proposal'] = _proposal(_snapshot(observations), candidates, record['revision'], 'rejected')
+                snapshot = _snapshot(observations)
+                snapshot.update({k: proposal[k] for k in SCOPE_FIELDS if k in proposal})
+                after['proposal'] = _proposal(snapshot, candidates, record['revision'], 'rejected')
         value['records'][_digest(observations.source_file_id)] = after
         self._event(value, operation, observations.source_file_id, observations.source_content_hash,
                     record, after, result, request_id=request['request_id'], request_digest=request_digest)
@@ -337,7 +368,7 @@ class DurablePdfGrouping:
         try:
             value = self.store.load()
             observations, record = self._current(value, source_id)
-            if (not record or not record['confirmation'] or
+            if (not record or not record['confirmation'] or not scope_current(value, record['proposal']) or
                     not _valid_proposal(record['proposal'], _snapshot(observations))):
                 return ()
             proposal = record['proposal']
