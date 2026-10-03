@@ -176,12 +176,24 @@ class ReadonlyPdfReceipts:
             report.update(status='authority_held',reason=str(error))
         except RenderHold as error:
             report.update(status='privacy_blocked',reason=str(error),gemini_calls=0)
-        except Exception:
+        except Exception as error:
             # Do not persist raw exception bodies, image data or OCR text.
             report.update(status=('privacy_blocked' if stage in {'render','privacy'} else
                                   'authority_held' if stage=='authority' else 'analysis_failed'),
                           reason={'render':'render_failed','privacy':'ocr_or_gate_failed',
                                   'authority':'readonly_authority_unavailable','analysis':'readonly_analysis_failed'}[stage])
+            if stage=='analysis':
+                from .gemini_errors import gemini_api_status, is_gemini_api_error
+                status=gemini_api_status(error)
+                if status is not None:
+                    report['gemini_api_status']=status
+                    report['analysis_failure_kind']='gemini_http_error'
+                elif is_gemini_api_error(error):
+                    report['analysis_failure_kind']='gemini_transport_or_response_error'
+                elif isinstance(error,(TypeError,AttributeError)):
+                    report['analysis_failure_kind']='adapter_contract_error'
+                else:
+                    report['analysis_failure_kind']='result_or_validation_error'
         finally:
             payload=content=extracted=None
         return report

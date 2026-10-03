@@ -307,7 +307,7 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
         rows.append({k:v for k,v in result.items() if k in {'page_number','unit_id','source_content_hash','page_hash',
             'model','status','validation_issues','reason','date','merchant','total','item_count','checks','privacy',
             'effective_classification','human_classification','payload_sha256','payload_mime','payload_pages',
-            'page_identity','observation_render_hash'}})
+            'page_identity','observation_render_hash','gemini_api_status','analysis_failure_kind'}})
         if result['status']=='authority_held':break
     if store.load()!=initial or store.payload!=initial_bytes or store.tag!=initial_tag:
         raise StateError('readonly_authority_changed')

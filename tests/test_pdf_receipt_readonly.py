@@ -116,3 +116,21 @@ def test_unverified_adjustment_is_not_balanced_into_import(local_ocr):
     ai.return_value=(result,[result])
     report=svc.run(2)
     assert report['status']=='would_need_review' and report['checks']['unverified_adjustment']
+
+@pytest.mark.parametrize('status',[400,401,403,404,429,503])
+def test_analysis_http_failure_keeps_only_numeric_status(local_ocr,status):
+    from google.genai.errors import APIError
+    svc,g,t,ai,_=setup();before=t.payload;writes=t.writes
+    ai.side_effect=APIError(status,{'error':{'message':'PRIVATE_SECRET_OCR'}})
+    report=svc.run(2)
+    assert report['status']=='analysis_failed' and report['gemini_api_status']==status
+    assert report['analysis_failure_kind']=='gemini_http_error'
+    assert 'PRIVATE_SECRET_OCR' not in str(report)
+    assert t.payload==before and t.writes==writes and ai.call_count==1
+
+def test_fake_http_status_is_not_trusted(local_ocr):
+    svc,_,_,ai,_=setup()
+    error=RuntimeError('PRIVATE_SECRET_OCR');error.status_code=403
+    ai.side_effect=error;report=svc.run(2)
+    assert report['analysis_failure_kind']=='result_or_validation_error'
+    assert 'gemini_api_status' not in report and 'PRIVATE_SECRET_OCR' not in str(report)
