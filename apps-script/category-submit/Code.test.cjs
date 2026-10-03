@@ -84,3 +84,22 @@ test('definitive dispatch failure allows repair and preserves source edits',()=>
   assert.equal(h.ui.B1[0][0],false);
   assert.equal(h.rows[2][0],'private purchase');
 });
+
+test('panel preparation is inside the busy guard and cannot recapture',()=>{
+  for(const state of ['dispatching','accepted','running']) {
+    const h=harness({state});let prepared=0;
+    h.context.submitCategoryInput({prepare:()=>{prepared++;return h.rows;}});
+    assert.equal(prepared,0);assert.equal(h.calls.length,0);
+  }
+});
+
+test('panel snapshot is frozen and correlated before dispatch',()=>{
+  const h=harness();const source=h.rows.map(r=>r.slice());source[2][0]='one selected candidate';
+  let accepted=0;
+  h.context.submitCategoryInput({prepare:()=>source,accepted:request=>{
+    accepted++;assert.equal(request,id);assert.equal(h.data['A2:J2'][0][0],id);
+    assert.equal(h.data['A2:J2'][0][1],'dispatching');assert.equal(h.calls.length,0);
+  }});
+  assert.equal(accepted,1);assert.equal(h.calls.length,1);
+  assert.equal(h.data['4:1:7:1'][2][0],JSON.stringify(source[2]));
+});
