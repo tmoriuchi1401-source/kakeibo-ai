@@ -278,7 +278,9 @@ def receipt_analyzer(key,model):
         try:evidence['readings'].append(ReceiptResult.model_validate_json(response.output_text))
         except Exception:pass
         return response
-    ai.client=SimpleNamespace(interactions=SimpleNamespace(create=create))
+    # The bound Interactions resource does not own genai.Client. Keep its owner
+    # alive: Client.__del__ otherwise closes HTTP before the first request.
+    ai.client=SimpleNamespace(interactions=SimpleNamespace(create=create),sdk_owner=ai.client)
     def analyze(png,categories,*,expected_payload_sha256=None):
         if expected_payload_sha256 is not None and sha256(png).hexdigest()!=expected_payload_sha256:
             raise StateError('readonly_payload_changed')

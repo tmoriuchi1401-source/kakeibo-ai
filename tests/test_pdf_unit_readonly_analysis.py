@@ -272,3 +272,34 @@ def test_real_receipt_adapter_rechecks_exact_png_before_each_sdk_call(monkeypatc
         assert base64.b64decode(content[1]['data'])==payload
     assert initial_gate.call_args.args[:2]==final_gate.call_args.args[:2]==(payload,'image/png')
     assert factory.call_args.kwargs['http_options']['retry_options']=={'attempts':1}
+
+def test_real_sdk_owner_survives_proxy_and_gc_before_http(monkeypatch):
+    import gc
+    import weakref
+    import httpx
+    from google import genai
+    from app import gemini_ai
+    result=ReceiptResult(date='2026-09-01',merchant='Synthetic shop',total=100,
+        items=[dict(name='Synthetic item',amount=100,major_category='食費',minor_category='食品')])
+    calls=[];owners=[];factory=genai.Client
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(200,json={'id':'synthetic','status':'completed','model':'synthetic',
+            'steps':[{'type':'model_output','content':[{'type':'text','text':result.model_dump_json()}]}]})
+    with httpx.Client(transport=httpx.MockTransport(handle)) as http:
+        def construct(**kwargs):
+            options={**kwargs.pop('http_options'),'httpx_client':http}
+            owner=factory(**kwargs,http_options=options);owners.append(weakref.ref(owner))
+            return owner
+        monkeypatch.setattr(gemini_ai.genai,'Client',construct)
+        monkeypatch.setattr(gemini_ai,'require_receipt_ai_permission',Mock())
+        monkeypatch.setattr(runner,'require_receipt_ai_permission',Mock())
+        analyze,evidence=runner.receipt_analyzer('synthetic-key','synthetic')
+        gc.collect()
+        assert owners[0]() is not None
+        buffer=BytesIO()
+        with Image.new('RGB',(10,10)) as image:image.save(buffer,format='PNG')
+        assert analyze(buffer.getvalue(),[('食費','食品')])[0]==result
+        assert len(calls)==evidence['calls']==evidence['responses']==1
+        assert calls[0].url.path=='/v1/interactions'
+        owners[0]().close()

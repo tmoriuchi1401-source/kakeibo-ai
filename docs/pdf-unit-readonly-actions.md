@@ -12,9 +12,9 @@ before it can be dispatched. After registration, a dispatch may select a branch
 using `--ref`. See [the event reference](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch)
 and [manual execution](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
-This workflow is absent from main at implementation time. Do not dispatch a
-production workflow, rename another registered workflow, add push/PR triggers,
-or merge PR #91 as a workaround.
+The reviewed one-file registration was merged through PR #97. Do not dispatch a
+production writer workflow, rename another registered workflow, add push/PR
+triggers, or merge PR #91 as a workaround.
 
 The smallest registration PR against main contains exactly one added file:
 
@@ -59,8 +59,7 @@ is used.
 
 ## Staged manual execution after approved registration
 
-Use the exact current PR #91 head whose CI has passed. These are future commands;
-they do not bypass the registration requirement:
+Use the exact current PR #91 head whose CI has passed:
 
 ```sh
 gh workflow run pdf-unit-readonly.yml --repo tmoriuchi1401-source/kakeibo-ai \
@@ -85,18 +84,24 @@ An expired artifact or changed code/authority requires a new p2 run.
 
 The source/binding/confirmation are pinned for this canary. Each Unit loads the
 Drive正本, checks human normal and sticky automatic classification, checks fresh
-whole-source bytes, renders only its selected page to a new RGB PNG and verifies
-the member hash. It runs local OCR and the exact payload gate, rechecks authority
+whole-source bytes, verifies the v2 source/ordinal/count page identity, and renders
+only its selected page to a new RGB PNG. Observation PNG hashes are diagnostic,
+not freshness authority. It runs local OCR and the exact payload gate, rechecks authority
 and source before analysis, and reruns the mandatory existing gate before each
 SDK request. PDF bytes, neighbouring pages and embedded content are never sent.
 Restricted automatic classifications remain blocked even after human normal
-confirmation. A platform/render hash difference stops; it does not regenerate
-authority. The excluded Medical page is neither rendered nor processed.
+confirmation. The source identity and human intent are migrated explicitly from
+v1 into a separately bound v2 file; the original v1 remains unchanged. Fresh PNG
+encoding differences do not invalidate the stable page identity. The excluded
+Medical page is neither rendered nor processed.
 
 The ordinary receipt analyzer and category validation are reused with one API
 attempt and at most three bounded correction readings. Units are processed
 sequentially. Results are `would_import`, `would_need_review`, `privacy_blocked`,
 `analysis_failed` or `authority_held`; none grants accounting authority.
+The proxy keeps the owning GenAI client alive until evaluation ends, so its
+destructor cannot close HTTP before the first SDK call. A real SDK/mock HTTP
+regression exercises garbage collection before a synthetic request.
 
 ## Private diagnostic on a public repository
 
@@ -104,6 +109,11 @@ No receipt fields appear in public logs. The diagnostic field whitelist includes
 Unit/page/source hashes, model, status, date, merchant, total, item count,
 validation issues and conservative validation checks. It excludes raw responses,
 item descriptions, OCR, images, Medical input, credentials and Secrets.
+Failure diagnostics retain only genuine SDK numeric HTTP status, fixed failure
+class, source-code basenames/line numbers and response counts. Exception messages,
+locals, absolute paths and traceback text are excluded. SDK invocation counts
+alone do not prove HTTP submission; a successful validated response is required
+for the p2 proof chain.
 
 Before any file write, the diagnostic is encrypted using a fresh AES-256-GCM
 content key, wrapped with RSA-OAEP-SHA256 to the existing service-account public
