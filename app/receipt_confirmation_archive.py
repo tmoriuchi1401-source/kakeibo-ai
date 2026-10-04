@@ -10,6 +10,8 @@ def archive_confirmations(review, inbox, processed, drive, download):
     if inbox==processed:raise StateError('confirmation_archive_folders_invalid')
     moved=0
     for key,old in list(review.items.items()):
+        if old.get('source',{}).get('pdf_page'):
+            continue  # A terminal page never authorizes moving its parent PDF.
         if (old['status']!='applied' or old['kind'] not in {'normal','medical'}
                 or old['folder_id']!=inbox or old.get('archive',{}).get('status')=='complete'):
             continue
