@@ -8,6 +8,7 @@ from copy import deepcopy
 from hashlib import sha256
 from io import BytesIO,StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit,unquote,parse_qs
 import json,logging,os,re,subprocess,zipfile
 
@@ -24,6 +25,7 @@ INTENT_ID='1J6hjORzCDEauxg39o1fZbwRS41ROe3jE'
 FOLDER='1WNrdIkbV2dzTHZ44hSF3DXadZOMD8_PO'
 SID='1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow'
 SAFE_DIFF={'app/pdf_unit_write_canary.py','app/pdf_receipt_write_canary.py',
+    'app/pdf_duplicate_comparison.py','tests/test_pdf_duplicate_comparison.py',
     'tests/test_pdf_unit_write_canary.py','tests/test_pdf_receipt_write_canary.py',
     WRITE_WORKFLOW,'docs/pdf-unit-write-canary-actions.md'}
 
@@ -182,7 +184,7 @@ def execute(env,head):
         proof.update(confirmation_digest=expected['confirmation_digest'],grouping_revision=expected['grouping_revision'])
         return result['unit_id'],png[0],ReceiptResult.model_validate(result['parsed']),db.categories(),proof
     stage=env['PDF_CANARY_STAGE'];reports=[]
-    pages={'preflight':[],'p11':[11],'small':[5,6,8],'remaining':[2,7,9,12,13]}[stage]
+    pages={'preflight':[],'p11':[11],'small':[5,6,8],'remaining':[2,3,7,9,12,13]}[stage]
     if stage=='remaining':require_small_stage(store,rows,expected)
     if stage not in {'preflight','p11'}:
         reports.append(run_canary(store,db,11,fresh,verify_fresh))
@@ -191,9 +193,25 @@ def execute(env,head):
             if rows[n]['status']=='would_import':reports.append(run_canary(store,db,n,fresh,verify_fresh))
     for n in pages:
         if rows[n]['status']!='would_import':continue
-        reports.append(run_canary(store,db,n,fresh,verify_fresh))
+        comparison=None
+        if n==3:
+            from .pdf_duplicate_comparison import compare_distinct,verify_comparison
+            def old_original(sid):
+                if sid!='1s8YeXVTTVbjg5xjXC0fRIn0JyIGZSbgi':raise StateError('canary_comparison_source_invalid')
+                fields='id,mimeType,trashed,version,parents'
+                meta=drive.files().get(fileId=sid,fields=fields,supportsAllDrives=True).execute(num_retries=0)
+                if meta['id']!=sid or meta.get('trashed'):raise StateError('canary_comparison_source_invalid')
+                data=drive.files().get_media(fileId=sid,supportsAllDrives=True).execute(num_retries=0)
+                if drive.files().get(fileId=sid,fields=fields,supportsAllDrives=True).execute(num_retries=0)!=meta:
+                    raise StateError('canary_comparison_source_changed')
+                return data,meta['mimeType']
+            comparison=SimpleNamespace(
+                resolve=lambda parsed,png:compare_distinct(db,'R-1s8YeXVTTVbjg5xjXC0fRIn0JyIGZSbgi',
+                    parsed,png,old_original,merchant_terms=(('ヤオコー',),('イオン','AEON'))),
+                verify=lambda evidence,parsed,png:verify_comparison(db,evidence,parsed,png,old_original))
+        reports.append(run_canary(store,db,n,fresh,verify_fresh,distinct_originals=comparison))
         count=len(requests);payload=store.payload;tag=store.tag
-        reports.append(run_canary(store,db,n,fresh,verify_fresh))
+        reports.append(run_canary(store,db,n,fresh,verify_fresh,distinct_originals=comparison))
         if len(requests)!=count or (store.payload,store.tag)!=(payload,tag):raise StateError('canary_replay_mutation')
     if authority.load()!=value or (authority.payload,authority.tag)!=(original_bytes,original_tag):
         raise StateError('canary_grouping_authority_changed')

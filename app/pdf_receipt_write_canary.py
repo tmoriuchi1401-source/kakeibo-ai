@@ -9,6 +9,7 @@ from datetime import date
 import json
 from hashlib import sha256
 from io import BytesIO
+import re
 from types import SimpleNamespace
 from PIL import Image
 
@@ -59,6 +60,22 @@ class CanaryStore:
                     or receipt[3]<=0 or receipt[3]!=imported[6]
                     or sum(x[4] for x in expenses)!=receipt[3]):
                 raise StateError('canary_state_invalid')
+            e=r.get('duplicate_comparison')
+            if e is not None:
+                fields={'schema','decision','receipt_id','import_id','source_file_id','source_content_hash',
+                    'rows_digest','candidate_digest','payload_sha256','old_date','new_date',
+                    'old_item_count','new_item_count','date_original_verified','merchant_original_verified'}
+                if (not isinstance(e,dict) or set(e)!=fields or e['schema']!='receipt-distinct-originals-v1'
+                        or e['decision']!='distinct_transactions' or e['receipt_id']!='R-'+e['source_file_id']
+                        or e['import_id']!='receipt:'+e['source_file_id'] or e['source_file_id']==key
+                        or e['candidate_digest']!=r['parsed_digest'] or e['payload_sha256']!=r['payload_sha256']
+                        or any(not isinstance(e[k],str) or not re.fullmatch('[0-9a-f]{64}',e[k])
+                            for k in ('source_content_hash','rows_digest','candidate_digest','payload_sha256'))
+                        or not _date(e['old_date']) or not _date(e['new_date']) or e['old_date']==e['new_date']
+                        or e['new_date']!=receipt[1] or e['new_item_count']!=len(expenses)
+                        or type(e['old_item_count']) is not int or e['old_item_count']<1
+                        or e['date_original_verified'] is not True or e['merchant_original_verified'] is not True):
+                    raise StateError('canary_comparison_state_invalid')
 
     def save(self,value):
         self._validate(value)
@@ -87,19 +104,21 @@ def verify_plan(db,plan,*,complete):
         if complete and not matches:raise StateError('canary_readback_missing')
 
 
-def check_duplicates(db,source_id,result):
+def check_duplicates(db,source_id,result,*,verified_distinct=frozenset()):
     """Same identity is handled by exact replay; other matching totals are held."""
     rid='R-'+source_id;iid='receipt:'+source_id
     if any(r and r[0] in {rid,iid} for title in ('レシート','取込データ') for r in table_rows(db,title)):
         raise StateError('canary_existing_identity_without_intent')
     for row in table_rows(db,'レシート'):
         if len(row)<4:continue
+        if row[0] in verified_distinct:continue
         day=_date(row[1])
         if day and _money(row[3])==result.total and abs((date.fromisoformat(day)-date.fromisoformat(result.date)).days)<=7:
             raise StateError('canary_possible_duplicate')
     for row in table_rows(db,'支出明細'):
         if len(row)<5:continue
         if len(row)>12 and row[12] in {'superseded','excluded'}:continue
+        if len(row)>9 and row[9] in verified_distinct:continue
         day=_date(row[1])
         if day and _money(row[4])==result.total and abs((date.fromisoformat(day)-date.fromisoformat(result.date)).days)<=7:
             raise StateError('canary_possible_duplicate')
@@ -147,7 +166,7 @@ class AppendOnlyDB:
         self.appended+=len(rows)
 
 
-def run_canary(store,db,number,fresh_candidate,verify_fresh):
+def run_canary(store,db,number,fresh_candidate,verify_fresh,*,distinct_originals=None):
     if number not in ALLOWED_PAGES:raise StateError('canary_page_not_allowed')
     for title in TABLES:
         width={'レシート':'I','支出明細':'M','取込データ':'L'}[title]
@@ -176,6 +195,9 @@ def run_canary(store,db,number,fresh_candidate,verify_fresh):
         if old['phase']!='applied':raise StateError('canary_pending_reconciliation_required')
         if old['proof']!=proof or old['parsed_digest']!=digest(result.model_dump()):
             raise StateError('canary_replay_candidate_changed')
+        if old.get('duplicate_comparison'):
+            if distinct_originals is None:raise StateError('canary_duplicate_comparison_required')
+            distinct_originals.verify(old['duplicate_comparison'],result,payload)
         verify_fresh(number,unit_id);verify_plan(db,old['plan'],complete=True)
         store.replayed_pages.add(number)
         return {'page_number':number,'status':'replayed','appended':0,'readback':True}
@@ -184,7 +206,9 @@ def run_canary(store,db,number,fresh_candidate,verify_fresh):
         raise StateError('canary_p11_required')
     if number==11 and (result.date!='2026-09-26' or result.total!=159 or len(result.items)!=1):
         raise StateError('canary_p11_candidate_changed')
-    check_duplicates(db,unit_id,result)
+    evidence=distinct_originals.resolve(result,payload) if distinct_originals is not None else None
+    permitted=distinct_originals.verify(evidence,result,payload) if evidence else frozenset()
+    check_duplicates(db,unit_id,result,verified_distinct=permitted)
     timestamp=now_jst_string()
     cached=lambda *_,**__:result.model_copy(deep=True)
     ai=SimpleNamespace(analyze_receipt=cached)
@@ -199,10 +223,12 @@ def run_canary(store,db,number,fresh_candidate,verify_fresh):
     intent=dict(unit_id=unit_id,page_number=number,phase='pending',policy_version=POLICY_VERSION,
         timestamp=timestamp,parsed_digest=digest(result.model_dump()),proof=proof,
         payload_sha256=sha256(payload).hexdigest(),plan=plan,plan_digest=digest(plan))
+    if evidence:intent['duplicate_comparison']=evidence
     value=deepcopy(store.value);value['records'][unit_id]=intent;store.save(value)
     def barrier():
         store.unchanged();verify_fresh(number,unit_id)
         if db.categories()!=categories:raise StateError('canary_categories_changed')
+        if evidence:distinct_originals.verify(evidence,result,payload)
     fenced=AppendOnlyDB(db,plan,categories,barrier)
     outcome=ReceiptPipeline(fenced,ai,clock=lambda:timestamp)._process_image_bytes(
         payload,'image/png',unit_id,
