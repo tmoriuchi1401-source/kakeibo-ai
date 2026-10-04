@@ -312,10 +312,21 @@ def classify_bank_transaction(
     *,
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
+    meaning_resolver=None,
 ) -> BankClassification:
     """Classify only cases supported by explicit bank-row evidence."""
     description = normalize_bank_description(transaction.description)
     direction = "incoming" if transaction.signed_amount > 0 else "outgoing"
+    if meaning_resolver is not None:
+        meaning = meaning_resolver(transaction)
+        if meaning["state"] == "held":
+            return BankClassification(transaction, "needs_review", meaning["reason"])
+        if meaning["state"] == "matched":
+            # A card settlement is already governed by purchase reconciliation.
+            # A meaning rule cannot create a second expense for it.
+            if transaction.signed_amount < 0 and is_known_card_settlement_description(description):
+                return BankClassification(transaction, "needs_review", "bank_meaning_card_settlement_conflict")
+            return BankClassification(transaction, meaning["classification"], "operator_confirmed_bank_meaning")
 
     confirmed = {
         (value, configured_direction, account_alias)
@@ -477,12 +488,14 @@ def build_bank_shadow_result(
     confirmed_internal_transfers: ConfirmedInternalTransfers = frozenset(),
     confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
     card_statement_authorities: tuple[ImportTransaction, ...] = (),
+    meaning_resolver=None,
 ) -> BankShadowResult:
     classified = [
         classify_bank_transaction(
             transaction,
             confirmed_internal_transfers=confirmed_internal_transfers,
             confirmed_non_own_classifications=confirmed_non_own_classifications,
+            **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
         )
         for transaction in parsed.transactions
     ]

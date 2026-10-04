@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .auto_expense import FALLBACK_CATEGORY
 from .category_rules import AGGREGATE_ITEM_NAMES, CategoryRule, match_transaction, narrow_text, parse_rules
@@ -38,6 +39,19 @@ def _bool(value: object) -> bool:
 
 
 def _ymd(value: object) -> date | None:
+    """Ledger calendar date; Sheets serials are day counts, not UTC instants."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        epoch = date(1899, 12, 30)
+        # Reject non-dates before constructing a timedelta (including overflow).
+        if not 0 <= value < (date.max - epoch).days + 1 or not math.isfinite(value):
+            return None
+        return epoch + timedelta(days=math.floor(value))
     text = _text(value).replace("/", "-")
     try:
         return date.fromisoformat(text[:10])

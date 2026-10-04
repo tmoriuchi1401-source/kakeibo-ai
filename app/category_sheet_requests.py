@@ -12,7 +12,7 @@ import re
 
 from .drive_run_state import StateError
 from .sheets import (SheetsDB, CATEGORY_REQUEST_SHEET, CATEGORY_WORKFLOW_SHEET,
-                     CATEGORY_WORKFLOW_MARKERS)
+                     CATEGORY_WORKFLOW_MARKERS, OPTIONAL_WORKFLOW_MARKERS)
 
 MAX_ROWS = 10000
 
@@ -33,9 +33,18 @@ def parse_snapshot(rows):
         if len(hits) != 1:
             raise StateError("category_snapshot_markers_invalid")
         markers[section] = hits[0]
+    for section, marker in OPTIONAL_WORKFLOW_MARKERS.items():
+        hits = [i for i, row in enumerate(rows) if row[0] == marker]
+        if len(hits) > 1:
+            raise StateError("category_snapshot_markers_invalid")
+        if hits:
+            markers[section] = hits[0]
     if list(markers.values()) != sorted(markers.values()):
         raise StateError("category_snapshot_order_invalid")
     defaults = SheetsDB._category_workflow_defaults(None)
+    if "bank" in markers:
+        from .bank_review_ui import BANK_UI_HEADERS
+        defaults["bank"] = list(BANK_UI_HEADERS)
     blocks = {}
     for section in markers:
         start = markers[section] + 2
@@ -52,6 +61,12 @@ def parse_snapshot(rows):
             # captured under the former preview-only label stays preview-only.
             header[5]=rows[markers[section]+1][5]
         blocks[section] = (header, data)
+    if "bank" in blocks:
+        from .bank_review_ui import validate_rows
+        try:
+            validate_rows(blocks["bank"][1])
+        except ValueError:
+            raise StateError("bank_review_snapshot_invalid") from None
     return blocks
 
 
@@ -60,6 +75,7 @@ class CapturedCategoryDB:
     def __init__(self, db, blocks):
         self.db = db
         self.blocks = deepcopy(blocks)
+        self._representative_records = None
 
     def __getattr__(self, name):
         return getattr(self.db, name)
@@ -71,6 +87,17 @@ class CapturedCategoryDB:
     def replace_category_rule_ui_rows(self, rows, header): self._replace("rule", rows, header)
     def replace_category_backfill_ui_rows(self, rows, header): self._replace("backfill", rows, header)
     def replace_category_backfill_confirmation_rows(self, rows, header): self._replace("confirm", rows, header)
+
+    def link_category_rule_representatives(self, rows, records):
+        # Candidate regeneration can grow the rule block. Native links must
+        # wait for the final merged layout or they can overwrite the next
+        # section's marker at the old row positions.
+        self._representative_records = deepcopy(records)
+
+    def write_representative_links(self, merged):
+        if self._representative_records is not None and hasattr(self.db, "link_category_rule_representatives"):
+            self.db.link_category_rule_representatives(
+                merged["rule"][1], self._representative_records)
 
     def _replace(self, section, rows, header):
         self.blocks[section] = (deepcopy(header), deepcopy(rows))
@@ -100,13 +127,13 @@ def merge_results(captured, result, live):
     """
     merged = deepcopy(result)
     retained = 0
+    def normalized(row):
+        return ["TRUE" if value is True else "FALSE" if value is False else str(value)
+                for value in (row or [])]
     for section in ("rule", "backfill", "confirm"):
         key_col = 4 if section == "confirm" else 6
         key = lambda row: str(row[key_col]) if len(row) > key_col else ""
         old = {key(r): r for r in captured[section][1] if key(r)}
-        def normalized(row):
-            return ["TRUE" if v is True else "FALSE" if v is False else str(v)
-                    for v in (row or [])]
         later = {key(r): r for r in live[section][1] if key(r)
                  and normalized(r) != normalized(old.get(key(r)))}
         seen = set()
@@ -122,6 +149,28 @@ def merge_results(captured, result, live):
                 output.append(deepcopy(row))
                 retained += 1
         merged[section] = (merged[section][0], output)
+    # Historical requests know nothing about a newly installed bank block.
+    # Keep that live block, including its unsubmitted approvals, unchanged.
+    if "bank" not in captured and "bank" in live:
+        merged["bank"] = deepcopy(live["bank"])
+    elif "bank" in captured:
+        # Bank rows use G as their immutable key, including sender subrows.
+        old = {str(row[6]): row for row in captured["bank"][1]}
+        later = {str(row[6]): row for row in live.get("bank", ([], []))[1]
+                 if normalized(row) != normalized(old.get(str(row[6]))) }
+        rows = []
+        seen = set()
+        for row in merged["bank"][1]:
+            key = str(row[6])
+            rows.append(deepcopy(later.get(key, row)))
+            if key in later:
+                retained += 1
+                seen.add(key)
+        for key, row in later.items():
+            if key not in seen:
+                rows.append(deepcopy(row))
+                retained += 1
+        merged["bank"] = (merged["bank"][0], rows)
     from .category_ui_order import consolidate_blocks
     return consolidate_blocks(merged), retained
 
@@ -167,7 +216,7 @@ class SheetRequestStore:
             body={"valueInputOption": "RAW", "data": data}).execute(num_retries=0)
 
 
-def execute_request(db, request_id, *, env, refresh_projection, store=None):
+def execute_request(db, request_id, *, env, refresh_projection, store=None, bank_processor=None, bank_refresh=None, bank_replay=None):
     if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", request_id):
         raise StateError("category_request_id_invalid")
     store = store or SheetRequestStore(db)
@@ -177,6 +226,12 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
     # Validate the complete captured input before claiming or touching ledgers.
     try:
         captured = store.snapshot(metadata)
+        if "bank" in captured:
+            from .bank_review_ui import checked, validate_rows
+            validate_rows(captured["bank"][1])
+            if (any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1])
+                    and env.get("BANK_REVIEW_ENABLED", "false") != "true"):
+                raise StateError("bank_review_execution_not_enabled")
     except Exception:
         store.update(metadata, "error", "受付内容を検証できませんでした。入力を確認して再実行してください。")
         raise StateError("category_request_snapshot_invalid") from None
@@ -189,9 +244,20 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
                 "CATEGORY_BACKFILL_PREVIEW_ENABLED", "CATEGORY_BACKFILL_APPLY_ENABLED")):
             raise StateError("category_request_features_disabled")
         from .category_past_all_months import PAST_HEADER
+        bank_counts = {}
+        if "bank" in captured and enabled("BANK_REVIEW_ENABLED"):
+            from .bank_review_ui import checked
+            if any(row[8] == "group" and checked(row[5]) for row in captured["bank"][1]):
+                if bank_processor is None:
+                    from .bank_review_requests import BankReviewRequestProcessor
+                    from .bank_review_source import from_environment
+                    bank_processor = BankReviewRequestProcessor(db, from_environment(db, env))
+                bank_counts, bank_rows = bank_processor.process(captured["bank"][1], request_id)
+                adapter.blocks["bank"] = (captured["bank"][0], bank_rows)
         result = process_category_operations(adapter, apply=True, rule_enabled=True,
             save_enabled=True, preview_enabled=True, backfill_enabled=True,
             all_months=captured["rule"][0][5] == PAST_HEADER)
+        result.update(bank_counts)
         # Merge once, after all processing. UI refreshes during the pipeline can
         # never consume or overwrite changes made after the captured submission.
         live = db._category_workflow_blocks()
@@ -200,15 +266,44 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None):
         db._category_workflow_blocks()
         db._check_category_workflow_input(prior)
         db._write_category_workflow_blocks(merged)
+        adapter.write_representative_links(merged)
         result["category_later_edits_retained"] = retained
+        if bank_counts:
+            confirmed = bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']
+            try:
+                if confirmed and bank_replay is not None:
+                    result.update(bank_replay(confirmed))
+            finally:
+                # Even a failed settlement retains its confirmed meaning. Show
+                # fresh ledger state and preserve unsent edits before reporting.
+                if enabled("BANK_REVIEW_ENABLED") and bank_refresh is not None:
+                    result.update(bank_refresh())
+        elif enabled("BANK_REVIEW_ENABLED") and bank_refresh is not None:
+            # Submitting without a meaning answer also refreshes candidates;
+            # it never authorizes a financial replay or approves a group.
+            result.update(bank_refresh())
         result.update(refresh_projection())
         message = (f"登録処理 {result['category_registration_processed']}件 / "
             f"プレビュー {result['category_previews_processed']}件 / "
             f"過去分反映 {result['category_expenses_applied']}件")
         if result["category_held"]:
             message += f" / 要確認 {result['category_held']}件"
+        if bank_counts:
+            message += (f" / 銀行確認 {bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']}グループ"
+                        f" / 銀行ルール登録 {bank_counts['bank_rules_registered']}件")
+            if bank_counts["bank_held"]:
+                message += f" / 銀行要確認 {bank_counts['bank_held']}グループ"
+            if result.get("bank_replay_completed"):
+                message += (f" / 銀行記帳 {result['bank_ledger_writes']}行"
+                            f" / 原本処理 {result.get('bank_replay_files_processed', 0)}件")
+                if result.get("bank_replay_files_withheld", 0):
+                    message += f" / 原本保留 {result['bank_replay_files_withheld']}件"
+                if result.get("bank_replay_income_scope_withheld", 0):
+                    message += f" / 記帳条件未充足 {result['bank_replay_income_scope_withheld']}取引"
         if retained: message += f" / 実行指示後の編集 {retained}行は次回分として保持"
-        store.update(metadata, "review" if result["category_held"] else "complete", message)
+        store.update(metadata, "review" if result["category_held"] or bank_counts.get("bank_held")
+                     or result.get("bank_replay_files_withheld")
+                     or result.get("bank_replay_income_scope_withheld") else "complete", message)
         return result
     except Exception as exc:
         try:
@@ -225,6 +320,8 @@ def main():
     from .production_flow import verify_execution_boundary
     from .sheets import SheetsReadPacer
     from .projection_runtime import run_projection
+    from .bank_review_refresh import run_bank_review_refresh
+    from .bank_review_replay import run_bank_review_replay
     env = dict(os.environ)
     try:
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -234,7 +331,10 @@ def main():
         pacer = SheetsReadPacer()
         db = SheetsDB(env["SPREADSHEET_ID"], read_pacer=pacer, read_retry_base=20)
         result = execute_request(db, env.get("CATEGORY_REQUEST_ID", ""), env=env,
-            refresh_projection=lambda: run_projection(env, apply=True, read_pacer=pacer))
+            refresh_projection=lambda: run_projection(env, apply=True, read_pacer=pacer),
+            bank_refresh=lambda: run_bank_review_refresh(db, env, apply=True),
+            bank_replay=lambda confirmed: run_bank_review_replay(env,
+                request_id=env.get("CATEGORY_REQUEST_ID", ""), confirmed_groups=confirmed))
         print(json.dumps({"success": True, "counts": result}, sort_keys=True))
     except Exception as exc:
         from .category_operations import CategoryOperationFailure

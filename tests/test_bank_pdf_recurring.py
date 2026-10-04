@@ -248,7 +248,8 @@ def test_old_pdf_only_archives_when_no_new_write_is_needed(tmp_path, monkeypatch
     assert writes == []
     assert result["written"] == 0
     assert result["files_processed"] == int(already_imported)
-    assert result["outside_write_window"] == int(not already_imported)
+    # Count every scanned PDF outside the write window, including safe archives.
+    assert result["outside_write_window"] == 1
     assert file["parents"] == (["B" * 20] if already_imported else ["A" * 20])
 
 

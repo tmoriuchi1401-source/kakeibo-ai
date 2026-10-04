@@ -784,6 +784,7 @@ class BankCanaryPreparationPipeline:
         confirmed_internal_transfers: ConfirmedInternalTransfers,
         confirmed_non_own_classifications: ConfirmedNonOwnClassifications = frozenset(),
         card_statement_authorities=(),
+        meaning_resolver=None,
     ) -> tuple[BankShadowResult, BankPreviewPlan]:
         existing_rows = self.db.get("取込データ!A2:L")
         existing = parse_import_rows(existing_rows)
@@ -798,6 +799,7 @@ class BankCanaryPreparationPipeline:
             confirmed_internal_transfers=confirmed_internal_transfers,
             confirmed_non_own_classifications=confirmed_non_own_classifications,
             card_statement_authorities=tuple(card_statement_authorities),
+            **({"meaning_resolver": meaning_resolver} if meaning_resolver is not None else {}),
         )
         return shadow, build_bank_preview_plan(shadow, existing)
 

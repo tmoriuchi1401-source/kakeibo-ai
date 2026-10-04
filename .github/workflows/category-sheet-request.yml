@@ -22,9 +22,10 @@ jobs:
       vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
       SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -35,10 +36,34 @@ jobs:
       CATEGORY_RULE_SAVE_ENABLED: ${{ vars.CATEGORY_RULE_SAVE_ENABLED }}
       CATEGORY_BACKFILL_PREVIEW_ENABLED: ${{ vars.CATEGORY_BACKFILL_PREVIEW_ENABLED }}
       CATEGORY_BACKFILL_APPLY_ENABLED: ${{ vars.CATEGORY_BACKFILL_APPLY_ENABLED }}
+      BANK_REVIEW_ENABLED: ${{ vars.BANK_REVIEW_ENABLED }}
+      BANK_REVIEW_REPLAY_ENABLED: ${{ vars.BANK_REVIEW_REPLAY_ENABLED || 'false' }}
+      BANK_PDF_DRIVE_FOLDER_ID: ${{ secrets.BANK_PDF_DRIVE_FOLDER_ID }}
+      BANK_PDF_PROCESSED_DRIVE_FOLDER_ID: ${{ vars.BANK_PDF_PROCESSED_DRIVE_FOLDER_ID }}
+      BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
+      BANK_INCOME_WRITE_ENABLED: ${{ vars.BANK_INCOME_WRITE_ENABLED || 'false' }}
+      BANK_AUDIT_KEY_JSON: ${{ secrets.BANK_AUDIT_KEY_JSON }}
+      KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+      AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+      AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+      BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+      KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+      BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
+      BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
+      BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           persist-credentials: false
+      - name: Bind verified checkout for existing bank main guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git switch -C main "$GITHUB_SHA"
+          git branch --set-upstream-to=origin/main main
       - name: Require normal logging before private inputs
         if: ${{ runner.debug == '1' }}
         run: exit 1
