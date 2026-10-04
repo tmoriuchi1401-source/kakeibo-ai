@@ -14,6 +14,27 @@ from .receipt_pdf_units import MAX_PAGE_PIXELS,is_pdf
 
 _CLEAR_PERSONAL=re.compile(r'マイナンバー|個人番号|患者氏名|生年月日|被保険者番号|保険証番号|口座番号')
 
+def response_wire_schema():
+    """Small generation grammar; all actual bounds remain local validation.
+
+    Inline local references and omit large array repetition constraints from
+    the API grammar. This is not a runtime retry/fallback or permission change.
+    Local PageReceiptExtraction validation still rejects oversized results.
+    """
+    source=PageReceiptExtraction.model_json_schema()
+    definitions=source.get('$defs',{})
+    def expand(value):
+        if isinstance(value,list):return [expand(x) for x in value]
+        if not isinstance(value,dict):return value
+        if '$ref' in value:
+            target=value['$ref']
+            if not target.startswith('#/$defs/') or target[8:] not in definitions:
+                raise StateError('page_response_schema_invalid')
+            return expand(definitions[target[8:]])
+        return {key:expand(item) for key,item in value.items()
+                if key not in {'$defs','title','default','maxItems','minItems'}}
+    return expand(source)
+
 @dataclass(frozen=True)
 class FreshRenderProof:
     source_file_id:str
@@ -104,6 +125,7 @@ class GeminiPageReceipts:
 支払日YYYY-MM-DD、原本の正のtotal、明細とtotal整合、既存カテゴリだけを使用。新カテゴリ禁止。
 商品/数量/税/値引きを原本から読み、架空の調整額禁止。transaction_kindはpurchase/buyback/unknown。
 支払方法と店舗は読めた場合のみ。推測・過去履歴・ファイル名で補完禁止。読めなければ空欄。
+上限は1ページ20枚・各レシート300明細。これを超える/不足する/不確実な分離はseparation_complete=false。
 カテゴリ一覧:
 '''+ '\n'.join(a+' / '+b for a,b in categories)
         readings=[];proof=None
@@ -113,7 +135,7 @@ class GeminiPageReceipts:
             if proof.get('payload_sha256')!=fingerprint:raise StateError('page_payload_changed')
             kwargs={'model':self.model,'input':[{'type':'text','text':prompt},
                 {'type':'image','mime_type':'image/png','data':base64.b64encode(payload).decode('ascii')}],
-                'response_format':{'type':'text','mime_type':'application/json','schema':PageReceiptExtraction.model_json_schema()}}
+                'response_format':{'type':'text','mime_type':'application/json','schema':response_wire_schema()}}
             # SDK arguments, not a cached gate: no other media/bytes can pass.
             sent=base64.b64decode(kwargs['input'][1]['data'],validate=True)
             if sha256(sent).hexdigest()!=fingerprint:raise StateError('page_payload_changed')

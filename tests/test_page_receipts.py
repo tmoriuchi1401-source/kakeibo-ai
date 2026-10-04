@@ -341,3 +341,14 @@ def test_api_diagnostic_classifies_body_without_emitting_message_or_values():
     assert 'unsupported_feature' in analyzer.last_diagnostic['api_reason_labels']
     assert 'schema' in analyzer.last_diagnostic['schema_keywords']
     assert 'PRIVATE' not in json.dumps(analyzer.last_diagnostic)
+
+def test_small_wire_grammar_preserves_strict_local_segmentation_limits():
+    schema=ai.response_wire_schema();serialized=json.dumps(schema)
+    assert '$ref' not in serialized and '$defs' not in serialized and 'maxItems' not in serialized
+    assert set(schema['required'])=={'receipts','separation_complete','mixed_page_kind_suspected','cross_page_continuation_suspected'}
+    assert schema['additionalProperties'] is False
+    assert schema['properties']['receipts']['items']['properties']['bbox']['properties']['left']['minimum']==0
+    value=reading().model_dump();value['receipts']*=21
+    with pytest.raises(ValueError):model.PageReceiptExtraction.model_validate(value)
+    value=reading().model_dump();value['receipts'][0]['item_boxes']*=301
+    with pytest.raises(ValueError):model.PageReceiptExtraction.model_validate(value)

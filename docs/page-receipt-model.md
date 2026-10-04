@@ -17,6 +17,13 @@ not response order. Detect changed counts/positions, overlap, shared or reassign
 item regions, duplicate results, incomplete separation and mixed page kinds.
 Any such problem holds the whole page as `receipt_segmentation_review`.
 
+The API generation grammar inlines local references and omits array repetition
+limits/default/title annotations to keep the nested grammar small. The strict
+local model still enforces 1..20 receipts, at most 300 items/boxes, finite valid
+coordinates and all semantic checks. API 400s never cause automatic transport,
+schema or permission fallback. Safe diagnostics contain fixed reason labels,
+HTTP status and redacted schema paths only, never the API message/body.
+
 After corroboration, freeze the initial spatial manifest. Receipt ID binds source
 ID/hash, stable page identity, manifest digest and spatial index. The optional
 `ReceiptManifestStore` uses the existing private Drive If-Match transport and ACL
