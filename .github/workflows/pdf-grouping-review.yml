@@ -1,0 +1,60 @@
+name: PDF grouping review
+run-name: PDF grouping ${{ inputs.mode }} ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [review, refresh, install, install-pages]
+        default: review
+        required: true
+      request_id:
+        description: Captured request UUID only; no source IDs or sheet values
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  grouping-review:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      vars.PDF_GROUPING_REVIEW_ENABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
+      KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+      RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
+      PDF_GROUPING_BINDING: ${{ vars.PDF_GROUPING_BINDING }}
+      PDF_GROUPING_REVIEW_ENABLED: ${{ vars.PDF_GROUPING_REVIEW_ENABLED }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      PDF_GROUPING_MODE: ${{ inputs.mode }}
+      PDF_GROUPING_REQUEST_ID: ${{ inputs.request_id }}
+      KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-grouping-ocr
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require normal logging
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install local OCR runtime
+        run: |
+          pip install -r requirements.txt -r requirements-local-ocr.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+          python -m app.receipt_local_ocr prepare
+      - name: Review grouping only
+        run: python -m app.pdf_grouping_review

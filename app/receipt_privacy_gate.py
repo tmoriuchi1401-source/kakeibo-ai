@@ -287,6 +287,11 @@ def require_receipt_ai_permission(
     No caller-supplied gate result, allow flag, or stale cached permission is
     accepted. Known-sensitive provenance short-circuits before OCR as well.
     """
+    # Documents must first become locally rendered, independently gated pages.
+    # Never authorize a PDF, even when a whole-document text gate says normal.
+    if (mime_type.strip().lower() == 'application/pdf'
+            or b'%PDF-' in content[:1024]):
+        raise ReceiptPrivacyBlocked()
     allowed = False
     if known_source_classification in {None, "normal"}:
         try:

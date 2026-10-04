@@ -89,7 +89,11 @@ class ReceiptConfirmation:
                 raise StateError('confirmation_store_invalid')
 
     @property
-    def items(self): return self.store.value.get("confirmation_items",{})
+    def items(self):
+        # PDF page confirmations have their own source/page verifier and UI
+        # adapter. Whole-file intake must neither render nor execute them.
+        return {k:v for k,v in self.store.value.get("confirmation_items",{}).items()
+                if not v.get('source',{}).get('pdf_page')}
 
     def save_item(self, key, item):
         value=deepcopy(self.store.value)
@@ -364,7 +368,8 @@ class ReceiptConfirmation:
         old_receipt=before['receipt_rows'][0] if before['receipt_rows'] else None
         old_import=next((r for r in before['import_rows'] if r[0]==iid),None)
         receipt=[rid,parsed.date,parsed.merchant,parsed.total,parsed.payment_method,
-                 'https://drive.google.com/file/d/'+sid+'/view','解析済',
+                 'https://drive.google.com/file/d/'+source.get('pdf_page',{}).get('original_file_id',sid)+'/view'
+                 + ('#page='+str(source['pdf_page']['page_number']) if source.get('pdf_page') else ''),'解析済',
                  old_receipt[7] if old_receipt and len(old_receipt)>7 else now_jst_string(),
                  "; ".join(part for part in (
                      _without_resolved_total_mismatch(old_receipt[8])
