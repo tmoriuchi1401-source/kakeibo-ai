@@ -11,6 +11,13 @@ from .monthly_projection import ProjectionError
 from .projection_refresh import load_catalog, load_month
 
 
+# Native Home chart overlay installed on 2026-10-03. Its creation plan and
+# saved readback establish this exact identity/shape; this is not a prefix
+# exemption. Category helpers live in the management workbook and are never
+# accepted here. The six renderer-owned sheets remain mandatory.
+OPTIONAL_DISPLAY_SHEETS={"_ホームグラフ":(261003103,100,11)}
+
+
 def a1(title,first,last,left,right):
     return f"'{title}'!{chr(65+left)}{first}:{chr(64+right)}{last}"
 
@@ -36,10 +43,22 @@ class DailySheets:
     def verify(self):
         meta=self.db._execute_sheet_read(lambda:self.db.svc.spreadsheets().get(
             spreadsheetId=self.db.sid,fields="sheets(properties,charts(chartId,spec,position)),developerMetadata"))
-        shapes={s["properties"]["title"]:s["properties"] for s in meta.get("sheets",[])}
-        if set(shapes)!=set(SHEETS):raise ProjectionError("daily_sheet_contract_changed")
+        sheets=meta.get("sheets",[])
+        shapes={s["properties"]["title"]:s["properties"] for s in sheets}
+        if (len(shapes)!=len(sheets) or
+                len({p["sheetId"] for p in shapes.values()})!=len(shapes) or
+                not set(SHEETS)<=set(shapes) or
+                not set(shapes)<=set(SHEETS)|set(OPTIONAL_DISPLAY_SHEETS)):
+            raise ProjectionError("daily_sheet_contract_changed")
         if any(shapes[t]["sheetId"]!=spec[0] for t,spec in SHEETS.items()):
             raise ProjectionError("daily_sheet_contract_changed")
+        for title,(sheet_id,rows,columns) in OPTIONAL_DISPLAY_SHEETS.items():
+            if title not in shapes:continue
+            p=shapes[title];g=p.get("gridProperties",{})
+            if (p.get("sheetId")!=sheet_id or p.get("sheetType")!="GRID" or
+                    p.get("hidden") is not True or
+                    g.get("rowCount")!=rows or g.get("columnCount")!=columns):
+                raise ProjectionError("daily_sheet_contract_changed")
         if sum(p["gridProperties"]["rowCount"]*p["gridProperties"]["columnCount"] for p in shapes.values())>100_000:
             raise ProjectionError("daily_cell_budget_exceeded")
         if not any(m.get("metadataKey")==OWNED_MARKER and
