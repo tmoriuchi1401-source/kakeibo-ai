@@ -70,16 +70,16 @@ test('invalid calendar day never offers confirm',()=>{
 test('general typing does not capture; three required inputs enable explicit confirmation with optional blanks',()=>{
   const h=harness({kind:'general_manual'});h.edit('date','2026/09/24');h.edit('amount','500');h.edit('category','食費｜外食');
   assert.equal(h.queue.length,0);assert.equal(h.calls.length,0);
-  assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留','一般手入力を確定']);
-  h.edit('manual_action','一般手入力を確定');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
+  assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留','一般支出を確定']);
+  h.edit('manual_action','一般支出を確定');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
   const snap=JSON.parse(h.queue[0][2]);assert.equal(snap.identity.kind,'general_manual');
   assert.equal(snap.rows.find(r=>r[0]==='merchant')[2],'');assert.equal(snap.rows.find(r=>r[0]==='payment')[2],'');
 });
 test('incomplete general input and invalid date cannot capture confirmation',()=>{
-  const h=harness({kind:'general_manual'});h.edit('manual_action','一般手入力を確定');assert.equal(h.queue.length,0);
-  const full=harness({kind:'general_manual',complete:true});full.edit('date','2026/02/30');full.edit('manual_action','一般手入力を確定');assert.equal(full.queue.length,0);
+  const h=harness({kind:'general_manual'});h.edit('manual_action','一般支出を確定');assert.equal(h.queue.length,0);
+  const full=harness({kind:'general_manual',complete:true});full.edit('date','2026/02/30');full.edit('manual_action','一般支出を確定');assert.equal(full.queue.length,0);
 });
 test('general hold is intent only and bulk paste does not confirm',()=>{
   const h=harness({kind:'general_manual'});h.edit('manual_action','保留');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
-  const full=harness({kind:'general_manual',complete:true});full.edit('manual_action','一般手入力を確定',2);assert.equal(full.queue.length,0);
+  const full=harness({kind:'general_manual',complete:true});full.edit('manual_action','一般支出を確定',2);assert.equal(full.queue.length,0);
 });

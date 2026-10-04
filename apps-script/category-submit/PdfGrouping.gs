@@ -76,7 +76,7 @@ function pdfPageGeneralValidation_(sheet, card) {
   const index=card.snapshot.rows.findIndex(r=>r[0]==='manual_action');
   if (index<0) return false;
   sheet.getRange(card.positions[index],2).setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList(complete ? ['保留','一般手入力を確定'] : ['保留'],true).setAllowInvalid(false).build());
+    .requireValueInList(complete ? ['保留','一般支出を確定'] : ['保留'],true).setAllowInvalid(false).build());
   return !!complete;
 }
 
@@ -114,7 +114,7 @@ function submitPdfPageCard_(sheet, initial) {
     const operation=kind==='medical' ? f.medical_action : kind==='general_manual' ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
     if (kind==='medical' && operation!=='保留' && !pdfPageMedicalValidation_(sheet,card)) return;
     if (kind==='general_manual' && operation!=='保留' &&
-        (operation!=='一般手入力を確定' || !pdfPageGeneralValidation_(sheet,card))) return;
+        (operation!=='一般支出を確定' || !pdfPageGeneralValidation_(sheet,card))) return;
     if (kind==='page_kind' && operation==='種別を確定' && !['一般','医療','給与','判定不能'].includes(f.kind_choice)) return;
     if (kind==='grouping' && ['分割','結合'].includes(operation) && !f.group_target) return;
     if (!queue || queue.getLastRow()>=1001) throw new Error('受付履歴を管理者に確認してください。');

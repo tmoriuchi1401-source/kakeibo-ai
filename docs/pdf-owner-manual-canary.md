@@ -8,7 +8,9 @@ enable archive or connect scheduled PDF intake.
 The fixed mixed-PDF canary admits only p1 Medical complete manual input and
 p4/p10/p14 general complete manual input. Fields remain blank until the owner
 types them. General date, positive amount and an existing category pair are
-required; merchant/payment are optional. Medical uses the existing complete
+required; merchant/payment are optional. Its displayed explicit action is
+`一般支出を確定`; previously captured `一般手入力を確定` requests retain their
+exact original snapshot and replay protection. Medical uses the existing complete
 manual parser, duplicate policy, durable confirmation and writer unchanged.
 
 ## Registration and admission
@@ -30,6 +32,20 @@ The tested Apps Script handler still needs installation in the existing project
 before live general confirmations are available. No new review sheet, trigger,
 schedule, scope, Secret or binding is introduced. Registration alone does not
 enable that handler, manufacture owner input or count as an iPhone check.
+
+For the fixed four-page live canary, the same existing sheet shows p1, p4, p10
+and p14 as consecutive vertical cards. Other grouping cards are hidden, with
+their content preserved. A/B widths are 108/208 pixels, technical C:P columns
+are hidden, input rows are 42 pixels and explanatory rows are 78 pixels. Values,
+links, validation and owner inputs are unchanged by this layout pass. These API
+read-backs do not replace actual iPhone operation verification.
+
+The existing project needs only its `PdfGrouping.gs` file updated from the
+reviewed `apps-script/category-submit/PdfGrouping.gs`. Preserve `Code.gs`, the
+manifest, scopes, existing edit trigger, properties and credentials. Keep
+`PDF_GROUPING_DISPATCH_ENABLED` disabled: the fixed canary captures owner intent
+in the existing hidden queue and uses the separate manual-only hosted worker.
+Do not choose or enter a confirmation operation on the owner's behalf.
 
 ## Durable flow
 

@@ -12,7 +12,14 @@ from test_receipt_pdf_units import local_ocr
 
 MASTER=CATEGORIES+[('食費','外食')]
 FIELDS={'date':'2026/09/24','amount':'500','category':'食費｜外食',
-        'merchant':'','payment':'','memo':'','manual_action':'一般手入力を確定'}
+        'merchant':'','payment':'','memo':'','manual_action':'一般支出を確定'}
+
+
+def test_renamed_explicit_action_preserves_existing_captured_owner_intent():
+    legacy={**FIELDS,'manual_action':'一般手入力を確定'}
+    assert manual_values(legacy,MASTER)==manual_values(FIELDS,MASTER)
+    with pytest.raises(StateError):
+        manual_values({**FIELDS,'manual_action':'確定'},MASTER)
 
 def context():
     g,live,t,kinds,evidence=setup();view=g.regenerate_general('drive-source-id',evidence)

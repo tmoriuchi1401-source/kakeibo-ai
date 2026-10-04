@@ -7,6 +7,9 @@ from .drive_run_state import StateError
 from .receipt_reimport import _date, _money
 
 FIELDS = {'date', 'amount', 'category', 'merchant', 'payment', 'memo', 'manual_action'}
+CONFIRM_ACTION = '一般支出を確定'
+# Preserve already-captured explicit owner intent when the display label changes.
+CONFIRM_ACTIONS = (CONFIRM_ACTION, '一般手入力を確定')
 
 
 def category_choices(categories):
@@ -23,7 +26,7 @@ def manual_values(fields, categories):
                 or len(pair) != 2 or tuple(pair) not in set(categories)
                 or not all(isinstance(x, str) for x in (merchant, payment, note))
                 or len(merchant) > 100 or len(payment) > 50 or len(note) > 300
-                or fields.get('manual_action') not in ('保留', '一般手入力を確定')):
+                or fields.get('manual_action') not in ('保留', *CONFIRM_ACTIONS)):
             raise ValueError()
         return {'date': day, 'amount': int(amount), 'major': pair[0], 'minor': pair[1],
                 'merchant': merchant, 'payment': payment, 'note': note}

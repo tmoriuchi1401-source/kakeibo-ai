@@ -221,8 +221,8 @@ def target_card(kinds,sheet,snapshot):
         from .pdf_page_review import EDITABLE
         if any(fields.get(k)!=live.get(k) for k in EDITABLE):raise StateError('pdf_manual_owner_snapshot_changed')
     if kind=='general_manual':
-        from .pdf_page_general import manual_values as general_values
-        if fields.get('manual_action')!='一般手入力を確定':raise StateError('pdf_manual_explicit_action_required')
+        from .pdf_page_general import manual_values as general_values, CONFIRM_ACTIONS
+        if fields.get('manual_action') not in CONFIRM_ACTIONS:raise StateError('pdf_manual_explicit_action_required')
         general_values(fields,sheet.categories)
     else:
         if fields.get('medical_action') not in {'医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定'}:

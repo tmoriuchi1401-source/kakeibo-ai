@@ -13,6 +13,7 @@ from .pdf_page_medical import (category_choices, manual_source, manual_values,
                                validate_manual_values)
 from .receipt_confirmation import review_id
 from .receipt_pdf_units import _digest
+from .pdf_page_general import CONFIRM_ACTION, CONFIRM_ACTIONS
 
 SCHEMA = 'pdf-page-review-v1'
 LABELS = {'normal': '一般', 'medical': '医療', 'payroll': '給与', 'sensitive_unknown': '判定不能'}
@@ -232,8 +233,8 @@ class PageReviewSheet(GroupingSheet):
                     from .pdf_page_general import manual_values as general_values
                     values={f:previous.get((card['token'],f),v) for f,_,v in card['rows']}
                     try:
-                        general_values({**values,'manual_action':'一般手入力を確定'},self.categories)
-                        choices=['保留','一般手入力を確定']
+                        general_values({**values,'manual_action':CONFIRM_ACTION},self.categories)
+                        choices=['保留',CONFIRM_ACTION]
                     except StateError:choices=['保留']
                 if choices:
                     requests.append({'setDataValidation':{'range':region,'rule':{'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in choices]},'strict':field!='payment','showCustomUi':True}}})
@@ -342,7 +343,7 @@ def _process_page_request(kinds, sheet, request_id, *, medical_factory=None, gen
         medical_results[identity['review_id']]=result
     elif identity['kind']=='general_manual':
         if fields.get('manual_action')=='保留':result='一般手入力待ち'
-        elif fields.get('manual_action')=='一般手入力を確定':
+        elif fields.get('manual_action') in CONFIRM_ACTIONS:
             from .pdf_page_general import manual_values as general_values
             submitted=general_values(fields,sheet.categories)
             if general_factory is None:raise StateError('pdf_general_manual_backend_required')
