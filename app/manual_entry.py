@@ -68,7 +68,7 @@ def _payload(raw, categories):
         raise StateError("manual_payload_invalid") from None
 
 
-def execute(db, request_id, *, refresh_projection=lambda: {}, before_append=lambda *_:None):
+def execute(db, request_id, *, refresh_projection=lambda: {}, before_append=None):
     if not UUID.fullmatch(request_id):
         raise StateError("manual_request_id_invalid")
     requests = _requests(db)
@@ -79,12 +79,19 @@ def execute(db, request_id, *, refresh_projection=lambda: {}, before_append=lamb
         return {"manual_ignored": 1}
     try:
         payload = json.loads(row[2])
+        # A PDF-bound request is admitted only by its source/authority wrapper.
+        # The ordinary manual workflow cannot trust a marker supplied by cells.
+        if isinstance(payload, dict) and 'pdf_unit' in payload and before_append is None:
+            raise StateError('manual_pdf_verifier_required')
         if isinstance(payload, dict) and "target" in payload:
             target = str(payload["target"])
             if not UUID.fullmatch(target) or target == request_id or target not in requests:
                 raise StateError("manual_cancel_target_invalid")
             target_num, original = requests[target]
-            if "target" in json.loads(original[2]):
+            original_payload = json.loads(original[2])
+            if 'pdf_unit' in original_payload:
+                raise StateError('manual_pdf_cancel_forbidden')
+            if "target" in original_payload:
                 raise StateError("manual_cancel_chain_invalid")
             row[1] = "running"
             _update(db, number, row)
@@ -128,7 +135,8 @@ def execute(db, request_id, *, refresh_projection=lambda: {}, before_append=lamb
             db.ensure_expense_status_column()
             # PDF/manual caller can recheck durable source + current owner
             # snapshot immediately before the established writer appends.
-            before_append(request_id, expected)
+            if before_append is not None:
+                before_append(request_id, expected)
             db.append_raw("支出明細", [expected])
             from .receipt_confirmation import same_row
             readback=db.expense_records().get(ledger_id)
