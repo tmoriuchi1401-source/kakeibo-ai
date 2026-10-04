@@ -55,6 +55,14 @@ enable that handler, manufacture owner input or count as an iPhone check.
 8. Replay must preserve rows, backend bytes, completion timestamps/ETag, Unit IDs
    and grouping/page-kind authority. Any inconsistency remains held.
 
+`ManualTerminalReadback` independently verifies an already-applied manual intent
+for the read-only parent plan. General completion requires its canonical input
+digest, existing manual request reference and one exact active expense row.
+Medical completion requires the separate existing Drive backend, unchanged
+page/review identity, explicit complete owner confirmation, its bound accounting
+plan and exact saved-target/read-back checks. It never captures or applies a
+Medical request. Labels or unrelated matching rows cannot complete a Unit.
+
 ## Current rollout boundary
 
 This is a prepared Draft canary path, not proof of live owner completion. Actual
