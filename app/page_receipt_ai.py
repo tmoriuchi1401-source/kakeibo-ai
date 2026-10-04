@@ -134,9 +134,27 @@ class GeminiPageReceipts:
                 if is_gemini_api_error(error):
                     self.last_diagnostic['failure_kind']='gemini_api'
                     # Fixed vocabulary only; never persist the API body/message.
-                    message=str(error)
+                    import json
+                    body=getattr(error,'body',None)
+                    message=(str(error)+' '+json.dumps(body,ensure_ascii=False,default=lambda _:'' )).lower()
                     self.last_diagnostic['schema_keywords']=[key for key in
-                        ('schema','additionalProperties','$defs','$ref','maxItems','minimum','maximum') if key in message]
+                        ('schema','additionalProperties','$defs','$ref','maxItems','minimum','maximum') if key.lower() in message]
+                    # Some SDK families expose a generic message and keep the
+                    # actual reason in body. Classify in memory, emit only
+                    # fixed labels: never an arbitrary field, value or message.
+                    self.last_diagnostic['api_reason_labels']=[label for label,terms in (
+                        ('schema_complexity',('complex','nesting','depth')),
+                        ('unsupported_feature',('not support','unsupported')),
+                        ('background',('background',)),('tool_required',('requires the use','computer use')),
+                        ('model',('model',)),('response_format',('response_format','response format')),
+                        ('input_shape',('input','invalid json','unknown field','unknown name')),
+                        ('media',('image','mime','base64')),
+                        ('resource_size',('too large','size limit','token limit')),
+                        ('authentication',('api key','api_key','permission','credential')),
+                        ('parameter',('parameter','argument','field')),
+                        ('required',('required','missing')),
+                        ('invalid_request',('invalid_request','invalid_argument')),
+                    ) if any(term in message for term in terms)]
                 elif isinstance(error,ValidationError):
                     fields={'receipts','receipt','bbox','item_boxes','left','top','right','bottom','date',
                         'total','merchant','payment_method','items','name','quantity','amount','major_category',

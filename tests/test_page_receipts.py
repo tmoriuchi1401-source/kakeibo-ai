@@ -325,3 +325,19 @@ def test_authority_confirmation_needs_fresh_drive_bytes_not_only_current_state_m
     with pytest.raises(StateError,match='source_changed'):
         c.confirm(p,operation='confirm_general_receipt_ai',request_id=UUID)
     assert t.writes==0
+
+def test_api_diagnostic_classifies_body_without_emitting_message_or_values():
+    import httpx
+    from google.genai._gaos.lib.compat_errors import APIError
+    p,raw=page();payload=png();client=Mock()
+    response=httpx.Response(400,request=httpx.Request('POST','https://generativelanguage.googleapis.com/v1/interactions'))
+    client.interactions.create.side_effect=APIError.generate(400,
+        {'error':{'message':'unsupported response_format schema PRIVATE_ACCOUNT_VALUE','code':'invalid_request'}},
+        'Bad Request',response)
+    analyzer=ai.GeminiPageReceipts(client,'model',lambda *args:{'payload_sha256':sha256(payload).hexdigest()})
+    with pytest.raises(APIError):analyzer.analyze(p,payload,CATEGORIES,
+        expected_payload_sha256=sha256(payload).hexdigest(),render_proof=ai.fresh_render_proof(p,raw,1,1,payload))
+    assert analyzer.last_diagnostic['http_status']==400 and analyzer.calls==1
+    assert 'unsupported_feature' in analyzer.last_diagnostic['api_reason_labels']
+    assert 'schema' in analyzer.last_diagnostic['schema_keywords']
+    assert 'PRIVATE' not in json.dumps(analyzer.last_diagnostic)
