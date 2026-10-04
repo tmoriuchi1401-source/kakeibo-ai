@@ -22,6 +22,32 @@ EDITABLE = {'kind_choice', 'kind_action', 'group_target', 'group_action', 'date'
             'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target',
             'merchant', 'manual_action'}
 GROUP_ACTIONS = ['確定', '分割', '結合', '拒否', '保留']
+PAYMENT_DATE_HINT = '原本の支払日。PCではダブルクリックでカレンダー選択。直接入力も可：yyyy/mm/dd（例：2026/10/04）。入力途中は空欄可、確定時は必須。iPhoneでカレンダーが出ない場合は直接入力してください。'
+
+
+def payment_date_ui_requests(rows, *, sheet_id=SHEET_ID, start_row_index=0):
+    """Find labelled payment-date inputs in review rows; never write values.
+
+    The label is paired with the adjacent input column and existing review
+    schema/field marker. Hidden markers are UI structure, not authority.
+    Row positions and card tokens may change without changing this policy.
+    """
+    requests = []
+    for offset, row in enumerate(rows):
+        if (len(row) < 6 or str(row[0]).strip() != '支払日' or
+                row[2] != SCHEMA or not row[3] or row[5] != 'date'):
+            continue
+        index = start_row_index + offset
+        region = {'sheetId': sheet_id, 'startRowIndex': index, 'endRowIndex': index+1,
+                  'startColumnIndex': 1, 'endColumnIndex': 2}
+        requests.extend([
+            {'setDataValidation': {'range': region, 'rule': {
+                'condition': {'type': 'DATE_IS_VALID'}, 'strict': True,
+                'inputMessage': PAYMENT_DATE_HINT}}},
+            {'repeatCell': {'range': region, 'cell': {
+                'userEnteredFormat': {'numberFormat': {'type': 'DATE', 'pattern': 'yyyy/mm/dd'}},
+                'note': PAYMENT_DATE_HINT}, 'fields': 'userEnteredFormat.numberFormat,note'}}])
+    return requests
 
 
 def sheet_date_value(value):
@@ -258,10 +284,6 @@ class PageReviewSheet(GroupingSheet):
                 if field=='payment':
                     from .receipt_confirmation_ui import PAYMENTS
                     choices=PAYMENTS
-                if field=='date':
-                    hint='スマホではyyyy/mm/ddで直接入力（例：2026/10/04）。原本の支払日を入力してください。入力途中は空欄可。'
-                    requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'DATE_IS_VALID'},'strict':True,'showCustomUi':True,'inputMessage':hint}}},
-                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/mm/dd'}},'note':hint},'fields':'userEnteredFormat.numberFormat,note'}}])
                 if field=='amount':
                     cell='B'+str(n+1)
                     rule={'condition':{'type':'CUSTOM_FORMULA','values':[{'userEnteredValue':f'=OR(ISBLANK({cell}),AND(ISNUMBER({cell}),{cell}>0,{cell}=INT({cell})))'}]},
@@ -286,12 +308,21 @@ class PageReviewSheet(GroupingSheet):
                     requests.append({'setDataValidation':{'range':region,'rule':{'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in choices]},'strict':field!='payment','showCustomUi':True}}})
             rows.append(['']*14)
         if len(rows)>1000:raise StateError('pdf_review_capacity')
+        requests.extend(payment_date_ui_requests(rows, start_row_index=1))
         all_rows=rows
         self._write([{'range':f"'{TITLE}'!A2:N1001",'values':all_rows+[['']*14]*(1000-len(all_rows))}])
         # Removed cards must not leave stale links or validators behind.
         clear={'range':{'sheetId':SHEET_ID,'startRowIndex':1,'endRowIndex':1001,'startColumnIndex':0,'endColumnIndex':2}}
         self.service.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={'requests':[
             {'setDataValidation':clear}, {'repeatCell':{**clear,'cell':{'userEnteredFormat':{'textFormat':{'foregroundColor':{'red':.15,'green':.15,'blue':.15},'underline':False}}},'fields':'userEnteredFormat.textFormat'}},*requests]}).execute(num_retries=0)
+
+    def configure_payment_dates(self):
+        """Reapply only date UI metadata after row edits, without republishing."""
+        requests = payment_date_ui_requests(self._rows())
+        if requests:
+            self.service.spreadsheets().batchUpdate(
+                spreadsheetId=self.sid, body={'requests': requests}).execute(num_retries=0)
+        return len(requests)//2
 
     def finish_card(self, request_id, snapshot, result, now):
         n,current=self.request(request_id)

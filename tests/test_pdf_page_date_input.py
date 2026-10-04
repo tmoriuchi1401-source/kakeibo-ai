@@ -3,7 +3,8 @@ from copy import deepcopy
 from datetime import date
 import pytest
 from app.drive_run_state import StateError
-from app.pdf_page_review import PageReviewSheet, sheet_date_value
+from app.pdf_page_review import (PageReviewSheet, sheet_date_value, SCHEMA,
+                                PAYMENT_DATE_HINT, payment_date_ui_requests)
 from app.receipt_reimport import _date
 from test_pdf_page_review import medical_context, CATEGORIES
 from test_pdf_grouping_transport_ui import FakeSheets
@@ -52,3 +53,75 @@ def test_ui_republication_keeps_native_date_storage_and_no_accounting(local_ocr)
     assert any(x['cell'].get('userEnteredFormat',{}).get('numberFormat')==
                {'type':'DATE','pattern':'yyyy/mm/dd'} for x in formats)
     assert db.writes==0 and before==(store.value,t.payload)
+
+
+def date_block(token='synthetic-card'):
+    return [['対象', 'p1', SCHEMA, token, 'synthetic identity', 'target'],
+            ['支払日', 45200, SCHEMA, token, 'synthetic identity', 'date'],
+            ['実支払額（円）', 100, SCHEMA, token, 'synthetic identity', 'amount']]
+
+
+def configured_rows(requests):
+    return [r['setDataValidation']['range']['startRowIndex'] for r in requests
+            if 'setDataValidation' in r]
+
+
+def test_payment_date_block_can_move_or_shift_after_inserting_and_deleting_rows():
+    block = date_block()
+    for leading_rows in (0, 3, 21, 74):
+        rows = [['']] * leading_rows + deepcopy(block)
+        assert configured_rows(payment_date_ui_requests(rows)) == [leading_rows+1]
+        inserted = rows[:leading_rows+1] + [['挿入行', '']] + rows[leading_rows+1:]
+        assert configured_rows(payment_date_ui_requests(inserted)) == [leading_rows+2]
+        del inserted[leading_rows+1]
+        assert configured_rows(payment_date_ui_requests(inserted)) == [leading_rows+1]
+        assert rows[-3:] == block
+
+
+def test_added_pdf_block_receives_same_date_policy_and_supports_range_offset():
+    rows = date_block('first') + [['']] + date_block('new-card')
+    requests = payment_date_ui_requests(rows, start_row_index=10)
+    assert configured_rows(requests) == [11, 15]
+    rules = [r['setDataValidation']['rule'] for r in requests if 'setDataValidation' in r]
+    assert rules[0] == rules[1] == {
+        'condition': {'type': 'DATE_IS_VALID'}, 'strict': True,
+        'inputMessage': PAYMENT_DATE_HINT}
+
+
+@pytest.mark.parametrize('label,schema,token,field', [
+    ('発行日', SCHEMA, 'card', 'date'), ('生年月日', SCHEMA, 'card', 'date'),
+    ('支払日', 'another-form', 'card', 'date'), ('支払日', SCHEMA, '', 'date'),
+    ('支払日', SCHEMA, 'card', 'notice')])
+def test_other_date_cells_and_non_input_labels_are_never_reformatted(label,schema,token,field):
+    assert payment_date_ui_requests([[label, 45200, schema, token, '', field]]) == []
+
+
+def test_metadata_only_refresh_finds_current_four_fields_without_changing_any_values():
+    # These are expected live-layout results, not production targeting rules.
+    rows = [['']] * 80
+    for index, value in zip((6, 41, 55, 69), (45200, '2026/10/04', '', '2026-10-04')):
+        rows[index] = ['支払日', value, SCHEMA, 'card-'+str(index), 'identity', 'date']
+    rows[25] = ['発行日', 45200, SCHEMA, 'other-card', 'identity', 'date']
+    before = deepcopy(rows)
+    native = FakeSheets()
+    sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
+    sheet._rows = lambda: deepcopy(rows)
+    assert sheet.configure_payment_dates() == 4
+    assert configured_rows(native.formats) == [6, 41, 55, 69]
+    for request in native.formats:
+        if 'repeatCell' in request:
+            change = request['repeatCell']
+            assert change['fields'] == 'userEnteredFormat.numberFormat,note'
+            assert change['cell'] == {
+                'userEnteredFormat': {'numberFormat': {'type': 'DATE', 'pattern': 'yyyy/mm/dd'}},
+                'note': PAYMENT_DATE_HINT}
+            assert 'userEnteredValue' not in change['cell']
+    assert rows == before and native.writes == []
+
+
+def test_no_matching_payment_date_inputs_does_not_call_sheet_update():
+    native = FakeSheets()
+    sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
+    sheet._rows = lambda: [['発行日', '2026/10/04']]
+    assert sheet.configure_payment_dates() == 0
+    assert native.formats == native.writes == []
