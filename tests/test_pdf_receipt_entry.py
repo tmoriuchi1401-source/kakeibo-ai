@@ -97,6 +97,8 @@ def test_readonly_production_preview_never_uses_whole_pdf_gate(local_ocr,monkeyp
     service,live,g,db,sdk,state=setup(('normal','medical'),{2:'医療'});before=state.payload
     settings=SimpleNamespace(validate=Mock(),spreadsheet_id='synthetic-sheet',receipt_drive_folder_id='synthetic-inbox')
     db.import_ids=lambda:set();monkeypatch.setattr(source,'SheetsDB',lambda *a,**kw:db)
+    sheets_reader=Mock()
+    monkeypatch.setattr(source,'read_only_sheets_service',lambda:sheets_reader)
     reader=Mock();reader.files().list().execute.return_value={'files':[{'id':'drive-source-id','mimeType':'application/pdf'}]}
     monkeypatch.setattr(source,'read_only_drive_service',lambda:reader)
     monkeypatch.setattr(source,'download_drive_file',lambda *a,**kw:live.content)
