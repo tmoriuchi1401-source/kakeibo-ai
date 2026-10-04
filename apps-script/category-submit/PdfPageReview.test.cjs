@@ -6,8 +6,8 @@ const source=fs.readFileSync(__dirname+'/PdfGrouping.gs','utf8');
 
 function harness({kind='medical', complete=false, dispatch=null, throws=false}={}) {
   const identity={schema:'pdf-page-review-v1',kind,source_file_id:'synthetic-source'};
-  const fields=kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
-  const values={target:'p1',kind:'医療',state:'医療入力待ち',original:'原本を開く',notice:'完全手入力',date:complete?'2026/09/01':'',facility:complete?'Synthetic manual clinic':'',amount:complete?'1,200':'',category:'医療費',medical_action:'',kind_choice:'未選択',kind_action:'',result:''};
+  const fields=kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : kind==='general_manual' ? ['target','kind','state','original','notice','date','amount','category','merchant','payment','memo','manual_action','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
+  const values={target:'p1',kind:'医療',state:'医療入力待ち',original:'原本を開く',notice:'完全手入力',date:complete?'2026/09/01':'',facility:complete?'Synthetic manual clinic':'',amount:complete?'1,200':'',category:kind==='general_manual' ? (complete?'食費｜外食':'') : '医療費',medical_action:'',manual_action:'',kind_choice:'未選択',kind_action:'',result:''};
   const rows=fields.map(f=>[f,values[f]||'','pdf-page-review-v1','token',JSON.stringify(identity),f,...Array(8).fill('')]);
   const queue=[],calls=[],validations=[];
   const range=(n,c,h=1,w=1)=>({
@@ -65,4 +65,21 @@ test('bulk paste cannot submit medical confirmation',()=>{
 test('invalid calendar day never offers confirm',()=>{
   const h=harness({complete:true});h.edit('date','2026/02/30');
   assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留']);
+});
+
+test('general typing does not capture; three required inputs enable explicit confirmation with optional blanks',()=>{
+  const h=harness({kind:'general_manual'});h.edit('date','2026/09/24');h.edit('amount','500');h.edit('category','食費｜外食');
+  assert.equal(h.queue.length,0);assert.equal(h.calls.length,0);
+  assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留','一般手入力を確定']);
+  h.edit('manual_action','一般手入力を確定');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
+  const snap=JSON.parse(h.queue[0][2]);assert.equal(snap.identity.kind,'general_manual');
+  assert.equal(snap.rows.find(r=>r[0]==='merchant')[2],'');assert.equal(snap.rows.find(r=>r[0]==='payment')[2],'');
+});
+test('incomplete general input and invalid date cannot capture confirmation',()=>{
+  const h=harness({kind:'general_manual'});h.edit('manual_action','一般手入力を確定');assert.equal(h.queue.length,0);
+  const full=harness({kind:'general_manual',complete:true});full.edit('date','2026/02/30');full.edit('manual_action','一般手入力を確定');assert.equal(full.queue.length,0);
+});
+test('general hold is intent only and bulk paste does not confirm',()=>{
+  const h=harness({kind:'general_manual'});h.edit('manual_action','保留');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
+  const full=harness({kind:'general_manual',complete:true});full.edit('manual_action','一般手入力を確定',2);assert.equal(full.queue.length,0);
 });

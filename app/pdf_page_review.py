@@ -17,7 +17,8 @@ from .receipt_pdf_units import _digest
 SCHEMA = 'pdf-page-review-v1'
 LABELS = {'normal': '一般', 'medical': '医療', 'payroll': '給与', 'sensitive_unknown': '判定不能'}
 EDITABLE = {'kind_choice', 'kind_action', 'group_target', 'group_action', 'date', 'facility',
-            'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target'}
+            'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target',
+            'merchant', 'manual_action'}
 GROUP_ACTIONS = ['確定', '分割', '結合', '拒否', '保留']
 
 
@@ -25,7 +26,7 @@ def span(numbers):
     return 'p'+str(numbers[0]) + ('-p'+str(numbers[-1]) if len(numbers)>1 else '')
 
 
-def cards(view, answers, categories, medical_results=None):
+def cards(view, answers, categories, medical_results=None, general_results=None):
     """Routing labels never replace proposal.pages[].classification."""
     proposal = view['proposal']
     if proposal is None:
@@ -33,6 +34,7 @@ def cards(view, answers, categories, medical_results=None):
     result = []
     synthetic = proposal['source_file_id'].startswith('synthetic-')
     medical_results = medical_results or {}
+    general_results = general_results or {}
     def add(kind, pages, rows, proof=''):
         identity = {'schema': SCHEMA, 'kind': kind, 'source_file_id': proposal['source_file_id'],
                     'source_content_hash': proposal['source_content_hash'], 'page_numbers': pages,
@@ -64,6 +66,24 @@ def cards(view, answers, categories, medical_results=None):
             add('medical',[n],rows,key)
         elif kind == 'normal':
             general.append(n)
+            partition = (view.get('confirmation') or {}).get('confirmed_partition', [])
+            # This UI never promotes human normal to AI permission. Only an
+            # already confirmed singleton with unknown automatic observation
+            # may request the separate complete-manual route. Strong Medical
+            # or payroll provenance cannot enter the general manual form.
+            if (answer and page['classification'] == 'sensitive_unknown'
+                    and view['status'] == 'grouping_confirmed' and [n] in partition):
+                key = 'pdf-general-manual-view-v1:' + _digest([
+                    proposal['source_file_id'], proposal['source_content_hash'], n,
+                    page['page_hash'], answer['confirmation_digest'],
+                    proposal['proposal_digest'], proposal['grouping_version']])
+                add('general_manual', [n], [
+                    ('target','対象','p'+str(n)), ('kind','種別','一般（人間確認済み）'),
+                    ('state','状態',general_results.get(key,'一般手入力待ち・AI送信なし')),link,
+                    ('notice','入力方法','原本を見て完全手入力。OCR・AI候補は使用しません。'),
+                    ('date','支払日',''), ('amount','実支払額（円）',''), ('category','カテゴリ',''),
+                    ('merchant','店舗名（任意）',''), ('payment','支払方法（任意）',''),
+                    ('memo','メモ（任意）',''), ('manual_action','操作',''), ('result','処理結果','')], key)
         elif not answer:
             add('page_kind',[n],[('target','対象','p'+str(n)), ('kind','自動判定',LABELS[kind]),
                 ('state','状態','ページ種別確認待ち'),link,('kind_choice','ページ種別','未選択'),
@@ -110,10 +130,12 @@ def original_uri(source_id, number):
 
 class PageReviewSheet(GroupingSheet):
     """Reuses the same tab IDs and hidden request queue. No ledger API surface."""
-    def __init__(self, service, spreadsheet_id, categories, *, load_medical_results=None):
+    def __init__(self, service, spreadsheet_id, categories, *, load_medical_results=None,
+                 load_general_results=None):
         super().__init__(service,spreadsheet_id)
         self.categories=categories
         self.load_medical_results=load_medical_results or (lambda: {})
+        self.load_general_results=load_general_results or (lambda: {})
 
     def _rows(self):
         return self.service.spreadsheets().values().get(spreadsheetId=self.sid,
@@ -185,7 +207,11 @@ class PageReviewSheet(GroupingSheet):
                 if field=='group_target':
                     eligible=[int(n) for f,l,v in card['rows'] if f=='groups' for n in re.findall(r'候補([0-9]+):',v)]
                     choices=[str(n) for n in eligible]+[str(a)+'+'+str(b) for a,b in zip(eligible,eligible[1:]) if b==a+1]
-                if field=='category':choices=list(category_choices(self.categories))
+                if field=='category':
+                    if identity['kind']=='general_manual':
+                        from .pdf_page_general import category_choices as general_categories
+                        choices=general_categories(self.categories)
+                    else:choices=list(category_choices(self.categories))
                 if field=='payment':
                     from .receipt_confirmation_ui import PAYMENTS
                     choices=PAYMENTS
@@ -202,6 +228,13 @@ class PageReviewSheet(GroupingSheet):
                         validate_manual_values(manual_values(values,self.categories),self.categories)
                         choices=['保留','医療費を確定','既存支出と重複（紐付け）','重複候補と別の支出として確定']
                     except ValueError:choices=['保留']
+                if field=='manual_action':
+                    from .pdf_page_general import manual_values as general_values
+                    values={f:previous.get((card['token'],f),v) for f,_,v in card['rows']}
+                    try:
+                        general_values({**values,'manual_action':'一般手入力を確定'},self.categories)
+                        choices=['保留','一般手入力を確定']
+                    except StateError:choices=['保留']
                 if choices:
                     requests.append({'setDataValidation':{'range':region,'rule':{'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in choices]},'strict':field!='payment','showCustomUi':True}}})
             rows.append(['']*14)
@@ -220,22 +253,24 @@ class PageReviewSheet(GroupingSheet):
             {'range':f"'{QUEUE}'!E{n}:F{n}",'values':[[result,now]]}])
 
 
-def process_page_request(kinds, sheet, request_id, *, medical_factory=None):
+def process_page_request(kinds, sheet, request_id, *, medical_factory=None, general_factory=None):
     try:
-        return _process_page_request(kinds,sheet,request_id,medical_factory=medical_factory)
+        return _process_page_request(kinds,sheet,request_id,medical_factory=medical_factory,
+                                     general_factory=general_factory)
     except StateError as error:
         # Refused/stale input must not remain a busy request forever. Unknown
         # Drive/accounting writes keep the existing recovery path untouched.
         if str(error) in {'stale_proposal','page_kind_source_changed','page_kind_page_changed',
                 'pdf_review_presentation_changed','pdf_review_original_link_changed',
                 'pdf_medical_owner_inputs_changed','medical_manual_input_required',
-                'pdf_grouping_medical_target_forbidden','confirmation_source_changed'}:
+                'pdf_grouping_medical_target_forbidden','confirmation_source_changed',
+                'pdf_general_complete_manual_input_required','pdf_general_owner_inputs_changed'}:
             _,captured=sheet.request(request_id)
             sheet.finish_card(request_id,captured,str(error),kinds.grouping.clock())
         raise
 
 
-def _process_page_request(kinds, sheet, request_id, *, medical_factory=None):
+def _process_page_request(kinds, sheet, request_id, *, medical_factory=None, general_factory=None):
     if not re.fullmatch(UUID,request_id):raise StateError('pdf_review_request_invalid')
     _,snapshot=sheet.request(request_id)
     if not isinstance(snapshot,dict) or 'identity' not in snapshot:
@@ -269,6 +304,7 @@ def _process_page_request(kinds, sheet, request_id, *, medical_factory=None):
     fields=check_snapshot(snapshot,expected)
     result='保留'
     medical_results={}
+    general_results={}
     if identity['kind']=='page_kind' and fields['kind_action']=='種別を確定':
         kinds.confirm(proposal,{identity['page_numbers'][0]:fields['kind_choice']},request_id=request_id,intent_digest=_digest(snapshot))
         result='ページ種別確認済み'
@@ -288,6 +324,8 @@ def _process_page_request(kinds, sheet, request_id, *, medical_factory=None):
         page=proposal['pages'][identity['page_numbers'][0]-1]
         source=manual_source(page,answers.get(page['page_number']))
         def owner_inputs():
+            if sheet.request(request_id)[1]!=snapshot:
+                raise StateError('pdf_medical_owner_inputs_changed')
             fresh_value,fresh_proposal,fresh_answers=kinds.current(identity['source_file_id'])
             fresh_view=g.view(fresh_value['records'][_digest(identity['source_file_id'])])
             fresh_card=next((c for c in cards(fresh_view,fresh_answers,sheet.categories) if c['identity'].get('review_id')==identity['review_id']),None)
@@ -302,21 +340,48 @@ def _process_page_request(kinds, sheet, request_id, *, medical_factory=None):
         submitted=manual_values(fields,sheet.categories)
         result=medical_factory(source,owner_inputs).confirm(submitted_inputs=submitted)
         medical_results[identity['review_id']]=result
+    elif identity['kind']=='general_manual':
+        if fields.get('manual_action')=='保留':result='一般手入力待ち'
+        elif fields.get('manual_action')=='一般手入力を確定':
+            from .pdf_page_general import manual_values as general_values
+            submitted=general_values(fields,sheet.categories)
+            if general_factory is None:raise StateError('pdf_general_manual_backend_required')
+            def owner_inputs():
+                if sheet.request(request_id)[1]!=snapshot:
+                    raise StateError('pdf_general_owner_inputs_changed')
+                current_value,current_proposal,current_answers=kinds.current(identity['source_file_id'])
+                current_view=g.view(current_value['records'][_digest(identity['source_file_id'])])
+                fresh_card=next((c for c in cards(current_view,current_answers,sheet.categories)
+                    if c['token']==snapshot['token'] and c['identity']==identity),None)
+                if fresh_card is None:raise StateError('stale_proposal')
+                current_fields=check_snapshot(sheet.read_card(snapshot['token']),fresh_card)
+                from .pdf_page_general import FIELDS as general_fields
+                if any(current_fields.get(f)!=fields.get(f) for f in general_fields):
+                    raise StateError('pdf_general_owner_inputs_changed')
+                return general_values(current_fields,sheet.categories)
+            # The host must resolve a fresh durable Unit, recheck the owner
+            # snapshot before append, and return only after existing-writer
+            # durable confirmation and exact accounting read-back succeed.
+            result=general_factory(deepcopy(identity),request_id,submitted,owner_inputs)
+            if result!='一般手入力済み':raise StateError('pdf_general_manual_readback_required')
+            general_results[identity['review_id']]=result
+        else:raise StateError('pdf_general_complete_manual_input_required')
     elif identity['kind']!='page_kind':raise StateError('pdf_review_request_invalid')
     _,proposal,answers=kinds.current(identity['source_file_id'])
     latest=g.display(identity['source_file_id'])
-    publish_current(kinds,sheet,medical_results)
+    publish_current(kinds,sheet,medical_results,general_results)
     sheet.finish_card(request_id,snapshot,result,g.clock())
     return result
 
 
-def publish_current(kinds,sheet,medical_results=None):
+def publish_current(kinds,sheet,medical_results=None,general_results=None):
     value=kinds.grouping.store.load()
     projected=[]
     medical_results={**sheet.load_medical_results(),**(medical_results or {})}
+    general_results={**getattr(sheet,'load_general_results',lambda:{})(),**(general_results or {})}
     for record in sorted(value['records'].values(),key=lambda r: (r['proposal'] or {}).get('source_file_id','').startswith('synthetic-')):
         p=record['proposal']
         if p is None:continue
         answers={page['page_number']:a for page in p['pages'] if (a:=current_answer(value,page))}
-        projected.extend(cards(kinds.grouping.view(record),answers,sheet.categories,medical_results))
+        projected.extend(cards(kinds.grouping.view(record),answers,sheet.categories,medical_results,general_results))
     sheet.publish_cards(projected)

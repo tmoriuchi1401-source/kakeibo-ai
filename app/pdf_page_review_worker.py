@@ -57,7 +57,7 @@ def execute_shared(env, grouping, legacy_sheet, reader, mode, *, verified_pages=
     selection=None
     if mode=='review':
         _,capture=legacy_sheet.request(env.get('PDF_GROUPING_REQUEST_ID',''))
-        if isinstance(capture,dict) and capture.get('identity',{}).get('kind') in {'medical','page_kind'}:
+        if isinstance(capture,dict) and capture.get('identity',{}).get('kind') in {'medical','page_kind','general_manual'}:
             selection=capture['identity'].get('page_numbers')
     # A migrated source may use its independent v2 source/ordinal verifier.
     # Unmigrated legacy callers keep the original strict pixel verification.

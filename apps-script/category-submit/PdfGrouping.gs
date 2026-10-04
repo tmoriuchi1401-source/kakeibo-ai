@@ -60,6 +60,26 @@ function pdfPageMedicalValidation_(sheet, card) {
   return !!complete;
 }
 
+function pdfPageGeneralValidation_(sheet, card) {
+  const f=card.fields, parts=/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(f.date || '');
+  let dateComplete=false;
+  if (parts) {
+    const y=Number(parts[1]),m=Number(parts[2]),d=Number(parts[3]),day=new Date(y,m-1,d);
+    dateComplete=day.getFullYear()===y && day.getMonth()===m-1 && day.getDate()===d;
+  }
+  const amount=String(f.amount || '').replace(/,/g,''), category=String(f.category || '').split('｜');
+  // Existing strict dropdown is convenience, not authority. The worker checks
+  // current master membership and Drive/source/owner evidence independently.
+  const complete=dateComplete && /^\d+$/.test(amount) && Number(amount)>0 && Number(amount)<=99999999 &&
+    category.length===2 && category.every(v=>v.trim()) &&
+    String(f.merchant || '').length<=100 && String(f.payment || '').length<=50 && String(f.memo || '').length<=300;
+  const index=card.snapshot.rows.findIndex(r=>r[0]==='manual_action');
+  if (index<0) return false;
+  sheet.getRange(card.positions[index],2).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(complete ? ['保留','一般手入力を確定'] : ['保留'],true).setAllowInvalid(false).build());
+  return !!complete;
+}
+
 function pdfPageReviewEdited_(e) {
   if (!e.range || e.range.getNumRows()!==1 || e.range.getNumColumns()!==1 ||
       e.range.getColumn()!==2 || e.range.getRow()<2) return;
@@ -74,7 +94,13 @@ function pdfPageReviewEdited_(e) {
       return; // Typing alone never queues confirmation or writes accounting.
     }
   }
-  if (!['kind_action','group_action','medical_action'].includes(tech[3]) || !e.value) return;
+  if (card.snapshot.identity.kind==='general_manual') {
+    const complete=pdfPageGeneralValidation_(sheet,card);
+    if (tech[3]==='manual_action' && e.value && e.value!=='保留' && !complete) {
+      sheet.getRange(e.range.getRow(),2).setValue('保留');return;
+    }
+  }
+  if (!['kind_action','group_action','medical_action','manual_action'].includes(tech[3]) || !e.value) return;
   submitPdfPageCard_(sheet,card);
 }
 
@@ -85,8 +111,10 @@ function submitPdfPageCard_(sheet, initial) {
     const ss=categorySpreadsheet_(),queue=ss.getSheetByName(PDF_QUEUE);
     const card=pdfPageCard_(sheet,initial.snapshot.token); // capture under lock
     const f=card.fields, kind=card.snapshot.identity.kind;
-    const operation=kind==='medical' ? f.medical_action : kind==='grouping' ? f.group_action : f.kind_action;
+    const operation=kind==='medical' ? f.medical_action : kind==='general_manual' ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
     if (kind==='medical' && operation!=='保留' && !pdfPageMedicalValidation_(sheet,card)) return;
+    if (kind==='general_manual' && operation!=='保留' &&
+        (operation!=='一般手入力を確定' || !pdfPageGeneralValidation_(sheet,card))) return;
     if (kind==='page_kind' && operation==='種別を確定' && !['一般','医療','給与','判定不能'].includes(f.kind_choice)) return;
     if (kind==='grouping' && ['分割','結合'].includes(operation) && !f.group_target) return;
     if (!queue || queue.getLastRow()>=1001) throw new Error('受付履歴を管理者に確認してください。');

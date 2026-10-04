@@ -45,6 +45,28 @@ proposalには原本全ページの観測metadataを変更せず保持し、`gro
 
 scope付きconfirmationは一般範囲と種類回答digestを含み、Gemini／会計／Medical handoff／archive flagsを全てfalseとする。旧全ページproposal／confirmationのschemaと読込みは維持。種類回答の変更でscope confirmationを失効させ、replayは既存Unit ID・confirmation digest／時刻を再利用する。scopeの取得や同一request replayは追加authority writeを行わない。保存は従来のstrong ETag／If-Match／exact read-backのみ、412後の自動retryや無条件fallbackはない。
 
+## privacy保留一般ページの完全手入力
+
+自動 `sensitive_unknown`、有効な人間 `normal`、確定済みの単独partitionが
+揃うページだけ、同じ2列UIに一般手入力カードを表示する。Medical/payrollはこの
+カードへ入れない。必須は支払日、正の整数金額、現在カテゴリマスタの組合せ。
+店舗名、支払方法、メモは任意で、全て空欄から入力する。OCR・AI候補を転記しない。
+入力編集はvalidationだけを更新し、「一般手入力を確定」だけが受付をcaptureする。
+画面上の一般回答、状態セル、旧PNG fingerprintは記帳authorityにはしない。
+
+`process_page_request` の明示的な `general_factory` は、現在DriveのUnitと原本を
+照合し、既存一般manual writerで保存・read-backした結果だけを返すhost adapter。
+handler未注入のworkerはfail closedで、確定済み表示や書込みを行わない。
+呼出し側はcaptured UUIDのsnapshot、現在入力、原本リンク、source/page-kind/
+proposal/revisionを各書込barrierで再照合する。UI更新はdurable成功後のprojection。
+別UUIDで同じUnitを確定した場合も、元のintentのread-backを行い追加記帳しない。
+変更された入力やpendingの不明書込みを自動上書き／再送しない。
+
+Medicalの4項目、review identity、manual writer、amount/HMAC/admissionの仕様は
+変更しない。両経路ともcaptured snapshotの差替えを拒否する。新シート、schedule、
+Secret、scope、triggerは作らない。実Apps Scriptの更新とprotected hosted dispatcher
+への接続・canaryは別の導入作業であり、このコード変更だけでは有効にならない。
+
 ## Draft中の実行境界
 
 manual workflowの既存main SHA gateと `PDF_GROUPING_REVIEW_ENABLED` を維持し、自動dispatchは既定OFF。新schedule、scope、secret、トリガーは追加しない。既存Medical完全手入力への停止措置2commitをPRへ取り込み、旧AUTO/candidate経路を復活させない。live canaryは利用者が指定したpage-kindの保存と空のMedical入力欄／一般groupingの表示のみ。実医療費の記帳はownerが原本を見て手入力・明示確定した後の別操作とする。PRはDraftのまま、mainへmergeせず停止する。
