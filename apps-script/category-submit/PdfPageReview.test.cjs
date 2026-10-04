@@ -6,7 +6,7 @@ const source=fs.readFileSync(__dirname+'/PdfGrouping.gs','utf8');
 
 function harness({kind='medical', complete=false, dispatch=null, throws=false}={}) {
   const identity={schema:'pdf-page-review-v1',kind,source_file_id:'synthetic-source'};
-  const fields=kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : kind==='general_manual' ? ['target','kind','state','original','notice','date','amount','category','merchant','payment','memo','manual_action','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
+  const fields=kind==='human_general' ? ['target','automatic','state','original','notice','human_general_kind','result'] : kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : kind==='general_manual' ? ['target','kind','state','original','notice','date','amount','category','merchant','payment','memo','manual_action','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
   const values={target:'p1',kind:'医療',state:'医療入力待ち',original:'原本を開く',notice:'完全手入力',date:complete?'2026/09/01':'',facility:complete?'Synthetic manual clinic':'',amount:complete?'1,200':'',category:kind==='general_manual' ? (complete?'食費｜外食':'') : '医療費',medical_action:'',manual_action:'',kind_choice:'未選択',kind_action:'',result:''};
   const rows=fields.map(f=>[f,values[f]||'','pdf-page-review-v1','token',JSON.stringify(identity),f,...Array(8).fill('')]);
   const queue=[],calls=[],validations=[];
@@ -82,4 +82,20 @@ test('incomplete general input and invalid date cannot capture confirmation',()=
 test('general hold is intent only and bulk paste does not confirm',()=>{
   const h=harness({kind:'general_manual'});h.edit('manual_action','保留');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
   const full=harness({kind:'general_manual',complete:true});full.edit('manual_action','一般支出を確定',2);assert.equal(full.queue.length,0);
+});
+
+test('new human general intent is never legacy authority or auto-dispatched; no count or inferred actor',()=>{
+  const h=harness({kind:'human_general',dispatch:'true'});
+  h.edit('human_general_kind','未選択');assert.equal(h.queue.length,0);
+  h.edit('human_general_kind','一般レシート');assert.equal(h.queue.length,1);
+  assert.equal(h.queue[0][1],'accepted');assert.equal(h.calls.length,0);
+  const snapshot=JSON.parse(h.queue[0][2]);assert.equal(snapshot.identity.kind,'human_general');
+  assert.equal(snapshot.rows.find(r=>r[0]==='human_general_kind')[2],'一般レシート');
+  assert.equal(snapshot.actor,undefined);assert.ok(!JSON.stringify(snapshot).includes('枚数'));
+  h.edit('human_general_kind','一般レシート');assert.equal(h.queue.length,1);
+});
+
+test('new general bulk paste cannot create a confirmation request',()=>{
+  const h=harness({kind:'human_general'});h.edit('human_general_kind','一般レシート',2);
+  assert.equal(h.queue.length,0);assert.equal(h.calls.length,0);
 });

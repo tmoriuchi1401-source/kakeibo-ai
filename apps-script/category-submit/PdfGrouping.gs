@@ -100,7 +100,9 @@ function pdfPageReviewEdited_(e) {
       sheet.getRange(e.range.getRow(),2).setValue('保留');return;
     }
   }
-  if (!['kind_action','group_action','medical_action','manual_action'].includes(tech[3]) || !e.value) return;
+  if (card.snapshot.identity.kind==='human_general' &&
+      (tech[3]!=='human_general_kind' || !['一般レシート','医療','給与','不明のまま'].includes(e.value))) return;
+  if (!['kind_action','group_action','medical_action','manual_action','human_general_kind'].includes(tech[3]) || !e.value) return;
   submitPdfPageCard_(sheet,card);
 }
 
@@ -111,7 +113,8 @@ function submitPdfPageCard_(sheet, initial) {
     const ss=categorySpreadsheet_(),queue=ss.getSheetByName(PDF_QUEUE);
     const card=pdfPageCard_(sheet,initial.snapshot.token); // capture under lock
     const f=card.fields, kind=card.snapshot.identity.kind;
-    const operation=kind==='medical' ? f.medical_action : kind==='general_manual' ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
+    const operation=kind==='human_general' ? f.human_general_kind : kind==='medical' ? f.medical_action : kind==='general_manual' ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
+    if (kind==='human_general' && !['一般レシート','医療','給与','不明のまま'].includes(operation)) return;
     if (kind==='medical' && operation!=='保留' && !pdfPageMedicalValidation_(sheet,card)) return;
     if (kind==='general_manual' && operation!=='保留' &&
         (operation!=='一般支出を確定' || !pdfPageGeneralValidation_(sheet,card))) return;
@@ -121,7 +124,10 @@ function submitPdfPageCard_(sheet, initial) {
     const prior=queue.getLastRow()>1 ? queue.getRange(2,1,queue.getLastRow()-1,6).getValues() : [];
     if (prior.some(r => ['accepted','dispatching'].includes(String(r[1])) &&
         (()=>{try{return JSON.parse(r[2]).token===card.snapshot.token;}catch(_){return true;}})())) return;
-    const enabled=pdfGroupingDispatchEnabled_();
+    // New single-page AI intent is never sent to the legacy page-kind worker.
+    // The separately authenticated actor adapter must be provisioned first.
+    // Captured cells (including any actor-looking value) are not authority.
+    const enabled=kind!=='human_general' && pdfGroupingDispatchEnabled_();
     if (enabled && !PropertiesService.getUserProperties().getProperty('CATEGORY_GITHUB_TOKEN')) throw new Error('既存連携設定を確認してください。');
     const id=Utilities.getUuid();
     queue.appendRow([id,enabled ? 'dispatching' : 'accepted',JSON.stringify(card.snapshot),new Date().toISOString(),'','']);

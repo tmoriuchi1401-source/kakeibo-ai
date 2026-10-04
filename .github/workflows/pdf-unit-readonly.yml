@@ -9,7 +9,7 @@ on:
         required: true
       mode:
         type: choice
-        options: [preflight, p2, remaining]
+        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay]
         default: p2
         required: true
       confirm:
@@ -19,6 +19,12 @@ on:
       p2_run_id:
         description: Successful p2 run ID required for remaining; same approved SHA and authority
         type: string
+        required: false
+      page_batch:
+        description: New page-array model only; bounded sequential batch after page_p2
+        type: choice
+        options: [p3-p6, p7-p10, p11-p14]
+        default: p3-p6
         required: false
 permissions:
   contents: read
@@ -99,6 +105,7 @@ jobs:
           PDF_READONLY_MODE: ${{ inputs.mode }}
           PDF_READONLY_CONFIRM: ${{ inputs.confirm }}
           PDF_READONLY_P2_RUN_ID: ${{ inputs.p2_run_id }}
+          PDF_READONLY_PAGE_BATCH: ${{ inputs.page_batch }}
           PDF_ACCOUNTING_ENABLED: 'false'
           PDF_MEDICAL_ENABLED: 'false'
           PDF_ARCHIVE_ENABLED: 'false'
