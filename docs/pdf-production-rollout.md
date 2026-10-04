@@ -130,6 +130,13 @@ normal import. One pending/unknown Unit always keeps the parent incomplete.
 Even all-terminal returns only an archive candidate, with archive permission
 false. Actual source movement requires its separate first-PDF canary.
 
+`ManualTerminalReadback` verifies already-applied general and Medical manual
+references independently of UI labels. It requires current Drive authority,
+the immutable input/intent reference and exact accounting rows. Medical remains
+in its separate existing durable backend, with the original page/review identity,
+explicit complete manual confirmation and bound accounting plan. This read-only
+component cannot create reviews, capture inputs, invoke a writer or move a PDF.
+
 ## Remaining before merge/activation
 
 * Finish owner input and durable read-back/replay for the remaining manual pages.
