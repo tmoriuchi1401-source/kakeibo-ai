@@ -212,3 +212,16 @@ def test_late_sensitive_gate_remains_sticky_not_an_ordinary_validation_issue(sta
     assert sdk.call_count==(0 if stage=='adapter' else 1)
     service.process(live.content,'drive-source-id')
     assert sdk.call_count==(0 if stage=='adapter' else 1) and not db.appends
+
+
+def test_budget_expired_during_sdk_response_cannot_reach_accounting(local_ocr,monkeypatch):
+    service,live,g,db,sdk,state=setup(group=True);budget=intake.WorkBudget()
+    monkeypatch.setattr(intake,'WorkBudget',lambda:budget)
+    def late(**kw):
+        budget.started-=901
+        return SimpleNamespace(output_text=result().model_dump_json())
+    sdk.side_effect=late
+    out=service.process(live.content,'drive-source-id')
+    assert out['units'][0]['status']=='privacy_pending' and not db.appends
+    assert sdk.call_count==1 and budget.live_pages==0
+    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:'sensitive_unknown',2:'sensitive_unknown'}

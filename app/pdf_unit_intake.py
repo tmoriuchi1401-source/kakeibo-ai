@@ -44,6 +44,11 @@ class PdfUnitIntake:
         observed=replace(observed,pages=tuple(replace(p,_payload=None) for p in observed.pages))
         # Complete local observation before resolving any AI or writer.
         medical_numbers={n for s in current.medical_pages for n in s['page_numbers']}
+        def verify(spec):
+            budget.checkpoint()
+            result=self.authority.verify(spec)
+            budget.checkpoint()
+            return result
         halted=False
         for spec in current.units:
             numbers=spec['page_numbers'];record={'page_numbers':numbers,'unit_id':spec['unit_id'],
@@ -61,15 +66,15 @@ class PdfUnitIntake:
                     else 'sensitive_unknown','local_observation_incomplete',verify_current=self.authority.verify)
                 report['units'].append(record);continue
             try:
-                replay=reconcile(self.db,self.completion,spec,verify_current=self.authority.verify)
+                replay=reconcile(self.db,self.completion,spec,verify_current=verify)
                 if replay:record.update(replay)
                 else:
                     require_new_identity(self.db,spec)
                     with rendered_unit(content,spec,observed,budget) as (png,payload_hash):
                         result=self.analyzer.analyze(png,payload_hash,self.db.categories(),spec,
-                            verify_current=self.authority.verify)
+                            verify_current=verify)
                         record.update(materialize(self.db,self.completion,spec,png,payload_hash,result,
-                            verify_current=self.authority.verify))
+                            verify_current=verify))
                         del result
             except (PayloadHold,ReceiptPrivacyBlocked,RenderHold) as exc:
                 classification=getattr(exc,'classification','sensitive_unknown')

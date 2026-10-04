@@ -56,6 +56,13 @@ class WorkBudget:
     def __post_init__(self):
         self.started = time.monotonic()
 
+    def checkpoint(self):
+        """Also fence downstream API/authority latency before accounting."""
+        if (self.render_calls>MAX_RENDER_CALLS or self.render_pixels>MAX_TOTAL_RENDER_PIXELS
+                or self.ocr_pixel_work>MAX_TOTAL_OCR_PIXEL_WORK
+                or time.monotonic()-self.started>MAX_WORK_SECONDS):
+            raise RenderHold('total_work_budget_exceeded')
+
     @contextmanager
     def page(self, pixels, *, render_calls=1, ocr_checks=1):
         # Existing gate performs text/token reads, a complete independent gate
