@@ -161,6 +161,7 @@ function ccRefresh_(ss,key) {
   }
   const same=prior.key===current.key && prior.sig===current.sig && !key;
   const state=same?prior:ccInitial_(current,model.month,filter);state.filter=filter;
+  if(state.fixed && !ccHasTargets_(state))state.emptyReason=ccEmptyReason_(ss,state);
   ccSave_(sheet,state);ccSet_(sheet.getRange('A4'),current.proof.merchant);
   const glyphs=Array.from(current.proof.merchant).reduce((n,c)=>n+(c.charCodeAt(0)<128?0.55:1),0);
   sheet.setRowHeight(4,Math.max(64,Math.ceil(glyphs/19)*24+12));
@@ -183,7 +184,7 @@ function ccPaint_(sheet,state) {
   ccSet_(sheet.getRange('A23'),(state.category||'カテゴリ未選択')+' / 自動分類 '+state.future+'\n過去：'+state.scope);
   const action=ready?'この内容で確定':'対象件数を確認';
   ccDropdown_(sheet,'A24',['操作を選択',action]);ccSet_(sheet.getRange('A24'),'操作を選択');
-  ccSet_(sheet.getRange('A25'),state.message||'内容を確認して、最後に操作を選んでください。');
+  ccSet_(sheet.getRange('A25'),fixed && !ready?'確定できる未分類明細がありません。'+(state.emptyReason||'安全条件と処理結果を確認してください。'):state.message||'内容を確認して、最後に操作を選んでください。');
   ccFit_(sheet,25,sheet.getRange('A25').getDisplayValue());
 }
 function categoryConfirmationEdited(e) {
@@ -323,7 +324,7 @@ function ccSync_(ss) {
     else{
       const legacyRows=ccRows_(ss.getSheetByName(CATEGORY_UI),12);
       const empty=legacyRows.some(r=>r[7]==='displayed:'+state.key && String(r[0]).includes('preview_empty'));
-      if(!selected.length && empty){state.fixed={id:'',count:0,amount:0,digest:''};state.message='確定できる未分類明細がありません。'+ccEmptyReason_(ss,state);}
+      if(!selected.length && empty){state.fixed={id:'',count:0,amount:0,digest:''};state.emptyReason=ccEmptyReason_(ss,state);state.message='確定できる未分類明細がありません。'+state.emptyReason;}
       else state.message='対象を固定できませんでした。旧シートの処理結果を確認してください。';
     }
     delete state.pending;ccSave_(sheet,state);ccPaint_(sheet,state);return;

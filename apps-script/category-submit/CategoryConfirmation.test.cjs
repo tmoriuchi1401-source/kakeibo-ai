@@ -146,10 +146,11 @@ test('zero and invalid preview counts never offer or capture confirmation',()=>{
     const c=freshContext(),values={},dropdowns={};
     c.ccDropdown_=(_s,a1,options)=>{dropdowns[a1]=options;};c.ccFit_=()=>{};
     const sheet={getRange:a1=>({setValue:value=>{values[a1]=value;},getDisplayValue:()=>values[a1]||''})};
-    const state={scope:'反映しない',future:'ON',category:'食費 ＞ 外食',fixed:{id:'audit',count,amount:0}};
+    const state={scope:'反映しない',future:'ON',category:'食費 ＞ 外食',fixed:{id:'audit',count,amount:0},message:'反映対象は0件です。設定を確認して確定してください。'};
     c.ccPaint_(sheet,state);
     assert.ok(!dropdowns.A24.includes('この内容で確定'));
     assert.match(values.A21,/確定できる未分類明細がありません/);
+    assert.match(values.A25,/確定できる未分類明細がありません/);assert.doesNotMatch(values.A25,/確定してください/);
     assert.throws(()=>c.ccCapture_([],'key','食費｜外食','confirm',state),/確定できる未分類/);
     assert.equal(c.ccFixedValid_({getSheetByName:()=>assert.fail('no request access')},state),false);
   }
