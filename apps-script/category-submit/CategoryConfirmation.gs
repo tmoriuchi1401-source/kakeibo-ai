@@ -176,10 +176,11 @@ function ccRefresh_(ss,key) {
 }
 function ccPaint_(sheet,state) {
   const fixed=state.fixed;
-  const impact=state.scope==='反映しない'?'過去明細への変更は0件です。':fixed?'固定対象 '+fixed.count+'件 / '+Number(fixed.amount).toLocaleString('ja-JP')+'円へ反映します。':'「対象件数を確認」で変更対象を固定します。';
+  const impact=(fixed?'固定対象 '+fixed.count+'件 / '+Number(fixed.amount).toLocaleString('ja-JP')+'円を確定します。':'「対象件数を確認」で今回の変更対象を固定します。')+
+    (state.scope==='反映しない'?'\n対象月の未分類だけを確定。追加の過去反映は0件です。':'');
   ccSet_(sheet.getRange('A21'),impact);
   ccSet_(sheet.getRange('A23'),(state.category||'カテゴリ未選択')+' / 自動分類 '+state.future+'\n過去：'+state.scope);
-  const action=state.scope==='反映しない'||fixed?'この内容で確定':'対象件数を確認';
+  const action=fixed?'この内容で確定':'対象件数を確認';
   ccDropdown_(sheet,'A24',['操作を選択',action]);ccSet_(sheet.getRange('A24'),'操作を選択');
   ccSet_(sheet.getRange('A25'),state.message||'内容を確認して、最後に操作を選んでください。');
   ccFit_(sheet,25,sheet.getRange('A25').getDisplayValue());
@@ -227,7 +228,7 @@ function ccCapture_(rows,key,rawCategory,stage,state) {
     // Logical past controls are mapped to physical A:E,G:K.
     const previous=output.findIndex((r,i)=>i>=past.first && i<past.end && r[7]==='displayed:'+key);
     if(previous>=0)output[previous]=physical;else output.splice(past.end,0,physical);
-  } else if(state.scope!=='反映しない' && state.fixed && state.fixed.count>0) {
+  } else if(state.fixed && state.fixed.count>0) {
     const hit=output.findIndex((r,i)=>i>=confirm.first&&i<confirm.end&&r[6]===state.fixed.id);
     if(hit<0)throw Error('固定対象が変わりました。対象件数を再確認してください。');
     output[hit][2]='TRUE';
@@ -243,7 +244,7 @@ function ccPrepare_(ss,action) {
   const choices=sheet.getRange(2,4,ss.getSheetByName('_支出明細カテゴリ候補').getLastRow()-1,2).getDisplayValues();
   const pair=choices.find(r=>r[0]===state.category);if(!pair || !['ON','OFF'].includes(state.future) || !['反映しない','対象月のみ','全期間'].includes(state.scope))throw Error('カテゴリと設定を選んでください。');
   const stage=action==='対象件数を確認'?'preview':'confirm';
-  if(stage==='confirm' && state.scope!=='反映しない' && !state.fixed)throw Error('先に対象件数を確認してください。');
+  if(stage==='confirm' && !state.fixed)throw Error('先に対象件数を確認してください。');
   if(state.fixed && !ccFixedValid_(ss,state))throw Error('固定対象が変更されています。再確認してください。');
   state.stage=stage;state.proof=candidate.proof;
   state.before=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).slice(1).map(r=>r[0]);
@@ -261,7 +262,23 @@ function ccFixedValid_(ss,state) {
   const fixed=state.fixed;if(!fixed)return true;
   if(!fixed.count)return true;
   const row=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).find(r=>r[0]===fixed.id);
-  return !!row && row[2]==='previewed' && row[8]===fixed.digest && Number(row[6])===fixed.count && Number(row[7])===Number(fixed.amount);
+  return !!row && row[2]==='previewed' && row[8]===fixed.digest && Number(row[6])===fixed.count && Number(row[7])===Number(fixed.amount) &&
+    ccPreviewBound_(ss,state,row) && ccCanonical_(ccFixedIds_(ss,row[0]))===ccCanonical_(fixed.ids);
+}
+function ccFixedIds_(ss,id) {
+  return ccRows_(ss.getSheetByName('カテゴリ過去反映対象'),15).slice(1).filter(r=>r[0]===id).map(r=>r[1]).sort();
+}
+function ccPreviewBound_(ss,state,row) {
+  const payload=ccJson_(row[3]);
+  if(ccCanonical_(ccIdentity_({...payload,merchant:payload.billing_name||payload.merchant}))!==ccCanonical_(ccIdentity_(state.proof)) ||
+    !Array.isArray(payload.category) || payload.category.join(' ＞ ')!==state.category || String(row[9]).toUpperCase()!=='FALSE')return false;
+  if(state.scope==='全期間')return row[4]==='' && row[5]==='';
+  const [year,month]=state.month.split('-').map(Number),last=new Date(Date.UTC(year,month,0)).getUTCDate();
+  if(row[4]!==state.month+'-01' || row[5]!==state.month+'-'+String(last).padStart(2,'0'))return false;
+  const targets=ccRows_(ss.getSheetByName('カテゴリ過去反映対象'),15).slice(1).filter(r=>r[0]===row[0]);
+  return targets.length===Number(row[6]) && new Set(targets.map(r=>r[1])).size===targets.length &&
+    targets.every(r=>String(r[3]).slice(0,7)===state.month && r[5]==='その他' && r[6]==='未分類' &&
+      r[7]===payload.category[0] && r[8]===payload.category[1] && r[10]==='previewed');
 }
 function ccSync_(ss) {
   const sheet=ss.getSheetByName(CC_UI);if(!sheet)return;
@@ -272,8 +289,8 @@ function ccSync_(ss) {
   if(queue[1]!=='complete'){delete state.pending;state.message='中断・要確認（'+queue[1]+'）。処理結果：'+queue[5];ccSave_(sheet,state);ccPaint_(sheet,state);return;}
   if(state.stage==='preview') {
     const rows=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).filter(r=>!state.before.includes(r[0]) && r[2]==='previewed');
-    const selected=rows.filter(r=>{const p=ccJson_(r[3]);return ccCanonical_(ccIdentity_({...p,merchant:p.billing_name||p.merchant}))===ccCanonical_(ccIdentity_(state.proof))&&p.category.join(' ＞ ')===state.category;});
-    if(selected.length===1){const r=selected[0];state.fixed={id:r[0],count:Number(r[6]),amount:Number(r[7]),digest:r[8]};state.message='対象を固定しました。件数・金額を確認して確定してください。';}
+    const selected=rows.filter(r=>ccPreviewBound_(ss,state,r));
+    if(selected.length===1){const r=selected[0];state.fixed={id:r[0],count:Number(r[6]),amount:Number(r[7]),digest:r[8],ids:ccFixedIds_(ss,r[0])};state.message='対象を固定しました。件数・金額を確認して確定してください。';}
     else{
       const legacyRows=ccRows_(ss.getSheetByName(CATEGORY_UI),12);
       const empty=legacyRows.some(r=>r[7]==='displayed:'+state.key && String(r[0]).includes('preview_empty'));
@@ -282,7 +299,8 @@ function ccSync_(ss) {
     }
     delete state.pending;ccSave_(sheet,state);ccPaint_(sheet,state);return;
   }
-  if(state.scope!=='反映しない' && state.fixed && state.fixed.count>0) {
+  if(!state.fixed){delete state.pending;state.message='固定対象のない確定受付です。実行記録を確認してください。';ccSave_(sheet,state);ccPaint_(sheet,state);return;}
+  if(state.fixed.count>0) {
     const fixed=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).find(r=>r[0]===state.fixed.id);
     if(!fixed || fixed[2]!=='complete'){delete state.pending;state.message='反映が完了していません。対象と処理結果を確認してください。';ccSave_(sheet,state);ccPaint_(sheet,state);return;}
   }
