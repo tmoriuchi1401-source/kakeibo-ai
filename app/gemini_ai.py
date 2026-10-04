@@ -99,7 +99,8 @@ class GeminiAI:
             last=result
             ok,issues=validate_receipt_result(result,categories)
             changed=previous is not None and any(a and a!=b for a,b in (
-                (previous.date,result.date),(previous.merchant,result.merchant),(previous.total,result.total)))
+                (previous.date,result.date),(previous.total,result.total),
+                (previous.transaction_kind,result.transaction_kind)))
             if ok and not changed:return result
             if not ok:unresolved=result
             if changed:

@@ -6,7 +6,7 @@ from .receipt_privacy_gate import evaluate_receipt_privacy
 from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
-from .receipt_validation import validate_receipt_result
+from .receipt_validation import validate_receipt_result, apply_receipt_policy
 from .receipt_review_snapshot import save_candidate
 from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
                           RECEIPT_BUYBACK_SOURCE, income_id, validate_income_rows)
@@ -47,10 +47,21 @@ class ReceiptPipeline:
         self._require_ai()
         categories=self.db.categories()
         result=self._analyze(image_bytes,mime_type,categories,policy,destination=destination)
-        ok,notes=validate_receipt_result(result,categories)
-        notes += self._kind_issues(result, gate)
-        ok = ok and not notes
+        notes=self._posting_policy(result,categories,image_bytes,mime_type,gate)
+        ok = not notes
         return {"status":"analyzed" if ok else "needs_review", "parsed":result.model_dump(),"issues":notes}
+
+    @staticmethod
+    def _posting_policy(result,categories,payload,mime_type,gate):
+        from .receipt_text_extraction import _extract_receipt_text
+        text=''
+        if result.payment_method or any('調整' in x.name or '補正' in x.name for x in result.items):
+            try:
+                extracted=_extract_receipt_text(payload,mime_type)
+                if extracted.status=='extracted' and extracted.observation_complete:text=extracted.text or ''
+            except Exception:pass
+        issues,_=apply_receipt_policy(result,categories,text=text,gate=gate)
+        return issues
 
     @staticmethod
     def _kind_issues(result, gate):
@@ -112,9 +123,8 @@ class ReceiptPipeline:
             return result
         self._require_ai()
         cats=self.db.categories(); result=self._analyze(image_bytes,mime_type,cats,source_policy)
-        ok,notes=validate_receipt_result(result,cats)
-        notes += self._kind_issues(result, privacy)
-        ok = ok and not notes
+        notes=self._posting_policy(result,cats,image_bytes,mime_type,privacy)
+        ok = not notes
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"
         receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]

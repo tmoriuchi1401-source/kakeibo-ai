@@ -112,7 +112,7 @@ def compare_receipt(
         reasons.append("manual_review_protected")
 
     valid_categories = set(map(tuple, categories))
-    if (not _date(parsed.date) or not parsed.merchant.strip() or not parsed.items
+    if (not _date(parsed.date) or not parsed.items
             or parsed.total <= 0 or sum(i.amount for i in parsed.items) != parsed.total
             or any((i.major_category, i.minor_category) not in valid_categories for i in parsed.items)):
         reasons.append("parsed_fields_need_review")
