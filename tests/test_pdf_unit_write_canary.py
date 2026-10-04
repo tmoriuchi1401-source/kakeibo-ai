@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import Mock
+from types import SimpleNamespace
 import pytest,yaml
 from app import pdf_unit_write_canary as w
 from app.drive_run_state import StateError
@@ -24,6 +25,16 @@ def test_hosted_boundary_before_any_client_or_secret_use(patch):
     with pytest.raises(StateError):w.require_context({**environment(),**patch},'b'*40)
 
 def test_exact_hosted_boundary():w.require_context(environment(),'b'*40)
+
+def test_remaining_requires_completed_small_canary():
+    rows={n:{'status':'would_import'} for n in (5,6,8)}
+    expected={'unit_ids':{n:str(n) for n in rows}}
+    store=SimpleNamespace(value={'records':{}})
+    with pytest.raises(StateError,match='small_stage_required'):w.require_small_stage(store,rows,expected)
+    store.value['records']={str(n):{'phase':'applied'} for n in rows}
+    w.require_small_stage(store,rows,expected)
+    store.value['records']['6']['phase']='pending'
+    with pytest.raises(StateError,match='small_stage_required'):w.require_small_stage(store,rows,expected)
 
 def test_registered_workflow_manual_only_same_mutex_and_no_ai_secret():
     text=Path(w.WRITE_WORKFLOW).read_text(encoding='utf-8')

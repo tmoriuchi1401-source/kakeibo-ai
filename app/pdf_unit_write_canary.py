@@ -97,6 +97,13 @@ def load_proofs(env,pem,expected,get=github_get):
     return rows
 
 
+def require_small_stage(store,rows,expected):
+    for number in (5,6,8):
+        if rows[number]['status']!='would_import':continue
+        record=store.value['records'].get(expected['unit_ids'][number])
+        if not record or record['phase']!='applied':raise StateError('canary_small_stage_required')
+
+
 def execute(env,head):
     require_context(env,head);check_code(env)
     from googleapiclient.discovery import build
@@ -176,8 +183,12 @@ def execute(env,head):
         return result['unit_id'],png[0],ReceiptResult.model_validate(result['parsed']),db.categories(),proof
     stage=env['PDF_CANARY_STAGE'];reports=[]
     pages={'preflight':[],'p11':[11],'small':[5,6,8],'remaining':[2,7,9,12,13]}[stage]
+    if stage=='remaining':require_small_stage(store,rows,expected)
     if stage not in {'preflight','p11'}:
         reports.append(run_canary(store,db,11,fresh,verify_fresh))
+    if stage=='remaining':
+        for n in (5,6,8):
+            if rows[n]['status']=='would_import':reports.append(run_canary(store,db,n,fresh,verify_fresh))
     for n in pages:
         if rows[n]['status']!='would_import':continue
         reports.append(run_canary(store,db,n,fresh,verify_fresh))
