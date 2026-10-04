@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 from app.drive_run_state import StateError
 from app.pdf_page_review import (PageReviewSheet, sheet_date_value, SCHEMA,
-                                PAYMENT_DATE_HINT, payment_date_ui_requests)
+                                PAYMENT_DATE_HINT, payment_date_ui_requests, TITLE, SHEET_ID)
 from app.receipt_reimport import _date
 from test_pdf_page_review import medical_context, CATEGORIES
 from test_pdf_grouping_transport_ui import FakeSheets
@@ -104,8 +104,10 @@ def test_metadata_only_refresh_finds_current_four_fields_without_changing_any_va
     rows[25] = ['発行日', 45200, SCHEMA, 'other-card', 'identity', 'date']
     before = deepcopy(rows)
     native = FakeSheets()
+    native.metadata = [{'properties': {'title': TITLE, 'sheetId': SHEET_ID,
+                                      'gridProperties': {'rowCount': len(rows)}}}]
+    native.value_data[f"'{TITLE}'!A1:F{len(rows)}"] = deepcopy(rows)
     sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
-    sheet._rows = lambda: deepcopy(rows)
     assert sheet.configure_payment_dates() == 4
     assert configured_rows(native.formats) == [6, 41, 55, 69]
     for request in native.formats:
@@ -121,7 +123,34 @@ def test_metadata_only_refresh_finds_current_four_fields_without_changing_any_va
 
 def test_no_matching_payment_date_inputs_does_not_call_sheet_update():
     native = FakeSheets()
+    native.metadata = [{'properties': {'title': TITLE, 'sheetId': SHEET_ID,
+                                      'gridProperties': {'rowCount': 10}}}]
+    native.value_data[f"'{TITLE}'!A1:F10"] = [['発行日', '2026/10/04']]
     sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
-    sheet._rows = lambda: [['発行日', '2026/10/04']]
     assert sheet.configure_payment_dates() == 0
+    assert native.formats == native.writes == []
+
+
+def test_inserted_rows_beyond_original_grid_limit_are_read_in_bounded_chunks():
+    native = FakeSheets()
+    native.metadata = [{'properties': {'title': TITLE, 'sheetId': SHEET_ID,
+                                      'gridProperties': {'rowCount': 2001}}}]
+    rows = [['']] * 2001
+    rows[1502] = date_block()[1]
+    for start in range(0, len(rows), 1000):
+        end = min(start+1000, len(rows))
+        native.value_data[f"'{TITLE}'!A{start+1}:F{end}"] = deepcopy(rows[start:end])
+    sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
+    assert sheet.configure_payment_dates() == 1
+    assert configured_rows(native.formats) == [1502]
+    assert native.writes == []
+
+
+def test_date_settings_refuse_another_sheet_with_the_same_title():
+    native = FakeSheets()
+    native.metadata = [{'properties': {'title': TITLE, 'sheetId': 12,
+                                      'gridProperties': {'rowCount': 10}}}]
+    sheet = PageReviewSheet(native, 'management-sheet', CATEGORIES)
+    with pytest.raises(StateError, match='pdf_review_existing_ui_required'):
+        sheet.configure_payment_dates()
     assert native.formats == native.writes == []

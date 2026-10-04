@@ -318,7 +318,22 @@ class PageReviewSheet(GroupingSheet):
 
     def configure_payment_dates(self):
         """Reapply only date UI metadata after row edits, without republishing."""
-        requests = payment_date_ui_requests(self._rows())
+        meta = self.service.spreadsheets().get(
+            spreadsheetId=self.sid, fields='sheets(properties)').execute(num_retries=0)
+        owned = next((s['properties'] for s in meta['sheets']
+                      if s['properties']['title'] == TITLE), None)
+        if not owned or owned['sheetId'] != SHEET_ID:
+            raise StateError('pdf_review_existing_ui_required')
+        requests = []
+        # Row insertions can enlarge the live grid beyond the publisher's
+        # capacity. Read current rows in bounded chunks, without changing that
+        # separate capacity or any confirmation/backend range.
+        count = owned['gridProperties']['rowCount']
+        for start in range(0, count, 1000):
+            rows = self.service.spreadsheets().values().get(
+                spreadsheetId=self.sid, range=f"'{TITLE}'!A{start+1}:F{min(start+1000,count)}",
+                valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=0).get('values', [])
+            requests.extend(payment_date_ui_requests(rows, start_row_index=start))
         if requests:
             self.service.spreadsheets().batchUpdate(
                 spreadsheetId=self.sid, body={'requests': requests}).execute(num_retries=0)
