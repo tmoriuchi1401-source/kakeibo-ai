@@ -21,7 +21,8 @@ MAX_BYTES=2*1024*1024
 def review_identity(page):
     return digest(['page-general-ai-review-v1',page.source.model_dump(),page.page_number,
         page.stable_page_identity,page.automatic_classification,page.automatic_reason,
-        page.human_page_kind,page.authority_revision])
+        page.human_page_kind,page.authority_revision,page.observation_complete,
+        page.extraction_status,page.clearly_sensitive])
 
 def eligible(page):
     return (page.automatic_classification in UNKNOWN and page.automatic_reason in REASONS
@@ -34,7 +35,8 @@ def binding_fields(page):
         'stable_page_identity':page.stable_page_identity,'review_identity':page.review_identity,
         'authority_revision':page.authority_revision,
         'automatic_classification':page.automatic_classification,'automatic_reason':page.automatic_reason,
-        'human_page_kind':page.human_page_kind}
+        'human_page_kind':page.human_page_kind,'observation_complete':page.observation_complete,
+        'extraction_status':page.extraction_status,'clearly_sensitive':page.clearly_sensitive}
 
 def authority(page,actor,timestamp):
     if (not eligible(page) or not isinstance(actor,dict) or set(actor)!={'provider','subject'}
@@ -68,7 +70,8 @@ def validate_state(value,binding):
             source={k:record[k] for k in ('source_file_id','source_content_hash','page_count','source_kind')}
             page=PageUnit(source=source,page_number=record['page_number'],stable_page_identity=record['stable_page_identity'],
                 automatic_classification=record['automatic_classification'],automatic_reason=record['automatic_reason'],
-                observation_complete=True,extraction_status='extracted',observation_render_hash='0'*64,
+                observation_complete=record['observation_complete'],extraction_status=record['extraction_status'],
+                clearly_sensitive=record['clearly_sensitive'],observation_render_hash='0'*64,
                 review_identity=record['review_identity'],authority_revision=record['authority_revision'])
             page=PageUnit.model_validate({**page.model_dump(),'human_page_kind':record['human_page_kind']})
             if page_key(page)!=key:raise ValueError()

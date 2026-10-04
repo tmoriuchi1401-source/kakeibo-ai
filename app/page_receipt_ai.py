@@ -73,7 +73,8 @@ def authorize_payload(page,payload,*,current_page,load_source,load_grant):
         latest=current_page(page.source.source_file_id,page.page_number)
         # Render fingerprint is diagnostics, never source/page authority.
         keys=('source','page_number','stable_page_identity','automatic_classification','automatic_reason',
-              'human_page_kind','review_identity','authority_revision','clearly_sensitive')
+              'human_page_kind','review_identity','authority_revision','clearly_sensitive',
+              'observation_complete','extraction_status')
         if any(getattr(latest,k)!=getattr(page,k) for k in keys):raise StateError('page_authority_stale')
         raw=load_source(page.source.source_file_id)
         if type(raw) is not bytes or sha256(raw).hexdigest()!=page.source.source_content_hash:

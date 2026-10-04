@@ -361,3 +361,14 @@ def test_outside_item_remains_held_and_geometry_diagnostic_contains_no_receipt_c
     assert report['status']=='receipt_segmentation_review' and report['units']==[]
     assert report['geometry_diagnostic'][0][0]['outside_item_indices']==[1]
     assert all(key not in json.dumps(report['geometry_diagnostic']) for key in ('merchant','name','amount','date'))
+
+def test_current_observation_failure_invalidates_permission_even_with_same_pdf_hash(local_ocr):
+    p,raw=page('unknown');grant=authority.authority(p,ACTOR,TIME);c,t=confirmation(p)
+    failed=p.model_copy(update={'observation_complete':False,'extraction_status':'failed'})
+    c.current_page=lambda *args:failed
+    with pytest.raises(StateError,match='stale'):
+        c.confirm(p,operation='confirm_general_receipt_ai',request_id=UUID)
+    with pytest.raises(StateError,match='stale'):
+        ai.authorize_payload(p,png('unknown'),current_page=lambda *args:failed,
+            load_source=lambda _:raw,load_grant=lambda _:grant)
+    assert t.writes==0
