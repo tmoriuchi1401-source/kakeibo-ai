@@ -18,6 +18,7 @@ from .pdf_bounded_rendering import (WorkBudget,render_scale,RenderHold,STANDARD_
     MAX_TOTAL_OCR_PIXEL_WORK,MAX_LIVE_PIXELS)
 from .receipt_text_extraction import _extract_receipt_text
 from .receipt_privacy_gate import ReceiptPrivacyBlocked,evaluate_receipt_privacy
+from .page_receipt_ai import fresh_render_proof
 
 class PageReceiptBudget(WorkBudget):
     @contextmanager
@@ -84,7 +85,8 @@ class ReadonlyPageReceipts:
                         with self.budget.page(pixels):
                             payload=_render_png(pdfpage,scale,STANDARD_PAGE_PIXELS)
                             report['effective_render_scale']=scale
-                            return self._analyze(page,payload,report,previous)
+                            proof=fresh_render_proof(page,raw,number,len(document),payload)
+                            return self._analyze(page,payload,report,previous,proof)
             with Image.open(BytesIO(raw)) as original:
                 if getattr(original,'n_frames',1)!=1 or original.width*original.height>min(MAX_PAGE_PIXELS,MAX_LIVE_PIXELS//8):
                     raise RenderHold('image_resource_limit_exceeded')
@@ -94,7 +96,8 @@ class ReadonlyPageReceipts:
                         try:
                             output=BytesIO();clean.save(output,format='PNG');payload=output.getvalue()
                         finally:clean.close()
-                    return self._analyze(page,payload,report,previous)
+                    proof=fresh_render_proof(page,raw,1,1,payload)
+                    return self._analyze(page,payload,report,previous,proof)
         except ReceiptPrivacyBlocked:report.update(status='privacy_blocked',reason='exact_payload_or_crop_gate')
         except StateError:report.update(status='authority_held',reason='source_or_authority_not_current')
         except RenderHold as error:report.update(status='privacy_blocked',reason=str(error))
@@ -102,11 +105,12 @@ class ReadonlyPageReceipts:
         finally:payload=raw=None
         return report
 
-    def _analyze(self,page,payload,report,previous):
+    def _analyze(self,page,payload,report,previous,render_proof):
         fingerprint=sha256(payload).hexdigest()
         before=self.analyzer.calls
         try:
-            readings,proof=self.analyzer.analyze(page,payload,self.categories,expected_payload_sha256=fingerprint)
+            readings,proof=self.analyzer.analyze(page,payload,self.categories,
+                expected_payload_sha256=fingerprint,render_proof=render_proof)
             if sha256(payload).hexdigest()!=fingerprint:raise StateError('page_payload_changed')
             report.update(payload_sha256=fingerprint,payload_mime='image/png',payload_pages=[page.page_number],privacy=proof)
             if segmentation_issues(*readings):

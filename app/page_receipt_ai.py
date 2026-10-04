@@ -4,7 +4,8 @@ from hashlib import sha256
 from io import BytesIO
 from PIL import Image
 from .drive_run_state import StateError
-from .page_receipt_model import PageUnit,PageReceiptExtraction
+from .page_receipt_model import PageUnit,PageReceiptExtraction,stable_page
+from dataclasses import dataclass
 from .human_general_authority import eligible,validate_grant
 from .receipt_text_extraction import _extract_receipt_text
 from .medical_receipt_privacy import classify_receipt_text
@@ -12,6 +13,27 @@ from .receipt_privacy_gate import evaluate_receipt_privacy,require_receipt_ai_pe
 from .receipt_pdf_units import MAX_PAGE_PIXELS,is_pdf
 
 _CLEAR_PERSONAL=re.compile(r'マイナンバー|個人番号|患者氏名|生年月日|被保険者番号|保険証番号|口座番号')
+
+@dataclass(frozen=True)
+class FreshRenderProof:
+    source_file_id:str
+    source_content_hash:str
+    page_count:int
+    page_number:int
+    stable_page_identity:str
+    payload_sha256:str
+
+def fresh_render_proof(page,source_bytes,rendered_number,rendered_count,payload):
+    """Called by the trusted renderer with its actual selection, never the UI.
+
+    This ephemeral record is not durable authority. It prevents a fresh payload
+    from being accidentally associated with another page's permission context.
+    """
+    if (sha256(source_bytes).hexdigest()!=page.source.source_content_hash
+            or rendered_number!=page.page_number or rendered_count!=page.source.page_count):
+        raise StateError('page_render_binding_changed')
+    return FreshRenderProof(page.source.source_file_id,page.source.source_content_hash,rendered_count,
+        rendered_number,stable_page(page.source,rendered_number),sha256(payload).hexdigest())
 
 def authorize_payload(page,payload,*,current_page,load_source,load_grant):
     """No caller allow flag. Reload protected authority/source immediately.
@@ -64,9 +86,13 @@ class GeminiPageReceipts:
     def __init__(self,client,model,permission):
         self.client,self.model,self.permission=client,model,permission
         self.calls=0
-    def analyze(self,page,payload,categories,*,expected_payload_sha256):
+    def analyze(self,page,payload,categories,*,expected_payload_sha256,render_proof):
         fingerprint=sha256(payload).hexdigest()
         if fingerprint!=expected_payload_sha256:raise StateError('page_payload_changed')
+        expected=FreshRenderProof(page.source.source_file_id,page.source.source_content_hash,page.source.page_count,
+            page.page_number,page.stable_page_identity,fingerprint)
+        if type(render_proof) is not FreshRenderProof or render_proof!=expected:
+            raise StateError('page_render_binding_changed')
         prompt='''日本の一般レシート解析。ページに独立したレシートが複数ある場合はreceipts配列で別取引に分離。
 1枚の場合も配列長1。枚数をユーザーへ質問しない。店舗・日付・明細・totalを別レシートと混ぜず、合算禁止。
 各bboxと各item_boxesは画像全体で正規化したleft/top/right/bottom座標(0..1)。明細ごとの印字領域を示す。

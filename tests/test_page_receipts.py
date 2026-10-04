@@ -175,7 +175,8 @@ def test_exact_png_only_two_readings_with_separate_unknown_authority(local_ocr,k
         seen.append(content[1]['data']);return SimpleNamespace(output_text=reading(count,len(seen)==2).model_dump_json())
     permission=lambda page,png:ai.authorize_payload(page,png,current_page=lambda *args:p,load_source=lambda _:raw,load_grant=lambda _:grant)
     analyzer=ai.GeminiPageReceipts(SimpleNamespace(interactions=SimpleNamespace(create=create)),'synthetic-model',permission)
-    readings,proof=analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=sha256(payload).hexdigest())
+    readings,proof=analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=sha256(payload).hexdigest(),
+        render_proof=ai.fresh_render_proof(p,raw,p.page_number,p.source.page_count,payload))
     assert analyzer.calls==2 and len(readings[0].receipts)==count and len(seen)==2
     assert proof['automatic_classification']==p.automatic_classification
     assert proof['basis']==('human_general_receipt' if kind=='unknown' else 'automatic_normal')
@@ -194,7 +195,9 @@ def test_rejected_exact_or_authority_gate_never_calls_gemini(local_ocr,monkeypat
     analyzer=ai.GeminiPageReceipts(client,'model',permission)
     fingerprint=sha256(payload).hexdigest() if failure!='payload' else 'f'*64
     with pytest.raises((StateError,ReceiptPrivacyBlocked)):
-        analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=fingerprint)
+        analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=fingerprint,
+            render_proof=ai.FreshRenderProof(p.source.source_file_id,p.source.source_content_hash,p.source.page_count,
+                p.page_number,p.stable_page_identity,sha256(payload).hexdigest()))
     client.interactions.create.assert_not_called()
 
 def test_source_pdf_or_png_metadata_rejected(local_ocr):
@@ -280,3 +283,14 @@ def test_explicit_unknown_hold_revokes_general_consent_old_request_cannot_restor
     with pytest.raises(StateError,match='replaced'):c.confirm(p,operation='confirm_general_receipt_ai',request_id=UUID)
     c.confirm(p,operation='confirm_general_receipt_ai',request_id=UUID[:-1]+'3')
     assert t.writes==3 and c.current(p)['confirmed_kind']=='general_receipt'
+
+def test_wrong_page_fresh_render_proof_rejected_before_permission_or_sdk():
+    from dataclasses import replace
+    p,raw=page('normal',2,['medical','normal','normal']);payload=png()
+    proof=ai.fresh_render_proof(p,raw,2,3,payload)
+    permission=Mock();client=Mock();analyzer=ai.GeminiPageReceipts(client,'model',permission)
+    with pytest.raises(StateError,match='render_binding'):
+        analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=sha256(payload).hexdigest(),
+            render_proof=replace(proof,page_number=3))
+    permission.assert_not_called();client.interactions.create.assert_not_called()
+    with pytest.raises(StateError,match='render_binding'):ai.fresh_render_proof(p,raw,3,3,payload)
