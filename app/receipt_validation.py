@@ -21,7 +21,7 @@ def validate_receipt_result(result, categories):
         except (ValueError,TypeError):notes.append('日付不正')
     if not result.items:notes.append('明細なし')
     if result.total<=0:notes.append('合計金額不正')
-    if any(not x.name.strip() or x.quantity<=0 for x in result.items):notes.append('明細不正')
+    if any(not x.name.strip() or (x.quantity is not None and x.quantity<=0) for x in result.items):notes.append('明細不正')
     return not notes,notes
 
 

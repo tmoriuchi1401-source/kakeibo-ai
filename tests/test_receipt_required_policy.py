@@ -15,6 +15,11 @@ def test_optional_payment_and_merchant_no_inference(payment):
     assert not issues and r.merchant=='' and r.payment_method==''
     assert validate_receipt_result(r,CATS)[0]
 
+def test_optional_null_fields_are_blank_and_quantity_is_not_required():
+    r=result(merchant=None,payment_method=None);r.items[0].quantity=None
+    assert r.merchant==r.payment_method==''
+    assert validate_receipt_result(r,CATS)[0]
+
 def test_readable_payment_retained_and_explicit_contradiction_held():
     r=result(payment_method='現金')
     assert not apply_receipt_policy(r,CATS,text='支払方法 現金')[0]
