@@ -63,6 +63,10 @@ class PdfUnitAnalyzer:
             return response
         # Do not mutate a shared SDK client or change another intake's transport.
         parser=object.__new__(GeminiAI);parser.model=self.ai.model
+        # Preserve the existing SDK fingerprint deny cache across per-Unit
+        # parser wrappers; a fresh wrapper must never forget an earlier block.
+        parser._blocked_receipts=getattr(self.ai,'_blocked_receipts',set())
+        self.ai._blocked_receipts=parser._blocked_receipts
         parser.client=SimpleNamespace(interactions=SimpleNamespace(create=create))
         result=parser.analyze_receipt(payload,'image/png',categories,known_source_classification='normal')
         if len(set(headers))>1:raise StateError('pdf_receipt_unstable_reread')

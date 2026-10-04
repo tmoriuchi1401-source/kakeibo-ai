@@ -135,6 +135,7 @@ def materialize(db,store,spec,payload,payload_sha256,result,*,verify_current,clo
         raise StateError('pdf_receipt_durable_intent_required')
     if set(spec['automatic_classifications']+spec['human_classifications'])!={'normal'}:
         raise StateError('pdf_receipt_normal_authority_required')
+    if len(spec['page_numbers'])!=1:raise StateError('pdf_receipt_single_page_scope_required')
     if not isinstance(payload,bytes) or sha256(payload).hexdigest()!=payload_sha256:
         raise StateError('pdf_receipt_payload_changed')
     old=reconcile(db,store,spec,verify_current=verify_current)

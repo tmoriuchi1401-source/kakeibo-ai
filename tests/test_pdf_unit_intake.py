@@ -66,10 +66,10 @@ def test_every_page_observed_before_sdk_then_independent_duplicate_candidate_hol
 
 
 def test_applied_replay_reads_intent_rows_without_new_sdk_append_or_state_write(local_ocr):
-    service,live,g,db,sdk,state=setup(group=True)
+    service,live,g,db,sdk,state=setup(('normal','medical'),{2:'医療'})
     out=service.process(live.content,'drive-source-id');before=(sdk.call_count,len(db.appends),state.payload)
     replay=service.process(live.content,'drive-source-id')
-    assert replay['all_units_terminal'] and replay['units'][0]['replayed']
+    assert not replay['all_units_terminal'] and replay['units'][0]['replayed']
     assert before==(sdk.call_count,len(db.appends),state.payload)
     assert out['archive_allowed'] is False and not should_archive_result(out)
 
@@ -145,7 +145,7 @@ def test_sdk_payload_and_reread_stability_guards(local_ocr,monkeypatch):
 
 
 def test_existing_pipeline_pdf_dispatch_and_original_pdf_ai_block(local_ocr):
-    service,live,g,db,sdk,state=setup(group=True)
+    service,live,g,db,sdk,state=setup(('normal','medical'),{2:'医療'})
     assert ReceiptPipeline(db,None,pdf_unit_intake=service).process_bytes(live.content,
         'application/pdf','drive-source-id')['units'][0]['status']=='imported'
     with pytest.raises(Exception):
@@ -193,7 +193,7 @@ def test_late_sensitive_gate_remains_sticky_not_an_ordinary_validation_issue(sta
     from app.receipt_privacy_gate import ReceiptPrivacyBlocked
     from app import receipt_pipeline
     from test_receipt_pipeline import _medical_gate,_payroll_gate
-    service,live,g,db,sdk,state=setup(group=True)
+    service,live,g,db,sdk,state=setup(('normal','medical'),{2:'医療'})
     if stage=='adapter':
         def deny(*a,**kw):raise ReceiptPrivacyBlocked(kind)
         monkeypatch.setattr('app.gemini_ai.require_receipt_ai_permission',deny)
@@ -208,14 +208,14 @@ def test_late_sensitive_gate_remains_sticky_not_an_ordinary_validation_issue(sta
         monkeypatch.setattr(receipt_pipeline,'evaluate_receipt_privacy',late)
     out=service.process(live.content,'drive-source-id')
     assert out['units'][0]['status']=='privacy_pending' and not db.appends
-    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:kind,2:kind}
+    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:kind}
     assert sdk.call_count==(0 if stage=='adapter' else 1)
     service.process(live.content,'drive-source-id')
     assert sdk.call_count==(0 if stage=='adapter' else 1) and not db.appends
 
 
 def test_budget_expired_during_sdk_response_cannot_reach_accounting(local_ocr,monkeypatch):
-    service,live,g,db,sdk,state=setup(group=True);budget=intake.WorkBudget()
+    service,live,g,db,sdk,state=setup(('normal','medical'),{2:'医療'});budget=intake.WorkBudget()
     monkeypatch.setattr(intake,'WorkBudget',lambda:budget)
     def late(**kw):
         budget.started-=901
@@ -224,4 +224,21 @@ def test_budget_expired_during_sdk_response_cannot_reach_accounting(local_ocr,mo
     out=service.process(live.content,'drive-source-id')
     assert out['units'][0]['status']=='privacy_pending' and not db.appends
     assert sdk.call_count==1 and budget.live_pages==0
-    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:'sensitive_unknown',2:'sensitive_unknown'}
+    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:'sensitive_unknown'}
+
+
+def test_confirmed_composite_group_does_not_expand_live_write_scope(local_ocr):
+    service,live,g,db,sdk,state=setup(group=True);before=state.payload
+    out=service.process(live.content,'drive-source-id')
+    assert out['units'][0]['status']=='multi_page_unit_pending' and not out['all_units_terminal']
+    assert sdk.call_count==0 and not db.appends and state.payload==before
+
+
+def test_existing_sdk_fingerprint_block_survives_per_unit_parser_wrapper(local_ocr):
+    service,live,g,db,sdk,state=setup()
+    spec=service.authority.current('drive-source-id').units[0];png=live.observations.page_payload(1)
+    service.analyzer.ai._blocked_receipts={sha256(png).digest()}
+    from app.receipt_privacy_gate import ReceiptPrivacyBlocked
+    with pytest.raises(ReceiptPrivacyBlocked):
+        service.analyzer.analyze(png,sha256(png).hexdigest(),db.categories(),spec,verify_current=lambda _:True)
+    assert sdk.call_count==0 and not db.appends

@@ -65,6 +65,11 @@ class PdfUnitIntake:
                 for p in failed:self.completion.block(spec,p.classification if p.classification!='normal'
                     else 'sensitive_unknown','local_observation_incomplete',verify_current=self.authority.verify)
                 report['units'].append(record);continue
+            if len(numbers)!=1:
+                # Live accounting evidence covers confirmed single-page Units.
+                # Composite payloads remain available for a separate read-only
+                # / write canary; confirmation alone does not expand this scope.
+                record['status']='multi_page_unit_pending';report['units'].append(record);continue
             try:
                 replay=reconcile(self.db,self.completion,spec,verify_current=verify)
                 if replay:record.update(replay)

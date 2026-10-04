@@ -59,8 +59,10 @@ Every SDK call verifies exact PNG bytes, normal authority, current original
 source and the fixed Google destination. Existing receipt rereads are bounded
 at three, and changed date/total/kind readings remain review-only.
 
-This adapter currently posts purchase Units only. Buyback/unknown results stay on
-review; the existing non-PDF buyback/income writer is unchanged.
+Live accounting scope is confirmed single-page purchase Units, matching the
+existing live canary evidence. Confirmed composite Units remain pending; their
+bounded payload interface supports a separate read-only/write canary. Buyback/
+unknown results stay on review; the existing non-PDF income writer is unchanged.
 
 The existing ReceiptPipeline writer first materializes a frozen plan in memory.
 The private journal persists pending intent before any literal append to only
