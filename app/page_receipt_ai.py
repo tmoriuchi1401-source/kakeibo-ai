@@ -120,6 +120,9 @@ class GeminiPageReceipts:
         prompt='''日本の一般レシート解析。ページに独立したレシートが複数ある場合はreceipts配列で別取引に分離。
 1枚の場合も配列長1。枚数をユーザーへ質問しない。店舗・日付・明細・totalを別レシートと混ぜず、合算禁止。
 各bboxと各item_boxesは画像全体で正規化したleft/top/right/bottom座標(0..1)。明細ごとの印字領域を示す。
+座標はレシート内の相対座標ではなく、すべてページ画像全体の同じ座標系。
+bboxはヘッダ・全明細・合計を含むレシート全体の外接領域。すべてのitem_boxesをbboxの中へ含める。
+item_boxesは各明細に一対一で対応し、itemsと同じ順序。位置を確認できなければ分離不完全とする。
 上から下、同じ高さは左から右。ページ間の続きと思われる場合はcross_page_continuation_suspected=true。
 医療/給与等が混在する疑いならmixed_page_kind_suspected=true。分離が不明ならseparation_complete=false。
 支払日YYYY-MM-DD、原本の正のtotal、明細とtotal整合、既存カテゴリだけを使用。新カテゴリ禁止。

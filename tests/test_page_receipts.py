@@ -352,3 +352,12 @@ def test_small_wire_grammar_preserves_strict_local_segmentation_limits():
     with pytest.raises(ValueError):model.PageReceiptExtraction.model_validate(value)
     value=reading().model_dump();value['receipts'][0]['item_boxes']*=301
     with pytest.raises(ValueError):model.PageReceiptExtraction.model_validate(value)
+
+def test_outside_item_remains_held_and_geometry_diagnostic_contains_no_receipt_content():
+    p,_=page();value=reading().model_dump()
+    value['receipts'][0]['item_boxes']=[{'left':0,'top':0,'right':.01,'bottom':.01}]
+    extraction=model.PageReceiptExtraction.model_validate(value)
+    report=model.build_receipt_units(p,extraction,extraction,CATEGORIES)
+    assert report['status']=='receipt_segmentation_review' and report['units']==[]
+    assert report['geometry_diagnostic'][0][0]['outside_item_indices']==[1]
+    assert all(key not in json.dumps(report['geometry_diagnostic']) for key in ('merchant','name','amount','date'))
