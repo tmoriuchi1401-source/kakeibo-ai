@@ -12,7 +12,7 @@ class ReceiptItem(BaseModel):
     confidence: float = Field(default=0.8, ge=0, le=1)
 
 class ReceiptResult(BaseModel):
-    merchant: str
+    merchant: str = ''
     transaction_kind: Literal["purchase", "buyback", "unknown"] = "purchase"
     date: str = Field(description="YYYY-MM-DD。読めない場合は空文字")
     total: int

@@ -156,7 +156,7 @@ def prior_p2(env,pem,expected,get=github_get):
 
 def check_p2(proof,env,expected):
     rows=proof.get('results',[])
-    if (proof.get('schema')!='pdf-unit-readonly-diagnostic-v1' or proof.get('mode')!='p2'
+    if (proof.get('schema')!='pdf-unit-readonly-diagnostic-v2' or proof.get('mode')!='p2'
             or proof.get('run_id')!=env['PDF_READONLY_P2_RUN_ID']
             or proof.get('code_sha')!=env['PDF_READONLY_APPROVED_SHA']
             or proof.get('confirmation_digest')!=expected['confirmation_digest']
@@ -307,16 +307,22 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
         evidence['calls']=0;evidence['responses']=0
         result=runner.run(number);calls+=evidence['calls']
         result['gemini_response_count']=evidence.get('responses',0)
-        # Explicit minimal whitelist: no raw response, notes, item names, OCR or images.
+        # v2 preserves validated structured normal candidates for the separately
+        # authorized accounting canary. Still no raw response, OCR or images.
         rows.append({k:v for k,v in result.items() if k in {'page_number','unit_id','source_content_hash','page_hash',
             'model','status','validation_issues','reason','date','merchant','total','item_count','checks','privacy',
             'effective_classification','human_classification','payload_sha256','payload_mime','payload_pages',
             'page_identity','observation_render_hash','gemini_api_status','analysis_failure_kind',
             'analysis_failure_class','analysis_failure_sites','gemini_response_count'}})
+        if result['status']=='would_import':
+            parsed=result['parsed']
+            rows[-1]['candidate']={k:parsed[k] for k in ('date','merchant','total','payment_method','transaction_kind')}
+            rows[-1]['candidate']['items']=[{k:x[k] for k in ('name','quantity','amount','major_category','minor_category')}
+                                          for x in parsed['items']]
         if result['status']=='authority_held':break
     if store.load()!=initial or store.payload!=initial_bytes or store.tag!=initial_tag:
         raise StateError('readonly_authority_changed')
-    value={'schema':'pdf-unit-readonly-diagnostic-v1','mode':env['PDF_READONLY_MODE'],'run_id':env['GITHUB_RUN_ID'],
+    value={'schema':'pdf-unit-readonly-diagnostic-v2','mode':env['PDF_READONLY_MODE'],'run_id':env['GITHUB_RUN_ID'],
         'code_sha':checkout_sha,'source_content_hash':SOURCE_HASH,'confirmation_digest':expected['confirmation_digest'],
         'legacy_confirmation_digest':expected.get('legacy_confirmation_digest'),
         'proposal_digest':expected['proposal_digest'],'grouping_revision':expected['grouping_revision'],

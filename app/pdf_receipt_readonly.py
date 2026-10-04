@@ -22,7 +22,7 @@ from .pdf_bounded_rendering import WorkBudget, render_scale, RenderHold
 from .receipt_privacy_gate import ReceiptPrivacyBlocked
 from .receipt_text_extraction import _extract_receipt_text
 from .medical_receipt_privacy import classify_receipt_text
-from .receipt_validation import validate_receipt_result
+from .receipt_validation import apply_receipt_policy
 
 
 def selected_unit(value, source_id, number, expected):
@@ -68,28 +68,7 @@ def selected_unit(value, source_id, number, expected):
 
 
 def receipt_checks(result,categories,gate,readings,text):
-    _,issues=validate_receipt_result(result,categories)
-    if result.transaction_kind=='unknown':issues.append('購入・買取の別が不明')
-    elif gate.buyback_evidence!=(result.transaction_kind=='buyback'):
-        issues.append('原本の買取表示と取引種別が不一致')
-    stability=len({(r.date,r.merchant,r.total) for r in readings})<=1
-    if not stability:issues.append('再読取で日付・店舗・合計が変化')
-    adjustment=any(re.search('調整|差額補正|差額調整',x.name) and x.name not in text for x in result.items)
-    if adjustment:issues.append('原本で確認できない調整明細')
-    normalized=unicodedata.normalize('NFKC',text).casefold()
-    payment=unicodedata.normalize('NFKC',result.payment_method).casefold().strip()
-    payment_patterns={'現金':r'現金|お預[りか]|預り|釣銭|お釣',
-        'クレジット':r'クレジット|カード|visa|master|jcb|amex',
-        'クレジットカード':r'クレジット|カード|visa|master|jcb|amex',
-        'カード':r'クレジット|カード|visa|master|jcb|amex'}
-    payment_supported=not payment or bool(re.search(payment_patterns.get(payment,re.escape(payment)),normalized))
-    if not payment_supported:issues.append('支払方法をlocal原本文字で裏付けできない')
-    return list(dict.fromkeys(issues)),{'date_present':bool(result.date),'merchant_present':bool(result.merchant.strip()),
-        'total_present':result.total>0,'item_sum':sum(x.amount for x in result.items),
-        'total_matches':sum(x.amount for x in result.items)==result.total,
-        'category_valid':all((x.major_category,x.minor_category) in categories for x in result.items),
-        'reread_stable':stability,'reread_count':len(readings),
-        'unverified_adjustment':adjustment,'payment_evidence_supported':payment_supported}
+    return apply_receipt_policy(result,categories,gate=gate,readings=readings,text=text)
 
 
 class ReadonlyPdfReceipts:

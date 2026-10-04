@@ -8,18 +8,19 @@ from .receipt_pdf_units import (PdfUnitManifestStore, SinglePageGrouping, docume
 from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
-from .receipt_validation import validate_receipt_result
+from .receipt_validation import validate_receipt_result, apply_receipt_policy
 from .receipt_review_snapshot import save_candidate
 from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
                           RECEIPT_BUYBACK_SOURCE, income_id, validate_income_rows)
 
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
-                 gemini_factory:Callable[[], GeminiAI] | None=None, pdf_manifest_store=None):
+                 gemini_factory:Callable[[], GeminiAI] | None=None, pdf_manifest_store=None, clock=now_jst_string):
         self.db=db; self.ai=ai
         self.medical_review_observer=medical_review_observer
         self._gemini_factory=gemini_factory
         self.pdf_manifest_store = pdf_manifest_store or PdfUnitManifestStore()
+        self.clock = clock
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
@@ -56,10 +57,21 @@ class ReceiptPipeline:
         self._require_ai()
         categories=self.db.categories()
         result=self._analyze(image_bytes,mime_type,categories,policy,destination=destination)
-        ok,notes=validate_receipt_result(result,categories)
-        notes += self._kind_issues(result, gate)
-        ok = ok and not notes
+        notes=self._posting_policy(result,categories,image_bytes,mime_type,gate)
+        ok = not notes
         return {"status":"analyzed" if ok else "needs_review", "parsed":result.model_dump(),"issues":notes}
+
+    @staticmethod
+    def _posting_policy(result,categories,payload,mime_type,gate):
+        from .receipt_text_extraction import _extract_receipt_text
+        text=''
+        if result.payment_method or any('調整' in x.name or '補正' in x.name for x in result.items):
+            try:
+                extracted=_extract_receipt_text(payload,mime_type)
+                if extracted.status=='extracted' and extracted.observation_complete:text=extracted.text or ''
+            except Exception:pass
+        issues,_=apply_receipt_policy(result,categories,text=text,gate=gate)
+        return issues
 
     @staticmethod
     def _kind_issues(result, gate):
@@ -179,19 +191,18 @@ class ReceiptPipeline:
             return result
         self._require_ai()
         cats=self.db.categories(); result=self._analyze(image_bytes,mime_type,cats,source_policy)
-        ok,notes=validate_receipt_result(result,cats)
-        notes += self._kind_issues(result, privacy)
-        ok = ok and not notes
+        notes=self._posting_policy(result,cats,image_bytes,mime_type,privacy)
+        ok = not notes
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"
-        receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]
+        receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,self.clock(),"; ".join(notes+[result.note] if result.note else notes)]
         raw_hash=canonical_hash(result.model_dump())
         income_row=None
         income_exists=False
         if ok and result.transaction_kind == "buyback":
             # Check the shared ledger before writing even the receipt row.
             income_row,income_exists=self._buyback_income(import_id,result,raw_hash)
-        import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
+        import_row=[import_id,self.clock(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
         if any(note.startswith("明細合計") for note in notes):
             # The rejected item list never reaches 支出明細. Save the values
             # actually used by validation before the import commit marker.

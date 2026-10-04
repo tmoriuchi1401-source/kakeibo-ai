@@ -91,6 +91,10 @@ def test_p2_only_encrypted_diagnostic_no_secret_ocr_image_or_cloud_write(local_o
     assert [r['page_number'] for r in value['results']]==[2]
     assert value['p1_rendered']==value['p1_submitted']==value['medical_calls']==value['cloud_writes']==value['source_moves']==0
     assert 'parsed' not in value['results'][0]
+    assert value['schema']=='pdf-unit-readonly-diagnostic-v2'
+    candidate=value['results'][0]['candidate']
+    assert candidate['total']==100 and len(candidate['items'])==1
+    assert 'note' not in candidate and 'note' not in candidate['items'][0]
     assert 'text' not in value['results'][0] and value['budgets']['peak_live_pages']==1
 
 

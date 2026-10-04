@@ -107,8 +107,11 @@ regression exercises garbage collection before a synthetic request.
 
 No receipt fields appear in public logs. The diagnostic field whitelist includes
 Unit/page/source hashes, model, status, date, merchant, total, item count,
-validation issues and conservative validation checks. It excludes raw responses,
-item descriptions, OCR, images, Medical input, credentials and Secrets.
+validation issues and conservative validation checks. Diagnostic v2 additionally
+retains validated structured normal candidates (including item descriptions and
+existing category pairs) inside the encrypted envelope, for a separately
+authorized accounting canary. It excludes raw responses, free-text notes, OCR,
+images, Medical input, credentials and Secrets. The workflow remains read-only.
 Failure diagnostics retain only genuine SDK numeric HTTP status, fixed failure
 class, source-code basenames/line numbers and response counts. Exception messages,
 locals, absolute paths and traceback text are excluded. SDK invocation counts
