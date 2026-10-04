@@ -1,0 +1,124 @@
+name: PDF confirmed Unit accounting canary
+run-name: PDF write canary ${{ inputs.stage }}
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact reviewed Draft PR 91 head; all CI must pass
+        type: string
+        required: true
+      analysis_sha:
+        description: Exact successful read-only code SHA; policy diff must be empty
+        type: string
+        required: true
+      p2_run_id:
+        type: string
+        required: true
+      remaining_run_id:
+        type: string
+        required: true
+      stage:
+        type: choice
+        options: [preflight, p11, small, remaining]
+        default: preflight
+        required: true
+      confirm:
+        description: Type WRITE_CANARY; fixed normal Units only, Medical/move/archive disabled
+        type: string
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  canary:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'WRITE_CANARY' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Reject debug before Secrets
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - name: Check reviewed Draft head and validated main before checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          VALIDATED_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$VALIDATED_SHA"
+          python - <<'PY'
+          import json,os,re,urllib.request
+          sha=os.environ['APPROVED_SHA'];assert re.fullmatch('[0-9a-f]{40}',sha)
+          def get(path):
+              request=urllib.request.Request('https://api.github.com/repos/tmoriuchi1401-source/kakeibo-ai/'+path,
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)
+          p=get('pulls/91')
+          assert p['state']=='open' and p['draft'] is True and p['base']['ref']=='main'
+          assert p['head']['repo']['full_name']=='tmoriuchi1401-source/kakeibo-ai'
+          assert p['head']['ref']=='codex/pdf-page-privacy' and p['head']['sha']==sha
+          required={'local-ocr-runtime','test (general, not payroll and not medical)',
+                    'test (sensitive-synthetic, payroll or medical)'}
+          checks=[r for r in get('commits/'+sha+'/check-runs?per_page=100')['check_runs'] if r['name'] in required]
+          assert len(checks)==3 and {r['name'] for r in checks}==required
+          assert all(r['status']=='completed' and r['conclusion']=='success' for r in checks)
+          print('Reviewed code and validated main: verified')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: tmoriuchi1401-source/kakeibo-ai
+          ref: ${{ inputs.approved_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing local OCR before Secrets
+        env:
+          KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-pdf-write-ocr
+        run: |
+          python -m pip install -r requirements.txt -r requirements-local-ocr.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+          tesseract --list-langs | grep -qx jpn
+          python -m app.receipt_local_ocr prepare
+      - name: Fixed normal accounting canary without Gemini Secret
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
+          PDF_GROUPING_BINDING: ${{ vars.PDF_GROUPING_BINDING }}
+          KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PDF_CANARY_APPROVED_SHA: ${{ inputs.approved_sha }}
+          PDF_CANARY_ANALYSIS_SHA: ${{ inputs.analysis_sha }}
+          PDF_CANARY_P2_RUN_ID: ${{ inputs.p2_run_id }}
+          PDF_CANARY_REMAINING_RUN_ID: ${{ inputs.remaining_run_id }}
+          PDF_CANARY_STAGE: ${{ inputs.stage }}
+          PDF_CANARY_CONFIRM: ${{ inputs.confirm }}
+          PDF_MEDICAL_ENABLED: 'false'
+          PDF_ARCHIVE_ENABLED: 'false'
+          KAKEIBO_LOCAL_OCR_ENABLED: 'true'
+          RECEIPT_UNRULED_POLICY: owner-unruled-v1
+          KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-pdf-write-ocr
+        run: python -m app.pdf_unit_write_canary
+      - name: Encrypted diagnostic only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-unit-write-canary-encrypted
+          path: ${{ runner.temp }}/pdf-unit-write-canary/diagnostic.enc.json
+          retention-days: 1
+          if-no-files-found: ignore
