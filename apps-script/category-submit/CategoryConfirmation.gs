@@ -179,7 +179,7 @@ function ccPaint_(sheet,state) {
   const fixed=state.fixed;
   const ready=ccHasTargets_(state);
   const impact=(ready?'固定対象 '+fixed.count+'件 / '+Number(fixed.amount).toLocaleString('ja-JP')+'円を確定します。':fixed?'確定できる未分類明細がありません。明細は変更していません。':'「対象件数を確認」で今回の変更対象を固定します。')+
-    (state.scope==='反映しない'?'\n対象月の未分類だけを確定。追加の過去反映は0件です。':'');
+    (state.scope==='反映しない' && (!fixed || ready)?'\n対象月の未分類だけを確定。追加の過去反映は0件です。':'');
   ccSet_(sheet.getRange('A21'),impact);
   ccSet_(sheet.getRange('A23'),(state.category||'カテゴリ未選択')+' / 自動分類 '+state.future+'\n過去：'+state.scope);
   const action=ready?'この内容で確定':'対象件数を確認';

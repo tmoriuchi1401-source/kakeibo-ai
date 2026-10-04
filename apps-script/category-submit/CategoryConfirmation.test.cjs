@@ -150,6 +150,7 @@ test('zero and invalid preview counts never offer or capture confirmation',()=>{
     c.ccPaint_(sheet,state);
     assert.ok(!dropdowns.A24.includes('この内容で確定'));
     assert.match(values.A21,/確定できる未分類明細がありません/);
+    assert.doesNotMatch(values.A21,/だけを確定/);
     assert.match(values.A25,/確定できる未分類明細がありません/);assert.doesNotMatch(values.A25,/確定してください/);
     assert.throws(()=>c.ccCapture_([],'key','食費｜外食','confirm',state),/確定できる未分類/);
     assert.equal(c.ccFixedValid_({getSheetByName:()=>assert.fail('no request access')},state),false);
