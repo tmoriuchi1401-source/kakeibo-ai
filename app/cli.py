@@ -124,8 +124,11 @@ def make_receipt_pipeline(settings, db, ai):
             settings.validate(need_gemini=True)
             model = getattr(settings, "normal_receipt_gemini_model", "") or settings.gemini_model
             return GeminiAI(settings.gemini_api_key, model)
+    from .pdf_unit_runtime import open_intake
     return ReceiptPipeline(
         db, ai, medical_review_observer=observer, gemini_factory=gemini_factory,
+        pdf_unit_intake=open_intake(settings,db,ai,apply=True)
+            if settings is not None else None,
     )
 
 

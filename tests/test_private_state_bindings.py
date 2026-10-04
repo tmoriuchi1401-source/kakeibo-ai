@@ -57,3 +57,10 @@ def test_projection_folder_uses_its_own_optional_encrypted_binding(key):
     encrypted=wrap(name,"synthetic-folder-id",key)
     assert unwrap(name,encrypted,key)=="synthetic-folder-id"
     assert name not in VARIABLES  # Existing installations keep their required set.
+
+
+def test_existing_pdf_grouping_ciphertext_uses_same_optional_label_without_changing_required_bindings(key):
+    name='PDF_GROUPING_STATE_FILE_ID'
+    encrypted=wrap(name,'synthetic-grouping-file-id',key)
+    assert unwrap(name,encrypted,key)=='synthetic-grouping-file-id' and name not in VARIABLES
+    with pytest.raises(StateError,match='decode_failed'):unwrap('RECEIPT_REIMPORT_FILE_ID',encrypted,key)

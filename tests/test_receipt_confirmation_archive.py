@@ -14,11 +14,12 @@ def setup_archive():
     review,store,db,verify,source=medical()
     # Rebuild the synthetic identity using real content bytes.
     old_key=review_id('medical',source);source['sha256']=sha256(b'original').hexdigest()
+    source['mime_type']='image/png'
     item=store.value['confirmation_items'].pop(old_key);item['source']=deepcopy(source)
     key=review_id('medical',source);store.value['confirmation_items'][key]=item
     db.rows['領収書確認'][0][0]=key;review.render()
     confirm(db);review.capture_inputs();assert review.apply_confirmations()==1
-    state={'parents':['synthetic-folder'],'version':'1','mimeType':'application/pdf','appProperties':{'unrelated':'keep'}}
+    state={'parents':['synthetic-folder'],'version':'1','mimeType':'image/png','appProperties':{'unrelated':'keep'}}
     drive=Mock();drive.files().get().execute.side_effect=lambda **kw:deepcopy(state)
     def move(**kw):
         state.update(parents=['processed'],version='2',appProperties=kw['body']['appProperties'])
@@ -95,6 +96,17 @@ def test_historical_automatic_medical_is_preserved_without_any_drive_calls():
     item=review.items[key];item['decision_origin']='automatic';item['local_decision']={'external_requests':0}
     before=deepcopy((store.value,db.rows))
     download=Mock(side_effect=AssertionError('Historical original must remain untouched'))
+    assert archive_confirmations(review,'synthetic-folder','processed',drive,download)==0
+    assert (store.value,db.rows)==before
+    drive.files.assert_not_called();download.assert_not_called()
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+def test_pdf_parent_never_moves_from_a_file_or_single_page_confirmation(kind):
+    review,store,db,source,key,state,drive=setup_archive()
+    review.items[key]['source']['mime_type']='application/pdf'
+    review.items[key]['kind']=kind
+    before=deepcopy((store.value,db.rows));download=Mock(side_effect=AssertionError('No original access'))
     assert archive_confirmations(review,'synthetic-folder','processed',drive,download)==0
     assert (store.value,db.rows)==before
     drive.files.assert_not_called();download.assert_not_called()

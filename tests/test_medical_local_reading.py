@@ -157,7 +157,8 @@ def test_local_prepare_consumes_no_cloud_crop_or_network(monkeypatch):
     assert packet['status']=='local_ready' and packet['local_parsed']['total']==1234 and pixels is None
     crop.assert_not_called()
 
-def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp_path):
+@pytest.mark.parametrize('mime_type',['image/png','application/pdf'])
+def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp_path,mime_type):
     import base64,json
     from hashlib import sha256
     from app import receipt_confirmation_production as runtime,google_clients,medical_candidate_preparation as prep
@@ -167,7 +168,7 @@ def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp
     monkeypatch.setattr(runtime,'open_context',lambda *a:(options,store,db,verify))
     monkeypatch.setattr('app.settings.service_account_source',lambda:('',{'private_key':'synthetic-private-key'}))
     api=Mock();api.files.return_value.list.return_value.execute.return_value={'files':[
-        {'id':str(i),'version':'1','mimeType':'application/pdf'} for i in range(2)]}
+        {'id':str(i),'version':'1','mimeType':mime_type} for i in range(2)]}
     monkeypatch.setattr(google_clients,'read_only_drive_service',lambda:api)
     monkeypatch.setattr(google_clients,'download_drive_file',lambda sid,*a:sid.encode())
     monkeypatch.setattr(runtime,'evaluate_receipt_privacy',lambda *a,**k:SimpleNamespace(classification='medical'))
@@ -181,10 +182,13 @@ def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp
     env={'MEDICAL_PREPARE_DIR':str(tmp_path),'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(b'synthetic').decode(),'MEDICAL_DERIVED_AI_POLICY':'auto-v1:free'}
     result=runtime.execute(env,True)
     assert result['written']==result['medical_local_written']==0
-    assert not db.rows['支出明細'] and result['medical_pending']==2
+    assert not db.rows['支出明細']
+    assert result['medical_pending']==(2 if mime_type=='image/png' else 0)
+    if mime_type=='application/pdf':assert result['blocked']==2
     assert not list(tmp_path.iterdir())
     assert all(row[7:15]==['']*8 for row in db.rows[TITLE])
     identities=set(store.value['confirmation_items'])
     assert runtime.execute(env,True)['written']==0
-    assert set(store.value['confirmation_items'])==identities and len(db.rows[TITLE])==2
+    assert set(store.value['confirmation_items'])==identities
+    assert len(db.rows[TITLE])==(2 if mime_type=='image/png' else 0)
     prepare.assert_not_called()

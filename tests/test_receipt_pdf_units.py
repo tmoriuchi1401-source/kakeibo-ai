@@ -457,6 +457,7 @@ def test_raster_encoding_change_cannot_duplicate_same_pdf(tmp_path, local_ocr, m
     assert first['units'][0]['page_hash'] != second['units'][0]['page_hash']
     assert first['units'][0]['unit_id'] == second['units'][0]['unit_id']
     assert second['units'][0]['status'] == 'imported'
+    assert second['units'][0]['replayed'] is True
     assert ai.analyze_receipt.call_count == 1
 
 

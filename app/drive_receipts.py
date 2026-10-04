@@ -65,7 +65,8 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
                          if known_source_classification is not None else {})
         try:
             progress('receipt_processing')
-            res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy)
+            extra={'pdf_preflight':entry['pdf_preflight']} if approved is not None and 'pdf_preflight' in entry else {}
+            res=pipeline.process_bytes(data,f["mimeType"],f["id"],f.get("webViewLink",""),**source_policy,**extra)
         except Exception as error:
             from .gemini_errors import gemini_api_status
             # These errors originate from extraction, before accounting starts.
@@ -83,8 +84,16 @@ def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str
                 break
             raise
         results.append((f["name"],res))
-        progress('receipt_processing', {key: res[key] for key in
-            ('status', 'reason', 'medical_shadow_status') if key in res})
+        if res.get('document_type')=='pdf_page_units':
+            from .pdf_unit_runtime import counts
+            unit_counts=counts(res)
+            progress('receipt_processing', {'document_type':'pdf_page_units','unit_counts':unit_counts})
+            if unit_counts['failure']:
+                from .drive_run_state import StateError
+                raise StateError('pdf_unit_reconciliation_required')
+        else:
+            progress('receipt_processing', {key: res[key] for key in
+                ('status', 'reason', 'medical_shadow_status') if key in res})
         if processed_folder_id and should_archive_result(res):
             progress('receipt_archive')
             prev=",".join(f.get("parents",[]))

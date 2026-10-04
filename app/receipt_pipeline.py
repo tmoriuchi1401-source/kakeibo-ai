@@ -4,7 +4,7 @@ from collections.abc import Callable
 from .gemini_ai import GeminiAI
 from .receipt_privacy_gate import evaluate_receipt_privacy
 from .receipt_pdf_units import (PdfUnitManifestStore, SinglePageGrouping, document_result,
-                                is_pdf, observe_pdf, update_document_status)
+                                is_pdf, is_single_page_pdf, observe_pdf, update_document_status)
 from .medical_receipt_privacy import Classification
 from .sheets import SheetsDB
 from .utils import now_jst_string, canonical_hash
@@ -98,11 +98,15 @@ class ReceiptPipeline:
         return row, row[0] in existing
 
     def process_bytes(self,image_bytes:bytes,mime_type:str,source_id:str,image_url:str="", *,
-                      known_source_classification: Classification | None = None):
+                      known_source_classification: Classification | None = None, pdf_preflight=None):
         if is_pdf(image_bytes, mime_type):
-            if self.pdf_unit_intake is not None:
+            if self.pdf_unit_intake is not None and not is_single_page_pdf(image_bytes):
                 return self.pdf_unit_intake.process(image_bytes,source_id,
-                    known_source_classification=known_source_classification)
+                    known_source_classification=known_source_classification,
+                    **({'preflight':pdf_preflight} if pdf_preflight is not None else {}))
+            if pdf_preflight is not None:
+                from .drive_run_state import StateError
+                raise StateError('pdf_preflight_durable_intake_required')
             return self._process_pdf(image_bytes, source_id, image_url,
                                      known_source_classification=known_source_classification)
         return self._process_image_bytes(image_bytes, mime_type, source_id, image_url,
@@ -141,6 +145,7 @@ class ReceiptPipeline:
                            'extraction_status': 'extraction_failed'}
             state = outcome['status']
             if state == 'skipped' and outcome.get('reason') == 'already_imported':
+                record['replayed']=True
                 # A review import marker also suppresses replay. It does not
                 # prove the unit is resolved, so reconcile the ledger status.
                 rows = self.db.get('取込データ!A2:L')

@@ -92,6 +92,30 @@ validated main boundary, projection journal, Drive authority provider and curren
 owner request verifier before activation. No live state/authority or UI is
 created by importing these modules.
 
+The normal receipt factory and source scan seams are now implemented, with an
+independent `PDF_UNIT_PROCESSING_ENABLED=true` opt-in. The current workflow does
+not pass this switch or the grouping binding, and no live Variable is changed.
+Enabling requires the existing hosted production workflow, exact validated main,
+normal logging and a valid projection journal before AI or accounting. Existing
+RSA-wrapped grouping IDs are decoded with their original labels; no existing
+binding or Secret value changes. The completion file is discovered by its exact
+schema/legacy-binding filename in the same private folder; missing/duplicate or
+changed ACL stops. Only its v2 conditional media upload is permitted by the new
+HTTP fence; grouping authority and source movement are read-only capabilities.
+
+The preflight scanner branches PDFs before any whole-file Medical/owner route.
+It finishes local observation and stores only source/ordinal/classification
+metadata plus an authority snapshot digest in the ephemeral source plan. The
+ordinary worker rechecks current Drive authority/source and cannot use that
+snapshot to grant permission; newly sensitive/incomplete observations remain
+restrictive across the two processes. Preview never resolves AI, claims completion
+or repairs pending writes. Applied replay verifies accounting rows without
+reanalysis, state writes or derived-view refresh. Count-only progress carries no
+filename, Unit IDs, amount or OCR. An unknown delivery stops subsequent sources.
+The existing one-page bounded PNG route remains separate; multi-page PDFs without
+the opt-in/durable authority stay on hold. Both ordinary intake and legacy
+confirmation archive paths refuse PDF moves pending the separate all-Unit canary.
+
 The parent-completion component is read-only. It requires complete, disjoint page
 coverage, stable source/ordinal page identities, durable completion intent and
 independent accounting read-back. A Medical page can only be completed by the
@@ -103,10 +127,10 @@ false. Actual source movement requires its separate first-PDF canary.
 ## Remaining before merge/activation
 
 * Finish owner input and durable read-back/replay for the remaining manual pages.
-* Install the production factory/scan-plan dependency injection at the existing
-  receipt entry, under its main/validated SHA and projection/mutex boundaries.
-  The service currently has no CLI/live activation path. Preview must recognize
-  page Units before the existing whole-file Medical/image scan.
+* Review and canary the opt-in receipt factory/source-plan seams with real Drive
+  state, under the existing main/validated SHA, projection and mutex boundaries.
+  Add only their encrypted binding/switch passthrough to the existing workflow
+  after completing remaining owner inputs; no new schedule or Secret.
 * Provision the separate completion journal under existing ACL/scopes and run
   the Drive-only migration of already posted canary intents without new writes.
 * Reconcile manual/Medical terminal references through their existing writers;

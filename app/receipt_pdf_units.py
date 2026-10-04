@@ -39,6 +39,15 @@ def is_pdf(content: bytes, mime_type: str) -> bool:
     return mime_type.strip().lower() == 'application/pdf' or b'%PDF-' in content[:1024]
 
 
+def is_single_page_pdf(content):
+    """Bounded structural dispatch only; no rendered/embedded authorization."""
+    if not isinstance(content,bytes) or not 0<len(content)<=MAX_SOURCE_BYTES:return False
+    try:
+        import pypdfium2 as pdfium
+        with closing(pdfium.PdfDocument(content)) as document:return len(document)==1
+    except Exception:return False
+
+
 @dataclass(frozen=True)
 class PageObservation:
     source_file_id: str
