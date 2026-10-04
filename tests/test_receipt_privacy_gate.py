@@ -330,3 +330,11 @@ def test_gate_low_level_exception_message_is_not_exposed(monkeypatch, capfd, cap
     assert marker not in exposed
     assert result.classification == "sensitive_unknown"
     assert result.gemini_allowed is False
+
+
+@pytest.mark.parametrize('kind',['medical','payroll','sensitive_unknown'])
+def test_permission_failure_preserves_only_safe_restrictive_classification(kind):
+    with pytest.raises(gate.ReceiptPrivacyBlocked) as caught:
+        gate.require_receipt_ai_permission(b'','image/png',known_source_classification=kind)
+    assert vars(caught.value)=={'classification':kind}
+    assert str(caught.value)=='receipt external AI submission blocked by privacy gate'

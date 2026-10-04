@@ -13,6 +13,10 @@ def archive_confirmations(review, inbox, processed, drive, download):
         if (old['status']!='applied' or old['kind'] not in {'normal','medical'}
                 or old['folder_id']!=inbox or old.get('archive',{}).get('status')=='complete'):
             continue
+        if old['source'].get('mime_type')=='application/pdf':
+            # A file-level confirmation cannot prove every PDF page Unit is
+            # terminal. Its separate all-Unit plan/first-move canary is required.
+            continue
         if old['kind']=='medical' and old.get('decision_origin')=='automatic':
             continue  # Preserve historical AUTO state/original; no new move.
         # Historical operator imports have a separate verified archive history.

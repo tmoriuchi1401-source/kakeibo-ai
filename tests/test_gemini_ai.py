@@ -35,7 +35,7 @@ class FakeInteractions:
 
 @pytest.mark.parametrize(
     ("mime_type", "expected_type"),
-    [("application/pdf", "document"), ("image/jpeg", "image")],
+    [("image/png", "image"), ("image/jpeg", "image")],
 )
 def test_receipt_media_uses_matching_interaction_type(monkeypatch, mime_type, expected_type):
     monkeypatch.setattr(

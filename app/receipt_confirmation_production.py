@@ -168,6 +168,7 @@ def execute(env,apply):
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
     plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
+    pdf_intake=None
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
         counts['found']+=1
@@ -176,6 +177,24 @@ def execute(env,apply):
         payload=download_drive_file(f['id'],reader)
         if before!=metadata(source,folder):raise StateError('confirmation_source_changed')
         source['sha256']=sha256(payload).hexdigest()
+        from .receipt_pdf_units import is_pdf
+        if is_pdf(payload,f['mimeType']):
+            # Page observation/grouping precedes any whole-file owner/Medical
+            # routing. PDF bytes never become a normal Gemini source payload.
+            from .pdf_unit_runtime import enabled,open_intake,preview_pdf
+            if pdf_intake is None and enabled(env):pdf_intake=open_intake(settings,db,apply=False,env=env)
+            pdf=preview_pdf(payload,f['id'],pdf_intake)
+            if any(u['status'] in {'new_eligible','unchanged'} for u in pdf['units']) and env.get('RECEIPT_SCAN_PLAN'):
+                directory=Path(env['RECEIPT_SCAN_PLAN']).parent
+                original=directory/(sha256(f['id'].encode()).hexdigest()+'.bin')
+                original.write_bytes(payload);original.chmod(0o600)
+                entry=dict(source,path=str(original))
+                if 'pdf_preflight' in pdf:entry['pdf_preflight']=pdf['pdf_preflight']
+                plans.append(entry)
+            else:counts['blocked']+=1
+            # No observe_medical/intake-kind item or accounting authority is
+            # manufactured from whole-document OCR or this scan snapshot.
+            continue
         owner_route=review.route_owner_intake(source,folder)
         if owner_route and owner_route!='医療':
             continue

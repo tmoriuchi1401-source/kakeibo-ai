@@ -353,7 +353,7 @@ def test_general_missing_details_require_explicit_confirmation_and_replay_once()
     assert ReceiptConfirmation(store,db,Mock()).apply_confirmations()==0
 
 
-def test_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(monkeypatch,tmp_path):
+def test_image_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(monkeypatch,tmp_path):
     import json
     from app import receipt_confirmation_production as runtime,google_clients,settings,private_state_bindings
     store=Store();store.value['manifest'].update(owner_email='owner@example.invalid',sa_email='sa@example.invalid')
@@ -367,8 +367,8 @@ def test_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(mon
                 return Request({'owners':[{'emailAddress':'owner@example.invalid'}], 'permissions':[
                     {'type':'user','role':'owner','emailAddress':'owner@example.invalid'},
                     {'type':'user','role':'writer','emailAddress':'sa@example.invalid'}]})
-            return Request({'id':kw['fileId'],'parents':['synthetic-inbox'],'version':'1','mimeType':'application/pdf'})
-        def list(self,**kw):return Request({'files':[{'id':kind,'version':'1','mimeType':'application/pdf'} for kind in ['medical','normal','unknown']]})
+            return Request({'id':kw['fileId'],'parents':['synthetic-inbox'],'version':'1','mimeType':'image/png'})
+        def list(self,**kw):return Request({'files':[{'id':kind,'version':'1','mimeType':'image/png'} for kind in ['medical','normal','unknown']]})
     api=SimpleNamespace(files=lambda:Files())
     monkeypatch.setattr(google_clients,'drive_service',lambda:api)
     monkeypatch.setattr(google_clients,'read_only_drive_service',lambda:api)

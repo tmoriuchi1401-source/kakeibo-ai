@@ -15,6 +15,12 @@ from .drive_run_state import DurableState, StateError
 
 
 SAFE_SOURCE_ERRORS = frozenset({
+    'pdf_unit_reconciliation_required', 'pdf_runtime_binding_invalid',
+    'pdf_processing_state_missing_or_ambiguous', 'pdf_private_permissions_mismatch',
+    'pdf_preflight_source_or_authority_changed', 'pdf_production_context_required',
+    'pdf_production_projection_required', 'pdf_runtime_cloud_write_forbidden',
+    'pdf_production_source_changed', 'pdf_processing_read_unavailable',
+    'grouping_v2_state_missing_or_ambiguous',
     'source_execution_failed', 'source_timeout', 'source_connection_failed',
     'source_tls_failed', 'source_invalid_data', 'source_internal_error',
     'receipt_response_invalid',

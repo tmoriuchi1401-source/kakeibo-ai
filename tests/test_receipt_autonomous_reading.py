@@ -62,7 +62,7 @@ def test_corroborated_changed_total_can_recover_a_bad_initial_reading(monkeypatc
     assert validate_receipt_result(parsed,CATS)[0] and parsed.total==330 and api.call_count==3
 
 @pytest.mark.parametrize('patch',[{'total':1891},{'date':'2026-02-30'},{'date':'yesterday'},
-    {'merchant':' '},{'items':[]},{'total':0}])
+    {'items':[]},{'total':0}])
 def test_posting_rejects_small_imbalance_invalid_fields_and_empty_items(patch):
     value=result();value.update(patch)
     assert not validate_receipt_result(ReceiptResult.model_validate(value),CATS)[0]

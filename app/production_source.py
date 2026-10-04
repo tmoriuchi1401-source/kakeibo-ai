@@ -56,6 +56,12 @@ def receipts(settings, *, apply: bool) -> dict:
             stage = current
             if result is None:return
             counts["found"] += 1
+            if result.get('document_type')=='pdf_page_units':
+                for key in ('written','needs_review','unchanged','failure'):
+                    value=result.get('unit_counts',{}).get(key)
+                    if type(value) is not int or value<0:raise RuntimeError('receipt_response_invalid')
+                    counts[key]+=value
+                return
             status = result.get("status")
             if status == "imported":
                 counts["written"] += 1
@@ -104,6 +110,7 @@ def receipts(settings, *, apply: bool) -> dict:
         raise RuntimeError("receipt_inbox_collection_incomplete")
     identities = db.import_ids()
     counts["new_eligible"] = 0
+    pdf_intake=None
     for file in response.get("files", []):
         if not is_supported_receipt_mime(file["mimeType"]):
             continue
@@ -111,7 +118,15 @@ def receipts(settings, *, apply: bool) -> dict:
         if f"receipt:{file['id']}" in identities:
             counts["unchanged"] += 1
             continue
-        gate = evaluate_receipt_privacy(download_drive_file(file["id"], service=service), file["mimeType"])
+        payload=download_drive_file(file['id'],service=service)
+        from .receipt_pdf_units import is_pdf
+        if is_pdf(payload,file['mimeType']):
+            from .pdf_unit_runtime import enabled,open_intake,preview_pdf,counts as pdf_counts
+            if pdf_intake is None and enabled():pdf_intake=open_intake(settings,db,apply=False)
+            result=preview_pdf(payload,file['id'],pdf_intake)
+            for key,value in pdf_counts(result).items():counts[key]+=value
+            continue
+        gate = evaluate_receipt_privacy(payload, file["mimeType"])
         if gate.classification == "normal" and gate.gemini_allowed:
             counts["new_eligible"] += 1
         else:

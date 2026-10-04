@@ -28,6 +28,9 @@ class GeminiAI:
         # Authorize the exact immutable bytes immediately before transport.
         if not isinstance(image_bytes, bytes):
             raise ReceiptPrivacyBlocked()
+        from .receipt_pdf_units import is_pdf
+        if is_pdf(image_bytes,mime_type):
+            raise ReceiptPrivacyBlocked()
         if known_source_classification in {'medical', 'payroll', 'sensitive_unknown'}:
             raise ReceiptPrivacyBlocked()
         fingerprint = sha256(image_bytes).digest()
@@ -99,7 +102,8 @@ class GeminiAI:
             last=result
             ok,issues=validate_receipt_result(result,categories)
             changed=previous is not None and any(a and a!=b for a,b in (
-                (previous.date,result.date),(previous.merchant,result.merchant),(previous.total,result.total)))
+                (previous.date,result.date),(previous.total,result.total),
+                (previous.transaction_kind,result.transaction_kind)))
             if ok and not changed:return result
             if not ok:unresolved=result
             if changed:
