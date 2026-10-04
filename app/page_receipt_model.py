@@ -143,7 +143,8 @@ def build_receipt_units(page,first,second,categories,*,previous=None,unit_texts=
             if previous.get('segmentation_digest')!=expected:raise ValueError('saved_segmentation_invalid')
             if len({u['receipt_unit_id'] for u in previous['units']})!=len(boxes):raise ValueError('saved_receipt_identity_invalid')
     if reasons:return {'status':'receipt_segmentation_review','reason_codes':sorted(set(reasons)),
-                       'page_key':page_key(page),'units':[],'terminal':False}
+                       'page_key':page_key(page),'units':[],'terminal':False,
+                       'candidate_regions':[[r.bbox.model_dump() for r in pass_] for pass_ in (a,b)]}
     manifest=digest(['receipt-separation-v1',page_key(page),[r.bbox.model_dump() for r in a]])
     if previous:manifest=previous['segmentation_digest']
     units=[]

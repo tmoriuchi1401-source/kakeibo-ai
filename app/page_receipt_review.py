@@ -6,7 +6,7 @@ never from a display cell or a service-account/trigger owner's guessed email.
 """
 from .drive_run_state import StateError
 from .human_general_authority import binding_fields,eligible
-from .page_receipt_model import digest
+from .page_receipt_model import digest,page_key,Box
 from .pdf_page_review import check_snapshot,original_uri
 
 CHOICES=['未選択','一般レシート','医療','給与','不明のまま']
@@ -49,3 +49,27 @@ def process_general_request(service,sheet,request_id,*,route_kind=None):
     else:raise StateError('human_general_explicit_operation_required')
     sheet.finish_card(request_id,snapshot,result,service.clock())
     return grant
+
+def segmentation_review_card(page,report):
+    """Projection in the same tab: original + detected areas, never count input."""
+    if report.get('status')!='receipt_segmentation_review' or report.get('page_key')!=page_key(page):
+        raise StateError('receipt_segmentation_review_required')
+    reasons=report.get('reason_codes',[])
+    if not reasons:raise StateError('receipt_segmentation_review_required')
+    identity={**binding_fields(page),'page_numbers':[page.page_number],
+        'kind':'receipt_segmentation','schema':'receipt-segmentation-review-v1',
+        'separation_digest':digest(report.get('candidate_regions',[]))}
+    rows=[('target','対象','ページ p'+str(page.page_number)),
+        ('state','状態','レシート分離確認待ち・記帳なし'),
+        ('original','原本','原本を開く（p'+str(page.page_number)+'）')]
+    for attempt,regions in enumerate(report.get('candidate_regions',[]),1):
+        positions=[]
+        for index,box in enumerate(regions,1):
+            b=Box.model_validate(box)
+            vertical='上部' if (b.top+b.bottom)/2<.33 else '下部' if (b.top+b.bottom)/2>.67 else '中央'
+            horizontal='左' if (b.left+b.right)/2<.4 else '右' if (b.left+b.right)/2>.6 else '中央'
+            positions.append('候補r'+str(index)+'：'+vertical+'・'+horizontal)
+        rows.append(('regions_'+str(attempt),'検出'+str(attempt),'\n'.join(positions)))
+    rows.extend([('notice','確認事項','原本と候補領域を比較してください。分離を確定できないため自動記帳しません。枚数の入力は不要です。'),
+        ('result','処理結果','分離確認待ち・親PDF移動なし')])
+    return {'identity':identity,'token':digest(identity),'rows':rows}

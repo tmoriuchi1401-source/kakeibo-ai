@@ -294,3 +294,12 @@ def test_wrong_page_fresh_render_proof_rejected_before_permission_or_sdk():
             render_proof=replace(proof,page_number=3))
     permission.assert_not_called();client.interactions.create.assert_not_called()
     with pytest.raises(StateError,match='render_binding'):ai.fresh_render_proof(p,raw,3,3,payload)
+
+def test_unstable_region_comparison_reuses_same_ui_has_no_editable_count():
+    from app.page_receipt_review import segmentation_review_card
+    from app.pdf_page_review import EDITABLE
+    p,_=page();report=model.build_receipt_units(p,reading(2),reading(3),CATEGORIES)
+    card=segmentation_review_card(p,report)
+    assert card['identity']['kind']=='receipt_segmentation' and report['units']==[]
+    assert any('候補r3' in value for field,label,value in card['rows'])
+    assert not any(field in EDITABLE for field,label,value in card['rows'])
