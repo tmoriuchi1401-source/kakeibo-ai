@@ -150,7 +150,20 @@ def validate(value,binding):
 def validate_current(value,binding,legacy,legacy_bytes,legacy_file_id):
     validate(value,binding);validate_v1(legacy,value['migration']['legacy_binding'])
     m=value['migration'];sid=next(iter(value['records'].values()))['proposal']['source_file_id']
-    if (m['legacy_file_id']!=legacy_file_id or sha256(legacy_bytes).hexdigest()!=m['legacy_state_bytes_digest']
+    # The whole-file digest records migration provenance, not freshness of
+    # unrelated PDFs. The exact target source's complete legacy intent remains
+    # the authority link. Adding another proposal/audit must not revoke it.
+    # Still bind the parsed current state to the bytes actually read from Drive.
+    try:
+        def unique(pairs):
+            result={}
+            for key,item in pairs:
+                if key in result:raise ValueError()
+                result[key]=item
+            return result
+        current=json.loads(legacy_bytes,object_pairs_hook=unique)
+    except Exception:raise StateError('grouping_v2_legacy_intent_stale') from None
+    if (m['legacy_file_id']!=legacy_file_id or current!=legacy
             or legacy_scope(legacy,sid)!=m['legacy_authority_snapshot']):
         raise StateError('grouping_v2_legacy_intent_stale')
     return value

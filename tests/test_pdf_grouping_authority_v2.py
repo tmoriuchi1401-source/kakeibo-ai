@@ -145,9 +145,49 @@ def test_v2_render_difference_permitted_only_with_fresh_exact_gate(local_ocr,key
 def test_current_legacy_change_invalidates_v2(local_ocr,key,monkeypatch):
     value,expected,g,t,source,legacy,payload,old=setup_v2(key,monkeypatch)
     with pytest.raises(StateError,match='legacy_intent_stale'):
-        v2.validate_current(value,BINDING,legacy,payload+b' ','old-v1-file')
+        v2.validate_current(value,BINDING,legacy,payload+b'broken','old-v1-file')
     with pytest.raises(StateError,match='legacy_intent_stale'):
         v2.validate_current(value,BINDING,legacy,payload,'other-v1-file')
+
+
+def test_unrelated_proposal_and_audit_do_not_revoke_existing_human_intent(local_ocr,key,monkeypatch):
+    value,expected,g,t,source,legacy,payload,old=setup_v2(key,monkeypatch)
+    before_units=v2.units(value);before_confirmation=deepcopy(next(iter(value['records'].values()))['confirmation'])
+    from app.receipt_pdf_units import observe_pdf
+    from app.pdf_grouping_authority import DurablePdfGrouping
+    other=DurablePdfGrouping(g.store,lambda sid,previous:observe_pdf(synthetic_pdf(('normal','normal')),sid),clock=lambda:NOW)
+    other.display('unrelated-source')
+    current=g.store.load();current_bytes=g.store.payload
+    assert sha256(current_bytes).hexdigest()!=value['migration']['legacy_state_bytes_digest']
+    assert len(current['records'])>len(legacy['records']) and len(current['audit'])>len(legacy['audit'])
+    v2.validate_current(value,BINDING,current,current_bytes,'old-v1-file')
+    assert v2.units(value)==before_units
+    assert next(iter(value['records'].values()))['confirmation']==before_confirmation
+    assert value['migration']['legacy_state_bytes_digest']==sha256(payload).hexdigest()
+
+
+def test_same_source_hold_revokes_v2_even_when_partition_revision_unchanged(local_ocr,key,monkeypatch):
+    value,expected,g,t,source,legacy,payload,old=setup_v2(key,monkeypatch)
+    view=g.view(legacy['records'][v2._digest(old['source_file_id'])])
+    from test_pdf_grouping_authority import request
+    held=request(view);held['operation']='hold';held['request_id']='12345678-1234-1234-1234-123456789abe'
+    g.review(held)
+    with pytest.raises(StateError):
+        v2.validate_current(value,BINDING,g.store.load(),g.store.payload,'old-v1-file')
+
+
+def test_current_legacy_bytes_cannot_be_replaced_by_a_local_snapshot(local_ocr,key,monkeypatch):
+    value,expected,g,t,source,legacy,payload,old=setup_v2(key,monkeypatch)
+    from app.receipt_pdf_units import observe_pdf
+    from app.pdf_grouping_authority import DurablePdfGrouping
+    other=DurablePdfGrouping(g.store,lambda sid,previous:observe_pdf(synthetic_pdf(('normal','normal')),sid),clock=lambda:NOW)
+    other.display('unrelated-source')
+    current=g.store.load()
+    with pytest.raises(StateError,match='legacy_intent_stale'):
+        v2.validate_current(value,BINDING,current,payload,'old-v1-file')
+    bad=payload.replace(b'"schema":',b'"schema":"invented","schema":',1)
+    with pytest.raises(StateError,match='legacy_intent_stale'):
+        v2.validate_current(value,BINDING,legacy,bad,'old-v1-file')
 
 
 def test_v2_store_has_no_mutation_api_and_checks_both_files(local_ocr,key,monkeypatch):
