@@ -78,7 +78,11 @@ Drive canary state after exact authority/source/Unit and full accounting-row
 checks. Only the new completion journal changes; Unit IDs, old ledger rows,
 old state and grouping confirmation remain intact. It accepts no local
 diagnostic/artifact restoration and performs no new accounting or Gemini call.
-This migration has synthetic regression coverage; it has not been run live.
+The operator's isolated live journal has now adopted ten previously posted
+canary intents after fresh Drive/source/authority and exact accounting-row
+checks. Replay through GET-only clients preserved its generation, bytes, ETag,
+intent IDs and timestamps. Existing grouping state and accounting rows did not
+change. This is migration evidence, not scheduled intake activation.
 
 Medical completion contains only identity and an existing backend reference,
 never Medical input fields or a Medical accounting plan. A page-kind completion
@@ -86,8 +90,10 @@ reference can cover a Medical page outside the general grouping partition;
 it does not change its existing Medical source/review identity. General grouping
 Unit IDs use the exact existing v2 digest and stay unchanged.
 
-The completion journal and manual service are not provisioned or wired into a
-live workflow by this preparation. They need the existing production mutex,
+The operator has provisioned a separate completion journal under the existing
+owner/service-account ACL. Strong conditional update and exact read-back passed;
+the stale ETag returned HTTP 412. This branch does not provision state on import
+and its manual service is not wired into a live workflow. It needs the production mutex,
 validated main boundary, projection journal, Drive authority provider and current
 owner request verifier before activation. No live state/authority or UI is
 created by importing these modules.
@@ -131,8 +137,8 @@ false. Actual source movement requires its separate first-PDF canary.
   state, under the existing main/validated SHA, projection and mutex boundaries.
   Add only their encrypted binding/switch passthrough to the existing workflow
   after completing remaining owner inputs; no new schedule or Secret.
-* Provision the separate completion journal under existing ACL/scopes and run
-  the Drive-only migration of already posted canary intents without new writes.
+* Retain the already verified private completion journal and adopted intents;
+  do not recreate or reapply them when activating the service.
 * Reconcile manual/Medical terminal references through their existing writers;
   the normal adapter does not generate Medical reviews or amounts.
 * Fresh exact PNG privacy remains mandatory for every externally analyzed Unit.
@@ -141,3 +147,26 @@ false. Actual source movement requires its separate first-PDF canary.
   before connecting the existing receipt entry point. Add no new schedule.
 
 This preparatory change does not activate scheduled PDF processing or archive.
+
+## Shared review to the existing general manual writer
+
+`GeneralManualReview` resolves a singleton from the real Drive authority and
+completion store; it does not trust technical cells as authority. It accepts
+only automatic unknown with durable human normal and confirmed singleton
+grouping. Strong Medical/payroll holds reject the route. Legacy fingerprints
+link the existing review intent, while current original SHA/count/ordinal Unit
+identity supplies freshness. No page images, OCR or AI are used by this adapter.
+
+The owner request remains in the existing `_PDF確認受付`. A one-request adapter
+presents its verified snapshot to `manual_entry.execute`, reusing its parser,
+duplicate checks and exact expense append/read-back without another physical
+queue or ledger writer. The Drive Unit journal saves intent before append and
+completion only after read-back and fresh source/owner checks. A second UUID
+with identical typed values reconciles the original intent without new writes;
+changed values are refused. Ambiguous pending delivery is never resent.
+
+This adapter requires a protected hosted dispatcher and an independent owner
+snapshot callback from the common review controller. It is not a standalone
+cell-to-writer command. No workflow, UI, Medical backend or schedule is enabled
+by its presence. The remaining four pages still require actual owner input and
+explicit confirmation, including actual iPhone operation verification.
