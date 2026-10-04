@@ -48,6 +48,11 @@ classification taxonomy changes are needed by this panel.
 - Row 3 refreshes the existing request status and panel without submitting.
 - Rows 30 onward are navigation: wrapped merchant, target-month count/amount,
   category/status and a separate `開く` dropdown. This selects the panel.
+- Row 28 filters the navigation into `対象月の未分類` (default),
+  `過去の未処理`, `その他の候補`, or `すべて`. Historical/future-only
+  candidates are retained. Counts in row 2 distinguish all three groups;
+  list amounts are explicitly labelled by their context. Opening a fresh
+  candidate always starts OFF / `反映しない`, even after an all-period review.
 
 The current production candidate set consists of service candidates. Product
 or receipt-specific candidates outside that kind continue to use the existing
@@ -91,7 +96,32 @@ records or overwriting the legacy accounting sheets. No accounting rollback
 is needed for UI-only changes. Any confirmed historical write must use the
 existing guarded backfill restore, never a blanket workbook restore.
 
-## Verification and current release limitation
+## Strict display-helper compatibility
+
+The read-only 2026-10-04 inventory has seven daily sheets and 41 management
+sheets. Category UI/log/queue/detail sheets belong to management, not daily.
+The daily Home helper was traced to the earlier authorized Home chart task's
+`home-chart-plan.json`, before/after snapshots and saved native chart settings.
+Its authored cells exactly match the latest API readback. The management
+`_ホーム月別収入` (261003105, hidden, 100 × 2) aggregates income month totals;
+the daily `_ホームグラフ` (261003103, hidden GRID, 100 × 11) imports only those
+totals and supplies labels/comparison series. No helper data was rewritten.
+
+`DailySheets.verify` allows this one optional exact title/ID/type/hidden/shape
+combination. All six original sheet IDs remain mandatory. Unknown titles,
+including arbitrary underscore names and management category helpers, are
+rejected. Duplicate titles/IDs, wrong helper IDs, visible/non-GRID helpers and
+shape changes are rejected; the 100,000-cell budget and source-binding marker
+still apply. The renderer's owned-sheet map, schedules, transaction identity,
+classification engine, production main/SHA guards and authority are unchanged.
+The latest actual daily workbook passes this verification read-only.
+
+Rollback of this code change is a revert of the isolated compatibility commit.
+That restores the strict six-sheet contract and therefore also restores the
+known projection failure while the Home helper exists; do not delete the
+legitimate Home helpers merely to silence that failure.
+
+## Verification and current release limitations
 
 `CategoryConfirmation.test.cjs` checks month/history separation, exact source
 binding, isolation of other approvals and rejection of unsaved choices.
@@ -106,13 +136,37 @@ the main approval SHA was being updated externally. The retry executed the
 zero-target preview, then failed during daily projection verification:
 `daily_sheets.py:40`, `daily_sheet_contract_changed`. The daily workbook has
 an additional `_ホームグラフ` helper outside the six-sheet contract. This
-panel does not alter that verification or helper. End-to-end confirmation,
-live rule saving and live completion removal therefore remain unverified.
+panel did not alter that verification or helper. The limited compatibility
+change described above is now tested, but is not yet on production main.
+End-to-end confirmation, live rule saving and live completion removal remain
+unverified until the compatible worker can run.
 
-Post-canary readback exactly matches the baseline for expenses, income,
-imports, automatic rules, taxonomy, historical request/target records and
-the management Home. The operation display and immutable request queue
-changed as expected. There were no ledger/category writes in this canary.
+The fresh audit of stopped UUID `7c5e7ce3-8dd6-4ca7-9ed6-acd40b0edcbb`
+validates its v1 232-row snapshot digest
+`4ad33b065b021c96073f00cb1e4cd20bf8e01932b3e8937232f5d1d96a9c03a9`.
+The queue is terminal `error`; the completion log has only its header.
+Every expense category is unchanged, as are all rules, backfill requests and
+fixed targets, taxonomy and income. The canary expense itself is unchanged.
+The only intervening canonical differences affect another au PAY transaction's
+status/link/note and related Home attention count. There were zero canary
+category/rule/historical writes. The legacy display gained a `preview_empty`
+row and the immutable queue changed; this UI partial write must not be confused
+with a completed confirmation or retried using the old UUID.
+
+The latest legacy service inventory contains 124 candidates: 7 with target-month
+fallback expenses, 98 with other-month fallback expenses, and 19 with no current
+fallback. The existing final-state filter excludes some of the last group.
+This results from all-period representative generation, not a month aggregation
+error. Historical and future-rule proposals remain available under the new
+filter; no candidate or accounting data is deleted.
+
+Production dispatch is restricted to the approved main SHA. PR #98 must remain
+draft/unmerged until live verification finishes, so testing the compatibility
+fix requires an explicitly authorized separate rollout or a different approved
+deployment sequence. The execution guard/SHA are not bypassed. This continuation
+also has no connected browser surface; Apps Script filter deployment and native
+dropdown/canary interactions await reconnection. The code is prepared and tested,
+not falsely reported as deployed.
 
 The native grid fits in a 390 px screenshot crop including its row gutter,
 but the browser viewport override did not apply (actual viewport remained

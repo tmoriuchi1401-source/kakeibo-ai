@@ -10,6 +10,24 @@ test('month summary and historical examples cannot mix dates',()=>{
   assert.deepEqual(Array.from(result.samples,e=>e[1]),['2026-08-21','2026-02-03','2025-10-16']);
 });
 
+test('month navigation separates historical and future-only candidates without deletion',()=>{
+  const candidates=[{key:'past',summary:{monthCount:0,allCount:3}},{key:'current',summary:{monthCount:2,allCount:5}},{key:'future',summary:{monthCount:0,allCount:0}}];
+  for(const [filter,key] of [['対象月の未分類','current'],['過去の未処理','past'],['その他の候補','future']]){
+    const p=ctx.ccPartition_(candidates,filter);
+    assert.deepEqual(Array.from(p.visible,c=>c.key),[key]);
+    assert.equal(p.groups.reduce((n,g)=>n+g.length,0),3);
+  }
+  assert.equal(ctx.ccPartition_(candidates,'すべて').visible.length,3);
+  assert.equal(candidates.length,3);
+});
+
+test('opening a fresh candidate never inherits all-period or future-ON choices',()=>{
+  const candidate={key:'new',sig:'snapshot',proof:{merchant:'new'},physical:['','','食費｜外食']};
+  const state=ctx.ccInitial_(candidate,'2026-09','対象月の未分類');
+  assert.equal(state.scope,'反映しない');assert.equal(state.future,'OFF');
+  assert.equal(state.category,'食費 ＞ 外食');assert.equal(state.fixed,undefined);assert.equal(state.pending,undefined);
+});
+
 test('exact evidence binding excludes unrelated source/account/target/inactive rows',()=>{
   const e=(id,importId,status='active')=>[id,'2026-09-01','原文','自動計上',100,'その他','未分類','','','',''+importId,'',status];
   const tx=(id,source,merchant,target)=>[id,'',source,'','',merchant,100,'','auto_expense',target];

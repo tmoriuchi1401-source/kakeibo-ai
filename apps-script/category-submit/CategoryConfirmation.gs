@@ -9,6 +9,7 @@ const CC_MARKERS = ['■ 1. カテゴリを選ぶ・今後の自動分類',
   '■ 2. 過去分の固定プレビュー','■ 3. 固定プレビューを確認して反映'];
 const CC_FIRST = 30;
 const CC_CELLS = {category:'A15',future:'A17',scope:'A20',action:'A24',status:'A25'};
+const CC_FILTERS = ['対象月の未分類','過去の未処理','その他の候補','すべて'];
 
 function ccText_(v) { return String(v || '').normalize('NFKC').trim().replace(/\s+/g,' '); }
 function ccJson_(v) { try { return JSON.parse(String(v)); } catch (_) { return {}; } }
@@ -57,6 +58,17 @@ function ccSummary_(members,month) {
   const total=rs=>rs.reduce((s,e)=>s+Number(String(e[4]).replace(/,/g,'')),0);
   return {monthCount:selected.length,monthAmount:total(selected),allCount:fallback.length,allAmount:total(fallback),
     samples:members.filter(e=>String(e[1]).slice(0,7)<month).slice(-3).reverse()};
+}
+function ccPartition_(candidates,filter) {
+  const groups=[candidates.filter(c=>c.summary.monthCount>0),
+    candidates.filter(c=>!c.summary.monthCount && c.summary.allCount>0),
+    candidates.filter(c=>!c.summary.allCount)];
+  return {groups,visible:filter==='すべて'?candidates:groups[CC_FILTERS.indexOf(filter)]||groups[0]};
+}
+function ccInitial_(candidate,month,filter) {
+  return {v:1,key:candidate.key,sig:candidate.sig,proof:candidate.proof,month,filter,
+    category:candidate.physical[2]?candidate.physical[2].replace('｜',' ＞ '):'',
+    future:'OFF',scope:'反映しない'};
 }
 function ccModel_(ss) {
   const legacy=ss.getSheetByName(CATEGORY_UI), rows=ccRows_(legacy,12), part=ccSection_(rows,0);
@@ -118,27 +130,37 @@ function ccRefresh_(ss,key) {
   const sheet=ss.getSheetByName(CC_UI);if(!sheet)return;
   ccDropdown_(sheet,'A3',['操作を選択','表示・処理結果を更新']);ccSet_(sheet.getRange('A3'),'操作を選択');sheet.setRowHeight(3,36);
   const prior=ccState_(sheet); if(prior.pending)return;
-  const model=ccModel_(ss),candidates=model.candidates;
+  const model=ccModel_(ss),filter=CC_FILTERS.includes(prior.filter)?prior.filter:CC_FILTERS[0];
+  const partition=ccPartition_(model.candidates,filter),candidates=partition.visible;
+  ccDropdown_(sheet,'A28',CC_FILTERS);ccSet_(sheet.getRange('A28'),filter);sheet.setRowHeight(28,44);
   const current=candidates.find(c=>c.key===(key||prior.key))||candidates[0];
   const helper=ss.getSheetByName('_支出明細カテゴリ候補'), choices=ccRows_(helper,4).slice(1).filter(r=>r[2]&&r[3]);
   const labels=choices.map(r=>r[2]+' ＞ '+r[3]);
   sheet.getRange('D2:E'+(labels.length+1)).setValues(choices.map((r,i)=>[labels[i],r[0]]));
   sheet.getRange('A15').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(sheet.getRange(2,4,labels.length,1),true).setAllowInvalid(false).build());
-  ccSet_(sheet.getRange('A2'),'未確認 '+candidates.length+'候補');
+  ccSet_(sheet.getRange('A2'),'対象月の未確認 '+partition.groups[0].length+'候補\n過去 '+partition.groups[1].length+' / その他 '+partition.groups[2].length+'候補');sheet.setRowHeight(2,40);
   const last=Math.max(CC_FIRST,sheet.getLastRow());sheet.getRange(CC_FIRST,1,last-CC_FIRST+1,3).clearContent().clearDataValidations();
   if(candidates.length) {
     const needed=CC_FIRST+candidates.length-1;if(needed>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),needed-sheet.getMaxRows());
     candidates.forEach((c,i)=>{
-      const line=c.proof.merchant+'\n'+c.summary.monthCount+'件 / '+c.summary.monthAmount.toLocaleString('ja-JP')+'円 · '+(c.physical[2]?c.physical[2].replace('｜',' ＞ '):'未選択')+' · 確認待ち';
+      const count=c.summary.monthCount || c.summary.allCount,amount=c.summary.monthCount?c.summary.monthAmount:c.summary.allAmount;
+      const context=c.summary.monthCount?'対象月':c.summary.allCount?'過去の未分類':'自動分類の検討';
+      const line=c.proof.merchant+'\n'+context+' '+count+'件 / '+amount.toLocaleString('ja-JP')+'円 · '+(c.physical[2]?c.physical[2].replace('｜',' ＞ '):'未選択')+' · 確認待ち';
       ccSet_(sheet.getRange(CC_FIRST+i,1),line);sheet.getRange(CC_FIRST+i,3).setValue(c.key);
       ccFit_(sheet,CC_FIRST+i,line,22);
     });
     sheet.getRange(CC_FIRST,1,candidates.length,2).setWrap(true).setVerticalAlignment('middle');
     ccDropdown_(sheet,'B'+CC_FIRST+':B'+needed,['開く']);
   }
-  if(!current){ccSet_(sheet.getRange('A4'),'未確認の候補はありません');sheet.getRange('A15').clearContent();ccSave_(sheet,{v:1});return;}
+  if(!current){
+    [4,5,6,7,8,10,11,12,15,17,20,21,23,24,25,26].forEach(r=>sheet.getRange('A'+r).clearContent());
+    ccSet_(sheet.getRange('A4'),'この区分に未確認の候補はありません');
+    ccSet_(sheet.getRange('A7'),'対象月 '+model.month);ccSet_(sheet.getRange('A17'),'OFF');ccSet_(sheet.getRange('A20'),'反映しない');
+    ccDropdown_(sheet,'A24',['操作を選択']);ccSet_(sheet.getRange('A24'),'操作を選択');
+    ccSet_(sheet.getRange('A25'),'下の一覧フィルタで過去・その他の候補を確認できます。');ccSave_(sheet,{v:1,filter});return;
+  }
   const same=prior.key===current.key && prior.sig===current.sig && !key;
-  const state=same?prior:{v:1,key:current.key,sig:current.sig,proof:current.proof,month:model.month,category:current.physical[2]?current.physical[2].replace('｜',' ＞ '):'',future:'OFF',scope:'反映しない'};
+  const state=same?prior:ccInitial_(current,model.month,filter);state.filter=filter;
   ccSave_(sheet,state);ccSet_(sheet.getRange('A4'),current.proof.merchant);
   const glyphs=Array.from(current.proof.merchant).reduce((n,c)=>n+(c.charCodeAt(0)<128?0.55:1),0);
   sheet.setRowHeight(4,Math.max(64,Math.ceil(glyphs/19)*24+12));
@@ -174,7 +196,9 @@ function categoryConfirmationEdited(e) {
   const lock=LockService.getScriptLock();if(!lock.tryLock(10000))return true;
   try{
     const wasPending=!!ccState_(sheet).pending;ccSync_(ss);const state=ccState_(sheet);if(state.pending || wasPending){['category','future','scope'].forEach(k=>ccSet_(sheet.getRange(CC_CELLS[k]),state[k]||''));ccSet_(sheet.getRange('A24'),'操作を選択');if(state.pending)ccSet_(sheet.getRange('A25'),'受付済みです。完了まで設定は変更できません。');return true;}
-    if(e.range.getRow()>=CC_FIRST && e.range.getColumn()===2 && e.value==='開く') {
+    if(cell==='A28' && CC_FILTERS.includes(e.value)) {
+      ccSave_(sheet,{v:1,filter:e.value});ccRefresh_(ss);
+    } else if(e.range.getRow()>=CC_FIRST && e.range.getColumn()===2 && e.value==='開く') {
       const key=sheet.getRange(e.range.getRow(),3).getValue();ccRefresh_(ss,key);ss.setActiveSheet(sheet);sheet.getRange('A4').activate();
     } else if(['A15','A17','A20'].includes(cell)) {
       const field={A15:'category',A17:'future',A20:'scope'}[cell];state[field]=e.value||'';delete state.fixed;delete state.message;ccSave_(sheet,state);ccPaint_(sheet,state);
@@ -265,7 +289,7 @@ function ccSync_(ss) {
   const log=ss.getSheetByName(CC_LOG),current=ccModel_(ss).candidates.find(c=>c.key===state.key);
   const signature=current?current.sig:state.sig;
   if(!ccRows_(log,8).some(r=>r[2]===state.pending))log.appendRow([signature,state.key,state.pending,state.category,state.future,state.scope,state.month,new Date().toISOString()]);
-  ccSave_(sheet,{v:1});ccRefresh_(ss);ccSet_(sheet.getRange('A25'),'前の候補を確定しました。'+queue[5]);
+  ccSave_(sheet,{v:1,filter:state.filter});ccRefresh_(ss);ccSet_(sheet.getRange('A25'),'前の候補を確定しました。'+queue[5]);
 }
 function ccDetails_(ss,state) {
   if(!state.key)return;
