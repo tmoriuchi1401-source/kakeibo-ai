@@ -49,7 +49,8 @@ def test_registered_workflow_manual_only_same_mutex_and_no_ai_secret():
     assert flow['on']['workflow_dispatch']['inputs']['stage']['default']=='preflight'
 
 @pytest.mark.parametrize('file',['app/receipt_validation.py','app/receipt_privacy_gate.py','app/models.py',
-    'app/gemini_ai.py','app/pdf_grouping_authority_v2.py','app/receipt_pipeline.py'])
+    'app/gemini_ai.py','app/pdf_grouping_authority_v2.py','app/receipt_pipeline.py',
+    'app/pdf_page_medical.py','app/receipt_confirmation.py','app/manual_entry.py'])
 def test_old_analysis_rejected_if_any_policy_or_authority_code_changes(file):
     env=environment()
     pr={'state':'open','draft':True,'base':{'ref':'main'},'head':{

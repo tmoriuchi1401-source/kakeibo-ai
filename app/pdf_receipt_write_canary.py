@@ -197,7 +197,10 @@ def run_canary(store,db,number,fresh_candidate,verify_fresh,*,distinct_originals
             raise StateError('canary_replay_candidate_changed')
         if old.get('duplicate_comparison'):
             if distinct_originals is None:raise StateError('canary_duplicate_comparison_required')
-            distinct_originals.verify(old['duplicate_comparison'],result,payload)
+            # The original comparison PNG is a diagnostic fingerprint. Applied
+            # replay uses source/Unit/candidate/rows; fresh PNG has already passed
+            # its exact gate and may encode differently on a future renderer.
+            distinct_originals.verify(old['duplicate_comparison'],result,payload,replay=True)
         verify_fresh(number,unit_id);verify_plan(db,old['plan'],complete=True)
         store.replayed_pages.add(number)
         return {'page_number':number,'status':'replayed','appended':0,'readback':True}

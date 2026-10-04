@@ -26,6 +26,15 @@ Drive正本から確定Unitを取得する際は、自動分類と現在有効�
 
 人間確認時は原本のmetadata／bytesを読み直し、保存されたscaleで対象ページを逐次再render・PNG hash照合する。全ページの再OCRや金額抽出をしない。Medical入力再照合時は対象ページに限定し、一般grouping確認時は全memberのpage hashを照合する。元PDFや生成PNGをAIへ送らない。
 
+既に `pdf-grouping-authority-v2` へ移行した原本の完全手入力確認には、独立した
+`confirmed_legacy_observations` verifierを注入できる。Drive v1/v2正本のACL・strong
+ETag・migration linkage、原本SHA、ページ数、全ordinal identity、旧human intentを
+照合し、処理中のauthority変更を拒否する。旧render fingerprintはlegacy reviewとの
+紐付けとして保持し、現在のPNGエンコードとの一致を要求しない。この確認はrender／
+OCRを一切行わず、Medicalのreview ID・HMAC・manual writerを変更しない。新しい
+proposalやAI permissionには使わない。未移行の既存workerは従来のstrict verifierを
+維持し、自動で緩いfallbackへ降格しない。
+
 ## 一般ページだけのgrouping確認
 
 `DurablePdfGrouping.regenerate_general` はfresh原本／全ページhashを確認し、人間の種類回答から一般ページだけの候補を作り直す。`DrivePdfReader.grouping_evidence` は対象一般ページだけを逐次local OCRし、既存の隣接groupingロジックへ一時的な証拠を渡す。原本画像・OCR本文・証拠の店舗名や日付を保存しない。機微ページを飛び越えた結合は禁止。弱い証拠は単独候補にする。

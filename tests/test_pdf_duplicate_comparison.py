@@ -79,6 +79,17 @@ def test_original_payload_and_rows_are_frozen(monkeypatch):
     with pytest.raises(StateError,match='comparison_changed'):d.verify_comparison(db,evidence,r,b'new-png!',get)
 
 
+def test_applied_replay_render_fingerprint_is_diagnostic_not_identity(monkeypatch):
+    db,rid,r,get,*_=fixture(monkeypatch);evidence=compare(db,rid,r,get)
+    assert d.verify_comparison(db,evidence,r,b'different-encoding',get,replay=True)=={rid}
+    # Only completed replay may omit old encode equality; pre-write never may.
+    with pytest.raises(StateError,match='comparison_changed'):
+        d.verify_comparison(db,evidence,r,b'different-encoding',get)
+    get.return_value=(b'changed-original','image/png')
+    with pytest.raises(StateError,match='comparison_changed'):
+        d.verify_comparison(db,evidence,r,b'different-encoding',get,replay=True)
+
+
 def test_unrelated_duplicate_still_blocks(monkeypatch):
     db,rid,r,get,*_=fixture(monkeypatch)
     evidence=compare(db,rid,r,get)

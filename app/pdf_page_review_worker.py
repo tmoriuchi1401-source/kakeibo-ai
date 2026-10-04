@@ -45,7 +45,7 @@ def medical_results(kinds, store, db, inbox):
     return result
 
 
-def execute_shared(env, grouping, legacy_sheet, reader, mode):
+def execute_shared(env, grouping, legacy_sheet, reader, mode, *, verified_pages=None):
     """Legacy dispatcher delegates only when the shared sheet schema is active."""
     if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
     from .receipt_confirmation_production import open_context
@@ -59,7 +59,10 @@ def execute_shared(env, grouping, legacy_sheet, reader, mode):
         _,capture=legacy_sheet.request(env.get('PDF_GROUPING_REQUEST_ID',''))
         if isinstance(capture,dict) and capture.get('identity',{}).get('kind') in {'medical','page_kind'}:
             selection=capture['identity'].get('page_numbers')
-    verified=DurablePdfGrouping(grouping.store,lambda sid,previous:reader.verify_pages(sid,previous,numbers=selection),
+    # A migrated source may use its independent v2 source/ordinal verifier.
+    # Unmigrated legacy callers keep the original strict pixel verification.
+    verifier=verified_pages or reader.verify_pages
+    verified=DurablePdfGrouping(grouping.store,lambda sid,previous:verifier(sid,previous,numbers=selection),
                                proposer=grouping.proposer,clock=grouping.clock)
     kinds=PageKindConfirmation(verified)
     sheet=PageReviewSheet(legacy_sheet.service,legacy_sheet.sid,db.categories(),

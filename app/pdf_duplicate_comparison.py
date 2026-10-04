@@ -97,10 +97,10 @@ def compare_distinct(db, receipt_id, result, payload, get_original, *, merchant_
     return evidence
 
 
-def verify_comparison(db, evidence, result, payload, get_original):
+def verify_comparison(db, evidence, result, payload, get_original, *, replay=False):
     if (evidence.get('schema') != 'receipt-distinct-originals-v1' or evidence.get('decision') != 'distinct_transactions'
             or evidence.get('candidate_digest') != digest(result.model_dump())
-            or evidence.get('payload_sha256') != sha256(payload).hexdigest()
+            or (not replay and evidence.get('payload_sha256') != sha256(payload).hexdigest())
             or evidence.get('date_original_verified') is not True or evidence.get('merchant_original_verified') is not True
             or digest(list(snapshot(db, evidence['receipt_id']))) != evidence['rows_digest']):
         raise StateError('duplicate_comparison_changed')

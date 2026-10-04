@@ -26,6 +26,10 @@ FOLDER='1WNrdIkbV2dzTHZ44hSF3DXadZOMD8_PO'
 SID='1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow'
 SAFE_DIFF={'app/pdf_unit_write_canary.py','app/pdf_receipt_write_canary.py',
     'app/pdf_duplicate_comparison.py','tests/test_pdf_duplicate_comparison.py',
+    # These manual-only adapters are not imported/invoked by normal canary
+    # analysis. Medical core and every parser/privacy/authority module stay out.
+    'app/pdf_confirmed_source_reader.py','app/pdf_page_review_worker.py',
+    'tests/test_pdf_confirmed_source_reader.py','docs/pdf-page-manual-review.md',
     'tests/test_pdf_unit_write_canary.py','tests/test_pdf_receipt_write_canary.py',
     WRITE_WORKFLOW,'docs/pdf-unit-write-canary-actions.md'}
 
@@ -208,7 +212,7 @@ def execute(env,head):
             comparison=SimpleNamespace(
                 resolve=lambda parsed,png:compare_distinct(db,'R-1s8YeXVTTVbjg5xjXC0fRIn0JyIGZSbgi',
                     parsed,png,old_original,merchant_terms=(('ヤオコー',),('イオン','AEON'))),
-                verify=lambda evidence,parsed,png:verify_comparison(db,evidence,parsed,png,old_original))
+                verify=lambda evidence,parsed,png,**flags:verify_comparison(db,evidence,parsed,png,old_original,**flags))
         reports.append(run_canary(store,db,n,fresh,verify_fresh,distinct_originals=comparison))
         count=len(requests);payload=store.payload;tag=store.tag
         reports.append(run_canary(store,db,n,fresh,verify_fresh,distinct_originals=comparison))

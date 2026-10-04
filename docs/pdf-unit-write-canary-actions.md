@@ -20,6 +20,9 @@ dates/merchants/items and receipt/import/source linkage establish distinct
 transactions. The private intent retains comparison fingerprints. Current rows
 and original bytes are rechecked before each append and on replay; any additional
 duplicate candidate remains held. No threshold or privacy rule is changed.
+The original comparison payload fingerprint binds the initial write's exact
+bytes. Completed replay keeps source/Unit/candidate/rows equality and a fresh
+exact PNG gate; a different PNG encoding alone never changes the receipt identity.
 
 The existing ReceiptPipeline row materializer and SheetsDB RAW append are reused.
 The writer keeps its normal ProjectionJournal invalidation before expense append.
