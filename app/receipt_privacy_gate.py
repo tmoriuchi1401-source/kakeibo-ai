@@ -273,9 +273,10 @@ def evaluate_receipt_privacy(
 
 
 class ReceiptPrivacyBlocked(ValueError):
-    """Data-free failure raised before any receipt media leaves this process."""
+    """Classification-only failure; never carries text, amounts or OCR errors."""
 
-    def __init__(self) -> None:
+    def __init__(self, classification: Classification = 'sensitive_unknown') -> None:
+        self.classification = classification if type(classification) is str and classification in {'medical','payroll','sensitive_unknown'} else 'sensitive_unknown'
         super().__init__("receipt external AI submission blocked by privacy gate")
 
 
@@ -288,6 +289,7 @@ def require_receipt_ai_permission(
     accepted. Known-sensitive provenance short-circuits before OCR as well.
     """
     allowed = False
+    blocked_kind=known_source_classification if known_source_classification in {'medical','payroll','sensitive_unknown'} else 'sensitive_unknown'
     if known_source_classification in {None, "normal"}:
         try:
             result = evaluate_receipt_privacy(content, mime_type)
@@ -301,6 +303,8 @@ def require_receipt_ai_permission(
                 {name: getattr(result, name) for name in ReceiptPrivacyGateResult.model_fields},
                 strict=True,
             )
+            if result.classification in {'medical','payroll','sensitive_unknown'}:
+                blocked_kind=result.classification
             allowed = (result.classification == "normal" and result.gemini_allowed is True
                        and result.status == "ready_for_gemini"
                        and result.extraction_status == "extracted" and result.text_present is True)
@@ -308,4 +312,4 @@ def require_receipt_ai_permission(
             # Never propagate OCR/parser exception messages or their context.
             pass
     if not allowed:
-        raise ReceiptPrivacyBlocked()
+        raise ReceiptPrivacyBlocked(blocked_kind)

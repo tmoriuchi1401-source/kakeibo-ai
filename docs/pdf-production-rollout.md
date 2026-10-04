@@ -38,6 +38,9 @@ OCR or amounts. Grouping edits and new service instances cannot erase them;
 normal automatic processing refuses any held member. Unknown pages may use
 explicit owner-complete general input with durable human page-kind evidence.
 Medical/payroll evidence cannot enter that general manual route.
+Late analyzer/planning/writer privacy failures keep their restrictive class as
+well. The common permission exception carries only that class, never Medical
+amounts/text; its allow conditions and detector thresholds are unchanged.
 
 `DrivePdfAuthority` re-reads Drive v1/v2 authority and current original PDF bytes,
 including page count/ordinal identity. Its v2 projection preserves existing Unit
@@ -55,6 +58,9 @@ writer checks are charged conservatively without raising pixel/work caps.
 Every SDK call verifies exact PNG bytes, normal authority, current original
 source and the fixed Google destination. Existing receipt rereads are bounded
 at three, and changed date/total/kind readings remain review-only.
+
+This adapter currently posts purchase Units only. Buyback/unknown results stay on
+review; the existing non-PDF buyback/income writer is unchanged.
 
 The existing ReceiptPipeline writer first materializes a frozen plan in memory.
 The private journal persists pending intent before any literal append to only

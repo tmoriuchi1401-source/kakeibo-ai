@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from .drive_run_state import StateError
 from .pdf_unit_processing import DriveUnitProcessingStore, digest, TABLES
+from .pdf_unit_payload import PayloadHold
 from .receipt_confirmation import same_row
 from .receipt_pipeline import ReceiptPipeline
 from .receipt_reimport import _date, _money
@@ -146,6 +147,8 @@ def materialize(db,store,spec,payload,payload_sha256,result,*,verify_current,clo
     planning=PlanningDB(categories)
     outcome=ReceiptPipeline(planning,cached,clock=lambda:timestamp)._process_image_bytes(
         payload,'image/png',spec['unit_id'],url,known_source_classification='normal',observe_medical=False)
+    if outcome['status']=='privacy_blocked':
+        raise PayloadHold(outcome['classification'],'planning_payload_privacy_blocked')
     if outcome['status']!='imported' or set(planning.plan)!=set(TABLES):
         # Planning has no review/snapshot capability and cannot persist a review.
         raise StateError('pdf_receipt_validation_failed')
@@ -165,6 +168,8 @@ def materialize(db,store,spec,payload,payload_sha256,result,*,verify_current,clo
     fenced=AppendOnlyDB(db,planning.plan,categories,barrier)
     outcome=ReceiptPipeline(fenced,cached,clock=lambda:timestamp)._process_image_bytes(
         payload,'image/png',spec['unit_id'],url,known_source_classification='normal',observe_medical=False)
+    if outcome['status']=='privacy_blocked':
+        raise PayloadHold(outcome['classification'],'writer_payload_privacy_blocked')
     if outcome['status']!='imported':raise StateError('pdf_receipt_write_incomplete')
     barrier();done=store.complete(spec['unit_id'],record['intent_digest'],verify_current=verify_current,
         verify_readback=lambda r:readback(db,r['planned_rows']))

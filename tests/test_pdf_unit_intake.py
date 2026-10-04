@@ -185,3 +185,30 @@ def test_legacy_unit_marker_without_migrated_intent_holds_before_sdk(local_ocr):
     assert out['units'][0]['reason_code']=='pdf_receipt_existing_identity_without_intent'
     assert sdk.call_count==1  # second page only, never the already posted Unit
     assert len(db.appends)==3
+
+
+@pytest.mark.parametrize('stage',['adapter','planning','writer'])
+@pytest.mark.parametrize('kind',['medical','payroll'])
+def test_late_sensitive_gate_remains_sticky_not_an_ordinary_validation_issue(stage,kind,local_ocr,monkeypatch):
+    from app.receipt_privacy_gate import ReceiptPrivacyBlocked
+    from app import receipt_pipeline
+    from test_receipt_pipeline import _medical_gate,_payroll_gate
+    service,live,g,db,sdk,state=setup(group=True)
+    if stage=='adapter':
+        def deny(*a,**kw):raise ReceiptPrivacyBlocked(kind)
+        monkeypatch.setattr('app.gemini_ai.require_receipt_ai_permission',deny)
+    else:
+        original=receipt_pipeline.evaluate_receipt_privacy;calls=0
+        def late(*a,**kw):
+            nonlocal calls
+            calls+=1
+            if calls==(1 if stage=='planning' else 2):
+                return _medical_gate() if kind=='medical' else _payroll_gate()
+            return original(*a,**kw)
+        monkeypatch.setattr(receipt_pipeline,'evaluate_receipt_privacy',late)
+    out=service.process(live.content,'drive-source-id')
+    assert out['units'][0]['status']=='privacy_pending' and not db.appends
+    assert service.completion.restrictions('drive-source-id',sha256(live.content).hexdigest())=={1:kind,2:kind}
+    assert sdk.call_count==(0 if stage=='adapter' else 1)
+    service.process(live.content,'drive-source-id')
+    assert sdk.call_count==(0 if stage=='adapter' else 1) and not db.appends
