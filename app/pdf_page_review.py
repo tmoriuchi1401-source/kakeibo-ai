@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import re
+from datetime import date, timedelta
 
 from .drive_run_state import StateError
 from .pdf_grouping_ui import (GroupingSheet, TITLE, QUEUE, SHEET_ID, HEADERS,
@@ -21,6 +22,32 @@ EDITABLE = {'kind_choice', 'kind_action', 'group_target', 'group_action', 'date'
             'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target',
             'merchant', 'manual_action'}
 GROUP_ACTIONS = ['確定', '分割', '結合', '拒否', '保留']
+
+
+def sheet_date_value(value):
+    """Keep calendar dates as Sheets serials; never convert through a timestamp."""
+    if value is None or value == '':
+        return ''
+    epoch = date(1899, 12, 30)
+    try:
+        if isinstance(value, bool):
+            raise ValueError()
+        if isinstance(value, (int, float)):
+            serial = int(value)
+            if serial != value:
+                raise ValueError()
+            epoch + timedelta(days=serial)  # Reject out-of-range calendar dates.
+            return serial
+        if type(value) is date:
+            day = value
+        else:
+            parts = re.fullmatch(r'(\d{4})([-/])(\d{1,2})\2(\d{1,2})', str(value).strip())
+            if not parts:
+                raise ValueError()
+            day = date(int(parts[1]), int(parts[3]), int(parts[4]))
+        return (day - epoch).days
+    except (ValueError, OverflowError, TypeError):
+        raise StateError('pdf_date_input_invalid') from None
 
 
 def span(numbers):
@@ -191,6 +218,8 @@ class PageReviewSheet(GroupingSheet):
             identity=card['identity'];first=identity['page_numbers'][0]
             for field,label,default in card['rows']:
                 value=previous.get((card['token'],field),default) if field in EDITABLE else default
+                if field=='date':
+                    value=sheet_date_value(value)
                 rows.append([label,value,SCHEMA,card['token'],json.dumps(identity,separators=(',',':')),field]+['']*8)
                 n=len(rows)
                 region={'sheetId':SHEET_ID,'startRowIndex':n,'endRowIndex':n+1,'startColumnIndex':1,'endColumnIndex':2}
@@ -217,9 +246,9 @@ class PageReviewSheet(GroupingSheet):
                     from .receipt_confirmation_ui import PAYMENTS
                     choices=PAYMENTS
                 if field=='date':
-                    hint='年/月/日で入力（例：2026/9/28）。月・日は1桁でもOKです。原本の支払日を入力してください。'
+                    hint='yyyy/mm/ddで入力（例：2026/10/04）。PCの標準pickerは日付のダブルクリック／@date。原本の支払日を入力してください。空欄可。'
                     requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'DATE_IS_VALID'},'strict':True,'showCustomUi':True,'inputMessage':hint}}},
-                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/m/d'}},'note':hint},'fields':'userEnteredFormat.numberFormat,note'}}])
+                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/mm/dd'}},'note':hint},'fields':'userEnteredFormat.numberFormat,note'}}])
                 if field=='amount':
                     requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'NUMBER_GREATER','values':[{'userEnteredValue':'0'}]},'strict':True,'showCustomUi':True}}},
                         {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'NUMBER','pattern':'#,##0.########'}}},'fields':'userEnteredFormat.numberFormat'}}])
