@@ -133,4 +133,6 @@ class ReadonlyPageReceipts:
         except Exception:
             report.update(status='analysis_failed',reason='response_or_validation_failed',units=[])
             return report
-        finally:report['gemini_calls']=self.analyzer.calls-before
+        finally:
+            report['gemini_calls']=self.analyzer.calls-before
+            report['analysis_diagnostic']=self.analyzer.last_diagnostic

@@ -303,3 +303,15 @@ def test_unstable_region_comparison_reuses_same_ui_has_no_editable_count():
     assert card['identity']['kind']=='receipt_segmentation' and report['units']==[]
     assert any('候補r3' in value for field,label,value in card['rows'])
     assert not any(field in EDITABLE for field,label,value in card['rows'])
+
+def test_response_schema_diagnostic_contains_only_safe_paths_no_values_or_retry(local_ocr):
+    p,raw=page();payload=png();response=reading().model_dump()
+    response['receipts'][0]['bbox']['left']='PRIVATE_RAW_RESPONSE_SECRET'
+    client=Mock();client.interactions.create.return_value=SimpleNamespace(output_text=json.dumps(response))
+    permission=lambda *args:{'payload_sha256':sha256(payload).hexdigest()}
+    analyzer=ai.GeminiPageReceipts(client,'model',permission)
+    with pytest.raises(ValueError):analyzer.analyze(p,payload,CATEGORIES,
+        expected_payload_sha256=sha256(payload).hexdigest(),render_proof=ai.fresh_render_proof(p,raw,1,1,payload))
+    assert analyzer.calls==analyzer.responses==1
+    assert analyzer.last_diagnostic['failure_kind']=='response_schema'
+    assert 'PRIVATE' not in json.dumps(analyzer.last_diagnostic)

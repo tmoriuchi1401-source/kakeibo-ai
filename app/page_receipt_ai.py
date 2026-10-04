@@ -86,7 +86,10 @@ class GeminiPageReceipts:
     def __init__(self,client,model,permission):
         self.client,self.model,self.permission=client,model,permission
         self.calls=0
+        self.responses=0
+        self.last_diagnostic={}
     def analyze(self,page,payload,categories,*,expected_payload_sha256,render_proof):
+        self.last_diagnostic={}
         fingerprint=sha256(payload).hexdigest()
         if fingerprint!=expected_payload_sha256:raise StateError('page_payload_changed')
         expected=FreshRenderProof(page.source.source_file_id,page.source.source_content_hash,page.source.page_count,
@@ -115,8 +118,34 @@ class GeminiPageReceipts:
             sent=base64.b64decode(kwargs['input'][1]['data'],validate=True)
             if sha256(sent).hexdigest()!=fingerprint:raise StateError('page_payload_changed')
             self.calls+=1
-            response=self.client.interactions.create(**kwargs)
-            if type(response.output_text) is not str or len(response.output_text.encode('utf-8'))>1024*1024:
-                raise StateError('page_response_resource_limit')
-            readings.append(PageReceiptExtraction.model_validate_json(response.output_text))
+            stage='api'
+            try:
+                response=self.client.interactions.create(**kwargs)
+                self.responses+=1;stage='response_schema'
+                if type(response.output_text) is not str or len(response.output_text.encode('utf-8'))>1024*1024:
+                    raise StateError('page_response_resource_limit')
+                readings.append(PageReceiptExtraction.model_validate_json(response.output_text))
+            except Exception as error:
+                from .gemini_errors import gemini_api_status,is_gemini_api_error
+                from pydantic import ValidationError
+                self.last_diagnostic={'failure_stage':stage}
+                code=gemini_api_status(error)
+                if code is not None:self.last_diagnostic['http_status']=code
+                if is_gemini_api_error(error):
+                    self.last_diagnostic['failure_kind']='gemini_api'
+                    # Fixed vocabulary only; never persist the API body/message.
+                    message=str(error)
+                    self.last_diagnostic['schema_keywords']=[key for key in
+                        ('schema','additionalProperties','$defs','$ref','maxItems','minimum','maximum') if key in message]
+                elif isinstance(error,ValidationError):
+                    fields={'receipts','receipt','bbox','item_boxes','left','top','right','bottom','date',
+                        'total','merchant','payment_method','items','name','quantity','amount','major_category',
+                        'minor_category','note','confidence','transaction_kind','separation_complete',
+                        'mixed_page_kind_suspected','cross_page_continuation_suspected'}
+                    self.last_diagnostic.update(failure_kind='response_schema',schema_issues=[{
+                        'type':x['type'],'path':[part if type(part) is int and 0<=part<=300 or
+                            isinstance(part,str) and part in fields else 'field' for part in x['loc']]}
+                        for x in error.errors(include_input=False,include_context=False,include_url=False)[:8]])
+                else:self.last_diagnostic['failure_kind']='adapter_contract' if isinstance(error,(TypeError,AttributeError)) else 'response_processing'
+                raise
         return readings,proof
