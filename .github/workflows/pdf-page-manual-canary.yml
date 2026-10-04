@@ -1,0 +1,100 @@
+name: PDF owner-complete manual canary
+run-name: PDF manual canary ${{ inputs.mode }}
+on:
+  workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact reviewed Draft PR 91 head; all CI must pass
+        type: string
+        required: true
+      mode:
+        type: choice
+        options: [preflight, review]
+        default: preflight
+        required: true
+      request_id:
+        description: Captured request UUID from existing hidden PDF queue; no owner fields
+        type: string
+        required: false
+      confirm:
+        description: Type MANUAL_ONLY; existing owner-complete manual backends only
+        type: string
+        required: true
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  canary:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'MANUAL_ONLY' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Reject debug before Secrets
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - name: Verify exact reviewed Draft head and validated main before Secrets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+          VALIDATED_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$VALIDATED_SHA"
+          python - <<'PY'
+          import json,os,re,urllib.request
+          sha=os.environ['APPROVED_SHA'];assert re.fullmatch('[0-9a-f]{40}',sha)
+          def get(path):
+              request=urllib.request.Request('https://api.github.com/repos/tmoriuchi1401-source/kakeibo-ai/'+path,
+                  headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+              with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)
+          p=get('pulls/91')
+          assert p['state']=='open' and p['draft'] is True and p['base']['ref']=='main'
+          assert p['head']['repo']['full_name']=='tmoriuchi1401-source/kakeibo-ai'
+          assert p['head']['ref']=='codex/pdf-page-privacy' and p['head']['sha']==sha
+          required={'local-ocr-runtime','test (general, not payroll and not medical)',
+                    'test (sensitive-synthetic, payroll or medical)'}
+          checks=[r for r in get('commits/'+sha+'/check-runs?per_page=100')['check_runs'] if r['name'] in required]
+          assert len(checks)==3 and {r['name'] for r in checks}==required
+          assert all(r['status']=='completed' and r['conclusion']=='success' for r in checks)
+          assert get('branches/main')['commit']['sha']==os.environ['GITHUB_SHA']
+          print('Reviewed code and validated main: verified')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: tmoriuchi1401-source/kakeibo-ai
+          ref: ${{ inputs.approved_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing dependencies before Secrets
+        run: python -m pip install -r requirements.txt
+      - name: Existing owner-complete manual backend without AI credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
+          PDF_GROUPING_BINDING: ${{ vars.PDF_GROUPING_BINDING }}
+          RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PDF_MANUAL_APPROVED_SHA: ${{ inputs.approved_sha }}
+          PDF_MANUAL_MODE: ${{ inputs.mode }}
+          PDF_MANUAL_REQUEST_ID: ${{ inputs.request_id }}
+          PDF_MANUAL_CONFIRM: ${{ inputs.confirm }}
+          PDF_AUTOMATIC_ENABLED: 'false'
+          PDF_ARCHIVE_ENABLED: 'false'
+        run: python -m app.pdf_page_manual_canary
