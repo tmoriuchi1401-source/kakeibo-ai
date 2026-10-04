@@ -217,8 +217,9 @@ class PageReviewSheet(GroupingSheet):
                     from .receipt_confirmation_ui import PAYMENTS
                     choices=PAYMENTS
                 if field=='date':
-                    requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'DATE_IS_VALID'},'strict':True,'showCustomUi':True}}},
-                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/mm/dd'}}},'fields':'userEnteredFormat.numberFormat'}}])
+                    hint='年/月/日で入力（例：2026/9/28）。月・日は1桁でもOKです。原本の支払日を入力してください。'
+                    requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'DATE_IS_VALID'},'strict':True,'showCustomUi':True,'inputMessage':hint}}},
+                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/m/d'}},'note':hint},'fields':'userEnteredFormat.numberFormat,note'}}])
                 if field=='amount':
                     requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'NUMBER_GREATER','values':[{'userEnteredValue':'0'}]},'strict':True,'showCustomUi':True}}},
                         {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'NUMBER','pattern':'#,##0.########'}}},'fields':'userEnteredFormat.numberFormat'}}])
