@@ -6,6 +6,7 @@ source move, runtime provisioning or local-authority fallback.
 from copy import deepcopy
 from datetime import datetime,timezone
 import json,re
+from hashlib import sha256
 from .drive_run_state import StateError,_aware
 from .conditional_drive_state_v2 import strong_etag
 from .page_receipt_model import PageUnit,digest,page_key
@@ -130,14 +131,20 @@ class HumanGeneralAuthorityStore:
         self.payload,self.tag=check,tag
 
 class HumanGeneralConfirmation:
-    def __init__(self,store,current_page,verified_actor,*,clock=None):
+    def __init__(self,store,current_page,verified_actor,*,load_source,clock=None):
         self.store,self.current_page,self.verified_actor=store,current_page,verified_actor
+        self.load_source=load_source # trusted current Drive bytes, never cache/Sheet
         self.clock=clock or (lambda:datetime.now(timezone.utc).isoformat(timespec='seconds'))
+    def fresh_source(self,page):
+        raw=self.load_source(page.source.source_file_id)
+        if type(raw) is not bytes or sha256(raw).hexdigest()!=page.source.source_content_hash:
+            raise StateError('human_general_source_changed')
     def confirm(self,expected,*,operation,request_id):
         if operation!='confirm_general_receipt_ai' or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}',request_id):
             raise StateError('human_general_explicit_operation_required')
         current=self.current_page(expected.source.source_file_id,expected.page_number)
         if binding_fields(current)!=binding_fields(expected):raise StateError('stale_proposal')
+        self.fresh_source(current)
         if not eligible(current):raise StateError('human_general_kind_forbidden')
         # verified_actor is the trusted auth/event adapter, never a Sheet cell.
         actor=self.verified_actor(request_id)
@@ -159,9 +166,13 @@ class HumanGeneralConfirmation:
             'confirmation_digest':grant['confirmation_digest'],'request_id':request_id,'result':'confirmed'})
         again=self.current_page(expected.source.source_file_id,expected.page_number)
         if binding_fields(again)!=binding_fields(current):raise StateError('stale_proposal')
+        self.fresh_source(again)
         self.store.save(state)
         return validate_grant(self.store.load()['grants'][page_key(current)],current)
     def current(self,page):
+        now=self.current_page(page.source.source_file_id,page.page_number)
+        if binding_fields(now)!=binding_fields(page):raise StateError('stale_proposal')
+        self.fresh_source(now)
         grant=self.store.load()['grants'].get(page_key(page))
         if not grant:raise StateError('human_general_authority_missing')
         return validate_grant(grant,page)
@@ -170,6 +181,7 @@ class HumanGeneralConfirmation:
             raise StateError('human_general_explicit_operation_required')
         current=self.current_page(expected.source.source_file_id,expected.page_number)
         if binding_fields(current)!=binding_fields(expected):raise StateError('stale_proposal')
+        self.fresh_source(current)
         state=self.store.load();key=page_key(current)
         prior=next((e for e in state['audit'] if e['request_id']==request_id),None)
         if prior:
@@ -187,6 +199,7 @@ class HumanGeneralConfirmation:
         state['generation']+=1
         if binding_fields(self.current_page(expected.source.source_file_id,expected.page_number))!=binding_fields(current):
             raise StateError('stale_proposal')
+        self.fresh_source(current)
         self.store.save(state)
         if key in self.store.load()['grants']:raise StateError('human_general_hold_readback_mismatch')
         return None

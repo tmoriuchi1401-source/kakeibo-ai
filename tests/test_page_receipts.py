@@ -19,6 +19,7 @@ TIME='2026-10-05T00:00:00+00:00'
 UUID='00000000-0000-4000-8000-000000000001'
 BINDING='b'*64
 CATEGORIES=[('食費','食品')]
+SOURCE_BYTES={}
 
 def page(kind='normal',number=1,kinds=None,source_kind='pdf',**changes):
     kinds=kinds or [kind]
@@ -32,6 +33,7 @@ def page(kind='normal',number=1,kinds=None,source_kind='pdf',**changes):
         observation_complete=True,extraction_status='extracted',observation_render_hash='a'*64,
         review_identity='0'*64,authority_revision=1)
     data.update(changes)
+    SOURCE_BYTES[source.source_content_hash]=raw
     p=model.PageUnit(**data);data['review_identity']=authority.review_identity(p)
     return model.PageUnit(**data),raw
 
@@ -62,7 +64,8 @@ class MemoryTransport:
 def confirmation(p,transport=None,actor=ACTOR):
     t=transport or MemoryTransport()
     store=authority.HumanGeneralAuthorityStore(t,BINDING,preflight=lambda:None)
-    c=authority.HumanGeneralConfirmation(store,lambda *args:p,lambda _:actor,clock=lambda:TIME)
+    c=authority.HumanGeneralConfirmation(store,lambda *args:p,lambda _:actor,
+        load_source=lambda _:SOURCE_BYTES[p.source.source_content_hash],clock=lambda:TIME)
     return c,t
 
 @pytest.mark.parametrize('count',[1,2,3])
@@ -315,3 +318,10 @@ def test_response_schema_diagnostic_contains_only_safe_paths_no_values_or_retry(
     assert analyzer.calls==analyzer.responses==1
     assert analyzer.last_diagnostic['failure_kind']=='response_schema'
     assert 'PRIVATE' not in json.dumps(analyzer.last_diagnostic)
+
+def test_authority_confirmation_needs_fresh_drive_bytes_not_only_current_state_metadata():
+    p,_=page('unknown');c,t=confirmation(p)
+    c.load_source=lambda _:b'current PDF changed but authority state is old'
+    with pytest.raises(StateError,match='source_changed'):
+        c.confirm(p,operation='confirm_general_receipt_ai',request_id=UUID)
+    assert t.writes==0
