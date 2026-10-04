@@ -12,7 +12,7 @@ test('month summary and historical examples cannot mix dates',()=>{
 
 test('month navigation separates historical and future-only candidates without deletion',()=>{
   const candidates=[{key:'past',summary:{monthCount:0,allCount:3}},{key:'current',summary:{monthCount:2,allCount:5}},{key:'future',summary:{monthCount:0,allCount:0}}];
-  for(const [filter,key] of [['対象月の未分類','current'],['過去の未処理','past'],['その他の候補','future']]){
+  for(const [filter,key] of [['対象月の未分類','current'],['他月の未処理','past'],['その他の候補','future']]){
     const p=ctx.ccPartition_(candidates,filter);
     assert.deepEqual(Array.from(p.visible,c=>c.key),[key]);
     assert.equal(p.groups.reduce((n,g)=>n+g.length,0),3);
@@ -26,6 +26,32 @@ test('opening a fresh candidate never inherits all-period or future-ON choices',
   const state=ctx.ccInitial_(candidate,'2026-09','対象月の未分類');
   assert.equal(state.scope,'反映しない');assert.equal(state.future,'OFF');
   assert.equal(state.category,'食費 ＞ 外食');assert.equal(state.fixed,undefined);assert.equal(state.pending,undefined);
+});
+
+test('completed transaction snapshot stays excluded after key regeneration, new transactions remain reviewable',()=>{
+  const crypto=require('node:crypto');
+  const modelCtx=vm.createContext({JSON,Date,Error,Number,String,Utilities:{DigestAlgorithm:{SHA_256:'sha'},Charset:{UTF_8:'utf8'},
+    computeDigest:(_a,text)=>Array.from(crypto.createHash('sha256').update(text).digest())}});
+  vm.runInContext(fs.readFileSync(__dirname+'/CategoryConfirmation.gs','utf8'),modelCtx);
+  modelCtx.CATEGORY_UI='legacy';
+  const proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC'};
+  const row=Array(12).fill('');row[6]='original-key';row[11]=JSON.stringify(proof);
+  const rules=[['■ 1. カテゴリを選ぶ・今後の自動分類'],Array(12).fill(''),row,['■ 2. 過去分の固定プレビュー']];
+  const expenses=[['支出ID'],['a','2026-09-01','ABC','自動計上',100,'その他','未分類','','','','i1','','active']];
+  const imported=[['取込ID'],['i1','','PayPay','','2026-09-01','ABC',100,'','auto_expense','a']];
+  const log=[['snapshot','key','uuid']];
+  const sheet=(rows,month)=>({getLastRow:()=>rows.length,getRange:a1=>({getDisplayValues:()=>rows,getDisplayValue:()=>month})});
+  const legacy=sheet(rules,'2026-09');
+  const sheets={legacy,'支出明細':sheet(expenses),'取込データ':sheet(imported),'_カテゴリ確認ログ':sheet(log)};
+  const ss={getSheetByName:name=>sheets[name]};
+  const candidate=modelCtx.ccModel_(ss).candidates[0];assert.equal(candidate.key,'original-key');
+  log.push([candidate.sig,candidate.key,'completed-uuid']);
+  assert.equal(modelCtx.ccModel_(ss).candidates.length,0);
+  row[6]='regenerated-key';assert.equal(modelCtx.ccModel_(ss).candidates.length,0);
+  expenses.push(['b','2026-09-02','ABC','自動計上',200,'その他','未分類','','','','i2','','active']);
+  imported.push(['i2','','PayPay','','2026-09-02','ABC',200,'','auto_expense','b']);
+  assert.equal(modelCtx.ccModel_(ss).candidates.length,1);
+  assert.equal(log.length,2);
 });
 
 test('exact evidence binding excludes unrelated source/account/target/inactive rows',()=>{

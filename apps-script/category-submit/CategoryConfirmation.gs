@@ -9,7 +9,7 @@ const CC_MARKERS = ['■ 1. カテゴリを選ぶ・今後の自動分類',
   '■ 2. 過去分の固定プレビュー','■ 3. 固定プレビューを確認して反映'];
 const CC_FIRST = 30;
 const CC_CELLS = {category:'A15',future:'A17',scope:'A20',action:'A24',status:'A25'};
-const CC_FILTERS = ['対象月の未分類','過去の未処理','その他の候補','すべて'];
+const CC_FILTERS = ['対象月の未分類','他月の未処理','その他の候補','すべて'];
 
 function ccText_(v) { return String(v || '').normalize('NFKC').trim().replace(/\s+/g,' '); }
 function ccJson_(v) { try { return JSON.parse(String(v)); } catch (_) { return {}; } }
@@ -138,13 +138,13 @@ function ccRefresh_(ss,key) {
   const labels=choices.map(r=>r[2]+' ＞ '+r[3]);
   sheet.getRange('D2:E'+(labels.length+1)).setValues(choices.map((r,i)=>[labels[i],r[0]]));
   sheet.getRange('A15').setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(sheet.getRange(2,4,labels.length,1),true).setAllowInvalid(false).build());
-  ccSet_(sheet.getRange('A2'),'対象月の未確認 '+partition.groups[0].length+'候補\n過去 '+partition.groups[1].length+' / その他 '+partition.groups[2].length+'候補');sheet.setRowHeight(2,40);
+  ccSet_(sheet.getRange('A2'),'対象月の未確認 '+partition.groups[0].length+'候補\n他月 '+partition.groups[1].length+' / その他 '+partition.groups[2].length+'候補');sheet.setRowHeight(2,40);
   const last=Math.max(CC_FIRST,sheet.getLastRow());sheet.getRange(CC_FIRST,1,last-CC_FIRST+1,3).clearContent().clearDataValidations();
   if(candidates.length) {
     const needed=CC_FIRST+candidates.length-1;if(needed>sheet.getMaxRows())sheet.insertRowsAfter(sheet.getMaxRows(),needed-sheet.getMaxRows());
     candidates.forEach((c,i)=>{
       const count=c.summary.monthCount || c.summary.allCount,amount=c.summary.monthCount?c.summary.monthAmount:c.summary.allAmount;
-      const context=c.summary.monthCount?'対象月':c.summary.allCount?'過去の未分類':'自動分類の検討';
+      const context=c.summary.monthCount?'対象月':c.summary.allCount?'対象月以外の未分類':'自動分類の検討';
       const line=c.proof.merchant+'\n'+context+' '+count+'件 / '+amount.toLocaleString('ja-JP')+'円 · '+(c.physical[2]?c.physical[2].replace('｜',' ＞ '):'未選択')+' · 確認待ち';
       ccSet_(sheet.getRange(CC_FIRST+i,1),line);sheet.getRange(CC_FIRST+i,3).setValue(c.key);
       ccFit_(sheet,CC_FIRST+i,line,22);
@@ -157,7 +157,7 @@ function ccRefresh_(ss,key) {
     ccSet_(sheet.getRange('A4'),'この区分に未確認の候補はありません');
     ccSet_(sheet.getRange('A7'),'対象月 '+model.month);ccSet_(sheet.getRange('A17'),'OFF');ccSet_(sheet.getRange('A20'),'反映しない');
     ccDropdown_(sheet,'A24',['操作を選択']);ccSet_(sheet.getRange('A24'),'操作を選択');
-    ccSet_(sheet.getRange('A25'),'下の一覧フィルタで過去・その他の候補を確認できます。');ccSave_(sheet,{v:1,filter});return;
+    ccSet_(sheet.getRange('A25'),'下の一覧フィルタで他月・その他の候補を確認できます。');ccSave_(sheet,{v:1,filter});return;
   }
   const same=prior.key===current.key && prior.sig===current.sig && !key;
   const state=same?prior:ccInitial_(current,model.month,filter);state.filter=filter;

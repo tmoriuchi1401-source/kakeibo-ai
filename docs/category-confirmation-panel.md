@@ -49,7 +49,7 @@ classification taxonomy changes are needed by this panel.
 - Rows 30 onward are navigation: wrapped merchant, target-month count/amount,
   category/status and a separate `開く` dropdown. This selects the panel.
 - Row 28 filters the navigation into `対象月の未分類` (default),
-  `過去の未処理`, `その他の候補`, or `すべて`. Historical/future-only
+  `他月の未処理`, `その他の候補`, or `すべて`. Historical/future-only
   candidates are retained. Counts in row 2 distinguish all three groups;
   list amounts are explicitly labelled by their context. Opening a fresh
   candidate always starts OFF / `反映しない`, even after an all-period review.
@@ -141,6 +141,14 @@ change described above is now tested, but is not yet on production main.
 End-to-end confirmation, live rule saving and live completion removal remain
 unverified until the compatible worker can run.
 
+Continuation verification: 3,479 Python tests passed locally, plus 15 Node
+tests for the category core/panel. The isolated daily contract/renderer/chart
+selection passed 50 tests. PR #98's earlier continuation commit and the isolated
+compatibility-only PR #99 both passed GitHub synthetic CI. A regeneration test
+confirms that completed signatures remain excluded after a legacy key changes,
+while a new matching transaction creates a new reviewable signature. Saved
+Home chart metadata produces zero chart mutations with the existing renderer.
+
 The fresh audit of stopped UUID `7c5e7ce3-8dd6-4ca7-9ed6-acd40b0edcbb`
 validates its v1 232-row snapshot digest
 `4ad33b065b021c96073f00cb1e4cd20bf8e01932b3e8937232f5d1d96a9c03a9`.
@@ -159,6 +167,8 @@ fallback. The existing final-state filter excludes some of the last group.
 This results from all-period representative generation, not a month aggregation
 error. Historical and future-rule proposals remain available under the new
 filter; no candidate or accounting data is deleted.
+One other-month group includes a date after the selected month, so the filter
+says `他月の未処理`, rather than incorrectly describing every such row as past.
 
 Production dispatch is restricted to the approved main SHA. PR #98 must remain
 draft/unmerged until live verification finishes, so testing the compatibility
