@@ -143,12 +143,24 @@ def _route(s, route, plan, reference):
             raise ValueError()
     if route == 'general_manual' and len(plan['支出明細']) != 1:
         raise ValueError()
+    if route=='receipt':
+        from .receipt_reimport import _date
+        r=plan['レシート'][0];i=plan['取込データ'][0];xs=plan['支出明細']
+        rid='R-'+s['unit_id'];iid='receipt:'+s['unit_id']
+        if (r[0]!=rid or i[0]!=iid or i[2:4]!=['receipt',s['unit_id']]
+                or r[6]!='解析済' or i[8]!='解析済' or not _date(r[1])
+                or type(r[3]) is not int or r[3]<=0 or i[4:9]!=[r[1],r[2],r[3],r[4],r[6]]
+                or not _hash(i[10]) or sum(x[4] for x in xs)!=r[3]
+                or any(x[0]!=f'{rid}-{n:02d}' or x[1:3]!=r[1:3] or not x[5] or not x[6]
+                    or x[7:11]!=[r[4],'receipt',rid,iid] or x[12]!='active'
+                    or type(x[4]) is not int for n,x in enumerate(xs,1))):
+            raise ValueError()
 
 
 def empty_state(binding):
     if not _hash(binding):
         raise StateError('pdf_processing_binding_invalid')
-    return {'schema': SCHEMA, 'binding': binding, 'generation': 0, 'records': {}, 'audit': []}
+    return {'schema': SCHEMA, 'binding': binding, 'generation': 0, 'records': {}, 'privacy_holds': {}, 'audit': []}
 
 
 def _intent(record):
@@ -157,10 +169,11 @@ def _intent(record):
 
 def validate(value, binding):
     try:
-        if (not _hash(binding) or set(value) != {'schema', 'binding', 'generation', 'records', 'audit'}
+        if (not _hash(binding) or set(value) != {'schema', 'binding', 'generation', 'records', 'privacy_holds', 'audit'}
                 or value['schema'] != SCHEMA or value['binding'] != binding
                 or type(value['generation']) is not int or value['generation'] < 0
-                or not isinstance(value['records'], dict) or not isinstance(value['audit'], list)
+                or not isinstance(value['records'], dict) or not isinstance(value['privacy_holds'], dict)
+                or not isinstance(value['audit'], list)
                 or value['generation'] != len(value['audit'])):
             raise ValueError()
         coverage = set()
@@ -180,25 +193,50 @@ def validate(value, binding):
                 p = (r['unit']['source_file_id'], r['unit']['source_content_hash'], n)
                 if p in coverage: raise ValueError()
                 coverage.add(p)
+        for key, hold in value['privacy_holds'].items():
+            if set(hold)!={'unit','page_number','classification','reason_code','created_at','hold_digest'}:
+                raise ValueError()
+            _spec(hold['unit']);s=hold['unit'];n=hold['page_number']
+            if (type(n) is not int or n not in s['page_numbers']
+                    or hold['classification'] not in {'medical','payroll','sensitive_unknown'}
+                    or not isinstance(hold['reason_code'],str)
+                    or not re.fullmatch('[a-z0-9_]{1,80}',hold['reason_code'])
+                    or key!=digest([s['source_file_id'],s['source_content_hash'],n,hold['classification']])
+                    or hold['hold_digest']!=digest({k:v for k,v in hold.items() if k!='hold_digest'})):
+                raise ValueError()
+            _aware(hold['created_at'])
         for event in value['audit']:
             if (set(event) != {'operation', 'timestamp', 'unit_id', 'source_file_id',
                     'source_content_hash', 'grouping_revision', 'proposal_digest',
-                    'confirmation_digest', 'intent_digest', 'result'}
-                    or event['operation'] not in {'reserve', 'complete'}
-                    or event['result'] != {'reserve': 'pending', 'complete': 'applied'}[event['operation']]):
+                    'confirmation_digest', 'intent_digest', 'result','page_number'}
+                    or event['operation'] not in {'reserve', 'complete','privacy_hold'}
+                    or event['result'] != {'reserve': 'pending', 'complete': 'applied','privacy_hold':'held'}[event['operation']]):
                 raise ValueError()
-            _aware(event['timestamp']); record = value['records'][event['unit_id']]
-            if any(event[k] != record['unit'][k] for k in ('source_file_id',
+            _aware(event['timestamp'])
+            if event['operation']=='privacy_hold':
+                matches=[h for h in value['privacy_holds'].values() if h['hold_digest']==event['intent_digest']]
+                if len(matches)!=1:raise ValueError()
+                hold=matches[0]
+                source=hold['unit'];intent=hold['hold_digest']
+                if (event['timestamp']!=hold['created_at'] or event['unit_id']!=source['unit_id']
+                        or event['page_number']!=hold['page_number']):raise ValueError()
+            else:
+                record=value['records'][event['unit_id']];source=record['unit'];intent=record['intent_digest']
+                if event['page_number']!=0:raise ValueError()
+            if any(event[k] != source[k] for k in ('source_file_id',
                     'source_content_hash', 'grouping_revision', 'proposal_digest', 'confirmation_digest')):
                 raise ValueError()
-            if event['intent_digest'] != record['intent_digest']: raise ValueError()
+            if event['intent_digest'] != intent: raise ValueError()
         # Reject orphan records, repeated completion and invented applied flags.
         for key, r in value['records'].items():
-            events = [e for e in value['audit'] if e['unit_id'] == key]
+            events = [e for e in value['audit'] if e['unit_id'] == key and e['operation']!='privacy_hold']
             if [e['operation'] for e in events] != (['reserve', 'complete'] if r['phase'] == 'applied' else ['reserve']):
                 raise ValueError()
             if events[0]['timestamp'] != r['created_at'] or (r['phase'] == 'applied' and
                     events[1]['timestamp'] != r['completed_at']): raise ValueError()
+        for hold in value['privacy_holds'].values():
+            if sum(e['operation']=='privacy_hold' and e['intent_digest']==hold['hold_digest'] for e in value['audit'])!=1:
+                raise ValueError()
         return value
     except Exception:
         raise StateError('pdf_processing_state_invalid') from None
@@ -215,7 +253,9 @@ def _unique_pairs(pairs):
 class DriveUnitProcessingStore:
     """ACL -> versioned read -> If-Match -> exact read-back, no retry/fallback."""
     def __init__(self, transport, binding, *, preflight, clock=None):
-        if not _hash(binding) or not callable(preflight):
+        from .conditional_drive_state_v2 import ConditionalDriveStateTransportV2
+        if (not _hash(binding) or not callable(preflight) or
+                not isinstance(transport,ConditionalDriveStateTransportV2)):
             raise StateError('pdf_processing_binding_invalid')
         self.transport, self.binding, self.preflight = transport, binding, preflight
         self.clock = clock or (lambda: datetime.now(timezone.utc).isoformat())
@@ -249,6 +289,7 @@ class DriveUnitProcessingStore:
             'unit_id': unit['unit_id'], **{k: unit[k] for k in ('source_file_id',
                 'source_content_hash', 'grouping_revision', 'proposal_digest', 'confirmation_digest')},
             'intent_digest': record['intent_digest'],
+            'page_number': 0,
             'result': 'pending' if operation == 'reserve' else 'applied'})
         value['generation'] += 1
 
@@ -262,6 +303,17 @@ class DriveUnitProcessingStore:
         self._event(trial, record, 'reserve'); validate(trial, self.binding)
         if verify_current(deepcopy(spec)) is not True:
             raise StateError('pdf_processing_authority_or_source_changed')
+        restrictions=self._restrictions(value,spec['source_file_id'],spec['source_content_hash'])
+        kinds=[restrictions[n] for n in spec['page_numbers'] if n in restrictions]
+        if route=='receipt' and kinds:
+            raise StateError('pdf_processing_sticky_privacy_hold')
+        strong=any(h['classification'] in {'medical','payroll'} and
+            h['unit']['source_file_id']==spec['source_file_id'] and
+            h['unit']['source_content_hash']==spec['source_content_hash'] and
+            h['page_number'] in spec['page_numbers'] for h in value['privacy_holds'].values())
+        if route=='general_manual' and (strong or
+                any(n in restrictions and not k for n,k in zip(spec['page_numbers'],spec['page_kind_digests']))):
+            raise StateError('pdf_processing_human_kind_required')
         previous = value['records'].get(spec['unit_id'])
         if previous:
             if _intent(previous) != _intent(record):
@@ -296,7 +348,47 @@ class DriveUnitProcessingStore:
 
     def verify_pending(self, unit_id, intent_digest):
         """Fresh Drive read immediately before entering the existing writer."""
-        record=self.load()['records'].get(unit_id)
+        value=self.load();record=value['records'].get(unit_id)
         if not record or record['phase']!='pending' or record['intent_digest']!=intent_digest:
             raise StateError('pdf_processing_pending_intent_changed')
+        s=record['unit']
+        if record['route']=='receipt' and any(n in self._restrictions(value,s['source_file_id'],s['source_content_hash'])
+                for n in s['page_numbers']):raise StateError('pdf_processing_sticky_privacy_hold')
         return True
+
+    @staticmethod
+    def _restrictions(value,source_id,source_hash):
+        grouped={}
+        for h in value['privacy_holds'].values():
+            if h['unit']['source_file_id']==source_id and h['unit']['source_content_hash']==source_hash:
+                grouped.setdefault(h['page_number'],set()).add(h['classification'])
+        return {n:'sensitive_unknown' if 'sensitive_unknown' in kinds or {'medical','payroll'}<=kinds
+            else next(iter(kinds)) for n,kinds in grouped.items()}
+
+    def restrictions(self,source_id,source_hash):
+        return self._restrictions(self.load(),source_id,source_hash)
+
+    def block(self,spec,classification,reason_code,*,verify_current):
+        """Persist a fail-closed hold, never normal permission or human intent."""
+        value=self.load()
+        if verify_current(deepcopy(spec)) is not True:
+            raise StateError('pdf_processing_authority_or_source_changed')
+        changed=False
+        for n in spec['page_numbers']:
+            key=digest([spec['source_file_id'],spec['source_content_hash'],n,classification])
+            old=value['privacy_holds'].get(key)
+            if old:
+                # Idempotent for this signal; additional sensitive classes get
+                # their own immutable evidence and cannot erase earlier ones.
+                continue
+            hold={'unit':deepcopy(spec),'page_number':n,'classification':classification,
+                'reason_code':reason_code,'created_at':self.clock()}
+            hold['hold_digest']=digest(hold);value['privacy_holds'][key]=hold
+            value['audit'].append({'operation':'privacy_hold','timestamp':hold['created_at'],
+                'unit_id':spec['unit_id'],**{k:spec[k] for k in ('source_file_id','source_content_hash',
+                    'grouping_revision','proposal_digest','confirmation_digest')},
+                'intent_digest':hold['hold_digest'],'page_number':n,'result':'held'})
+            value['generation']+=1;changed=True
+        validate(value,self.binding)
+        if changed:self._save(value)
+        return self._restrictions(value,spec['source_file_id'],spec['source_content_hash'])

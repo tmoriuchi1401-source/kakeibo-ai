@@ -293,10 +293,10 @@ def test_non_normal_gate_never_calls_gemini_or_sheets(
     monkeypatch.setattr(pipeline_module, "evaluate_receipt_privacy", gate)
 
     result = pipeline_module.ReceiptPipeline(db, ai).process_bytes(
-        b"SYNTHETIC_PRIVATE_OCR", "application/pdf", "source-2"
+        b"SYNTHETIC_PRIVATE_OCR", "image/png", "source-2"
     )
 
-    gate.assert_called_once_with(b"SYNTHETIC_PRIVATE_OCR", "application/pdf")
+    gate.assert_called_once_with(b"SYNTHETIC_PRIVATE_OCR", "image/png")
     ai.analyze_receipt.assert_not_called()
     assert db.category_calls == 0
     assert db.append_calls == []

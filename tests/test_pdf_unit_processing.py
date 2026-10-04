@@ -123,7 +123,7 @@ def test_medical_completion_is_reference_only_with_no_medical_payload_or_calls()
     # No writer, AI, source mover, accounting permission, OCR or Medical fields.
     assert set(json.loads(drive.payload)['audit'][0])=={'operation','timestamp','unit_id',
         'source_file_id','source_content_hash','grouping_revision','proposal_digest',
-        'confirmation_digest','intent_digest','result'}
+        'confirmation_digest','intent_digest','result','page_number'}
     assert '医療' not in drive.payload.decode() and 'amount' not in drive.payload.decode()
 
 
@@ -186,3 +186,46 @@ def test_existing_grouping_unit_ids_remain_byte_identical():
         s['page_numbers'],s['member_page_identities'],s['grouping_revision'],s['proposal_digest']],
         ensure_ascii=True,separators=(',',':')).encode()).hexdigest()
     assert s['unit_id']=='pdf-confirmed-unit-v2:'+old
+
+
+def test_privacy_hold_survives_grouping_edit_and_never_becomes_receipt_authority():
+    drive,store,_=context();s=spec(automatic='normal')
+    store.block(s,'sensitive_unknown','ocr_incomplete',verify_current=lambda _:True)
+    saved=drive.payload
+    assert store.restrictions(s['source_file_id'],s['source_content_hash'])=={4:'sensitive_unknown'}
+    store.block(s,'sensitive_unknown','ocr_incomplete',verify_current=lambda _:True)
+    assert drive.payload==saved and len(drive.updates)==1
+    changed=spec(automatic='normal',revision=3)
+    rid='R-'+changed['unit_id'];iid='receipt:'+changed['unit_id']
+    receipt_plan={'レシート':[[rid,'2026-09-24','',100,'','','解析済','stamp','']],
+        '支出明細':[[rid+'-01','2026-09-24','','商品',100,'食費','外食','','receipt',rid,iid,'','active']],
+        '取込データ':[[iid,'stamp','receipt',changed['unit_id'],'2026-09-24','',100,'','解析済','','f'*64,'']]}
+    with pytest.raises(StateError,match='sticky_privacy_hold'):reserve(store,changed,'receipt',receipt_plan)
+    assert len(drive.updates)==1
+
+
+def test_unknown_followed_by_medical_keeps_both_and_blocks_general_manual():
+    drive,store,_=context();s=spec(automatic='normal')
+    for kind in ('sensitive_unknown','medical'):
+        store.block(s,kind,'synthetic_signal',verify_current=lambda _:True)
+    assert store.restrictions(s['source_file_id'],s['source_content_hash'])=={4:'sensitive_unknown'}
+    assert len(store.load()['privacy_holds'])==2
+    with pytest.raises(StateError,match='human_kind_required'):reserve(store,s)
+    assert len(drive.updates)==2
+
+
+def test_unknown_can_use_explicit_general_manual_but_never_ai_permission():
+    drive,store,_=context();s=spec(automatic='normal')
+    store.block(s,'sensitive_unknown','render_failed',verify_current=lambda _:True)
+    r,created=reserve(store,s)
+    assert created and r['route']=='general_manual'
+    assert store.load()['privacy_holds'] and r['phase']=='pending'
+
+
+def test_privacy_hold_cannot_be_recorded_against_stale_source_or_grant_normal():
+    drive,store,_=context()
+    with pytest.raises(StateError,match='authority_or_source_changed'):
+        store.block(spec(),'medical','synthetic_signal',verify_current=lambda _:False)
+    with pytest.raises(StateError,match='state_invalid'):
+        store.block(spec(),'normal','synthetic_signal',verify_current=lambda _:True)
+    assert drive.updates==[]

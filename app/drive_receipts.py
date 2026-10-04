@@ -17,6 +17,8 @@ def normalize_folder_id(value:str)->str:
 
 def should_archive_result(result: dict) -> bool:
     """Return whether an inbox image was safely recorded and can be archived."""
+    if result.get('document_type') == 'pdf_page_units':
+        return False  # Separate all-terminal archive plan/canary remains required.
     status = result.get("status")
     return status in {"imported", "needs_review"} or (
         status == "skipped" and result.get("reason") == "already_imported"

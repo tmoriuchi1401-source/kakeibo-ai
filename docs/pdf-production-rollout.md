@@ -1,8 +1,10 @@
 # PDF production rollout preparation
 
 This branch starts at validated main. Draft PR 91 is not merged or copied as a
-whole. No workflow, schedule, Secret, existing Drive binding, bank, PayPay,
-Amazon, Payroll, Medical AUTO or existing spreadsheet UI is changed here.
+whole. Its bounded observation, grouping/schema and stable identity modules are
+selected dependencies of the Unit adapter. No workflow, schedule, Secret,
+existing Drive binding, bank, PayPay, Amazon, Payroll, Medical AUTO or existing
+spreadsheet UI is changed here. The Medical detector remains unchanged.
 
 The shared ordinary receipt policy requires a valid payment date, positive
 original total and existing categories. Existing item/total consistency,
@@ -30,6 +32,46 @@ accounting read-back. An ambiguous pending write is reconciliation-only, never
 an automatic resend. An overlapping new grouping revision is held. Projection
 failure replays the view without applying intent or accounting again.
 
+The journal also records sticky privacy holds, separately from accounting
+completion. Holds contain source/page/Unit identity and fixed reason codes, not
+OCR or amounts. Grouping edits and new service instances cannot erase them;
+normal automatic processing refuses any held member. Unknown pages may use
+explicit owner-complete general input with durable human page-kind evidence.
+Medical/payroll evidence cannot enter that general manual route.
+
+`DrivePdfAuthority` re-reads Drive v1/v2 authority and current original PDF bytes,
+including page count/ordinal identity. Its v2 projection preserves existing Unit
+IDs and does not compare fresh PNG compression to historical render hashes.
+The single-source v2 migration must still match that source's complete legacy
+intent; an unrelated PDF never inherits its migration or permission.
+
+`PdfUnitIntake` is an opt-in service injected at the existing ReceiptPipeline PDF
+boundary. It completes all local page observations before selecting confirmed
+normal groups, discards observation PNGs, then freshly renders one bounded Unit
+at a time. Multi-member groups use one bounded RGB canvas and one member scratch;
+original PDF objects/attachments cannot reach Gemini. A shared work budget spans
+observation, fresh rendering and downstream checks; normal gate/parser/planning/
+writer checks are charged conservatively without raising pixel/work caps.
+Every SDK call verifies exact PNG bytes, normal authority, current original
+source and the fixed Google destination. Existing receipt rereads are bounded
+at three, and changed date/total/kind readings remain review-only.
+
+The existing ReceiptPipeline writer first materializes a frozen plan in memory.
+The private journal persists pending intent before any literal append to only
+the existing three receipt tables. A fence prohibits unplanned rows or other
+writer methods; every append and completion requires exact accounting read-back.
+A pending unknown/partial append is reconciliation-only, never automatically
+resumed. Total/date duplicate candidates are held for a full source comparison,
+never declared duplicates by amount alone. Legacy parent import IDs or Unit IDs
+without durable intent cannot be reposted. All PDF archive remains disabled.
+
+`adopt_canary_intents` can migrate already posted records from the existing
+Drive canary state after exact authority/source/Unit and full accounting-row
+checks. Only the new completion journal changes; Unit IDs, old ledger rows,
+old state and grouping confirmation remain intact. It accepts no local
+diagnostic/artifact restoration and performs no new accounting or Gemini call.
+This migration has synthetic regression coverage; it has not been run live.
+
 Medical completion contains only identity and an existing backend reference,
 never Medical input fields or a Medical accounting plan. A page-kind completion
 reference can cover a Medical page outside the general grouping partition;
@@ -53,15 +95,14 @@ false. Actual source movement requires its separate first-PDF canary.
 ## Remaining before merge/activation
 
 * Finish owner input and durable read-back/replay for the remaining manual pages.
-* Implement/inject the generic Drive-authority normal Unit intake; do not use the
-  local grouping cache as authority or send original PDF bytes to Gemini.
-* Reconcile already posted per-Unit intents without changing their Unit IDs.
-* Address the current single-source v2 migration's whole-v1-file dependency
-  before admitting unrelated new proposals. Do not invalidate existing confirmed
-  intent merely because an unrelated state record is added.
-  Draft 91 now checks the exact target source's complete legacy scope instead;
-  its original whole-file digest remains migration provenance. Source, page-kind,
-  partition, revision or confirmation changes still revoke the migrated scope.
+* Install the production factory/scan-plan dependency injection at the existing
+  receipt entry, under its main/validated SHA and projection/mutex boundaries.
+  The service currently has no CLI/live activation path. Preview must recognize
+  page Units before the existing whole-file Medical/image scan.
+* Provision the separate completion journal under existing ACL/scopes and run
+  the Drive-only migration of already posted canary intents without new writes.
+* Reconcile manual/Medical terminal references through their existing writers;
+  the normal adapter does not generate Medical reviews or amounts.
 * Fresh exact PNG privacy remains mandatory for every externally analyzed Unit.
 * Keep Medical/privacy/unconfirmed Units on hold and retain partial PDFs.
 * Require full CI, a single production PDF canary and verified validated-main

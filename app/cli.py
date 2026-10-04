@@ -131,7 +131,16 @@ def make_receipt_pipeline(settings, db, ai):
 
 def print_drive_receipt_results(results):
     for name,res in results:
-        if res.get("status") == "privacy_blocked":
+        if res.get('document_type')=='pdf_page_units':
+            summary={'document_type':'pdf_page_units','status':res['status'],'archive_allowed':False}
+            if res['status']=='grouping_required':
+                summary['pages']=[{k:page[k] for k in ('page_number','classification','extraction_status')}
+                    for page in res.get('pages',[])]
+            else:
+                summary['units']=[{k:unit[k] for k in ('page_number','page_numbers','classification','status') if k in unit}
+                    for unit in res['units']]
+            print(summary)
+        elif res.get("status") == "privacy_blocked":
             print(res)
         else:
             print(name,res)
@@ -827,7 +836,12 @@ def main():
         except ReceiptPrivacyBlocked:
             print({"status":"privacy_blocked","gemini_allowed":False})
     elif args.cmd=="analyze":
-        s,db,ai=make(); data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
+        data=open(args.image,"rb").read(); mime=mimetypes.guess_type(args.image)[0] or "image/jpeg"
+        from .receipt_pdf_units import is_pdf
+        if is_pdf(data,mime):
+            print({'status':'privacy_blocked','reason':'pdf_requires_page_units','gemini_allowed':False})
+            return
+        s,db,ai=make()
         try:
             result=ai.analyze_receipt(
                 data,mime,db.categories(),known_source_classification=args.source_classification,
