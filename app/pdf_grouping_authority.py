@@ -140,9 +140,16 @@ class DriveGroupingStore:
         try:
             self.preflight()
             payload, tag = self.transport.read_versioned()
-            if len(payload) > MAX_STATE_BYTES:
+            from .conditional_drive_state_v2 import strong_etag
+            if not isinstance(payload,bytes) or len(payload) > MAX_STATE_BYTES or not strong_etag(tag):
                 raise ValueError()
-            value = validate(json.loads(payload), self.binding)
+            def unique(pairs):
+                result={}
+                for key,item in pairs:
+                    if key in result:raise ValueError()
+                    result[key]=item
+                return result
+            value = validate(json.loads(payload,object_pairs_hook=unique), self.binding)
             self.payload, self.tag, self.value = payload, tag, deepcopy(value)
             return deepcopy(value)
         except StateError:

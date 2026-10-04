@@ -30,11 +30,11 @@ class MemoryTransport:
         if self.fail_read:
             raise StateError('state_drive_read_failed')
         with self.lock:
-            return self.payload, str(self.tag)
+            return self.payload, '"memory-'+str(self.tag)+'"'
 
     def replace_versioned(self, expected, tag, proposed):
         with self.lock:
-            if expected != self.payload or tag != str(self.tag):
+            if expected != self.payload or tag != '"memory-'+str(self.tag)+'"':
                 raise StateError('state_changed_since_read')
             if self.fail_write:
                 raise StateError('state_drive_write_unknown')

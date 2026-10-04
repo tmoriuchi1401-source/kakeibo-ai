@@ -52,21 +52,23 @@ def _payload(raw, categories):
         if type(amount) is not int or not 1 <= amount <= 99999999:
             raise ValueError()
         merchant, note = value["merchant"], value["note"]
+        payment = value.get("payment", "")
         major, minor = value["major"], value["minor"]
         if not all(isinstance(x, str) for x in (merchant, note, major, minor)):
             raise ValueError()
-        if len(merchant) > 100 or len(note) > 300 or value["payment"] != "現金":
+        if (len(merchant) > 100 or len(note) > 300 or not isinstance(payment, str)
+                or len(payment)>50):
             raise ValueError()
         if (major, minor) != ("", "") and (major, minor) not in categories:
             raise ValueError()
         if (major, minor) == ("", ""):
             major, minor = FALLBACK
-        return day, amount, merchant, note, major, minor
+        return day, amount, merchant, note, major, minor, payment
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise StateError("manual_payload_invalid") from None
 
 
-def execute(db, request_id, *, refresh_projection=lambda: {}):
+def execute(db, request_id, *, refresh_projection=lambda: {}, before_append=None):
     if not UUID.fullmatch(request_id):
         raise StateError("manual_request_id_invalid")
     requests = _requests(db)
@@ -77,12 +79,19 @@ def execute(db, request_id, *, refresh_projection=lambda: {}):
         return {"manual_ignored": 1}
     try:
         payload = json.loads(row[2])
+        # A PDF-bound request is admitted only by its source/authority wrapper.
+        # The ordinary manual workflow cannot trust a marker supplied by cells.
+        if isinstance(payload, dict) and 'pdf_unit' in payload and before_append is None:
+            raise StateError('manual_pdf_verifier_required')
         if isinstance(payload, dict) and "target" in payload:
             target = str(payload["target"])
             if not UUID.fullmatch(target) or target == request_id or target not in requests:
                 raise StateError("manual_cancel_target_invalid")
             target_num, original = requests[target]
-            if "target" in json.loads(original[2]):
+            original_payload = json.loads(original[2])
+            if 'pdf_unit' in original_payload:
+                raise StateError('manual_pdf_cancel_forbidden')
+            if "target" in original_payload:
                 raise StateError("manual_cancel_chain_invalid")
             row[1] = "running"
             _update(db, number, row)
@@ -107,21 +116,31 @@ def execute(db, request_id, *, refresh_projection=lambda: {}):
         categories = set(db.categories())
         if FALLBACK not in categories:
             raise StateError("manual_fallback_category_missing")
-        day, amount, merchant, note, major, minor = _payload(row[2], categories)
+        day, amount, merchant, note, major, minor, payment = _payload(row[2], categories)
         row[1] = "running"
         _update(db, number, row)
         ledger_id = expense_id(request_id)
+        expected=[ledger_id, day, merchant, "手入力", amount, major, minor, payment,
+            "manual", "", "manual:" + request_id, note, "active"]
         records = db.expense_records()
         entry = records.get(ledger_id)
         if entry:
             _, values = entry
             if values[8] != "manual" or values[10] != "manual:" + request_id:
                 raise StateError("manual_expense_identity_conflict")
+            from .receipt_confirmation import same_row
+            if not same_row('支出明細',values,expected):
+                raise StateError('manual_expense_content_conflict')
         else:
             db.ensure_expense_status_column()
-            db.append_raw("支出明細", [[ledger_id, day, merchant, "手入力", amount,
-                major, minor, "現金", "manual", "", "manual:" + request_id, note, "active"]])
-            if ledger_id not in db.expense_index():
+            # PDF/manual caller can recheck durable source + current owner
+            # snapshot immediately before the established writer appends.
+            if before_append is not None:
+                before_append(request_id, expected)
+            db.append_raw("支出明細", [expected])
+            from .receipt_confirmation import same_row
+            readback=db.expense_records().get(ledger_id)
+            if not readback or not same_row('支出明細',readback[1],expected):
                 raise StateError("manual_expense_readback_failed")
         row[1], row[4] = "complete", ledger_id
         _update(db, number, row)

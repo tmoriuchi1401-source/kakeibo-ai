@@ -206,11 +206,32 @@ class DriveGroupingV2Store:
         self.preflight=preflight;self.payload=self.tag=None
 
     def load(self):
+        return self.load_for(None)
+
+    def load_for(self,source_id):
+        """An unrelated PDF does not inherit this single-source migration.
+
+        Always check both private ACLs, schemas and the migration binding. The
+        migrated source also requires its exact current legacy human intent;
+        revoking that source cannot grant or revoke a different PDF's intent.
+        """
         try:
             self.preflight();legacy=self.legacy_store.load()
             payload,tag=self.transport.read_versioned()
-            if len(payload)>MAX_STATE_BYTES:raise ValueError()
-            value=validate_current(json.loads(payload),self.binding,legacy,self.legacy_store.payload,self.legacy_file_id)
+            from .conditional_drive_state_v2 import strong_etag
+            if not isinstance(payload,bytes) or len(payload)>MAX_STATE_BYTES or not strong_etag(tag):raise ValueError()
+            def unique(pairs):
+                result={}
+                for key,item in pairs:
+                    if key in result:raise ValueError()
+                    result[key]=item
+                return result
+            value=validate(json.loads(payload,object_pairs_hook=unique),self.binding)
+            migration=value['migration']
+            if (migration['legacy_file_id']!=self.legacy_file_id or
+                    migration['legacy_binding']!=self.legacy_store.binding):raise ValueError()
+            if source_id is None or _digest(source_id) in value['records']:
+                validate_current(value,self.binding,legacy,self.legacy_store.payload,self.legacy_file_id)
             self.payload,self.tag=payload,tag
             return deepcopy(value)
         except StateError:raise

@@ -136,7 +136,7 @@ def test_concurrent_etag_change_rejects_proposal_write_without_retry(local_ocr):
     def concurrent(p,n):
         value=g.store.load();value['generation']+=1
         # Another worker changes the same object, not this store's cached tag.
-        payload=t.payload;tag=str(t.tag)
+        payload,tag=t.read_versioned()
         from app.pdf_grouping_authority import encoded
         t.replace_versioned(payload,tag,encoded(value))
         return evidence.return_value
