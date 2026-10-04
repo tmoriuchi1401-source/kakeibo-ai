@@ -50,6 +50,17 @@ def sheet_date_value(value):
         raise StateError('pdf_date_input_invalid') from None
 
 
+def sheet_amount_value(value):
+    """Preserve an entered whole-yen amount as a number during UI refresh."""
+    if value is None or value == '':
+        return ''
+    from .receipt_reimport import _money
+    amount = _money(str(value).replace(',', ''))
+    if amount is None or amount <= 0:
+        raise StateError('pdf_amount_input_invalid')
+    return int(amount)
+
+
 def span(numbers):
     return 'p'+str(numbers[0]) + ('-p'+str(numbers[-1]) if len(numbers)>1 else '')
 
@@ -220,6 +231,8 @@ class PageReviewSheet(GroupingSheet):
                 value=previous.get((card['token'],field),default) if field in EDITABLE else default
                 if field=='date':
                     value=sheet_date_value(value)
+                if field=='amount':
+                    value=sheet_amount_value(value)
                 rows.append([label,value,SCHEMA,card['token'],json.dumps(identity,separators=(',',':')),field]+['']*8)
                 n=len(rows)
                 region={'sheetId':SHEET_ID,'startRowIndex':n,'endRowIndex':n+1,'startColumnIndex':1,'endColumnIndex':2}
@@ -246,12 +259,15 @@ class PageReviewSheet(GroupingSheet):
                     from .receipt_confirmation_ui import PAYMENTS
                     choices=PAYMENTS
                 if field=='date':
-                    hint='yyyy/mm/ddで入力（例：2026/10/04）。PCの標準pickerは日付のダブルクリック／@date。原本の支払日を入力してください。空欄可。'
+                    hint='スマホではyyyy/mm/ddで直接入力（例：2026/10/04）。原本の支払日を入力してください。入力途中は空欄可。'
                     requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'DATE_IS_VALID'},'strict':True,'showCustomUi':True,'inputMessage':hint}}},
                         {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'DATE','pattern':'yyyy/mm/dd'}},'note':hint},'fields':'userEnteredFormat.numberFormat,note'}}])
                 if field=='amount':
-                    requests.extend([{'setDataValidation':{'range':region,'rule':{'condition':{'type':'NUMBER_GREATER','values':[{'userEnteredValue':'0'}]},'strict':True,'showCustomUi':True}}},
-                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'NUMBER','pattern':'#,##0.########'}}},'fields':'userEnteredFormat.numberFormat'}}])
+                    cell='B'+str(n+1)
+                    rule={'condition':{'type':'CUSTOM_FORMULA','values':[{'userEnteredValue':f'=OR(ISBLANK({cell}),AND(ISNUMBER({cell}),{cell}>0,{cell}=INT({cell})))'}]},
+                          'strict':True,'inputMessage':'円の金額を正の整数で入力。入力途中は空欄可。'}
+                    requests.extend([{'setDataValidation':{'range':region,'rule':rule}},
+                        {'repeatCell':{'range':region,'cell':{'userEnteredFormat':{'numberFormat':{'type':'NUMBER','pattern':'#,##0'}}},'fields':'userEnteredFormat.numberFormat'}}])
                 if field=='medical_action':
                     values={f:previous.get((card['token'],f),v) for f,_,v in card['rows']}
                     # Real validator governs whether confirm appears in dropdown.
