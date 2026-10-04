@@ -176,11 +176,12 @@ function ccRefresh_(ss,key) {
 }
 function ccPaint_(sheet,state) {
   const fixed=state.fixed;
-  const impact=(fixed?'固定対象 '+fixed.count+'件 / '+Number(fixed.amount).toLocaleString('ja-JP')+'円を確定します。':'「対象件数を確認」で今回の変更対象を固定します。')+
+  const ready=ccHasTargets_(state);
+  const impact=(ready?'固定対象 '+fixed.count+'件 / '+Number(fixed.amount).toLocaleString('ja-JP')+'円を確定します。':fixed?'確定できる未分類明細がありません。明細は変更していません。':'「対象件数を確認」で今回の変更対象を固定します。')+
     (state.scope==='反映しない'?'\n対象月の未分類だけを確定。追加の過去反映は0件です。':'');
   ccSet_(sheet.getRange('A21'),impact);
   ccSet_(sheet.getRange('A23'),(state.category||'カテゴリ未選択')+' / 自動分類 '+state.future+'\n過去：'+state.scope);
-  const action=fixed?'この内容で確定':'対象件数を確認';
+  const action=ready?'この内容で確定':'対象件数を確認';
   ccDropdown_(sheet,'A24',['操作を選択',action]);ccSet_(sheet.getRange('A24'),'操作を選択');
   ccSet_(sheet.getRange('A25'),state.message||'内容を確認して、最後に操作を選んでください。');
   ccFit_(sheet,25,sheet.getRange('A25').getDisplayValue());
@@ -212,6 +213,7 @@ function ccPayload_(proof,pair) {
   return ccCanonical_({kind:'service',source:ccText_(proof.source),account_alias:ccText_(proof.account_alias),billing_name:ccText_(proof.merchant),merchant:'',product_id:'',product_name:'',amount:null,category:pair,rule_id:'adhoc',revision:1,saved_rule:false});
 }
 function ccCapture_(rows,key,rawCategory,stage,state) {
+  if(stage==='confirm' && !ccHasTargets_(state))throw Error('確定できる未分類明細がありません。先に対象件数を確認してください。');
   const output=rows.map(r=>r.slice(0,12)),rule=ccSection_(output,0),past=ccSection_(output,1),confirm=ccSection_(output,2);
   // Bind the old preview-only header. Never interpret F as an all-month apply.
   output[rule.first-1][5]='過去分の候補に追加';
@@ -239,13 +241,14 @@ function ccPrepare_(ss,action) {
   const sheet=ss.getSheetByName(CC_UI),state=ccState_(sheet);
   if(state.pending)throw Error('受付済みです。完了をお待ちください。');
   if(['category','future','scope'].some(k=>sheet.getRange(CC_CELLS[k]).getDisplayValue()!==state[k]))throw Error('選択の保存を待ってから、もう一度操作してください。');
+  if(action==='この内容で確定' && !ccHasTargets_(state))throw Error('確定できる未分類明細がありません。先に対象件数を確認してください。');
   const model=ccModel_(ss),candidate=model.candidates.find(c=>c.key===state.key);
   if(!candidate || candidate.sig!==state.sig || state.month!==model.month)throw Error('取引または対象月が変わりました。一覧を更新してください。');
   const choices=sheet.getRange(2,4,ss.getSheetByName('_支出明細カテゴリ候補').getLastRow()-1,2).getDisplayValues();
   const pair=choices.find(r=>r[0]===state.category);if(!pair || !['ON','OFF'].includes(state.future) || !['反映しない','対象月のみ','全期間'].includes(state.scope))throw Error('カテゴリと設定を選んでください。');
   const stage=action==='対象件数を確認'?'preview':'confirm';
   if(stage==='confirm' && !state.fixed)throw Error('先に対象件数を確認してください。');
-  if(state.fixed && !ccFixedValid_(ss,state))throw Error('固定対象が変更されています。再確認してください。');
+  if(state.fixed && ccHasTargets_(state) && !ccFixedValid_(ss,state))throw Error('固定対象が変更されています。再確認してください。');
   state.stage=stage;state.proof=candidate.proof;
   state.before=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).slice(1).map(r=>r[0]);
   // UI-only category entry is retained in the legacy surface. No approvals
@@ -260,7 +263,7 @@ function ccAccepted_(ss,id) {
 }
 function ccFixedValid_(ss,state) {
   const fixed=state.fixed;if(!fixed)return true;
-  if(!fixed.count)return true;
+  if(!ccHasTargets_(state))return false;
   const row=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).find(r=>r[0]===fixed.id);
   return !!row && row[2]==='previewed' && row[8]===fixed.digest && Number(row[6])===fixed.count && Number(row[7])===Number(fixed.amount) &&
     ccPreviewBound_(ss,state,row) && ccCanonical_(ccFixedIds_(ss,row[0]))===ccCanonical_(fixed.ids);
@@ -270,6 +273,7 @@ function ccFixedIds_(ss,id) {
 }
 function ccPreviewBound_(ss,state,row) {
   const payload=ccJson_(row[3]);
+  if(!Number.isInteger(Number(row[6])) || Number(row[6])<=0)return false;
   if(ccCanonical_(ccIdentity_({...payload,merchant:payload.billing_name||payload.merchant}))!==ccCanonical_(ccIdentity_(state.proof)) ||
     !Array.isArray(payload.category) || payload.category.join(' ＞ ')!==state.category || String(row[9]).toUpperCase()!=='FALSE')return false;
   if(state.scope==='全期間')return row[4]==='' && row[5]==='';
@@ -277,8 +281,33 @@ function ccPreviewBound_(ss,state,row) {
   if(row[4]!==state.month+'-01' || row[5]!==state.month+'-'+String(last).padStart(2,'0'))return false;
   const targets=ccRows_(ss.getSheetByName('カテゴリ過去反映対象'),15).slice(1).filter(r=>r[0]===row[0]);
   return targets.length===Number(row[6]) && new Set(targets.map(r=>r[1])).size===targets.length &&
-    targets.every(r=>String(r[3]).slice(0,7)===state.month && r[5]==='その他' && r[6]==='未分類' &&
+    targets.every(r=>ccTargetMonth_(r[3])===state.month && r[5]==='その他' && r[6]==='未分類' &&
       r[7]===payload.category[0] && r[8]===payload.category[1] && r[10]==='previewed');
+}
+function ccHasTargets_(state) {
+  return !!state.fixed && Number.isInteger(Number(state.fixed.count)) && Number(state.fixed.count)>0;
+}
+function ccTargetMonth_(value) {
+  // Fixed targets retain the runner's raw ledger date and unchanged digest.
+  // DisplayValues renders an unformatted native Sheets serial as numeric text.
+  const text=String(value).trim();
+  if(/^\d+(?:\.\d+)?$/.test(text)) {
+    const serial=Number(text);
+    if(!Number.isFinite(serial) || serial<0 || serial>=2958466)return '';
+    return new Date(Date.UTC(1899,11,30)+Math.floor(serial)*86400000).toISOString().slice(0,7);
+  }
+  return text.replace(/\//g,'-').slice(0,7);
+}
+function ccEmptyReason_(ss,state) {
+  const candidate=ccModel_(ss).candidates.find(c=>c.key===state.key);
+  if(!candidate)return '対象月・取引の状態が変わった可能性があります。一覧を更新してください。';
+  const members=candidate.members||[],fallback=members.filter(e=>e[5]==='その他' && e[6]==='未分類');
+  const relevant=state.scope==='全期間'?fallback:fallback.filter(e=>ccTargetMonth_(e[1])===state.month);
+  if(!fallback.length && members.length)return '一致する明細はすでに分類済みです。';
+  if(!relevant.length)return state.scope==='全期間'?'一致する未分類明細がありません。':'対象月に未分類明細がありません。';
+  const ids=new Set(relevant.map(e=>String(e[10])));
+  const held=ccRows_(ss.getSheetByName('取込データ'),12).some(r=>ids.has(String(r[0])) && /照合/.test(String(r[11])));
+  return held?'照合待ちの明細は安全確認のため対象外です。照合状態を確認してください。':'既存の安全条件により対象外です。取引・処理結果を確認してください。';
 }
 function ccSync_(ss) {
   const sheet=ss.getSheetByName(CC_UI);if(!sheet)return;
@@ -294,12 +323,12 @@ function ccSync_(ss) {
     else{
       const legacyRows=ccRows_(ss.getSheetByName(CATEGORY_UI),12);
       const empty=legacyRows.some(r=>r[7]==='displayed:'+state.key && String(r[0]).includes('preview_empty'));
-      if(!selected.length && empty){state.fixed={id:'',count:0,amount:0,digest:''};state.message='反映対象は0件です。設定を確認して確定してください。';}
+      if(!selected.length && empty){state.fixed={id:'',count:0,amount:0,digest:''};state.message='確定できる未分類明細がありません。'+ccEmptyReason_(ss,state);}
       else state.message='対象を固定できませんでした。旧シートの処理結果を確認してください。';
     }
     delete state.pending;ccSave_(sheet,state);ccPaint_(sheet,state);return;
   }
-  if(!state.fixed){delete state.pending;state.message='固定対象のない確定受付です。実行記録を確認してください。';ccSave_(sheet,state);ccPaint_(sheet,state);return;}
+  if(!ccHasTargets_(state)){delete state.pending;state.message='確定できる固定対象がないため、確認済みにはしていません。実行記録を確認してください。';ccSave_(sheet,state);ccPaint_(sheet,state);return;}
   if(state.fixed.count>0) {
     const fixed=ccRows_(ss.getSheetByName('カテゴリ過去反映要求'),11).find(r=>r[0]===state.fixed.id);
     if(!fixed || fixed[2]!=='complete'){delete state.pending;state.message='反映が完了していません。対象と処理結果を確認してください。';ccSave_(sheet,state);ccPaint_(sheet,state);return;}

@@ -148,3 +148,21 @@ def test_captured_confirmation_does_not_expand_to_new_matching_expense():
     result=execute_request(db,REQUEST,env=ENV,store=confirm,refresh_projection=lambda:{})
     assert result['category_expenses_applied']==2
     assert db.expenses['M-later'][1][5:7]==['その他','未分類']
+
+
+@pytest.mark.parametrize('scope',['反映しない','対象月のみ','全期間'])
+def test_zero_preview_off_never_mutates_ledger_rules_or_requests_and_cannot_capture_confirm(scope):
+    db,row,state=prepare();state.update(scope=scope,future='OFF')
+    for tx in db.imports:
+        if tx[5]=='請求名':tx[11]='レシート等との照合待ち'
+    before=deepcopy((db.expenses,db.rule_rows,db.requests,db.targets,db.category_updates))
+    preview=Store(capture(db,row,state,'preview'))
+    result=execute_request(db,REQUEST,env=ENV,store=preview,refresh_projection=lambda:{})
+    assert result['category_expenses_applied']==0
+    assert (db.expenses,db.rule_rows,db.requests,db.targets,db.category_updates)==before
+    assert execute_request(db,REQUEST,env=ENV,store=preview,refresh_projection=lambda:{})=={'category_request_ignored':1}
+    assert (db.expenses,db.rule_rows,db.requests,db.targets,db.category_updates)==before
+    state['fixed']={'id':'','count':0,'amount':0,'digest':''}
+    with pytest.raises(subprocess.CalledProcessError):
+        capture(db,row,state,'confirm')
+    assert (db.expenses,db.rule_rows,db.requests,db.targets,db.category_updates)==before

@@ -67,11 +67,12 @@ test('capture clears every other action including bank group approval',()=>{
   const row=()=>Array(12).fill('');const marker=m=>[m,...Array(11).fill('')];
   const selected=row();selected[6]='chosen';const other=row();other[6]='other';other[4]='登録する';other[5]='TRUE';
   const bank=row();bank[5]='TRUE';bank[8]='group';
-  const rows=[marker('■ 1. カテゴリを選ぶ・今後の自動分類'),row(),selected,other,marker('■ 2. 過去分の固定プレビュー'),row(),marker('■ 3. 固定プレビューを確認して反映'),row(),marker('■ 4. 銀行取引をまとめて確認'),row(),bank];
-  const output=ctx.ccCapture_(rows,'chosen','食費｜外食','confirm',{scope:'反映しない',future:'OFF'});
+  const fixed=row();fixed[6]='audit';
+  const rows=[marker('■ 1. カテゴリを選ぶ・今後の自動分類'),row(),selected,other,marker('■ 2. 過去分の固定プレビュー'),row(),marker('■ 3. 固定プレビューを確認して反映'),row(),fixed,marker('■ 4. 銀行取引をまとめて確認'),row(),bank];
+  const output=ctx.ccCapture_(rows,'chosen','食費｜外食','confirm',{scope:'反映しない',future:'OFF',fixed:{id:'audit',count:1}});
   assert.equal(output[2][4],'登録しない');assert.equal(output[2][5],'FALSE');
-  assert.equal(output[3][4],'未選択');assert.equal(output[3][5],'FALSE');assert.equal(output[10][5],'FALSE');
-  assert.equal(rows[3][4],'登録する');assert.equal(rows[10][5],'TRUE');
+  assert.equal(output[3][4],'未選択');assert.equal(output[3][5],'FALSE');assert.equal(output[11][5],'FALSE');
+  assert.equal(rows[3][4],'登録する');assert.equal(rows[11][5],'TRUE');
 });
 
 test('visible unsaved settings stop confirmation before ledger access',()=>{
@@ -138,4 +139,78 @@ test('no-history confirmation without a fixed preview stops before any writes',(
   c.ccModel_=()=>({month:state.month,candidates:[{key:state.key,sig:state.sig}],legacy:{getRange:()=>assert.fail('no writes')}});
   const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:{getLastRow:()=>2}};
   assert.throws(()=>c.ccPrepare_(ss,'この内容で確定'),/先に対象件数/);
+});
+
+test('zero and invalid preview counts never offer or capture confirmation',()=>{
+  for(const count of [0,-1,0.5,'NaN',Infinity]){
+    const c=freshContext(),values={},dropdowns={};
+    c.ccDropdown_=(_s,a1,options)=>{dropdowns[a1]=options;};c.ccFit_=()=>{};
+    const sheet={getRange:a1=>({setValue:value=>{values[a1]=value;},getDisplayValue:()=>values[a1]||''})};
+    const state={scope:'反映しない',future:'ON',category:'食費 ＞ 外食',fixed:{id:'audit',count,amount:0}};
+    c.ccPaint_(sheet,state);
+    assert.ok(!dropdowns.A24.includes('この内容で確定'));
+    assert.match(values.A21,/確定できる未分類明細がありません/);
+    assert.throws(()=>c.ccCapture_([],'key','食費｜外食','confirm',state),/確定できる未分類/);
+    assert.equal(c.ccFixedValid_({getSheetByName:()=>assert.fail('no request access')},state),false);
+  }
+});
+
+test('server prepare rejects zero targets before any model, ledger or queue writes',()=>{
+  const c=freshContext();
+  const state={key:'key',category:'食費 ＞ 外食',future:'OFF',scope:'反映しない',fixed:{id:'',count:0,digest:''}};
+  const panel={getRange:a1=>({getValue:()=>JSON.stringify(state),getDisplayValue:()=>({A15:state.category,A17:state.future,A20:state.scope})[a1]})};
+  c.ccModel_=()=>assert.fail('no model access or mutation');
+  assert.throws(()=>c.ccPrepare_({getSheetByName:()=>panel},'この内容で確定'),/確定できる未分類/);
+});
+
+test('zero confirmation queue completion never logs or removes a candidate, including replay',()=>{
+  const c=freshContext();c.CATEGORY_BUSY=['running'];c.CATEGORY_QUEUE='queue';
+  let state={stage:'confirm',pending:'uuid',key:'key',fixed:{id:'',count:0}};
+  const panel={getRange:()=>({getValue:()=>JSON.stringify(state),setValue:v=>{if(typeof v==='string' && v.startsWith('{'))state=JSON.parse(v);}})};
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:name==='queue'?{getRange:()=>({getDisplayValues:()=>[['uuid','complete']]})}:assert.fail('no log/request access')};
+  c.ccPaint_=()=>{};c.ccModel_=()=>assert.fail('candidate retained');c.ccRefresh_=()=>assert.fail('no removal');
+  c.ccSync_(ss);assert.equal(state.pending,undefined);assert.equal(state.key,'key');
+  assert.match(state.message,/確認済みにはしていません/);
+  c.ccSync_(ss);assert.equal(state.key,'key');
+});
+
+test('empty preview retains candidate and explains reconciliation without enabling confirmation',()=>{
+  const c=freshContext();c.CATEGORY_BUSY=['running'];c.CATEGORY_QUEUE='queue';c.CATEGORY_UI='legacy';
+  let state={stage:'preview',pending:'uuid',key:'key',before:[]};
+  const legacy=Array(12).fill('');legacy[0]='condition\npreview_empty:';legacy[7]='displayed:key';
+  const panel={getRange:()=>({getValue:()=>JSON.stringify(state),setValue:v=>{if(typeof v==='string' && v.startsWith('{'))state=JSON.parse(v);}})};
+  const rows=values=>({getLastRow:()=>values.length,getRange:()=>({getDisplayValues:()=>values})});
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:name==='queue'?{getRange:()=>({getDisplayValues:()=>[['uuid','complete']]})}:name==='legacy'?rows([legacy]):rows([['header']])};
+  c.ccPaint_=()=>{};c.ccEmptyReason_=()=> '照合待ちの明細は安全確認のため対象外です。';
+  c.ccSync_(ss);assert.equal(state.key,'key');assert.equal(state.pending,undefined);
+  assert.equal(state.fixed.count,0);assert.equal(c.ccHasTargets_(state),false);assert.match(state.message,/照合待ち/);
+  c.ccSync_(ss);assert.equal(state.key,'key');
+});
+
+test('zero reason uses candidate-specific current-month rows, never changes safety flags',()=>{
+  const c=freshContext(),row=['id','2026-09-14','','',923,'その他','未分類','','','','import'];
+  let members=[row];c.ccModel_=()=>({candidates:[{key:'key',members}]});
+  const tx=Array(12).fill('');tx[0]='import';tx[11]='au PAY実支出。レシート等との照合待ち';
+  const ss={getSheetByName:()=>({getLastRow:()=>1,getRange:()=>({getDisplayValues:()=>[tx]})})};
+  const state={key:'key',month:'2026-09',scope:'反映しない'};
+  assert.match(c.ccEmptyReason_(ss,state),/照合待ち/);assert.match(tx[11],/照合待ち/);
+  members=[row.slice()];members[0][1]='2026-08-31';
+  assert.match(c.ccEmptyReason_(ss,state),/対象月に未分類明細がありません/);
+  members=[row.slice()];members[0][5]='食費';members[0][6]='外食';
+  assert.match(c.ccEmptyReason_(ss,state),/すでに分類済み/);
+  members=[row];tx[11]='';assert.match(c.ccEmptyReason_(ss,state),/安全条件/);
+});
+
+test('fixed-target month accepts raw serial display without changing snapshot or digest',()=>{
+  const c=freshContext(),serial=(Date.UTC(2026,7,10)-Date.UTC(1899,11,30))/86400000;
+  assert.equal(c.ccTargetMonth_(serial),'2026-08');assert.equal(c.ccTargetMonth_(String(serial+0.99999)),'2026-08');
+  assert.equal(c.ccTargetMonth_('2026/08/10'),'2026-08');assert.equal(c.ccTargetMonth_(2958466),'');
+  const proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC'};
+  const payload={...proof,billing_name:'ABC',merchant:'',category:['食費','外食']};
+  const request=['audit','','previewed',JSON.stringify(payload),'2026-08-01','2026-08-31','1','101','digest','FALSE'];
+  const target=['audit','M-1',2,String(serial),101,'その他','未分類','食費','外食','','previewed'];
+  const ss={getSheetByName:()=>({getLastRow:()=>2,getRange:()=>({getDisplayValues:()=>[['header'],target]})})};
+  const state={scope:'反映しない',month:'2026-08',category:'食費 ＞ 外食',proof};
+  assert.equal(c.ccPreviewBound_(ss,state,request),true);assert.equal(target[3],String(serial));assert.equal(request[8],'digest');
+  request[6]='0';assert.equal(c.ccPreviewBound_(ss,state,request),false);
 });
