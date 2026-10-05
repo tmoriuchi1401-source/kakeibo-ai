@@ -66,3 +66,10 @@ def test_page_mode_guard_rejects_unbounded_unknown_batch_before_credentials():
     opener=Mock()
     with pytest.raises(StateError,match='batch_required'):runner.execute(env,'a'*40,opener=opener,approve=Mock())
     opener.assert_not_called()
+
+def test_independent_diagnosis_does_not_create_a_successful_p2_proof(local_ocr,key,monkeypatch):
+    value,summary,env,expected,calls,factory=run_model(key,monkeypatch,'page_diagnose')
+    assert value['investigation_only'] and value['gemini_model']=='gemini-3.6-flash'
+    assert value['authority_unchanged'] and value['cloud_writes']==value['medical_calls']==value['source_moves']==0
+    assert calls.call_count==6 and all(not r['accounting_allowed'] for r in value['results'])
+    with pytest.raises(StateError,match='proof_stale'):actions.check_page_p2(value,env,expected)

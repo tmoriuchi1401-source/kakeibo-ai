@@ -58,7 +58,7 @@ def require_context(env,checkout_sha):
             or env.get('GITHUB_WORKFLOW_REF')!=REPO+'/'+WORKFLOW+'@'+str(branch)
             or not re.fullmatch(r'[0-9a-f]{40}',env.get('PDF_READONLY_APPROVED_SHA',''))
             or checkout_sha!=env['PDF_READONLY_APPROVED_SHA']
-            or env.get('PDF_READONLY_MODE') not in {'preflight','p2','remaining','page_p2','page_remaining','page_replay','page_multi'}
+            or env.get('PDF_READONLY_MODE') not in {'preflight','p2','remaining','page_p2','page_remaining','page_replay','page_multi','page_diagnose'}
             or env.get('PDF_READONLY_CONFIRM')!='READ_ONLY'
             or any(env.get(k)!='false' for k in ('PDF_ACCOUNTING_ENABLED','PDF_MEDICAL_ENABLED','PDF_ARCHIVE_ENABLED'))
             or env.get('ACTIONS_STEP_DEBUG')=='true' or env.get('RUNNER_DEBUG')=='1'
@@ -66,9 +66,11 @@ def require_context(env,checkout_sha):
             or env.get('GOOGLE_SERVICE_ACCOUNT_FILE') or env.get('GOOGLE_APPLICATION_CREDENTIALS')
             or env.get('GOOGLE_GENAI_USE_VERTEXAI') or env.get('GEMINI_BASE_URL')):
         raise StateError('readonly_runner_context_required')
-    if env['PDF_READONLY_MODE'] in {'remaining','page_remaining','page_replay','page_multi'} and not re.fullmatch(r'[1-9][0-9]*',env.get('PDF_READONLY_P2_RUN_ID','')):
+    if env['PDF_READONLY_MODE'] in {'remaining','page_remaining','page_replay'} and not re.fullmatch(r'[1-9][0-9]*',env.get('PDF_READONLY_P2_RUN_ID','')):
         raise StateError('readonly_p2_proof_required')
     if env['PDF_READONLY_MODE']=='page_remaining' and env.get('PDF_READONLY_PAGE_BATCH') not in {'p3-p6','p7-p10','p11-p14'}:
+        raise StateError('readonly_page_batch_required')
+    if env['PDF_READONLY_MODE']=='page_diagnose' and env.get('PDF_READONLY_PAGE_BATCH') not in {'p3-p6','p7-p10','p11-p14','problem-pages'}:
         raise StateError('readonly_page_batch_required')
 
 
@@ -157,7 +159,7 @@ def prior_p2(env,pem,expected,get=github_get):
 
 
 def check_p2(proof,env,expected):
-    if env['PDF_READONLY_MODE'] in {'page_remaining','page_replay','page_multi'}:
+    if env['PDF_READONLY_MODE'] in {'page_remaining','page_replay'}:
         from .page_receipt_actions import check_page_p2
         return check_page_p2(proof,env,expected)
     rows=proof.get('results',[])
@@ -303,7 +305,7 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
     store,source,categories,expected,pem=opener(env)
     initial=store.load();initial_bytes=store.payload;initial_tag=store.tag
     if env['PDF_READONLY_MODE']=='preflight':return None,{'status':'preflight_ok','gemini_calls':0}
-    if env['PDF_READONLY_MODE'] in {'page_p2','page_remaining','page_replay','page_multi'}:
+    if env['PDF_READONLY_MODE'] in {'page_p2','page_remaining','page_replay','page_multi','page_diagnose'}:
         from .page_receipt_actions import execute_pages
         return execute_pages(env,checkout_sha,store,source,categories,expected,pem,prior=prior)
     if env['PDF_READONLY_MODE']=='remaining':prior(env,pem,expected)

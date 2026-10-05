@@ -60,7 +60,7 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
     from .pdf_unit_readonly_analysis import encrypted
     initial=store.load();initial_bytes,initial_tag=store.payload,store.tag
     mode=env['PDF_READONLY_MODE']
-    proof=prior(env,pem,expected) if mode in {'page_remaining','page_replay','page_multi'} else None
+    proof=prior(env,pem,expected) if mode in {'page_remaining','page_replay'} else None
     current=lambda sid,n:load_page(store,expected,sid,n)
     # No live Human General state has been provisioned or authenticated here.
     # Never promote legacy human-normal answers to a new external-AI scope.
@@ -70,10 +70,13 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
         from .page_receipt_real_fixture import real_image_fixture
         fixture,current,analysis_source,fixture_provenance=real_image_fixture(current,source,expected)
     permission=lambda p,png:authorize_payload(p,png,current_page=current,load_source=analysis_source,load_grant=no_grant)
-    analyzer=factory(env['GEMINI_API_KEY'],env.get('NORMAL_RECEIPT_GEMINI_MODEL','gemini-3.5-flash-lite'),permission)
+    # Independent investigation uses the ordinary parser's existing model.
+    # It never relaxes the successful-p2 proof required by expansion/replay.
+    model='gemini-3.6-flash' if mode in {'page_diagnose','page_multi'} else env.get('NORMAL_RECEIPT_GEMINI_MODEL','gemini-3.5-flash-lite')
+    analyzer=factory(env['GEMINI_API_KEY'],model,permission)
     runner=ReadonlyPageReceipts(current,analysis_source,no_grant,analyzer,categories)
     rows=[]
-    batch={'p3-p6':range(3,7),'p7-p10':range(7,11),'p11-p14':range(11,15)}
+    batch={'p3-p6':range(3,7),'p7-p10':range(7,11),'p11-p14':range(11,15),'problem-pages':(2,3,5,9,13)}
     for number in ([1,1] if mode=='page_multi' else [2] if mode in {'page_p2','page_replay'} else batch[env['PDF_READONLY_PAGE_BATCH']]):
         previous=rows[0] if mode=='page_multi' and rows else proof['results'][0] if mode=='page_replay' else None
         result=runner.run(fixture.source.source_file_id if mode=='page_multi' else expected['source_file_id'],number,previous=previous)
@@ -98,6 +101,7 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
         **{k:expected[k] for k in ('source_content_hash','proposal_digest','confirmation_digest','grouping_revision')},
         'authority_unchanged':True,'cloud_writes':0,'medical_calls':0,'source_moves':0,
         'p1_rendered':0,'p1_submitted':0,'gemini_calls':analyzer.calls,'results':rows,'budgets':runner.budget.metadata(),
+        'gemini_model':model,'investigation_only':mode in {'page_diagnose','page_multi'},
         'accounting_authority':False,'new_human_general_authority_created':False}
     if fixture_provenance is not None:
         value.update(real_image_fixture=fixture_provenance,real_image_replay_verified=real_replay)

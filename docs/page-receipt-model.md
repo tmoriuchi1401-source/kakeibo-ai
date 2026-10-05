@@ -97,6 +97,14 @@ independent paired readings must preserve count, frozen manifest, spatial IDs,
 transaction values and item ownership. Any instability stops the test. This is
 an evaluation fixture, not an intake or posting route.
 
+`page_diagnose` independently inspects a fixed bounded batch (or the five
+problem pages) with the ordinary parser's existing `gemini-3.6-flash` model.
+`page_multi` uses the same explicit diagnostic model; there is no automatic
+model fallback. These investigation modes do not certify p2, release held
+units or authorize expansion/posting. The successful-p2 proof checks of
+`page_remaining` and `page_replay` remain unchanged and reject investigative
+artifacts. All source, authority, exact-payload and Google GET fences still apply.
+
 The new adapter uses Gemini's documented integer `[ymin,xmin,ymax,xmax]` 0..1000
 wire coordinates and strictly converts them into canonical normalized boxes.
 There is no clamping, inferred geometry, alternate-schema retry or relaxed

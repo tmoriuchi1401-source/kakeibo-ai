@@ -9,7 +9,7 @@ on:
         required: true
       mode:
         type: choice
-        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay, page_multi]
+        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay, page_multi, page_diagnose]
         default: p2
         required: true
       confirm:
@@ -23,7 +23,7 @@ on:
       page_batch:
         description: New page-array model only; bounded sequential batch after page_p2
         type: choice
-        options: [p3-p6, p7-p10, p11-p14]
+        options: [p3-p6, p7-p10, p11-p14, problem-pages]
         default: p3-p6
         required: false
 permissions:
