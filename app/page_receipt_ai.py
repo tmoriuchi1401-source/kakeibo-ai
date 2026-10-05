@@ -11,6 +11,48 @@ from .receipt_text_extraction import _extract_receipt_text
 from .medical_receipt_privacy import classify_receipt_text
 from .receipt_privacy_gate import evaluate_receipt_privacy,require_receipt_ai_permission,ReceiptPrivacyBlocked
 from .receipt_pdf_units import MAX_PAGE_PIXELS,is_pdf
+from pydantic import BaseModel,ConfigDict,Field,model_validator
+from typing import Annotated
+from .models import ReceiptResult
+
+Coordinate=Annotated[int,Field(strict=True,ge=0,le=1000)]
+
+class WireLocatedReceipt(BaseModel):
+    """Gemini's documented page-relative [ymin,xmin,ymax,xmax] geometry."""
+    model_config=ConfigDict(extra='forbid',hide_input_in_errors=True)
+    bbox:list[Coordinate]=Field(min_length=4,max_length=4)
+    receipt:ReceiptResult
+    item_boxes:list[list[Coordinate]]=Field(default_factory=list,max_length=300)
+    @model_validator(mode='after')
+    def strict_geometry(self):
+        for box in [self.bbox,*self.item_boxes]:
+            if (len(box)!=4 or any(type(x) is not int or not 0<=x<=1000 for x in box)
+                    or box[0]>=box[2] or box[1]>=box[3]):raise ValueError('wire_bbox_invalid')
+        return self
+
+class WirePageExtraction(BaseModel):
+    model_config=ConfigDict(extra='forbid',hide_input_in_errors=True)
+    receipts:list[WireLocatedReceipt]=Field(min_length=1,max_length=20)
+    separation_complete:bool=Field(strict=True)
+    mixed_page_kind_suspected:bool=Field(strict=True)
+    cross_page_continuation_suspected:bool=Field(strict=True)
+
+def parse_wire_response(raw):
+    value=WirePageExtraction.model_validate_json(raw).model_dump()
+    def box(b):return dict(left=b[1]/1000,top=b[0]/1000,right=b[3]/1000,bottom=b[2]/1000)
+    for located in value['receipts']:
+        located['bbox']=box(located['bbox'])
+        located['item_boxes']=[box(b) for b in located['item_boxes']]
+    return PageReceiptExtraction.model_validate(value)
+
+def wire_value(reading):
+    """Canonical inverse for synthetic adapter tests; never a live fallback."""
+    value=reading.model_dump()
+    def box(b):return [round(b[k]*1000) for k in ('top','left','bottom','right')]
+    for located in value['receipts']:
+        located['bbox']=box(located['bbox'])
+        located['item_boxes']=[box(b) for b in located['item_boxes']]
+    return value
 
 _CLEAR_PERSONAL=re.compile(r'マイナンバー|個人番号|患者氏名|生年月日|被保険者番号|保険証番号|口座番号')
 
@@ -21,7 +63,7 @@ def response_wire_schema():
     the API grammar. This is not a runtime retry/fallback or permission change.
     Local PageReceiptExtraction validation still rejects oversized results.
     """
-    source=PageReceiptExtraction.model_json_schema()
+    source=WirePageExtraction.model_json_schema()
     definitions=source.get('$defs',{})
     def expand(value):
         if isinstance(value,list):return [expand(x) for x in value]
@@ -120,7 +162,7 @@ class GeminiPageReceipts:
             raise StateError('page_render_binding_changed')
         prompt='''日本の一般レシート解析。ページに独立したレシートが複数ある場合はreceipts配列で別取引に分離。
 1枚の場合も配列長1。枚数をユーザーへ質問しない。店舗・日付・明細・totalを別レシートと混ぜず、合算禁止。
-各bboxと各item_boxesは画像全体で正規化したleft/top/right/bottom座標(0..1)。明細ごとの印字領域を示す。
+各bboxと各item_boxesは画像全体の[ymin,xmin,ymax,xmax]整数配列、0..1000に正規化。明細ごとの印字領域を示す。
 座標はレシート内の相対座標ではなく、すべてページ画像全体の同じ座標系。
 bboxはヘッダ・全明細・合計を含むレシート全体の外接領域。すべてのitem_boxesをbboxの中へ含める。
 item_boxesは各明細に一対一で対応し、itemsと同じ順序。位置を確認できなければ分離不完全とする。
@@ -128,6 +170,11 @@ item_boxesは各明細に一対一で対応し、itemsと同じ順序。位置�
 医療/給与等が混在する疑いならmixed_page_kind_suspected=true。分離が不明ならseparation_complete=false。
 支払日YYYY-MM-DD、原本の正のtotal、明細とtotal整合、既存カテゴリだけを使用。新カテゴリ禁止。
 商品/数量/税/値引きを原本から読み、架空の調整額禁止。transaction_kindはpurchase/buyback/unknown。
+商品ごとに税込の明細金額を抽出。数量が読めれば数量も。数量×単価と明細金額を区別する。
+特定商品に対応する値引きはその商品のamountへ反映。全体値引き・クーポンは印字金額を負の明細とし、二重値引き禁止。
+税抜商品が並ぶ場合は、印字された外税を独立明細にしてよい。税率別外税をすべて読む。内税・小計・税対象額を加算しない。
+全商品・値引き・外税を上から下まで読む。差額を埋める架空の調整額は禁止。totalを明細合計で置き換えない。
+同じ取引のカード控え・領収証再掲・小計は別レシートにしない。独立した別取引だけを分離する。
 支払方法と店舗は読めた場合のみ。推測・過去履歴・ファイル名で補完禁止。読めなければ空欄。
 上限は1ページ20枚・各レシート300明細。これを超える/不足する/不確実な分離はseparation_complete=false。
 カテゴリ一覧:
@@ -150,7 +197,7 @@ item_boxesは各明細に一対一で対応し、itemsと同じ順序。位置�
                 self.responses+=1;stage='response_schema'
                 if type(response.output_text) is not str or len(response.output_text.encode('utf-8'))>1024*1024:
                     raise StateError('page_response_resource_limit')
-                readings.append(PageReceiptExtraction.model_validate_json(response.output_text))
+                readings.append(parse_wire_response(response.output_text))
             except Exception as error:
                 from .gemini_errors import gemini_api_status,is_gemini_api_error
                 from pydantic import ValidationError

@@ -113,6 +113,12 @@ class ReadonlyPageReceipts:
                 expected_payload_sha256=fingerprint,render_proof=render_proof)
             if sha256(payload).hexdigest()!=fingerprint:raise StateError('page_payload_changed')
             report.update(payload_sha256=fingerprint,payload_mime='image/png',payload_pages=[page.page_number],privacy=proof)
+            report['reading_diagnostic']=[[{'receipt_index':i,'receipt_count':len(reading.receipts),
+                'bbox':located.bbox.model_dump(),'item_boxes':[b.model_dump() for b in located.item_boxes],
+                'date':located.receipt.date,'total':located.receipt.total,
+                'item_count':len(located.receipt.items),'item_sum':sum(x.amount for x in located.receipt.items),
+                'transaction_kind':located.receipt.transaction_kind}
+                for i,located in enumerate(ordered(reading),1)] for reading in readings]
             if segmentation_issues(*readings):
                 report.update(build_receipt_units(page,*readings,self.categories,previous=previous));return report
             texts,gates=unit_observations(payload,readings[1])

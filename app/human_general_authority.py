@@ -153,6 +153,10 @@ class HumanGeneralConfirmation:
         actor=self.verified_actor(request_id)
         timestamp=self.clock();grant=authority(current,actor,timestamp)
         state=self.store.load();old=state['grants'].get(page_key(current))
+        prior=next((e for e in state['audit'] if e['request_id']==request_id),None)
+        if prior and (prior['operation']!=operation or prior['source_identity']!=page_key(current)
+                      or prior['review_identity']!=current.review_identity):
+            raise StateError('human_general_request_replaced')
         if old:
             try:return validate_grant(old,current) # replay: unchanged time/revision/digest
             except StateError:

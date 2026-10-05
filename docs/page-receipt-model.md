@@ -89,6 +89,20 @@ Existing p2/remaining modes retain their schema/behavior. New diagnostics use
 Existing Secrets stay in hosted runner memory; encrypted artifacts retain one day.
 No PNG, OCR text, raw Gemini response, Secret or Medical data is persisted.
 
+The manual `page_multi` evaluation derives an ephemeral image from fresh,
+individually privacy-checked normal canary pages p11 and p12. Its image SourceRef
+has a separate identity, plus diagnostic parent provenance; it never borrows a
+parent page's identity or AI grant. The image is not uploaded or retained. Two
+independent paired readings must preserve count, frozen manifest, spatial IDs,
+transaction values and item ownership. Any instability stops the test. This is
+an evaluation fixture, not an intake or posting route.
+
+The new adapter uses Gemini's documented integer `[ymin,xmin,ymax,xmax]` 0..1000
+wire coordinates and strictly converts them into canonical normalized boxes.
+There is no clamping, inferred geometry, alternate-schema retry or relaxed
+containment/overlap threshold. Printed external tax and discounts follow the
+ordinary parser's existing extraction rules; item-sum validation is unchanged.
+
 All Google clients in this runner have a GET-only transport fence. The canary has
 no Human General live binding yet: legacy unknown pages are held, not sent. Medical
 p1 is excluded before document open/render/AI. Diagnostic statuses are never

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
 from app import page_receipt_actions as actions,pdf_unit_readonly_analysis as runner
-from app.page_receipt_ai import GeminiPageReceipts
+from app.page_receipt_ai import GeminiPageReceipts,wire_value
 from app.drive_run_state import StateError
 from test_page_receipts import page,reading,CATEGORIES
 from test_private_state_bindings import key
@@ -20,7 +20,7 @@ def run_model(key,monkeypatch,mode='page_p2',proof=None):
         proposal_digest='d'*64,confirmation_digest='c'*64,grouping_revision=2,
         unit_ids={n:'legacy-unit-'+str(n) for n in range(2,7)})
     monkeypatch.setattr(actions,'load_page',lambda _,expected,sid,n:pages[n])
-    calls=Mock(return_value=SimpleNamespace(output_text=reading(2).model_dump_json()))
+    calls=Mock(return_value=SimpleNamespace(output_text=json.dumps(wire_value(reading(2)))))
     factory=Mock(side_effect=lambda key,model,permission:GeminiPageReceipts(
         SimpleNamespace(interactions=SimpleNamespace(create=calls)),model,permission))
     env={**environment(),'GOOGLE_SERVICE_ACCOUNT_JSON':json.dumps({'private_key':key}),

@@ -175,7 +175,7 @@ def test_exact_png_only_two_readings_with_separate_unknown_authority(local_ocr,k
         import base64
         content=kwargs['input'];assert len(content)==2 and content[1]['mime_type']=='image/png'
         assert base64.b64decode(content[1]['data'])==payload and payload!=raw
-        seen.append(content[1]['data']);return SimpleNamespace(output_text=reading(count,len(seen)==2).model_dump_json())
+        seen.append(content[1]['data']);return SimpleNamespace(output_text=json.dumps(ai.wire_value(reading(count,len(seen)==2))))
     permission=lambda page,png:ai.authorize_payload(page,png,current_page=lambda *args:p,load_source=lambda _:raw,load_grant=lambda _:grant)
     analyzer=ai.GeminiPageReceipts(SimpleNamespace(interactions=SimpleNamespace(create=create)),'synthetic-model',permission)
     readings,proof=analyzer.analyze(p,payload,CATEGORIES,expected_payload_sha256=sha256(payload).hexdigest(),
@@ -217,7 +217,7 @@ def test_mixed_pdf_sequential_without_medical_render_or_unknown_guess(local_ocr,
     raw=synthetic_pdf(kinds);source=Mock(return_value=raw)
     def permit(p,payload):return ai.authorize_payload(p,payload,current_page=lambda _,n:pages[n],load_source=source,
         load_grant=lambda _:None)
-    calls=Mock(return_value=SimpleNamespace(output_text=reading(2).model_dump_json()))
+    calls=Mock(return_value=SimpleNamespace(output_text=json.dumps(ai.wire_value(reading(2)))))
     analyzer=ai.GeminiPageReceipts(SimpleNamespace(interactions=SimpleNamespace(create=calls)),'model',permit)
     runner=ReadonlyPageReceipts(lambda _,n:pages[n],source,lambda _:None,analyzer,CATEGORIES)
     results=[runner.run('synthetic-source-id',n) for n in pages]
@@ -230,7 +230,7 @@ def test_mixed_pdf_sequential_without_medical_render_or_unknown_guess(local_ocr,
 def test_image_source_fresh_rgb_metadata_free_and_stable_replay(local_ocr):
     p,raw=page(source_kind='image');permission=lambda page,payload:ai.authorize_payload(page,payload,
         current_page=lambda *args:p,load_source=lambda _:raw,load_grant=Mock())
-    create=Mock(return_value=SimpleNamespace(output_text=reading().model_dump_json()))
+    create=Mock(return_value=SimpleNamespace(output_text=json.dumps(ai.wire_value(reading()))))
     analyzer=ai.GeminiPageReceipts(SimpleNamespace(interactions=SimpleNamespace(create=create)),'model',permission)
     runner=ReadonlyPageReceipts(lambda *args:p,lambda _:raw,Mock(),analyzer,CATEGORIES)
     first=runner.run(p.source.source_file_id,1);second=runner.run(p.source.source_file_id,1,previous=first)
@@ -308,8 +308,8 @@ def test_unstable_region_comparison_reuses_same_ui_has_no_editable_count():
     assert not any(field in EDITABLE for field,label,value in card['rows'])
 
 def test_response_schema_diagnostic_contains_only_safe_paths_no_values_or_retry(local_ocr):
-    p,raw=page();payload=png();response=reading().model_dump()
-    response['receipts'][0]['bbox']['left']='PRIVATE_RAW_RESPONSE_SECRET'
+    p,raw=page();payload=png();response=ai.wire_value(reading())
+    response['receipts'][0]['bbox'][1]='PRIVATE_RAW_RESPONSE_SECRET'
     client=Mock();client.interactions.create.return_value=SimpleNamespace(output_text=json.dumps(response))
     permission=lambda *args:{'payload_sha256':sha256(payload).hexdigest()}
     analyzer=ai.GeminiPageReceipts(client,'model',permission)
@@ -347,7 +347,7 @@ def test_small_wire_grammar_preserves_strict_local_segmentation_limits():
     assert '$ref' not in serialized and '$defs' not in serialized and 'maxItems' not in serialized
     assert set(schema['required'])=={'receipts','separation_complete','mixed_page_kind_suspected','cross_page_continuation_suspected'}
     assert schema['additionalProperties'] is False
-    assert schema['properties']['receipts']['items']['properties']['bbox']['properties']['left']['minimum']==0
+    assert schema['properties']['receipts']['items']['properties']['bbox']['items']['maximum']==1000
     value=reading().model_dump();value['receipts']*=21
     with pytest.raises(ValueError):model.PageReceiptExtraction.model_validate(value)
     value=reading().model_dump();value['receipts'][0]['item_boxes']*=301
@@ -372,3 +372,59 @@ def test_current_observation_failure_invalidates_permission_even_with_same_pdf_h
         ai.authorize_payload(p,png('unknown'),current_page=lambda *args:failed,
             load_source=lambda _:raw,load_grant=lambda _:grant)
     assert t.writes==0
+
+@pytest.mark.parametrize('invalid',[[-1,0,900,900],[0,0,1001,900],[0,0,0,900],[0,0,900],['0',0,900,900],[0.1,0,900,900]])
+def test_documented_wire_coordinates_are_strict_without_clamping_or_fallback(invalid):
+    value=ai.wire_value(reading());value['receipts'][0]['bbox']=invalid
+    with pytest.raises(ValueError):ai.parse_wire_response(json.dumps(value))
+
+def test_wire_geometry_conversion_preserves_all_receipt_and_item_coordinates():
+    original=reading(2)
+    decoded=ai.parse_wire_response(json.dumps(ai.wire_value(original)))
+    assert decoded.model_dump()==original.model_dump()
+
+def test_real_image_replay_requires_two_independent_stable_transactions():
+    from app.page_receipt_real_fixture import verify_real_replay
+    p,_=page(source_kind='image');first=model.build_receipt_units(p,reading(2),reading(2),CATEGORIES)
+    first['status']='would_import'
+    replay=model.build_receipt_units(p,reading(2,True),reading(2),CATEGORIES,previous=first)
+    replay['status']='would_import'
+    assert verify_real_replay(first,replay)
+    changed=deepcopy(replay);changed['units'].pop()
+    with pytest.raises(StateError,match='count_changed'):verify_real_replay(first,changed)
+    changed=deepcopy(replay);changed['units'][0]['parsed']['total']+=1
+    with pytest.raises(StateError,match='values_changed'):verify_real_replay(first,changed)
+    changed=deepcopy(replay);changed['units'][0]['receipt_unit_id']='other'
+    with pytest.raises(StateError,match='identity_changed'):verify_real_replay(first,changed)
+
+def test_real_fixture_refuses_medical_parent_before_source_download():
+    from app.page_receipt_real_fixture import real_image_fixture
+    p,_=page('medical',11,['normal']*10+['medical','normal'])
+    source=Mock()
+    with pytest.raises(StateError,match='normal_parents_required'):
+        real_image_fixture(lambda sid,n:p,source,{'source_file_id':p.source.source_file_id})
+    source.assert_not_called()
+
+def test_tax_and_discount_still_need_printed_items_not_validation_balancing():
+    p,_=page();data=reading().model_dump()
+    data['receipts'][0]['receipt']['total']=108
+    a=model.PageReceiptExtraction.model_validate(data)
+    result=model.build_receipt_units(p,a,a,CATEGORIES)
+    assert result['units'][0]['analysis_status']=='would_need_review'
+    data['receipts'][0]['receipt']['items'].append(dict(name='外税',amount=8,major_category='食費',minor_category='食品'))
+    data['receipts'][0]['item_boxes'].append(data['receipts'][0]['bbox'])
+    a=model.PageReceiptExtraction.model_validate(data)
+    result=model.build_receipt_units(p,a,a,CATEGORIES)
+    assert result['units'][0]['analysis_status']=='would_import'
+    assert result['units'][0]['validation']['item_sum']==108
+
+def test_human_request_uuid_cannot_replay_for_another_already_confirmed_page():
+    a,_=page('unknown',1,['unknown','unknown']);b,_=page('unknown',2,['unknown','unknown'])
+    c,t=confirmation(a)
+    c.confirm(a,operation='confirm_general_receipt_ai',request_id=UUID)
+    c.current_page=lambda *args:b
+    c.confirm(b,operation='confirm_general_receipt_ai',request_id=UUID[:-1]+'2')
+    before=t.writes
+    with pytest.raises(StateError,match='request_replaced'):
+        c.confirm(b,operation='confirm_general_receipt_ai',request_id=UUID)
+    assert t.writes==before

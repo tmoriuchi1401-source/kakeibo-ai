@@ -147,6 +147,7 @@ def build_receipt_units(page,first,second,categories,*,previous=None,unit_texts=
                        'candidate_regions':[[r.bbox.model_dump() for r in pass_] for pass_ in (a,b)],
                        'geometry_diagnostic':[[{'receipt_index':index,'bbox':r.bbox.model_dump(),
                            'item_count':len(r.receipt.items),'item_box_count':len(r.item_boxes),
+                           'item_boxes':[box.model_dump() for box in r.item_boxes],
                            'outside_item_indices':[i for i,box in enumerate(r.item_boxes,1)
                                if intersection(r.bbox,box)/box.area<.98]}
                            for index,r in enumerate(pass_,1)] for pass_ in (a,b)]}

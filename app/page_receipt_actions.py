@@ -60,27 +60,36 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
     from .pdf_unit_readonly_analysis import encrypted
     initial=store.load();initial_bytes,initial_tag=store.payload,store.tag
     mode=env['PDF_READONLY_MODE']
-    proof=prior(env,pem,expected) if mode in {'page_remaining','page_replay'} else None
+    proof=prior(env,pem,expected) if mode in {'page_remaining','page_replay','page_multi'} else None
     current=lambda sid,n:load_page(store,expected,sid,n)
     # No live Human General state has been provisioned or authenticated here.
     # Never promote legacy human-normal answers to a new external-AI scope.
     def no_grant(_):raise StateError('human_general_authority_missing')
-    permission=lambda p,png:authorize_payload(p,png,current_page=current,load_source=source,load_grant=no_grant)
+    analysis_source=source;fixture_provenance=None;real_replay=False
+    if mode=='page_multi':
+        from .page_receipt_real_fixture import real_image_fixture
+        fixture,current,analysis_source,fixture_provenance=real_image_fixture(current,source,expected)
+    permission=lambda p,png:authorize_payload(p,png,current_page=current,load_source=analysis_source,load_grant=no_grant)
     analyzer=factory(env['GEMINI_API_KEY'],env.get('NORMAL_RECEIPT_GEMINI_MODEL','gemini-3.5-flash-lite'),permission)
-    runner=ReadonlyPageReceipts(current,source,no_grant,analyzer,categories)
+    runner=ReadonlyPageReceipts(current,analysis_source,no_grant,analyzer,categories)
     rows=[]
     batch={'p3-p6':range(3,7),'p7-p10':range(7,11),'p11-p14':range(11,15)}
-    for number in ([2] if mode in {'page_p2','page_replay'} else batch[env['PDF_READONLY_PAGE_BATCH']]):
-        previous=proof['results'][0] if mode=='page_replay' else None
-        result=runner.run(expected['source_file_id'],number,previous=previous)
+    for number in ([1,1] if mode=='page_multi' else [2] if mode in {'page_p2','page_replay'} else batch[env['PDF_READONLY_PAGE_BATCH']]):
+        previous=rows[0] if mode=='page_multi' and rows else proof['results'][0] if mode=='page_replay' else None
+        result=runner.run(fixture.source.source_file_id if mode=='page_multi' else expected['source_file_id'],number,previous=previous)
         for u in result.get('units',[]):
             parsed=u['parsed']
             u['parsed']={k:parsed[k] for k in ('date','merchant','total','payment_method','transaction_kind')}
             u['parsed']['items']=[{k:x[k] for k in ('name','quantity','amount','major_category','minor_category')}
                 for x in parsed['items']]
-        result['legacy_unit_id']=expected['unit_ids'][number]
+        if mode!='page_multi':result['legacy_unit_id']=expected['unit_ids'][number]
         rows.append(result)
+        if mode=='page_multi' and result['status'] not in {'would_import','would_need_review'}:break
         if result['status']=='authority_held':break
+    if mode=='page_multi' and len(rows)==2:
+        from .page_receipt_real_fixture import verify_real_replay
+        try:real_replay=verify_real_replay(*rows)
+        except StateError as error:fixture_provenance['replay_hold_reason']=str(error)
     if store.load()!=initial or store.payload!=initial_bytes or store.tag!=initial_tag:
         raise StateError('readonly_authority_changed')
     if sha256(source(expected['source_file_id'])).hexdigest()!=expected['source_content_hash']:
@@ -90,12 +99,15 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
         'authority_unchanged':True,'cloud_writes':0,'medical_calls':0,'source_moves':0,
         'p1_rendered':0,'p1_submitted':0,'gemini_calls':analyzer.calls,'results':rows,'budgets':runner.budget.metadata(),
         'accounting_authority':False,'new_human_general_authority_created':False}
+    if fixture_provenance is not None:
+        value.update(real_image_fixture=fixture_provenance,real_image_replay_verified=real_replay)
     serial=json.dumps(value,ensure_ascii=False)
     info=json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
     if any(secret and secret in serial for secret in (env['GEMINI_API_KEY'],info['private_key'],env['GOOGLE_SERVICE_ACCOUNT_JSON'])):
         raise StateError('readonly_diagnostic_rejected')
     statuses={'would_import','would_need_review','privacy_blocked','human_general_authority_required','receipt_segmentation_review'}
     complete=bool(rows) and all(r['status'] in statuses for r in rows)
+    if mode=='page_multi':complete=real_replay
     if mode=='page_p2':complete=complete and rows[0]['status'] in {'would_import','would_need_review'}
     return encrypted(value,pem),{'status':'analysis_complete' if complete else 'analysis_incomplete',
         'gemini_calls':analyzer.calls,'counts':{s:sum(r['status']==s for r in rows) for s in sorted(statuses|{'analysis_failed','authority_held'})}}
