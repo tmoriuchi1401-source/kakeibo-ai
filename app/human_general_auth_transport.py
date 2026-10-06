@@ -268,15 +268,19 @@ class AuthenticatedGeneralConfirmation:
             fail('request_expired')
         return state, record
 
-    def prepare(self, expected):
+    def prepare(self, expected, *, request_id=None):
         # Caller is trusted projection/Drive reader, not browser/Sheet JSON.
-        rid = str(uuid4())
+        rid = request_id if request_id is not None else str(uuid4())
+        if not isinstance(rid, str) or not UUID.fullmatch(rid):
+            fail('request_invalid')
         now = int(self.clock())
         record = {'request_id': rid, 'binding': request_binding(expected, rid),
                   'created_at': now, 'expires_at': now + TTL, 'status': 'prepared'}
         record['digest'] = digest(record['binding'])
         self.fresh(record)
         state = self.store.load()
+        if rid in state['requests']:
+            fail('request_replaced')
         state['requests'][rid] = record
         self.store.save(state)
         return rid

@@ -1,5 +1,9 @@
 # Human General: 認証付き明示確定（offline candidate）
 
+後続のsynthetic HTTPS host構築・実測結果は
+[isolated Cloud Run host](human-general-synthetic-cloud-run.md) を参照。
+以下は6f86f7b時点のoffline coreの設計記録であり、live進捗を示す記述ではない。
+
 この実装は認証transportのsynthetic検証用core。公開HTTP endpoint、OAuth client、live state、Apps Script deploymentを作らない。既存onEdit、period guard、定期Actions、privacy閾値を変更しない。liveへの接続は未実施。
 
 ## 方式選定
