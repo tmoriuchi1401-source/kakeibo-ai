@@ -136,4 +136,11 @@ def configured_runtime():
         'mode': 'synthetic_only'}
     key = Path(os.environ['HGA_SESSION_KEY_PATH']).read_bytes().strip()
     client = firestore.Client(project=os.environ['GOOGLE_CLOUD_PROJECT'], database=settings['database'])
+    if os.environ.get('HGA_REAL_PAGE_CONFIG_PATH'):
+        # Operator-only pinned config and separate private HGA state. No browser
+        # input can enable this capability or pick a different source/page.
+        from .real_runtime import RealPageRuntime
+        config=json.loads(Path(os.environ['HGA_REAL_PAGE_CONFIG_PATH']).read_text())
+        info=json.loads(Path(os.environ['HGA_DRIVE_CREDENTIAL_PATH']).read_text())
+        return RealPageRuntime(client,settings,key,config,info)
     return SyntheticRuntime(client, settings, key)

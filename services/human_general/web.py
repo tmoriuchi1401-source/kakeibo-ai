@@ -96,7 +96,7 @@ def create_app(runtime_factory):
 
     @app.route('/health', methods=['GET'])
     def health():
-        return {'status': 'ok', 'mode': 'synthetic_only'}
+        return {'status': 'ok', 'mode':getattr(runtime(),'mode','synthetic_only')}
 
     @app.route('/start', methods=['GET', 'POST'])
     def start():
@@ -113,10 +113,11 @@ def create_app(runtime_factory):
         if request.method == 'GET':
             gateway = rt.gateway(value)
             gateway.record(value, 'prepared')
+            label=rt.label(value) if hasattr(rt,'label') else 'synthetic page'
             nonce = secrets.token_urlsafe(32)
             token = signer.dumps({'request': value, 'nonce_hash': sha256(nonce.encode()).hexdigest()})
             response = Response(screen('一般レシートの確認',
-                '<p>対象：synthetic page</p><p>Googleで本人確認後、明示的に確定します。</p>'
+                '<p>対象：'+str(escape(label))+'</p><p>Googleで本人確認後、明示的に確定します。</p>'
                 '<form method="post" action="/start"><input type="hidden" name="request" value="'+value+'">'
                 '<input type="hidden" name="proof" value="'+str(escape(proof))+'">'
                 '<input type="hidden" name="csrf" value="'+str(escape(token))+'">'
@@ -161,13 +162,14 @@ def create_app(runtime_factory):
             gateway.browser(record, session, request.cookies.get(COOKIE))
             gateway.fresh(record)
             _, tag = rt.state(session.request_id, 'authorities').read_versioned()
+            label='p14（今回の対象ページのみ）' if getattr(rt,'mode','')=='real_p14_authority_only' else 'synthetic page'
             return Response(screen('一般レシートとして確定',
-                '<p>対象：synthetic page</p><p>Googleアカウント：確認済み</p>'
+                '<p>対象：'+str(escape(label))+'</p><p>Googleアカウント：確認済み</p>'
                 '<p>一般レシートであることを確認し、このページだけをGeminiへ送信して解析することを許可します。</p>'
                 '<small>このテストでは会計処理を実行しません。</small>'
                 '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                 '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
-                '<button name="action" value="confirm">一般レシートとして確定</button>'
+                '<button name="action" value="confirm">一般レシートとして確定しGemini送信を許可</button>'
                 '<button name="action" value="cancel">キャンセル</button></form>'))
         own_origin(rt)
         if request.form.get('action') == 'cancel':
@@ -196,7 +198,8 @@ def create_app(runtime_factory):
         grant = rt.factory(session.request_id)(None).current(page)
         if grant['confirmation_digest'] != record['authority_digest']:
             raise StateError('synthetic_readback_mismatch')
-        return Response(screen('確認が完了しました', '<p>synthetic確認を保存しました。</p><p>会計処理は実行していません。</p>'))
+        label='p14の送信許可を保存しました' if getattr(rt,'mode','')=='real_p14_authority_only' else 'synthetic確認を保存しました'
+        return Response(screen('確認が完了しました','<p>'+label+'。</p><p>会計処理は実行していません。</p>'))
 
     return app
 

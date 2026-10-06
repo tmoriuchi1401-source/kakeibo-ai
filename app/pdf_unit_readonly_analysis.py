@@ -58,7 +58,7 @@ def require_context(env,checkout_sha):
             or env.get('GITHUB_WORKFLOW_REF')!=REPO+'/'+WORKFLOW+'@'+str(branch)
             or not re.fullmatch(r'[0-9a-f]{40}',env.get('PDF_READONLY_APPROVED_SHA',''))
             or checkout_sha!=env['PDF_READONLY_APPROVED_SHA']
-            or env.get('PDF_READONLY_MODE') not in {'preflight','p2','remaining','page_p2','page_remaining','page_replay','page_multi','page_diagnose'}
+            or env.get('PDF_READONLY_MODE') not in {'preflight','p2','remaining','page_p2','page_remaining','page_replay','page_multi','page_diagnose','page_p14'}
             or env.get('PDF_READONLY_CONFIRM')!='READ_ONLY'
             or any(env.get(k)!='false' for k in ('PDF_ACCOUNTING_ENABLED','PDF_MEDICAL_ENABLED','PDF_ARCHIVE_ENABLED'))
             or env.get('ACTIONS_STEP_DEBUG')=='true' or env.get('RUNNER_DEBUG')=='1'
@@ -305,6 +305,9 @@ def execute(env,checkout_sha,*,opener=open_context,analyzer=receipt_analyzer,pri
     store,source,categories,expected,pem=opener(env)
     initial=store.load();initial_bytes=store.payload;initial_tag=store.tag
     if env['PDF_READONLY_MODE']=='preflight':return None,{'status':'preflight_ok','gemini_calls':0}
+    if env['PDF_READONLY_MODE']=='page_p14':
+        from .p14_completion_readonly import execute_p14
+        return execute_p14(env,checkout_sha,store,source,categories,expected,pem)
     if env['PDF_READONLY_MODE'] in {'page_p2','page_remaining','page_replay','page_multi','page_diagnose'}:
         from .page_receipt_actions import execute_pages
         return execute_pages(env,checkout_sha,store,source,categories,expected,pem,prior=prior)

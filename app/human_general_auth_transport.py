@@ -26,6 +26,7 @@ from .page_receipt_model import digest
 ISSUER = 'https://accounts.google.com'
 SCHEMA = 'human-general-auth-requests-v1'
 ACTION = 'general_receipt'
+AI_CONSENT_ACTION = 'general_receipt_and_gemini'
 TTL = 600
 UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
 
@@ -42,8 +43,9 @@ def same(a, b):
     return isinstance(a, str) and isinstance(b, str) and hmac.compare_digest(a.encode(), b.encode())
 
 
-def request_binding(page, rid):
-    return {**binding_fields(page), 'request_id': rid, 'requested_action': ACTION,
+def request_binding(page, rid, action=ACTION):
+    if action not in {ACTION,AI_CONSENT_ACTION}:fail('request_invalid')
+    return {**binding_fields(page), 'request_id': rid, 'requested_action': action,
             'page_processing_status': page.processing_status}
 
 
@@ -63,7 +65,7 @@ def validate_auth_state(value, binding):
                                                'authenticated', 'claimed', 'complete'}
                     or record['digest'] != digest(record['binding'])
                     or record['binding']['request_id'] != rid
-                    or record['binding']['requested_action'] != ACTION
+                    or record['binding']['requested_action'] not in {ACTION,AI_CONSENT_ACTION}
                     or type(record['created_at']) is not int or type(record['expires_at']) is not int
                     or record['expires_at'] - record['created_at'] != TTL):
                 raise ValueError()
@@ -236,13 +238,15 @@ class BrowserSession:
 
 class AuthenticatedGeneralConfirmation:
     def __init__(self, store, identity, current_page, load_source, *, redirect_uri,
-                 exchange_code, clock=time.time):
+                 exchange_code, clock=time.time, requested_action=ACTION):
         parsed = urlsplit(redirect_uri)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.query or parsed.fragment or parsed.username:
             fail('redirect_invalid')
         self.origin = parsed.scheme + '://' + parsed.netloc
         self.store, self.identity, self.current_page, self.load_source = store, identity, current_page, load_source
         self.redirect_uri, self.exchange_code, self.clock = redirect_uri, exchange_code, clock
+        if requested_action not in {ACTION,AI_CONSENT_ACTION}:fail('request_invalid')
+        self.requested_action=requested_action
 
     def fresh(self, record):
         binding = record['binding']
@@ -251,7 +255,7 @@ class AuthenticatedGeneralConfirmation:
             raw = self.load_source(page.source.source_file_id)
         except Exception:
             fail('freshness_unavailable')
-        if request_binding(page, record['request_id']) != binding or not eligible(page):
+        if request_binding(page, record['request_id'],self.requested_action) != binding or not eligible(page):
             fail('stale_or_sensitive_page')
         if type(raw) is not bytes or sha256(raw).hexdigest() != page.source.source_content_hash:
             fail('source_changed')
@@ -274,7 +278,7 @@ class AuthenticatedGeneralConfirmation:
         if not isinstance(rid, str) or not UUID.fullmatch(rid):
             fail('request_invalid')
         now = int(self.clock())
-        record = {'request_id': rid, 'binding': request_binding(expected, rid),
+        record = {'request_id': rid, 'binding': request_binding(expected, rid,self.requested_action),
                   'created_at': now, 'expires_at': now + TTL, 'status': 'prepared'}
         record['digest'] = digest(record['binding'])
         self.fresh(record)

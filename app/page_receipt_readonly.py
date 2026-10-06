@@ -51,10 +51,11 @@ def unit_observations(payload,reading):
     return texts,gates
 
 class ReadonlyPageReceipts:
-    def __init__(self,current_page,load_source,load_grant,analyzer,categories,*,budget=None):
+    def __init__(self,current_page,load_source,load_grant,analyzer,categories,*,budget=None,completion_drafts=False):
         self.current_page,self.load_source,self.load_grant=current_page,load_source,load_grant
         self.analyzer,self.categories=analyzer,categories
         self.budget=budget or PageReceiptBudget()
+        self.completion_drafts=completion_drafts
 
     def run(self,source_id,number,*,previous=None):
         report={'page_number':number,'status':'analysis_failed','units':[],
@@ -133,6 +134,16 @@ class ReadonlyPageReceipts:
                     or sha256(self.load_source(page.source.source_file_id)).hexdigest()!=page.source.source_content_hash):
                 raise StateError('page_authority_stale')
             if proof['basis']=='human_general_receipt':validate_grant(self.load_grant(page),page)
+            if self.completion_drafts:
+                from .general_receipt_completion import drafts_for_page
+                manifest={k:report[k] for k in ('page_key','segmentation_digest')}
+                manifest.update(source=page.source.model_dump(),page_number=page.page_number,
+                    stable_page_identity=page.stable_page_identity,
+                    units=[{k:u[k] for k in ('receipt_unit_id','receipt_index','parent_page_identity','bbox','accounting_status')}
+                           for u in report['units']])
+                report['manifest']=manifest
+                report['completion_drafts']=drafts_for_page(page,manifest,*readings,categories=self.categories,
+                    unit_texts=texts,unit_gates=gates)
             return report
         except StateError:raise
         except ReceiptPrivacyBlocked:raise
