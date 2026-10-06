@@ -12,6 +12,15 @@ CONFIRM_ACTION = '一般支出を確定'
 CONFIRM_ACTIONS = (CONFIRM_ACTION, '一般手入力を確定')
 
 
+def input_rows(values=None):
+    """Same editable fields for empty manual forms and corroborated AI values."""
+    values = values or {}
+    return [(field,label,values.get(field,'')) for field,label in (
+        ('date','支払日'), ('amount','実支払額（円）'), ('category','カテゴリ'),
+        ('merchant','店舗名（任意）'), ('payment','支払方法（任意）'),
+        ('memo','メモ（任意）'), ('manual_action','操作'), ('result','処理結果'))]
+
+
 def category_choices(categories):
     return sorted({'｜'.join(pair) for pair in categories})
 

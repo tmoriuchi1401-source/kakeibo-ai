@@ -163,7 +163,9 @@ def test_http_signed_owner_explicit_post_exact_readback_and_replay(http):
     assert http.callback().status_code == 303
     assert not http.grants()['grants']  # OAuth success alone grants nothing
     before = http.db.writes
-    assert http.get('/confirm').status_code == 200
+    confirm_screen=http.get('/confirm')
+    assert confirm_screen.status_code == 200
+    assert 'このページだけをGeminiへ送信' in confirm_screen.get_data(as_text=True)
     assert http.db.writes == before
     assert http.confirm().status_code == 303
     grant_state = http.grants()

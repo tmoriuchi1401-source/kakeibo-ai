@@ -15,7 +15,7 @@ SCHEMA='human-general-page-authority-v1'
 FLAGS={'authority_scope':['human_general_receipt','single_page_ai'],
        'accounting_allowed':False,'medical_handoff_allowed':False,'archive_allowed':False}
 UNKNOWN={'unknown','sensitive_unknown'}
-REASONS={'insufficient_evidence','sensitive_signal_insufficient'}
+REASONS={'insufficient_evidence','sensitive_signal_insufficient','privacy_unresolved'}
 MAX_BYTES=2*1024*1024
 
 def review_identity(page):

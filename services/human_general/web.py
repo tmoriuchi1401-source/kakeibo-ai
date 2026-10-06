@@ -163,6 +163,7 @@ def create_app(runtime_factory):
             _, tag = rt.state(session.request_id, 'authorities').read_versioned()
             return Response(screen('一般レシートとして確定',
                 '<p>対象：synthetic page</p><p>Googleアカウント：確認済み</p>'
+                '<p>一般レシートであることを確認し、このページだけをGeminiへ送信して解析することを許可します。</p>'
                 '<small>このテストでは会計処理を実行しません。</small>'
                 '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                 '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'

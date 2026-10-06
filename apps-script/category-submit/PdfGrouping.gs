@@ -70,7 +70,11 @@ function pdfPageGeneralValidation_(sheet, card) {
   const amount=String(f.amount || '').replace(/,/g,''), category=String(f.category || '').split('｜');
   // Existing strict dropdown is convenience, not authority. The worker checks
   // current master membership and Drive/source/owner evidence independently.
-  const complete=dateComplete && /^\d+$/.test(amount) && Number(amount)>0 && Number(amount)<=99999999 &&
+  const constraints=card.snapshot.identity.completion_constraints;
+  const completionSafe=card.snapshot.identity.kind!=='general_receipt_completion' ||
+    (constraints && constraints.hard_blocked===false &&
+      (constraints.item_sum===null || Number(amount)===constraints.item_sum));
+  const complete=completionSafe && dateComplete && /^\d+$/.test(amount) && Number(amount)>0 && Number(amount)<=99999999 &&
     category.length===2 && category.every(v=>v.trim()) &&
     String(f.merchant || '').length<=100 && String(f.payment || '').length<=50 && String(f.memo || '').length<=300;
   const index=card.snapshot.rows.findIndex(r=>r[0]==='manual_action');
@@ -94,8 +98,13 @@ function pdfPageReviewEdited_(e) {
       return; // Typing alone never queues confirmation or writes accounting.
     }
   }
-  if (card.snapshot.identity.kind==='general_manual') {
+  if (['general_manual','general_receipt_completion'].includes(card.snapshot.identity.kind)) {
     const complete=pdfPageGeneralValidation_(sheet,card);
+    if (card.snapshot.identity.kind==='general_receipt_completion') {
+      const state=card.snapshot.rows.findIndex(r=>r[0]==='state');
+      if (state>=0) sheet.getRange(card.positions[state],2).setValue(complete ?
+        '入力確認済み・明示確定待ち' : '不足欄または明細を確認してください');
+    }
     if (tech[3]==='manual_action' && e.value && e.value!=='保留' && !complete) {
       sheet.getRange(e.range.getRow(),2).setValue('保留');return;
     }
@@ -113,10 +122,10 @@ function submitPdfPageCard_(sheet, initial) {
     const ss=categorySpreadsheet_(),queue=ss.getSheetByName(PDF_QUEUE);
     const card=pdfPageCard_(sheet,initial.snapshot.token); // capture under lock
     const f=card.fields, kind=card.snapshot.identity.kind;
-    const operation=kind==='human_general' ? f.human_general_kind : kind==='medical' ? f.medical_action : kind==='general_manual' ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
+    const operation=kind==='human_general' ? f.human_general_kind : kind==='medical' ? f.medical_action : ['general_manual','general_receipt_completion'].includes(kind) ? f.manual_action : kind==='grouping' ? f.group_action : f.kind_action;
     if (kind==='human_general' && !['一般レシート','医療','給与','不明のまま'].includes(operation)) return;
     if (kind==='medical' && operation!=='保留' && !pdfPageMedicalValidation_(sheet,card)) return;
-    if (kind==='general_manual' && operation!=='保留' &&
+    if (['general_manual','general_receipt_completion'].includes(kind) && operation!=='保留' &&
         (operation!=='一般支出を確定' || !pdfPageGeneralValidation_(sheet,card))) return;
     if (kind==='page_kind' && operation==='種別を確定' && !['一般','医療','給与','判定不能'].includes(f.kind_choice)) return;
     if (kind==='grouping' && ['分割','結合'].includes(operation) && !f.group_target) return;
@@ -127,7 +136,7 @@ function submitPdfPageCard_(sheet, initial) {
     // New single-page AI intent is never sent to the legacy page-kind worker.
     // The separately authenticated actor adapter must be provisioned first.
     // Captured cells (including any actor-looking value) are not authority.
-    const enabled=kind!=='human_general' && pdfGroupingDispatchEnabled_();
+    const enabled=!['human_general','general_receipt_completion'].includes(kind) && pdfGroupingDispatchEnabled_();
     if (enabled && !PropertiesService.getUserProperties().getProperty('CATEGORY_GITHUB_TOKEN')) throw new Error('既存連携設定を確認してください。');
     const id=Utilities.getUuid();
     queue.appendRow([id,enabled ? 'dispatching' : 'accepted',JSON.stringify(card.snapshot),new Date().toISOString(),'','']);

@@ -14,7 +14,7 @@ from .pdf_page_medical import (category_choices, manual_source, manual_values,
                                validate_manual_values)
 from .receipt_confirmation import review_id
 from .receipt_pdf_units import _digest
-from .pdf_page_general import CONFIRM_ACTION, CONFIRM_ACTIONS
+from .pdf_page_general import CONFIRM_ACTION, CONFIRM_ACTIONS, input_rows
 
 SCHEMA = 'pdf-page-review-v1'
 LABELS = {'normal': '一般', 'medical': '医療', 'payroll': '給与', 'sensitive_unknown': '判定不能'}
@@ -146,9 +146,7 @@ def cards(view, answers, categories, medical_results=None, general_results=None)
                     ('target','対象','p'+str(n)), ('kind','種別','一般（人間確認済み）'),
                     ('state','状態',general_results.get(key,'一般手入力待ち・AI送信なし')),link,
                     ('notice','入力方法','原本を見て完全手入力。OCR・AI候補は使用しません。'),
-                    ('date','支払日',''), ('amount','実支払額（円）',''), ('category','カテゴリ',''),
-                    ('merchant','店舗名（任意）',''), ('payment','支払方法（任意）',''),
-                    ('memo','メモ（任意）',''), ('manual_action','操作',''), ('result','処理結果','')], key)
+                    *input_rows()], key)
         elif not answer:
             add('page_kind',[n],[('target','対象','p'+str(n)), ('kind','自動判定',LABELS[kind]),
                 ('state','状態','ページ種別確認待ち'),link,('kind_choice','ページ種別','未選択'),
@@ -280,7 +278,7 @@ class PageReviewSheet(GroupingSheet):
                     eligible=[int(n) for f,l,v in card['rows'] if f=='groups' for n in re.findall(r'候補([0-9]+):',v)]
                     choices=[str(n) for n in eligible]+[str(a)+'+'+str(b) for a,b in zip(eligible,eligible[1:]) if b==a+1]
                 if field=='category':
-                    if identity['kind']=='general_manual':
+                    if identity['kind'] in {'general_manual','general_receipt_completion'}:
                         from .pdf_page_general import category_choices as general_categories
                         choices=general_categories(self.categories)
                     else:choices=list(category_choices(self.categories))
@@ -304,6 +302,13 @@ class PageReviewSheet(GroupingSheet):
                     from .pdf_page_general import manual_values as general_values
                     values={f:previous.get((card['token'],f),v) for f,_,v in card['rows']}
                     try:
+                        if identity['kind']=='general_receipt_completion':
+                            constraints=identity['completion_constraints']
+                            from .receipt_reimport import _money
+                            amount=_money(str(values.get('amount','')).replace(',',''))
+                            if constraints['hard_blocked'] or (constraints['item_sum'] is not None and amount!=constraints['item_sum']):
+                                raise StateError('completion_validation_required')
+                            values={**values,'amount':amount}
                         general_values({**values,'manual_action':CONFIRM_ACTION},self.categories)
                         choices=['保留',CONFIRM_ACTION]
                     except StateError:choices=['保留']

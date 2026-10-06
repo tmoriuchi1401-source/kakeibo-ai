@@ -4,10 +4,10 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const source=fs.readFileSync(__dirname+'/PdfGrouping.gs','utf8');
 
-function harness({kind='medical', complete=false, dispatch=null, throws=false}={}) {
-  const identity={schema:'pdf-page-review-v1',kind,source_file_id:'synthetic-source'};
-  const fields=kind==='human_general' ? ['target','automatic','state','original','notice','human_general_kind','result'] : kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : kind==='general_manual' ? ['target','kind','state','original','notice','date','amount','category','merchant','payment','memo','manual_action','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
-  const values={target:'p1',kind:'医療',state:'医療入力待ち',original:'原本を開く',notice:'完全手入力',date:complete?'2026/09/01':'',facility:complete?'Synthetic manual clinic':'',amount:complete?'1,200':'',category:kind==='general_manual' ? (complete?'食費｜外食':'') : '医療費',medical_action:'',manual_action:'',kind_choice:'未選択',kind_action:'',result:''};
+function harness({kind='medical', complete=false, dispatch=null, throws=false, constraints={hard_blocked:false,item_sum:1200}}={}) {
+  const identity={schema:'pdf-page-review-v1',kind,source_file_id:'synthetic-source',completion_constraints:constraints};
+  const fields=kind==='human_general' ? ['target','automatic','state','original','notice','human_general_kind','result'] : kind==='medical' ? ['target','kind','state','original','notice','date','facility','amount','category','payment','memo','medical_action','duplicate_target','result'] : ['general_manual','general_receipt_completion'].includes(kind) ? ['target','kind','state','original','notice','date','amount','category','merchant','payment','memo','manual_action','result'] : ['target','kind','state','original','kind_choice','kind_action','result'];
+  const values={target:'p1',kind:'医療',state:'医療入力待ち',original:'原本を開く',notice:'完全手入力',date:complete?'2026/09/01':'',facility:complete?'Synthetic manual clinic':'',amount:complete?'1,200':'',category:['general_manual','general_receipt_completion'].includes(kind) ? (complete?'食費｜外食':'') : '医療費',medical_action:'',manual_action:'',kind_choice:'未選択',kind_action:'',result:''};
   const rows=fields.map(f=>[f,values[f]||'','pdf-page-review-v1','token',JSON.stringify(identity),f,...Array(8).fill('')]);
   const queue=[],calls=[],validations=[];
   const range=(n,c,h=1,w=1)=>({
@@ -98,4 +98,27 @@ test('new human general intent is never legacy authority or auto-dispatched; no 
 test('new general bulk paste cannot create a confirmation request',()=>{
   const h=harness({kind:'human_general'});h.edit('human_general_kind','一般レシート',2);
   assert.equal(h.queue.length,0);assert.equal(h.calls.length,0);
+});
+
+test('machine prefilled and human fields use same editable general form, capture only even with dispatch enabled',()=>{
+  const h=harness({kind:'general_receipt_completion',complete:true,dispatch:'true'});
+  h.edit('date','2026/10/06');assert.equal(h.queue.length,0);
+  h.edit('manual_action','一般支出を確定');
+  assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);assert.equal(h.queue[0][1],'accepted');
+  const snap=JSON.parse(h.queue[0][2]);assert.equal(snap.rows.find(r=>r[0]==='date')[2],'2026/10/06');
+  h.edit('manual_action','一般支出を確定');assert.equal(h.queue.length,1);
+});
+test('missing required field cannot confirm, optional blanks remain allowed',()=>{
+  const h=harness({kind:'general_receipt_completion',constraints:{hard_blocked:false,item_sum:500}});
+  h.edit('date','2026/10/05');h.edit('category','食費｜外食');h.edit('manual_action','一般支出を確定');
+  assert.equal(h.queue.length,0);
+  h.edit('amount','500');assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留','一般支出を確定']);
+  h.edit('manual_action','一般支出を確定');assert.equal(h.queue.length,1);assert.equal(h.calls.length,0);
+});
+test('item mismatch, structural review and missing protected constraints cannot be unlocked by three fields',()=>{
+  for (const constraints of [{hard_blocked:true,item_sum:1200},{hard_blocked:false,item_sum:1300},null]) {
+    const h=harness({kind:'general_receipt_completion',complete:true,constraints});
+    h.edit('manual_action','一般支出を確定');assert.equal(h.queue.length,0);
+    assert.deepEqual(Array.from(h.validations.at(-1).choices),['保留']);
+  }
 });
