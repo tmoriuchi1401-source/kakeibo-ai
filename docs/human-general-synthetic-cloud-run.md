@@ -77,7 +77,7 @@ The OAuth session cookie is Secure/HttpOnly/host-only/SameSite=None because the
 Google callback is a cross-site POST. Bootstrap cookie is SameSite=Lax. State,
 nonce, PKCE, fixed callback, CSRF and Origin checks remain required. CSP allows
 form redirects only to self and the fixed `accounts.google.com` origin. Headers
-include no-store, no-referrer, HSTS, nosniff and DENY framing. Error pages contain
+include no-store, strict-origin, HSTS, nosniff and DENY framing. Error pages contain
 fixed Japanese messages, not exceptions, claims, tokens or technical identities.
 
 Buttons have 54px minimum height, the screen is one column and max 420px wide.
@@ -107,8 +107,8 @@ existing Actions, existing secrets or bindings are read or changed by this host.
 
 ## Verification and remaining gate
 
-- Final full Python suite: 4,442 passed, including existing Medical tests;
-  targeted HTTP/core suite: 73 passed. Two existing dependency deprecation warnings.
+- Final full Python suite: 4,457 passed, including existing Medical tests;
+  targeted HTTP/core suite: 88 passed. Two existing dependency deprecation warnings.
 - Node suite: 30 passed; compileall and diff check passed.
 - Live private preflight: all three Secret configs valid; signed owner sub
   matches; private `/health` and signed `/start` return 200.
@@ -116,14 +116,45 @@ existing Actions, existing secrets or bindings are read or changed by this host.
   rejects, application stale ETag is `HTTP_412`, exact read-back matches and a
   latest-tag update succeeds. This tests actual server CAS, not just mocks.
 - Public HTTPS `/health`: 200 after all private preflights and configuration
-  read-back succeeded. Ready revision `hga-auth-synthetic-00003-kmr`, image digest
-  `sha256:58e5b9b2a07ccf5e7a8815584a9758ed20c4ba45573ab5582a729c4ba64bc77b`.
-- Live Google Web OAuth, explicit confirmation, post-confirm replay and real
-  iPhone Sheets→Safari roundtrip are still pending until separately recorded.
+  read-back succeeded. Ready revision `hga-auth-synthetic-00006-kfj`, image digest
+  `sha256:98176402d019a966d707d38cf7e7cb5af56a6e097821ac827671ab36c937cf17`.
+- On 2026-10-07 JST the owner completed the real iPhone Sheets→Safari→Google
+  authentication→explicit confirmation→result flow and reported usable UX.
+  The owner also confirmed rejection of the same original preparation link.
+  Protected state read-back showed complete, one authority and one audit,
+  verified Google-signed allowlisted actor and exact request/authority/audit
+  digest linkage. Operator callback/confirm replays returned 409; result returned
+  200; authority and request bytes and versions remained exactly unchanged.
+- Desktop Chromium reproduced the header-policy difference on a local form
+  probe. A separate Cloud Run flow in the Codex embedded browser rejected its
+  start POST, leaving prepared/zero authority/zero audit. A normal desktop browser
+  OAuth roundtrip remains a separate gate; an embedded-browser failure is not
+  counted as success.
 
 No real-page canary may start merely because provisioning/offline tests pass.
 The live authentication and phone gates must both succeed first. Synthetic
 success is not permission to publish this host as a production authority store.
+
+## Same-origin form compatibility
+
+The initial `no-referrer` policy also made ordinary browser form POSTs send
+`Origin: null`. A temporary category-only live diagnostic observed this on
+iPhone Chrome: Referer absent, Sec-Fetch-Site same-origin, Mode navigate and
+Dest document. A desktop browser comparison reproduced null with no-referrer
+and the exact expected Origin with strict-origin. After the policy fix, the
+successful real iPhone Safari start POST had expected Origin, same-origin
+Referer and same-origin/navigate/document Fetch Metadata.
+
+Use `strict-origin` on the synthetic host. It sends only the origin as Referer,
+never a path/query containing a signed preparation link, OAuth code or state.
+Both /start and /confirm still require the configured origin's exact match;
+missing/null/wildcard/lookalike origins are refused even with a matching Referer.
+CSRF, cookie, state, nonce, PKCE, 600-second expiry, one-use UUID, explicit POST,
+source freshness, owner allowlist, conditional save and read-back remain required.
+GET/callback never create an authority. Old diagnostic links are not reused.
+The temporary category-only header logger and its enabling environment setting
+were removed from the final source and deployed revision after this diagnosis.
+Temporary Sheet links were cleared without changing any real page card.
 
 ## Cost and upkeep
 

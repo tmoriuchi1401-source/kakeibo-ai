@@ -59,7 +59,9 @@ def create_app(runtime_factory):
     @app.after_request
     def headers(response):
         response.headers.update({
-            'Cache-Control': 'no-store', 'Pragma': 'no-cache', 'Referrer-Policy': 'no-referrer',
+            # Form POSTs under no-referrer carry Origin:null in real browsers.
+            # Preserve their Origin without exposing any URL path/query.
+            'Cache-Control': 'no-store', 'Pragma': 'no-cache', 'Referrer-Policy': 'strict-origin',
             'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
             'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'",
             'Strict-Transport-Security': 'max-age=31536000',

@@ -176,6 +176,47 @@ def test_http_signed_owner_explicit_post_exact_readback_and_replay(http):
     assert http.db.writes == before and http.grants() == grant_state
 
 
+def test_form_referrer_policy_keeps_origin_without_url_path_or_query(http):
+    # Browser-level comparison is recorded separately. The header contract must
+    # never regress to no-referrer (Origin:null) or expose a path/query via unsafe-url.
+    assert http.get(http.start_path).headers['Referrer-Policy'] == 'strict-origin'
+    assert http.start().headers['Referrer-Policy'] == 'strict-origin'
+    assert http.callback().status_code == 303
+    assert http.get('/confirm').headers['Referrer-Policy'] == 'strict-origin'
+    assert http.confirm().status_code == 303
+    assert http.get('/result').headers['Referrer-Policy'] == 'strict-origin'
+
+
+@pytest.mark.parametrize('origin', [None, 'null', '*', 'https://arbitrary.run.app',
+    ORIGIN+'.evil.example', ORIGIN+'/', 'https://sub.confirmation.example.test'])
+@pytest.mark.parametrize('path', ['/start', '/confirm'])
+def test_same_origin_posts_reject_missing_null_and_lookalike_origins(http, origin, path):
+    from html.parser import HTMLParser
+    if path == '/start':
+        fields = {}
+        class Form(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                value = dict(attrs)
+                if tag == 'input':
+                    fields[value['name']] = value['value']
+        Form().feed(http.get(http.start_path).get_data(as_text=True))
+    else:
+        http.start()
+        assert http.callback().status_code == 303
+        _, tag = http.runtime.state(http.rid, 'authorities').read_versioned()
+        fields = dict(action='confirm', csrf=http.ticket.csrf, etag=tag)
+    before, exchanges = http.db.writes, http.exchanges
+    state_before = deepcopy(http.db.data)
+    # A legitimate Referer never substitutes for the required Origin header.
+    headers = {'Referer': ORIGIN+'/start'}
+    if origin is not None:
+        headers['Origin'] = origin
+    response = http.client.post(path, data=fields, base_url=ORIGIN, headers=headers)
+    assert response.status_code == 400
+    assert http.db.writes == before and http.exchanges == exchanges
+    assert http.db.data == state_before and not http.grants()['grants']
+
+
 def test_unsigned_or_tampered_link_refused_before_state_change(http):
     before = http.db.writes
     assert http.get('/start?request='+http.rid).status_code == 400
