@@ -26,7 +26,7 @@ from .page_receipt_model import digest
 ISSUER = 'https://accounts.google.com'
 SCHEMA = 'human-general-auth-requests-v1'
 ACTION = 'general_receipt'
-AI_CONSENT_ACTION = 'general_receipt_and_gemini'
+AI_CONSENT_ACTION = 'general_receipt_and_gemini_permission'
 TTL = 600
 UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
 

@@ -62,7 +62,7 @@ def validate_verified(value,config,owner_sub):
             if (set(evidence)!={'actor','binding','explicit_consent'} or evidence['binding']!=expected
                     or set(actor)!={'issuer','subject','email','method','verified_at','request_id','request_digest','policy_revision','verification_revision','actor_id'}
                     or type(actor['verified_at']) is not int
-                    or evidence['explicit_consent']!='general_receipt_and_gemini'
+                    or evidence['explicit_consent']!=AI_CONSENT_ACTION
                     or actor['issuer']!=ISSUER or actor['subject']!=owner_sub
                     or actor['actor_id']!=digest([ISSUER,owner_sub]) or actor['method']!='google_oidc_code_pkce_v1'
                     or actor['request_id']!=event['request_id'] or actor['request_digest']!=digest(expected)
@@ -159,7 +159,7 @@ class VerifiedDriveTransport:
         value=json.loads(raw);new=json.loads(after);actor=self.actor.record();rid=actor['request_id']
         if value['authority']['generation']!=0 or new['generation']!=1:raise StateError('real_page_one_grant_only')
         expected=request_binding(self.drive.page,rid,AI_CONSENT_ACTION)
-        value.update(authority=new,actor_evidence={rid:{'actor':actor,'binding':expected,'explicit_consent':'general_receipt_and_gemini'}})
+        value.update(authority=new,actor_evidence={rid:{'actor':actor,'binding':expected,'explicit_consent':AI_CONSENT_ACTION}})
         validate_verified(value,self.drive.config,self.owner_sub)
         proposed=canonical(value)
         self.drive.fresh()

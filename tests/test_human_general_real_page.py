@@ -91,9 +91,11 @@ def test_real_config_rejects_other_pages_sensitive_stale(monkeypatch,keys,change
     with pytest.raises(StateError):real.validate_config(cfg)
 
 
-def real_http(monkeypatch,keys):
+def real_http(monkeypatch,keys,*,past_seconds=0):
     drive,http,cfg,info=fixture(monkeypatch,keys)
     rig=HttpRig(keys)
+    # Start an old request in the past so the next signed JWT uses wall time.
+    rig.now-=past_seconds
     monkeypatch.setattr('services.human_general.real_runtime.RealPageDrive',lambda *_:drive)
     rig.runtime=RealPageRuntime(rig.db,rig.settings,rig.key,cfg,info,clock=lambda:rig.now,
         identity=rig.runtime.identity,exchange=rig.exchange)
@@ -120,7 +122,7 @@ def test_live_host_offline_owner_explicit_ai_consent_readback_and_replay(monkeyp
     value=real.validate_verified(json.loads(saved[cfg['authority_file']]),cfg,OWNER)
     assert len(value['authority']['grants'])==len(value['actor_evidence'])==1
     evidence=value['actor_evidence'][rig.rid]
-    assert evidence['binding']['requested_action']=='general_receipt_and_gemini'
+    assert evidence['binding']['requested_action']=='general_receipt_and_gemini_permission'
     assert evidence['actor']['subject']==OWNER and evidence['actor']['issuer']=='https://accounts.google.com'
     assert drive.page.automatic_classification=='sensitive_unknown'
     assert rig.confirm().status_code==rig.callback().status_code==rig.get(rig.start_path).status_code==409
@@ -158,3 +160,38 @@ def test_native_412_never_retried(monkeypatch,keys):
     http.race=True;assert rig.confirm().status_code==412
     assert len([r for r in http.requests if r[0]=='PUT'])==1
     assert not json.loads(http.payloads[cfg['authority_file']])['authority']['grants']
+
+
+def test_expired_incomplete_request_new_session_is_independent(monkeypatch,keys):
+    from urllib.parse import urlsplit,parse_qs
+    rig,drive,http,cfg=real_http(monkeypatch,keys,past_seconds=601)
+    rig.start();old_rid=rig.rid;old_path=rig.start_path;old_ticket=rig.ticket
+    old_record=rig.runtime.gateway(old_rid).store.load()['requests'][old_rid]
+    rig.now+=601
+    assert rig.get(old_path).status_code in {400,409,410}
+    assert not json.loads(http.payloads[cfg['authority_file']])['authority']['grants']
+    rig.link=rig.runtime.seed()
+    rig.start_path=urlsplit(rig.link).path+'?'+urlsplit(rig.link).query
+    rig.rid=parse_qs(urlsplit(rig.link).query)['request'][0]
+    record=rig.runtime.gateway(rig.rid).store.load()['requests'][rig.rid]
+    assert rig.rid!=old_rid and record['digest']!=old_record['digest']
+    assert record['binding']['requested_action']=='general_receipt_and_gemini_permission'
+    assert record['status']=='prepared' and record['expires_at']-record['created_at']==600
+    rig.start()
+    for field in ('state','nonce','cookie','csrf','pkce_verifier'):
+        assert getattr(rig.ticket,field)!=getattr(old_ticket,field)
+    assert rig.callback().status_code==303
+    assert not json.loads(http.payloads[cfg['authority_file']])['authority']['grants']
+    assert rig.confirm().status_code==303
+    assert 'p14の送信許可を保存しました' in rig.get('/result').get_data(as_text=True)
+    assert len(json.loads(http.payloads[cfg['authority_file']])['authority']['grants'])==1
+    saved=deepcopy(http.payloads);version=http.version
+    assert rig.get(rig.start_path).status_code==409
+    assert http.payloads==saved and http.version==version
+
+
+def test_previous_consent_action_not_silently_promoted(monkeypatch,keys):
+    from app.human_general_auth_transport import request_binding
+    drive,_,_,_=fixture(monkeypatch,keys)
+    with pytest.raises(StateError):
+        request_binding(drive.page,'00000000-0000-0000-0000-000000000001','general_receipt_and_gemini')

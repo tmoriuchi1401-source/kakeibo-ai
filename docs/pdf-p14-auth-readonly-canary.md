@@ -14,7 +14,7 @@ prepared and no Human General Authority is issued.
 
 ## Explicit consent and storage
 
-The new request action is `general_receipt_and_gemini`. Existing page-kind or
+The new request action is `general_receipt_and_gemini_permission`. Existing page-kind or
 legacy general selections do not become this consent. The existing Google
 OIDC signature, issuer, audience, timestamps, nonce, verified email and owner
 issuer/sub checks remain required. Login alone never issues authority; the
