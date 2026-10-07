@@ -6,6 +6,7 @@ There is no public seed/provision route or arbitrary source/page input.
 """
 from hashlib import sha256
 import json
+import time
 
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
@@ -79,6 +80,17 @@ class RealPageDrive:
         auth=service_account.Credentials.from_service_account_info(info,scopes=['https://www.googleapis.com/auth/drive'])
         self.http=session or AuthorizedSession(auth)
         self.allowed={SOURCE,config['folder'],config['authority_file'],*config['baseline_files']}
+        self._request_cache=None
+        self._acl_checked=False
+        self._deadline=None
+
+    def begin_request(self):
+        # HTTP-local only. Never share source bytes, ACL or authority across requests.
+        self._request_cache={};self._acl_checked=False
+        self._deadline=time.monotonic()+45
+
+    def end_request(self):
+        self._request_cache=None;self._acl_checked=False;self._deadline=None
 
     def request(self,fid,*,media=False,fields=None,put=None,tag=None):
         if fid not in self.allowed:raise StateError('real_page_drive_target_forbidden')
@@ -93,7 +105,9 @@ class RealPageDrive:
             params={'uploadType':'media','fields':'id,etag'};method='PUT'
             headers={'If-Match':tag,'Content-Type':'application/json'};body=put
         try:
-            response=self.http.request(method,url,params=params,data=body,headers=headers,timeout=25,allow_redirects=False)
+            remaining=25 if self._deadline is None else min(25,self._deadline-time.monotonic())
+            if remaining<=0 or (put is not None and remaining<5):raise StateError('real_page_request_budget_exceeded')
+            response=self.http.request(method,url,params=params,data=body,headers=headers,timeout=remaining,allow_redirects=False)
             if response.status_code==412:raise StateError('HTTP_412')
             if response.status_code!=200:raise StateError('real_page_drive_unavailable')
             if len(response.content)>100*1024*1024:raise StateError('real_page_drive_size_limit')
@@ -112,17 +126,32 @@ class RealPageDrive:
         return value
 
     def read(self,fid):
+        # Only immutable evidence within this request, never the authority store.
+        reusable=fid==SOURCE or fid in self.config['baseline_files']
+        if reusable and self._request_cache is not None and fid in self._request_cache:
+            return self._request_cache[fid]
         before=self.metadata(fid);payload=self.request(fid,media=True);after=self.metadata(fid)
         if before!=after:raise StateError('real_page_changed_during_read')
-        return payload,before['etag']
+        result=(payload,before['etag'])
+        if reusable and self._request_cache is not None:self._request_cache[fid]=result
+        return result
 
     def acl(self):
+        if self._request_cache is not None and self._acl_checked:return
         for fid in (self.config['folder'],self.config['authority_file']):
             value=self.request(fid,fields='id,owners(emailAddress),permissions(type,role,emailAddress,deleted)')
             owners=[o.get('emailAddress') for o in value.get('owners',[])]
             if len(owners)!=1 or digest(owners[0])!=self.config['owner_digest']:raise StateError('real_page_acl_mismatch')
             grants={(p.get('type'),p.get('role'),p.get('emailAddress')) for p in value.get('permissions',[]) if not p.get('deleted')}
             if grants!={('user','owner',owners[0]),('user','writer',self.sa)}:raise StateError('real_page_acl_mismatch')
+        if self._request_cache is not None:self._acl_checked=True
+
+    def refresh_before_write(self):
+        # A cache is not freshness authority. Re-read ACL, all baseline bytes,
+        # original PDF bytes/SHA256 immediately before the conditional PUT.
+        if self._request_cache is not None:self._request_cache.clear()
+        self._acl_checked=False
+        self.acl();self.fresh()
 
     def fresh(self):
         for fid,expected in self.config['baseline_files'].items():
@@ -142,12 +171,15 @@ class VerifiedDriveTransport:
     """Core-compatible inner state, durable signed-actor provenance envelope."""
     def __init__(self,drive,owner_sub,*,actor=None):
         self.drive,self.owner_sub,self.actor=drive,owner_sub,actor
+        self.stage=lambda *_:None
 
     def read_versioned(self):
+        self.stage('authority_state_read_started')
         self.drive.acl()
         raw,tag=self.drive.read(self.drive.config['authority_file'])
         try:value=validate_verified(json.loads(raw),self.drive.config,self.owner_sub)
         except (ValueError,TypeError):raise StateError('real_page_verified_state_invalid') from None
+        self.stage('authority_state_read_complete')
         return canonical(value['authority']),tag
 
     def replace_versioned(self,before,tag,after):
@@ -162,7 +194,12 @@ class VerifiedDriveTransport:
         value.update(authority=new,actor_evidence={rid:{'actor':actor,'binding':expected,'explicit_consent':AI_CONSENT_ACTION}})
         validate_verified(value,self.drive.config,self.owner_sub)
         proposed=canonical(value)
-        self.drive.fresh()
+        self.stage('source_freshness_started')
+        self.drive.refresh_before_write()
+        self.stage('source_freshness_verified')
+        self.stage('conditional_write_started')
         self.drive.request(self.drive.config['authority_file'],put=proposed,tag=tag)
+        self.stage('conditional_write_complete')
         check,_=self.drive.read(self.drive.config['authority_file'])
         if check!=proposed:raise StateError('real_page_authority_readback_mismatch')
+        self.stage('exact_readback_complete')

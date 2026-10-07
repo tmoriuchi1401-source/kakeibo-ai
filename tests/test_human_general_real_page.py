@@ -4,6 +4,7 @@ from hashlib import sha256
 from functools import partial
 import json
 from types import SimpleNamespace
+import time
 from cryptography.hazmat.primitives import serialization
 import pytest
 from app.drive_run_state import StateError
@@ -22,7 +23,7 @@ class FakeDriveHttp:
         self.payloads={k:('synthetic '+k).encode() for k in config['baseline_files']}
         self.payloads[config['authority_file']]=real.canonical(real.empty_verified_state(config['binding']))
     def request(self,method,url,*,params,data,headers,timeout,allow_redirects):
-        assert timeout==25 and allow_redirects is False
+        assert 0<timeout<=25 and allow_redirects is False
         self.requests.append((method,url,deepcopy(headers)))
         fid=url.split('/')[-1];status=200
         if method=='PUT':
@@ -195,3 +196,100 @@ def test_previous_consent_action_not_silently_promoted(monkeypatch,keys):
     drive,_,_,_=fixture(monkeypatch,keys)
     with pytest.raises(StateError):
         request_binding(drive.page,'00000000-0000-0000-0000-000000000001','general_receipt_and_gemini')
+
+
+def test_confirm_bounded_http_local_source_snapshot_fresh_again_before_put(monkeypatch,keys):
+    rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
+    http.requests.clear()
+    assert rig.confirm().status_code==303
+    downloads=[r for r in http.requests if r[0]=='GET' and r[1].endswith('/'+real.SOURCE)]
+    # Each full read has metadata/media/metadata: two distinct SHA256 reads.
+    assert len(downloads)==6
+    assert len([r for r in http.requests if r[0]=='PUT'])==1
+    assert drive._request_cache is None and drive._deadline is None
+    http.requests.clear();assert rig.get('/result').status_code==200
+    assert len([r for r in http.requests if r[1].endswith('/'+real.SOURCE)])==3
+
+
+@pytest.mark.parametrize('target',['source','baseline'])
+def test_http_snapshot_cannot_hide_change_before_write(monkeypatch,keys,target):
+    rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
+    original=drive.refresh_before_write
+    def changed():
+        if target=='source':http.raw+=b'changed'
+        else:http.payloads[next(iter(cfg['baseline_files']))]+=b'changed'
+        original()
+    drive.refresh_before_write=changed
+    assert rig.confirm().status_code in {400,409}
+    assert not any(r[0]=='PUT' for r in http.requests)
+    assert rig.runtime.gateway(rig.rid).store.load()['requests'][rig.rid]['status']=='claimed'
+    assert rig.runtime.reconcile(rig.rid)=='not_written'
+
+
+def test_source_read_timeout_after_claim_is_not_written_no_retry(monkeypatch,keys):
+    rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
+    original=drive.refresh_before_write
+    def failure():
+        drive._request_cache.clear()
+        raise StateError('real_page_drive_unavailable')
+    drive.refresh_before_write=failure
+    assert rig.confirm().status_code==400
+    assert rig.runtime.reconcile(rig.rid)=='not_written'
+    assert rig.runtime.gateway(rig.rid).store.load()['requests'][rig.rid]['status']=='claimed'
+    assert rig.confirm().status_code==409
+    assert not any(r[0]=='PUT' for r in http.requests)
+
+
+def test_authority_read_timeout_unknown_never_retries(monkeypatch,keys):
+    rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
+    _,tag=rig.runtime.state(rig.rid,'authorities').read_versioned()
+    original=drive.read
+    def failure(fid):
+        if fid==cfg['authority_file']:raise StateError('real_page_drive_unavailable')
+        return original(fid)
+    drive.read=failure
+    assert rig.post('/confirm',dict(action='confirm',csrf=rig.ticket.csrf,etag=tag)).status_code==400
+    assert rig.runtime.reconcile(rig.rid)=='unknown'
+    assert not any(r[0]=='PUT' for r in http.requests)
+
+
+def test_write_saved_then_request_response_failure_readback_written_no_reapply(monkeypatch,keys):
+    rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
+    original=rig.runtime.gateway
+    def gateway(rid):
+        result=original(rid);save=result.store.save
+        def fail_complete(value):
+            if value['requests'][rid]['status']=='complete':raise StateError('synthetic_conditional_save_unknown')
+            return save(value)
+        result.store.save=fail_complete
+        return result
+    rig.runtime.gateway=gateway
+    assert rig.confirm().status_code==400
+    assert rig.runtime.reconcile(rig.rid)=='written'
+    assert rig.runtime.gateway(rig.rid).store.load()['requests'][rig.rid]['status']=='claimed'
+    before=deepcopy(http.payloads);version=http.version
+    assert rig.confirm().status_code==409
+    assert http.payloads==before and http.version==version
+    assert len([r for r in http.requests if r[0]=='PUT'])==1
+
+
+def test_http_budget_expired_fails_before_network_or_write(monkeypatch,keys):
+    drive,http,cfg,_=fixture(monkeypatch,keys)
+    drive.begin_request();drive._deadline=time.monotonic()-1
+    with pytest.raises(StateError):drive.read(real.SOURCE)
+    with pytest.raises(StateError):drive.request(cfg['authority_file'],put=b'{}',tag='"v1"')
+    assert http.requests==[]
+    drive.end_request();assert drive._request_cache is None
+
+
+def test_stage_logs_are_allowlisted_and_do_not_emit_exception_text(monkeypatch,capsys):
+    from services.human_general.stages import Stages
+    monkeypatch.setenv('HGA_STAGE_DIAGNOSTICS','1')
+    trace=Stages('00000000-0000-0000-0000-000000000001')
+    trace('confirm_failed',outcome='unknown',exception=StateError('secret-token-must-not-appear'))
+    trace('response_sent',http_status=400)
+    trace('untrusted-stage-secret');trace('confirm_failed',outcome='untrusted-secret')
+    lines=capsys.readouterr().out.splitlines();assert len(lines)==2
+    assert 'secret' not in ''.join(lines) and '00000000-0000' not in ''.join(lines)
+    assert json.loads(lines[0])['exception_class']=='StateError'
+    assert json.loads(lines[1])['http_status']==400

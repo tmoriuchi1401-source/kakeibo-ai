@@ -5,7 +5,7 @@ import secrets
 import time
 from urllib.parse import urlsplit
 
-from flask import Flask, Response, request, redirect
+from flask import Flask, Response, request, redirect, g
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from markupsafe import escape
 from werkzeug.exceptions import HTTPException
@@ -34,7 +34,15 @@ def create_app(runtime_factory):
     app.config['MAX_CONTENT_LENGTH'] = 16384
 
     def runtime():
-        return runtime_factory()
+        if not hasattr(g,'hga_runtime'):
+            g.hga_runtime=runtime_factory()
+            if hasattr(g.hga_runtime,'drive'):g.hga_runtime.drive.begin_request()
+        return g.hga_runtime
+
+    @app.teardown_request
+    def discard_observation(_error):
+        rt=getattr(g,'hga_runtime',None)
+        if rt is not None and hasattr(rt,'drive'):rt.drive.end_request()
 
     def own_origin(rt):
         if request.headers.get('Origin') != rt.origin:
@@ -58,6 +66,9 @@ def create_app(runtime_factory):
 
     @app.after_request
     def headers(response):
+        rt=getattr(g,'hga_runtime',None)
+        if request.path=='/confirm' and request.method=='POST' and rt is not None and hasattr(rt,'_stages'):
+            rt._stages('response_sent',http_status=response.status_code)
         response.headers.update({
             # Form POSTs under no-referrer carry Origin:null in real browsers.
             # Preserve their Origin without exposing any URL path/query.
@@ -182,9 +193,15 @@ def create_app(runtime_factory):
             raise StateError('human_general_auth_csrf_invalid')
         if not request.form.get('etag'):
             raise StateError('HTTP_412')
-        gateway.confirm(session, cookie=request.cookies.get(COOKIE), csrf=request.form.get('csrf'),
-            origin=request.headers.get('Origin'), method='POST',
-            confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
+        try:
+            gateway.confirm(session, cookie=request.cookies.get(COOKIE), csrf=request.form.get('csrf'),
+                origin=request.headers.get('Origin'), method='POST',
+                confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
+        except Exception as error:
+            if hasattr(rt,'reconcile'):
+                outcome=rt.reconcile(session.request_id)
+                rt._stages('confirm_failed',outcome=outcome,exception=error)
+            raise
         return redirect('/result', code=303)
 
     @app.route('/result', methods=['GET'])

@@ -238,7 +238,7 @@ class BrowserSession:
 
 class AuthenticatedGeneralConfirmation:
     def __init__(self, store, identity, current_page, load_source, *, redirect_uri,
-                 exchange_code, clock=time.time, requested_action=ACTION):
+                 exchange_code, clock=time.time, requested_action=ACTION, stage=None):
         parsed = urlsplit(redirect_uri)
         if parsed.scheme != 'https' or not parsed.hostname or parsed.query or parsed.fragment or parsed.username:
             fail('redirect_invalid')
@@ -247,6 +247,7 @@ class AuthenticatedGeneralConfirmation:
         self.redirect_uri, self.exchange_code, self.clock = redirect_uri, exchange_code, clock
         if requested_action not in {ACTION,AI_CONSENT_ACTION}:fail('request_invalid')
         self.requested_action=requested_action
+        self.stage=stage or (lambda *_:None)
 
     def fresh(self, record):
         binding = record['binding']
@@ -338,15 +339,20 @@ class AuthenticatedGeneralConfirmation:
         return VerifiedActor(**{k: v for k, v in actor.items() if k != 'actor_id'})
 
     def confirm(self, ticket, *, cookie, csrf, origin, method, confirmation_factory):
+        self.stage('confirm_received')
         stored, record = self.record(ticket.request_id, 'authenticated')
         self.browser(record, ticket, cookie)
         if (method != 'POST' or not same(origin, self.origin) or not same(csrf, ticket.csrf)
                 or not same(fingerprint(csrf), record['session']['csrf'])):
             fail('csrf_invalid')
+        self.stage('session_verified')
         page = self.fresh(record)
+        self.stage('request_freshness_verified')
         record['status'] = 'claimed'
         self.store.save(stored)  # consume request before any authority mutation
+        self.stage('request_claimed')
         actor = self.verified_actor(ticket.request_id)
+        self.stage('actor_verified')
         service = confirmation_factory(lambda rid: self.verified_actor(rid).legacy_actor())
         grant = service.confirm(page, operation='confirm_general_receipt_ai', request_id=ticket.request_id)
         audit = service.store.load()['audit']
@@ -356,6 +362,7 @@ class AuthenticatedGeneralConfirmation:
         stored, record = self.record(ticket.request_id, 'claimed')
         record.update(status='complete', authority_digest=grant['confirmation_digest'])
         self.store.save(stored)
+        self.stage('request_complete')
         return {'request_id': ticket.request_id, 'actor_id': actor.actor_id,
                 'authority_digest': grant['confirmation_digest'], 'status': 'complete'}
 
