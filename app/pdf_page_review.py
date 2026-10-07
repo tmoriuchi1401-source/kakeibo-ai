@@ -20,7 +20,7 @@ SCHEMA = 'pdf-page-review-v1'
 LABELS = {'normal': '一般', 'medical': '医療', 'payroll': '給与', 'sensitive_unknown': '判定不能'}
 EDITABLE = {'kind_choice', 'kind_action', 'group_target', 'group_action', 'date', 'facility',
             'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target',
-            'merchant', 'manual_action', 'human_general_kind'}
+            'merchant', 'manual_action', 'human_general_kind', 'reconciliation_decision'}
 GROUP_ACTIONS = ['確定', '分割', '結合', '拒否', '保留']
 PAYMENT_DATE_HINT = '原本の支払日。PCではダブルクリックでカレンダー選択。直接入力も可：yyyy/mm/dd（例：2026/10/04）。入力途中は空欄可、確定時は必須。iPhoneでカレンダーが出ない場合は直接入力してください。'
 
@@ -271,6 +271,9 @@ class PageReviewSheet(GroupingSheet):
                 if field=='kind_choice':choices=['未選択',*KINDS]
                 if field=='human_general_kind':
                     from .page_receipt_review import CHOICES
+                    choices=CHOICES
+                if field=='reconciliation_decision':
+                    from .receipt_reconciliation_ui import CHOICES
                     choices=CHOICES
                 if field=='kind_action':choices=['種別を確定','保留']
                 if field=='group_action':choices=GROUP_ACTIONS
