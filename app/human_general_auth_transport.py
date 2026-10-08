@@ -53,7 +53,8 @@ def empty_auth_state(binding):
     return {'schema': SCHEMA, 'binding': binding, 'requests': {}}
 
 
-def validate_auth_state(value, binding):
+def validate_auth_state(value, binding, *, allowed_actions=None):
+    allowed_actions = {ACTION,AI_CONSENT_ACTION} if allowed_actions is None else allowed_actions
     try:
         if (set(value) != {'schema', 'binding', 'requests'} or value['schema'] != SCHEMA
                 or value['binding'] != binding or not isinstance(value['requests'], dict)
@@ -65,7 +66,7 @@ def validate_auth_state(value, binding):
                                                'authenticated', 'claimed', 'complete'}
                     or record['digest'] != digest(record['binding'])
                     or record['binding']['request_id'] != rid
-                    or record['binding']['requested_action'] not in {ACTION,AI_CONSENT_ACTION}
+                    or record['binding']['requested_action'] not in allowed_actions
                     or type(record['created_at']) is not int or type(record['expires_at']) is not int
                     or record['expires_at'] - record['created_at'] != TTL):
                 raise ValueError()
@@ -107,8 +108,8 @@ def validate_auth_state(value, binding):
 
 class AuthRequestStore(HumanGeneralAuthorityStore):
     """Reuse strong ETag / If-Match / exact read-back; dedicated binding/file."""
-    def __init__(self, transport, binding, *, preflight):
-        super().__init__(transport, binding, preflight=preflight, validator=validate_auth_state)
+    def __init__(self, transport, binding, *, preflight, validator=validate_auth_state):
+        super().__init__(transport, binding, preflight=preflight, validator=validator)
         self.lock = RLock()
 
     def load(self):

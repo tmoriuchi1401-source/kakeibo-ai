@@ -39,7 +39,7 @@ def pending(page):
     return {'identity':identity,'token':digest([identity,rows]),'rows':rows}
 
 
-def patch_requests(before_rows, expected_rows, card, categories, *, link=None):
+def patch_requests(before_rows, expected_rows, card, categories, *, link=None, preserve_owner_inputs=False):
     """Build a bounded batchUpdate from a fresh optimistic preflight read.
 
     A Sheets projection cannot confer authority. The backend must independently
@@ -50,7 +50,12 @@ def patch_requests(before_rows, expected_rows, card, categories, *, link=None):
     if len(indices)!=len(card['rows']):raise StateError('pdf_single_card_height_change_requires_review')
     token=card['token'];cells=[];serialized=[];requests=[]
     for index,(field,label,value) in zip(indices,card['rows']):
-        if field=='date':
+        retained=preserve_owner_inputs and field in {'date','amount','category','merchant','payment','memo'}
+        if retained:
+            existing=[before_rows[i] for i in indices if before_rows[i][5]==field]
+            if len(existing)!=1:raise StateError('pdf_single_card_owner_input_conflict')
+            value=existing[0][1] if len(existing[0])>1 else ''
+        if field=='date' and not retained:
             from .pdf_page_review import sheet_date_value
             value=sheet_date_value(value)
         encoded=[label,value,SCHEMA,token,json.dumps(ident,separators=(',',':')),field]+['']*8

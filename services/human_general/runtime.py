@@ -142,5 +142,8 @@ def configured_runtime():
         from .real_runtime import RealPageRuntime
         config=json.loads(Path(os.environ['HGA_REAL_PAGE_CONFIG_PATH']).read_text())
         info=json.loads(Path(os.environ['HGA_DRIVE_CREDENTIAL_PATH']).read_text())
+        if config.get('schema')=='human-general-page-profiles-v1':
+            from .page_router import PageRouter
+            return PageRouter(client,settings,key,config,info)
         return RealPageRuntime(client,settings,key,config,info)
     return SyntheticRuntime(client, settings, key)

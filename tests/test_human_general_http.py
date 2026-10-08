@@ -30,6 +30,9 @@ class Snapshot:
     def get(self, key):
         return self.data[key]
 
+    def to_dict(self):
+        return deepcopy(self.data)
+
 
 class Document:
     def __init__(self, db, path):

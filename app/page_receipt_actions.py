@@ -88,7 +88,8 @@ def execute_pages(env,checkout_sha,store,source,categories,expected,pem,*,prior,
         if mode!='page_multi':result['legacy_unit_id']=expected['unit_ids'][number]
         rows.append(result)
         if mode=='page_multi' and result['status'] not in {'would_import','would_need_review'}:break
-        if result['status']=='authority_held':break
+        # A held page is local. The final source hash/authority read-back below
+        # still refuses the entire diagnostic if the original changed.
     if mode=='page_multi' and len(rows)==2:
         from .page_receipt_real_fixture import verify_real_replay
         try:real_replay=verify_real_replay(*rows)

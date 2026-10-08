@@ -35,6 +35,21 @@ def test_fragmented_card_refused():
     with pytest.raises(StateError):patch_requests(before,before,pending(p),CATEGORIES)
 
 
+def test_existing_owner_input_values_survive_preanalysis_projection_exactly():
+    p,_=page();card=pending(p)
+    values={'date':'2026/10/05','amount':1485,'category':'食費 / 食料品',
+            'merchant':'本人入力店舗','payment':'','memo':'本人入力'}
+    before=[['unrelated',42]]+[[label,values.get(field,value),SCHEMA,'old',json.dumps(card['identity']),field]
+        for field,label,value in card['rows']]+[['other',13]]
+    original=json.loads(json.dumps(before))
+    patch=patch_requests(before,before,card,CATEGORIES,preserve_owner_inputs=True)
+    projected={row['values'][5]['userEnteredValue']['stringValue']:next(iter(row['values'][1]['userEnteredValue'].values()))
+        for row in patch[0]['updateCells']['rows']}
+    assert all(projected[field]==value for field,value in values.items())
+    assert projected['date']=='2026/10/05'  # No normalization or date resave.
+    assert before==original
+
+
 @pytest.mark.parametrize('count',[1,2,3])
 def test_completion_cards_expand_only_target_page_without_posting(count):
     from app.pdf_single_card_ui import completion_card_requests

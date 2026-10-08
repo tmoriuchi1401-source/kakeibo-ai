@@ -73,3 +73,19 @@ def test_independent_diagnosis_does_not_create_a_successful_p2_proof(local_ocr,k
     assert value['authority_unchanged'] and value['cloud_writes']==value['medical_calls']==value['source_moves']==0
     assert calls.call_count==6 and all(not r['accounting_allowed'] for r in value['results'])
     with pytest.raises(StateError,match='proof_stale'):actions.check_page_p2(value,env,expected)
+
+
+def test_one_held_page_does_not_stop_following_independent_pages(local_ocr,key,monkeypatch):
+    original=actions.ReadonlyPageReceipts.run
+    visited=[]
+    def run(self,sid,number,**kwargs):
+        visited.append(number)
+        if number==3:return {'page_number':3,'status':'authority_held','units':[]}
+        return original(self,sid,number,**kwargs)
+    monkeypatch.setattr(actions.ReadonlyPageReceipts,'run',run)
+    first,*_=run_model(key,monkeypatch);first['run_id']='99';visited.clear()
+    rest,summary,_,_,calls,_=run_model(key,monkeypatch,'page_remaining',first)
+    assert visited==[3,4,5,6]
+    assert rest['results'][0]['status']=='authority_held'
+    assert rest['results'][-1]['status'] in {'would_import','would_need_review'}
+    assert rest['authority_unchanged'] and rest['cloud_writes']==rest['medical_calls']==rest['source_moves']==0

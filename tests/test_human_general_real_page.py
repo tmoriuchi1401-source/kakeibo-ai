@@ -198,6 +198,61 @@ def test_previous_consent_action_not_silently_promoted(monkeypatch,keys):
         request_binding(drive.page,'00000000-0000-0000-0000-000000000001','general_receipt_and_gemini')
 
 
+def page_config(cfg,number):
+    value=deepcopy(cfg)
+    page=PageUnit.model_validate(value['page'])
+    page=page.model_copy(update={'page_number':number,'stable_page_identity':stable_page(page.source,number)})
+    page=page.model_copy(update={'review_identity':review_identity(page)})
+    value['page']=page.model_dump();value['authority_file']='synthetic-authority-p'+str(number)
+    value['binding']=digest([real.SCHEMA,value['folder'],value['authority_file'],page.source.model_dump(),number,page.review_identity])
+    return value
+
+
+@pytest.mark.parametrize('number',[4,10,14])
+def test_independent_pinned_profiles_exact_identity_and_no_cross_page(monkeypatch,keys,number):
+    drive,http,cfg,info=fixture(monkeypatch,keys)
+    cfg=page_config(cfg,number);http=FakeDriveHttp(cfg,http.raw)
+    drive=real.RealPageDrive(cfg,info,session=http)
+    assert drive.fresh().page_number==number
+    rig=HttpRig(keys)
+    monkeypatch.setattr('services.human_general.real_runtime.RealPageDrive',lambda *_:drive)
+    rt=RealPageRuntime(rig.db,rig.settings,rig.key,cfg,info,clock=lambda:rig.now,
+        identity=rig.runtime.identity,exchange=rig.exchange)
+    assert rt.current_page('request',real.SOURCE,number).page_number==number
+    for other in {1,4,10,14}-{number}:
+        with pytest.raises(StateError):rt.current_page('request',real.SOURCE,other)
+    assert all(row[0]=='GET' for row in http.requests)
+
+
+def test_profiles_duplicate_authority_and_cross_source_rejected(monkeypatch,keys):
+    from services.human_general.page_router import validate_profiles,SCHEMA
+    _,_,cfg,_=fixture(monkeypatch,keys)
+    profiles={'schema':SCHEMA,'profiles':{'p4':page_config(cfg,4),'p10':page_config(cfg,10),'p14':cfg}}
+    assert validate_profiles(profiles)==profiles
+    bad=deepcopy(profiles);bad['profiles']['p4']=cfg
+    with pytest.raises(StateError):validate_profiles(bad)
+    bad=deepcopy(profiles);bad['profiles']['p4']['authority_file']=cfg['authority_file']
+    with pytest.raises(StateError):validate_profiles(bad)
+
+
+def test_router_does_not_trust_browser_page_selection(monkeypatch,keys):
+    from services.human_general.page_router import PageRouter,SCHEMA
+    from services.human_general.backend import timestamp
+    from uuid import uuid4
+    drive,http,cfg,info=fixture(monkeypatch,keys);rig=HttpRig(keys)
+    profiles={'schema':SCHEMA,'profiles':{'p4':page_config(cfg,4),'p14':cfg}}
+    router=PageRouter(rig.db,rig.settings,rig.key,profiles,info,clock=lambda:rig.now,
+        identity=rig.runtime.identity,exchange=rig.exchange)
+    unknown=str(uuid4())
+    with pytest.raises(StateError):router.gateway(unknown)
+    rid=str(uuid4());rig.db.collection('real_request_profiles').document(rid).create(
+        dict(profile='p14',profile_digest=digest(cfg),expires_at=timestamp(rig.now+600)),retry=None,timeout=10)
+    monkeypatch.setattr('services.human_general.real_runtime.RealPageDrive',lambda *_:drive)
+    assert router.label(rid).startswith('p14')
+    with pytest.raises(StateError,match='cross_binding'):router.gateway(unknown)
+    router.drive.end_request()
+
+
 def test_confirm_bounded_http_local_source_snapshot_fresh_again_before_put(monkeypatch,keys):
     rig,drive,http,cfg=real_http(monkeypatch,keys);rig.start();rig.callback()
     http.requests.clear()

@@ -36,13 +36,15 @@ def create_app(runtime_factory):
     def runtime():
         if not hasattr(g,'hga_runtime'):
             g.hga_runtime=runtime_factory()
-            if hasattr(g.hga_runtime,'drive'):g.hga_runtime.drive.begin_request()
+            drive=getattr(g.hga_runtime,'drive',None)
+            if drive is not None:drive.begin_request()
         return g.hga_runtime
 
     @app.teardown_request
     def discard_observation(_error):
         rt=getattr(g,'hga_runtime',None)
-        if rt is not None and hasattr(rt,'drive'):rt.drive.end_request()
+        drive=getattr(rt,'drive',None)
+        if drive is not None:drive.end_request()
 
     def own_origin(rt):
         if request.headers.get('Origin') != rt.origin:
@@ -127,7 +129,8 @@ def create_app(runtime_factory):
             label=rt.label(value) if hasattr(rt,'label') else 'synthetic page'
             nonce = secrets.token_urlsafe(32)
             token = signer.dumps({'request': value, 'nonce_hash': sha256(nonce.encode()).hexdigest()})
-            response = Response(screen('一般レシートの確認',
+            heading=rt.start_heading(value) if hasattr(rt,'start_heading') else '一般レシートの確認'
+            response = Response(screen(heading,
                 '<p>対象：'+str(escape(label))+'</p><p>Googleで本人確認後、明示的に確定します。</p>'
                 '<form method="post" action="/start"><input type="hidden" name="request" value="'+value+'">'
                 '<input type="hidden" name="proof" value="'+str(escape(proof))+'">'
@@ -173,14 +176,18 @@ def create_app(runtime_factory):
             gateway.browser(record, session, request.cookies.get(COOKIE))
             gateway.fresh(record)
             _, tag = rt.state(session.request_id, 'authorities').read_versioned()
-            label='p14（今回の対象ページのみ）' if getattr(rt,'mode','')=='real_p14_authority_only' else 'synthetic page'
-            return Response(screen('一般レシートとして確定',
+            label=rt.label(session.request_id) if hasattr(rt,'label') else 'synthetic page'
+            text=rt.confirmation_text(session.request_id) if hasattr(rt,'confirmation_text') else {
+                'heading':'一般レシートとして確定',
+                'detail':'一般レシートであることを確認し、このページだけをGeminiへ送信して解析することを許可します。',
+                'button':'一般レシートとして確定しGemini送信を許可'}
+            return Response(screen(text['heading'],
                 '<p>対象：'+str(escape(label))+'</p><p>Googleアカウント：確認済み</p>'
-                '<p>一般レシートであることを確認し、このページだけをGeminiへ送信して解析することを許可します。</p>'
+                '<p>'+str(escape(text['detail']))+'</p>'
                 '<small>このテストでは会計処理を実行しません。</small>'
                 '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                 '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
-                '<button name="action" value="confirm">一般レシートとして確定しGemini送信を許可</button>'
+                '<button name="action" value="confirm">'+str(escape(text['button']))+'</button>'
                 '<button name="action" value="cancel">キャンセル</button></form>'))
         own_origin(rt)
         if request.form.get('action') == 'cancel':
@@ -212,11 +219,14 @@ def create_app(runtime_factory):
         _, record = gateway.record(session.request_id, 'complete')
         gateway.browser(record, session, request.cookies.get(COOKIE))
         page = gateway.fresh(record)
-        grant = rt.factory(session.request_id)(None).current(page)
-        if grant['confirmation_digest'] != record['authority_digest']:
-            raise StateError('synthetic_readback_mismatch')
-        label='p14の送信許可を保存しました' if getattr(rt,'mode','')=='real_p14_authority_only' else 'synthetic確認を保存しました'
-        return Response(screen('確認が完了しました','<p>'+label+'。</p><p>会計処理は実行していません。</p>'))
+        if hasattr(rt,'validate_result'):
+            rt.validate_result(session.request_id,record)
+        else:
+            grant = rt.factory(session.request_id)(None).current(page)
+            if grant['confirmation_digest'] != record['authority_digest']:
+                raise StateError('synthetic_readback_mismatch')
+        label=rt.success_label(session.request_id) if hasattr(rt,'success_label') else 'synthetic確認を保存しました'
+        return Response(screen('確認が完了しました','<p>'+str(escape(label))+'。</p><p>会計処理は実行していません。</p>'))
 
     return app
 

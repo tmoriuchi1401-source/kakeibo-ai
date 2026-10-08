@@ -170,7 +170,7 @@ def test_cleanup_expiry_namespace_legacy_unknown_and_wrong_ttl_fail_closed():
 def test_ui_reuses_existing_card_and_hides_rows_without_clear_or_delete():
     r=Rig();card=reconciliation_card(r.ident,r.ledger,r.b['ledger_snapshot_digest'])
     assert [x[0] for x in card['rows']].count('reconciliation_decision')==1
-    assert [x[2] for x in card['rows'] if x[0]=='reconciliation_decision']==['判断できない']
+    assert [x[2] for x in card['rows'] if x[0]=='reconciliation_decision']==['未選択']
     r.confirm();state=r.repo.get_current(r.ident)
     assert visible_cards([card],{audit.entity_key(r.ident):state})==[]
     unrelated={'identity':{'kind':'general_manual'},'token':'other','rows':[]}
@@ -267,7 +267,7 @@ def test_existing_pdf_card_publisher_provides_exact_dropdown_no_new_sheet():
     sheet.publish_cards([card])
     rules=[x['setDataValidation']['rule'] for x in native.formats if x.get('setDataValidation',{}).get('rule')]
     assert any(x['condition']['type']=='ONE_OF_LIST' and x['condition']['values']==[
-        {'userEnteredValue':s} for s in ('同一レシート','別のレシート','判断できない')] and x['strict'] for x in rules)
+        {'userEnteredValue':s} for s in ('未選択','同一レシート','別のレシート','判断できない')] and x['strict'] for x in rules)
     assert not any('addSheet' in x for x in native.formats)
     rows=native.writes[-1][0]['values']
     assert next(row for row in rows if len(row)>5 and row[5]=='reconciliation_decision')[1]=='別のレシート'
@@ -279,6 +279,37 @@ def test_ui_failure_after_commit_replay_never_appends_again():
     with pytest.raises(OSError):raise OSError('synthetic UI refresh failure')
     assert r.confirm()['replayed'] is True
     assert r.repo.writes==1 and r.repo.current==before
+
+
+def test_insert_comparison_preserves_owner_inputs_and_other_page_cards():
+    import json
+    from app.receipt_reconciliation_ui import append_reconciliation_requests
+    from app.pdf_page_review import SCHEMA
+    r=Rig();other=identity(4)
+    medical={**r.ident,'page_numbers':[1],'kind':'medical_manual'}
+    general={**other,'page_numbers':[4],'kind':'general_manual'}
+    rows=[['項目','内容'],
+        ['支払日',46299,SCHEMA,'old-medical',json.dumps(medical),'date'],
+        ['施設名','Synthetic facility',SCHEMA,'old-medical',json.dumps(medical),'facility'],
+        ['実支払額',159,SCHEMA,'old-medical',json.dumps(medical),'amount'],
+        ['カテゴリ','医療',SCHEMA,'old-medical',json.dumps(medical),'category'],
+        ['支払日','',SCHEMA,'old-general',json.dumps(general),'date']]
+    original=deepcopy(rows)
+    card=reconciliation_card(r.ident,r.ledger,r.b['ledger_snapshot_digest'],preview={
+        'date':'2026/10/05','facility':'Synthetic facility','amount':159,'category':'医療',
+        'source_file_id':'synthetic-other-pdf'})
+    requests=append_reconciliation_requests(rows,original,card)
+    assert rows==original
+    assert requests[0]['insertDimension']['range']['startIndex']==5
+    assert not any('deleteDimension' in x or 'addSheet' in x for x in requests)
+    writes=[x['updateCells'] for x in requests if 'updateCells' in x]
+    assert len(writes)==1 and writes[0]['range']['startRowIndex']==5
+    text=json.dumps(requests,ensure_ascii=False)
+    assert 'existing_other_p1' not in text
+    # Comparison date is read-only display; it cannot be mistaken for input date.
+    assert all(row[0]!='date' for row in card['rows'])
+    assert card['identity'].get('date') is None
+    with pytest.raises(StateError):append_reconciliation_requests(rows,rows[:-1],card)
 
 
 def test_concurrent_same_confirmation_creates_exactly_one_event():

@@ -14,7 +14,7 @@ class RealPageRuntime(SyntheticRuntime):
         super().__init__(client,settings,key,**kwargs)
         self.drive=RealPageDrive(config,info)
         self.config=config
-        self.mode='real_p14_authority_only'
+        self.mode='real_p14_authority_only' if self.drive.page.page_number==14 else 'real_page_authority_only'
 
     def state(self,rid,kind):
         from app.human_general_auth_transport import UUID
@@ -24,7 +24,7 @@ class RealPageRuntime(SyntheticRuntime):
         raise StateError('real_page_state_forbidden')
 
     def current_page(self,rid,source_id,number):
-        if source_id!=self.drive.page.source.source_file_id or number!=14:raise StateError('real_page_target_forbidden')
+        if source_id!=self.drive.page.source.source_file_id or number!=self.drive.page.page_number:raise StateError('real_page_target_forbidden')
         return self.drive.fresh()
 
     def source(self,source_id):return self.drive.source(source_id)
@@ -71,8 +71,10 @@ class RealPageRuntime(SyntheticRuntime):
         return build
 
     def label(self,rid):
-        self.gateway(rid).record(rid,'prepared')
-        return 'p14（今回の対象ページのみ）'
+        return 'p'+str(self.drive.page.page_number)+'（今回の対象ページのみ）'
+
+    def success_label(self,rid):
+        return 'p'+str(self.drive.page.page_number)+'の送信許可を保存しました'
 
     def seed(self):
         # Operator only; fail closed if this page already has any HGA.

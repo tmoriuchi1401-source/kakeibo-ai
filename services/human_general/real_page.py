@@ -30,7 +30,7 @@ def validate_config(config):
         if set(config)!={'page','folder','inbox','authority_file','baseline_files','owner_digest','binding'}:raise ValueError()
         page=PageUnit.model_validate(config['page'])
         if (page.source.source_file_id!=SOURCE or page.source.source_content_hash!=HASH or page.source.page_count!=14
-                or page.page_number!=14 or page.authority_revision!=2 or page.processing_status!='observed'
+                or page.page_number not in {4,10,14} or page.authority_revision!=2 or page.processing_status!='observed'
                 or page.automatic_classification!='sensitive_unknown' or page.automatic_reason!='privacy_unresolved'
                 or not eligible(page) or page.review_identity!=review_identity(page)):raise ValueError()
         fixed={'1ju2rEDWrlpALr-9d4JEN9yaPfTuKtFCq','1atHszVu7J-OXPbJkhCMhsvhiyz6QEdsR',
@@ -40,7 +40,7 @@ def validate_config(config):
         if any(not re.fullmatch('[0-9a-f]{64}',v) for v in [config['owner_digest'],*config['baseline_files'].values()]):raise ValueError()
         for v in (config['folder'],config['inbox'],config['authority_file']):
             if not re.fullmatch('[A-Za-z0-9_-]{10,150}',v):raise ValueError()
-        if config['binding']!=digest([SCHEMA,config['folder'],config['authority_file'],page.source.model_dump(),14,page.review_identity]):raise ValueError()
+        if config['binding']!=digest([SCHEMA,config['folder'],config['authority_file'],page.source.model_dump(),page.page_number,page.review_identity]):raise ValueError()
     except Exception:raise StateError('real_page_configuration_invalid') from None
     return page
 
