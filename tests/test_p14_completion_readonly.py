@@ -70,7 +70,7 @@ def test_changed_durable_hga_after_first_analysis_stops_replay(local_ocr,key,mon
 
 
 def test_p14_manual_mode_uses_unchanged_no_writer_flags():
-    env={**environment(),'PDF_READONLY_MODE':'page_p14'}
+    env={**environment(),'PDF_READONLY_MODE':'page_p14','PDF_HGA_READONLY_BINDING_ID':'private-reference-id'}
     runner.require_context(env,'a'*40)
     env['PDF_ACCOUNTING_ENABLED']='true'
     with pytest.raises(StateError):runner.require_context(env,'a'*40)
@@ -111,13 +111,30 @@ def test_verified_drive_readonly_context_bound_and_tamper_rejected(monkeypatch,k
         http.payloads[cfg['authority_file']]=json.dumps(value).encode()
         config['authority_sha256']=sha256(http.payloads[cfg['authority_file']]).hexdigest()
     elif tamper=='source':http.raw+=b'changed'
-    blob=runner.encrypted(config,key)
-    env={'PDF_HGA_READONLY_BINDING':json.dumps(blob),'GOOGLE_SERVICE_ACCOUNT_JSON':'{}'}
+    env={'PDF_HGA_READONLY_BINDING_ID':'private-reference-id','GOOGLE_SERVICE_ACCOUNT_JSON':'{}'}
+    reader=SimpleNamespace(read=lambda:(deepcopy(config),'a'*64,'"binding-tag"'))
     writes=len([r for r in http.requests if r[0]=='PUT'])
-    def call():return canary.context(env,key,{'source_file_id':drive.page.source.source_file_id},lambda *_:drive.page,drive_factory=lambda *_:drive)
+    def call():return canary.context(env,key,{'source_file_id':drive.page.source.source_file_id},lambda *_:drive.page,
+        drive_factory=lambda *_:drive,binding_factory=lambda *_:reader)
     if tamper:
         with pytest.raises(StateError):call()
     else:
         p,grant,check=call();assert 'single_page_ai' in grant(p)['authority_scope'];check()
         with pytest.raises(StateError):drive.request(cfg['authority_file'],put=b'{}',tag='"v2"')
     assert len([r for r in http.requests if r[0]=='PUT'])==writes
+
+
+def test_binding_must_stay_fresh_through_grant_and_final_check(monkeypatch,keys,key):
+    from test_human_general_real_page import real_http
+    from app.page_receipt_model import digest
+    from hashlib import sha256
+    rig,drive,http,cfg=real_http(monkeypatch,keys)
+    rig.start();rig.callback();rig.confirm()
+    config={'drive':cfg,'actor_id':digest(['https://accounts.google.com',OWNER]),'authority_sha256':sha256(http.payloads[cfg['authority_file']]).hexdigest()}
+    reader=Mock();reader.read.return_value=(config,'a'*64,'"initial"')
+    env={'PDF_HGA_READONLY_BINDING_ID':'private-reference-id','GOOGLE_SERVICE_ACCOUNT_JSON':'{}'}
+    page,grant,check=canary.context(env,key,{'source_file_id':drive.page.source.source_file_id},lambda *_:drive.page,
+        drive_factory=lambda *_:drive,binding_factory=lambda *_:reader)
+    reader.read.return_value=(config,'a'*64,'"changed"')
+    with pytest.raises(StateError,match='binding_changed'):grant(page)
+    with pytest.raises(StateError,match='binding_changed'):check()

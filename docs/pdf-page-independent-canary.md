@@ -39,6 +39,10 @@ terminal表示は行非表示によるprojectionであり、入力・ledger・�
 
 ## 一般ページ
 
+read-only解析bindingはprivate Driveの軽量metadata descriptorへ保存する。GitHub VariableへJSON・暗号文・actor metadataを置かない。
+manual workflowへ渡すのは`hga_binding_id`の参照IDだけ。既存service accountのDrive read-only scopeで、既存private folder、owner digest、owner+service accountだけのACL、strong ETag、schema/digestをfresh検証する。
+descriptorとHGA stateは別の正本。解析直前・grant確認・解析後にも両方をread-backし、bytes/ETagが変われば対象ページだけ停止する。GET以外のHTTP、unconditional write、古いVariableへのfallbackはない。
+
 有効なページ専用HGAだけを使い、Actions内でfresh RGB PNG1ページを送る。元PDF、Medical、別ページの送信は禁止。
 Receipt Unit manifestと独立rereadを検証し、信頼できるfieldだけ共通手入力カードへpre-fillする。
 既存の本人入力を消さない。新しいcandidateのdigestへbindingし、human/human_overrideとして最終validationする。

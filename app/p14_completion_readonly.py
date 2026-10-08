@@ -1,7 +1,7 @@
-"""Authenticated p14 only, two bounded read-only analyses with frozen IDs.
+"""Authenticated single-page, two bounded read-only analyses with frozen IDs.
 
-No writer, authority save or projection mutations. Config is encrypted to the
-existing SA key in a manual-only Actions Variable. Secret stays in the runner.
+No writer, authority save or projection mutations. Binding is freshly read from
+private Drive; Actions receives only a reference ID. Secrets stay in the runner.
 """
 from hashlib import sha256
 import json
@@ -39,13 +39,21 @@ def corroborate_replay(first,second):
     return validate_draft(result)
 
 
-def context(env,pem,expected,current,*,drive_factory=None):
-    from .pdf_unit_readonly_analysis import decrypted
+def context(env,pem,expected,current,*,drive_factory=None,binding_factory=None):
+    from .hga_readonly_binding import PrivateBindingReader
     from services.human_general.real_page import RealPageDrive,validate_verified
     try:
-        config=decrypted(json.loads(env['PDF_HGA_READONLY_BINDING']),pem)
+        info=json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
+        reader=(binding_factory or PrivateBindingReader)(env,pem,info)
+        config,binding_hash,binding_tag=reader.read()
         if set(config)!={'drive','actor_id','authority_sha256'}:raise ValueError()
-        drive=(drive_factory or RealPageDrive)(config['drive'],json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON']))
+        if drive_factory is None:
+            from google.auth.transport.requests import AuthorizedSession
+            from google.oauth2 import service_account
+            readonly=AuthorizedSession(service_account.Credentials.from_service_account_info(
+                info,scopes=['https://www.googleapis.com/auth/drive.readonly']))
+            drive=RealPageDrive(config['drive'],info,session=readonly)
+        else:drive=drive_factory(config['drive'],info)
         # Defense in depth: mutation interface is removed before any read.
         request=drive.request
         def get(fid,**kw):
@@ -57,6 +65,7 @@ def context(env,pem,expected,current,*,drive_factory=None):
         if target is None or page.page_number!=target or page!=current(expected['source_file_id'],target):
             raise StateError('readonly_hga_page_changed')
         def read():
+            if reader.read()!=(config,binding_hash,binding_tag):raise StateError('readonly_hga_binding_changed')
             raw,tag=drive.read(config['drive']['authority_file'])
             if sha256(raw).hexdigest()!=config['authority_sha256']:raise StateError('readonly_hga_changed')
             value=json.loads(raw)

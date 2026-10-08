@@ -72,6 +72,8 @@ def require_context(env,checkout_sha):
         raise StateError('readonly_page_batch_required')
     if env['PDF_READONLY_MODE']=='page_diagnose' and env.get('PDF_READONLY_PAGE_BATCH') not in {'p3-p6','p7-p10','p11-p14','problem-pages'}:
         raise StateError('readonly_page_batch_required')
+    if env['PDF_READONLY_MODE'] in {'page_p4','page_p10','page_p14'} and not re.fullmatch('[A-Za-z0-9_-]{10,150}',env.get('PDF_HGA_READONLY_BINDING_ID','')):
+        raise StateError('readonly_hga_reference_required')
 
 
 def github_get(path,token,*,binary=False):
