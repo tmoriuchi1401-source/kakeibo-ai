@@ -9,11 +9,12 @@ from google.auth.transport.requests import AuthorizedSession
 from google.oauth2 import service_account
 from app.drive_run_state import StateError
 from app.receipt_audit import validate_identity,digest,checked_hash
-from app.pdf_page_review import SCHEMA
-from app.pdf_unit_readonly_analysis import SOURCE_KEY
 from .real_page import RealPageDrive,SOURCE,HASH,validate_config
 
 SID='1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow'
+# Read-only wire contracts. Do not import UI/processor modules into this host.
+SCHEMA='pdf-page-review-v1'
+SOURCE_KEY='7bef7c636cf64f9a8cd40aefefcf0a668f2fdc4564217ddbee45ff69ee6f8d84'
 
 
 def validate_reconciliation_config(config):

@@ -5,6 +5,7 @@ COPY services/human_general/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Explicit whitelist: no Google clients, processors or accounting writers.
 COPY app/__init__.py app/drive_run_state.py app/conditional_drive_state_v2.py app/human_general_authority.py app/human_general_auth_transport.py app/page_receipt_model.py app/pdf_page_identity.py app/models.py app/receipt_validation.py ./app/
+COPY app/receipt_retention.py app/receipt_audit.py app/receipt_audit_firestore.py app/receipt_reconciliation_authority.py app/receipt_reconciliation_auth_transport.py ./app/
 COPY services/human_general/ ./services/human_general/
 RUN useradd --system --uid 10001 hga
 USER 10001
