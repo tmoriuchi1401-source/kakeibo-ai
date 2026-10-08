@@ -14,9 +14,10 @@ from test_pdf_unit_readonly_analysis import environment
 from test_human_general_auth_transport import keys,OWNER
 
 
-def run(key,monkeypatch,*,blocked=False,changing=False):
+def run(key,monkeypatch,*,blocked=False,changing=False,number=14):
     kinds=['medical']+['normal']*12+['unknown']
-    p,raw=page('unknown',14,kinds);svc,_=confirmation(p)
+    kinds[number-1]='unknown'
+    p,raw=page('unknown',number,kinds);svc,_=confirmation(p)
     grant=svc.confirm(p,operation='confirm_general_receipt_ai',request_id='00000000-0000-4000-8000-000000000001')
     store=Mock(payload=b'fixed',tag='"tag"');store.load.return_value={'fixed':True}
     source=Mock(return_value=raw)
@@ -24,13 +25,13 @@ def run(key,monkeypatch,*,blocked=False,changing=False):
     calls=Mock(side_effect=[SimpleNamespace(output_text=json.dumps(wire_value(reading(1)))) for _ in range(4)])
     factory=Mock(side_effect=lambda key,model,permission:GeminiPageReceipts(SimpleNamespace(interactions=SimpleNamespace(create=calls)),model,permission))
     expected={'source_file_id':p.source.source_file_id}
-    env={**environment(),'PDF_READONLY_MODE':'page_p14','GOOGLE_SERVICE_ACCOUNT_JSON':json.dumps({'private_key':key})}
+    env={**environment(),'PDF_READONLY_MODE':'page_p'+str(number),'GOOGLE_SERVICE_ACCOUNT_JSON':json.dumps({'private_key':key})}
     def hga(*_):
         if blocked:raise StateError('readonly_verified_actor_missing')
         def fresh():
             if changing and calls.call_count:raise StateError('readonly_hga_changed')
         return p,lambda _:grant,fresh
-    value,summary=canary.execute_p14(env,'a'*40,store,source,CATEGORIES,expected,key,factory=factory,open_hga=hga)
+    value,summary=canary.execute_hga_page(env,'a'*40,store,source,CATEGORIES,expected,key,factory=factory,open_hga=hga)
     return runner.decrypted(value,key),summary,calls
 
 
@@ -48,6 +49,20 @@ def test_only_p14_two_independent_readings_twice_and_blank_optional(local_ocr,ke
 
 def test_missing_verified_hga_before_any_gemini(local_ocr,key,monkeypatch):
     with pytest.raises(StateError,match='verified_actor'):run(key,monkeypatch,blocked=True)
+
+
+@pytest.mark.parametrize('number',[4,10,14])
+def test_each_authorized_page_is_independent_and_exact_single_png(local_ocr,key,monkeypatch,number):
+    value,summary,calls=run(key,monkeypatch,number=number)
+    assert value['mode']=='page_p'+str(number) and value['page']['page_number']==number
+    assert summary['receipt_manifest_replay'] and calls.call_count==4
+    assert all(row['payload_pages']==[number] for row in value['results'])
+    assert value['cloud_writes']==value['medical_calls']==value['source_moves']==value['p1_submitted']==0
+
+
+def test_p14_compatibility_entrypoint_cannot_select_other_page(key,monkeypatch):
+    with pytest.raises(StateError,match='p14_only'):
+        canary.execute_p14({'PDF_READONLY_MODE':'page_p4'})
 
 
 def test_changed_durable_hga_after_first_analysis_stops_replay(local_ocr,key,monkeypatch):

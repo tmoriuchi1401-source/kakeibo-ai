@@ -53,7 +53,9 @@ def context(env,pem,expected,current,*,drive_factory=None):
             return request(fid,**kw)
         drive.request=get
         drive.acl();page=drive.fresh()
-        if page!=current(expected['source_file_id'],14):raise StateError('readonly_hga_page_changed')
+        target={'page_p4':4,'page_p10':10,'page_p14':14}.get(env.get('PDF_READONLY_MODE','page_p14'))
+        if target is None or page.page_number!=target or page!=current(expected['source_file_id'],target):
+            raise StateError('readonly_hga_page_changed')
         def read():
             raw,tag=drive.read(config['drive']['authority_file'])
             if sha256(raw).hexdigest()!=config['authority_sha256']:raise StateError('readonly_hga_changed')
@@ -79,12 +81,15 @@ def context(env,pem,expected,current,*,drive_factory=None):
     except Exception:raise StateError('readonly_hga_configuration_invalid') from None
 
 
-def execute_p14(env,checkout_sha,store,source,categories,expected,pem,*,factory=None,open_hga=context):
+def execute_hga_page(env,checkout_sha,store,source,categories,expected,pem,*,factory=None,open_hga=context):
     from .page_receipt_actions import load_page,page_analyzer
     from .pdf_unit_readonly_analysis import encrypted
     initial=store.load();initial_bytes,tag=store.payload,store.tag
-    current=lambda sid,n:load_page(store,expected,sid,n) if n==14 else forbidden_page()
+    target={'page_p4':4,'page_p10':10,'page_p14':14}.get(env.get('PDF_READONLY_MODE'))
+    if target is None:raise StateError('readonly_hga_target_forbidden')
+    current=lambda sid,n:load_page(store,expected,sid,n) if n==target else forbidden_page()
     page,grant,unchanged=open_hga(env,pem,expected,current)
+    if page.page_number!=target:raise StateError('readonly_hga_page_changed')
     permission=lambda p,png:authorize_payload(p,png,current_page=current,load_source=source,load_grant=grant)
     model=env.get('NORMAL_RECEIPT_GEMINI_MODEL','gemini-3.5-flash-lite')
     analyzer=(factory or page_analyzer)(env['GEMINI_API_KEY'],model,permission)
@@ -92,7 +97,7 @@ def execute_p14(env,checkout_sha,store,source,categories,expected,pem,*,factory=
     rows=[]
     for _ in range(2):
         unchanged()
-        result=runner.run(expected['source_file_id'],14,previous=rows[0] if rows else None)
+        result=runner.run(expected['source_file_id'],target,previous=rows[0] if rows else None)
         rows.append(result)
         if result['status'] not in {'would_import','would_need_review'}:break
     replay=(len(rows)==2 and bool(rows[0].get('manifest')) and rows[0]['manifest']==rows[1].get('manifest'))
@@ -104,7 +109,8 @@ def execute_p14(env,checkout_sha,store,source,categories,expected,pem,*,factory=
     unchanged()
     if store.load()!=initial or (store.payload,store.tag)!=(initial_bytes,tag):raise StateError('readonly_authority_changed')
     if sha256(source(expected['source_file_id'])).hexdigest()!=page.source.source_content_hash:raise StateError('readonly_source_changed')
-    value={'schema':'p14-completion-readonly-v1','mode':'page_p14','run_id':env['GITHUB_RUN_ID'],'code_sha':checkout_sha,
+    value={'schema':'p14-completion-readonly-v1' if target==14 else 'page-completion-readonly-v1',
+        'mode':env['PDF_READONLY_MODE'],'run_id':env['GITHUB_RUN_ID'],'code_sha':checkout_sha,
         'page':page.model_dump(),'results':rows,'gemini_model':model,'gemini_calls':analyzer.calls,
         'receipt_manifest_replay':replay,'completion_drafts':drafts,'hga_unchanged':True,'grouping_unchanged':True,
         'authority_writes':0,'cloud_writes':0,'medical_calls':0,'source_moves':0,'p1_rendered':0,'p1_submitted':0,
@@ -119,4 +125,9 @@ def execute_p14(env,checkout_sha,store,source,categories,expected,pem,*,factory=
         'counts':{s:sum(r['status']==s for r in rows) for s in ('would_import','would_need_review','receipt_segmentation_review','privacy_blocked','analysis_failed','authority_held')}}
 
 
-def forbidden_page():raise StateError('readonly_p14_only')
+def execute_p14(env,*args,**kwargs):
+    if env.get('PDF_READONLY_MODE')!='page_p14':raise StateError('readonly_p14_only')
+    return execute_hga_page(env,*args,**kwargs)
+
+
+def forbidden_page():raise StateError('readonly_single_hga_page_only')

@@ -9,7 +9,7 @@ on:
         required: true
       mode:
         type: choice
-        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay, page_multi, page_diagnose, page_p14]
+        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay, page_multi, page_diagnose, page_p4, page_p10, page_p14]
         default: p2
         required: true
       confirm:
