@@ -16,16 +16,18 @@ MAX_EVENT_BYTES = 2048
 MAX_CURRENT_BYTES = 2048
 EVENT_TYPES = {'reconciled_existing', 'confirmed_distinct', 'duplicate_confirmed',
                'imported', 'manual_imported', 'medical_manual_imported',
-               'hga_confirmed', 'intentionally_skipped'}
+               'hga_confirmed', 'item_structure_confirmed', 'intentionally_skipped'}
 ACTIONS = {k: ('reconcile_receipt' if k in {'reconciled_existing','confirmed_distinct','duplicate_confirmed'}
                else 'general_receipt_and_gemini_permission' if k == 'hga_confirmed'
+               else 'confirm_receipt_item_snapshot' if k == 'item_structure_confirmed'
                else 'medical_manual_confirm' if k == 'medical_manual_imported'
                else 'skip_receipt' if k == 'intentionally_skipped' else 'post_receipt') for k in EVENT_TYPES}
 REASONS = {'reconciled_existing': 'owner_verified_existing_receipt',
            'confirmed_distinct': 'owner_verified_distinct_pair', 'imported': 'writer_exact_readback',
            'duplicate_confirmed': 'explicit_duplicate_confirmed', 'hga_confirmed': 'explicit_hga_ai_consent',
            'intentionally_skipped': 'owner_intentionally_skipped', 'manual_imported': 'manual_writer_exact_readback',
-           'medical_manual_imported': 'medical_manual_exact_readback'}
+           'medical_manual_imported': 'medical_manual_exact_readback',
+           'item_structure_confirmed': 'owner_verified_item_snapshot'}
 REASON_CODES = set(REASONS.values())
 # Void/replacement are documented future event types; no posting/void handler.
 TERMINAL = {'imported', 'manual_imported', 'medical_manual_imported', 'reconciled_existing',
@@ -152,7 +154,8 @@ def current_after(value, revision):
     validate_event(value)
     if type(revision) is not int or revision < 0: raise StateError('audit_current_revision_invalid')
     identity = {k: value[k] for k in IDENTITY_FIELDS}
-    status = {'confirmed_distinct': 'confirmed_distinct', 'hga_confirmed': 'needs_human_completion'}.get(value['event_type'], value['event_type'])
+    status = {'confirmed_distinct': 'confirmed_distinct', 'hga_confirmed': 'needs_human_completion',
+              'item_structure_confirmed': 'ready_to_write'}.get(value['event_type'], value['event_type'])
     result = {**pending(identity), 'state_revision': revision+1, 'status': status,
               'ledger_id': value['ledger_id'], 'last_event': {'year': partition(value), 'event_id': value['event_id']},
               'last_authority_digest': value['authority_digest']}

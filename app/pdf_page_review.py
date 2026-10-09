@@ -16,13 +16,12 @@ from .receipt_confirmation import review_id
 from .receipt_pdf_units import _digest
 from .pdf_page_general import CONFIRM_ACTION, CONFIRM_ACTIONS, input_rows
 
-SCHEMA = 'pdf-page-review-v1'
+from .pdf_review_fields import SCHEMA, PAYMENT_DATE_HINT, sheet_date_value, original_uri
 LABELS = {'normal': '一般', 'medical': '医療', 'payroll': '給与', 'sensitive_unknown': '判定不能'}
 EDITABLE = {'kind_choice', 'kind_action', 'group_target', 'group_action', 'date', 'facility',
             'amount', 'category', 'payment', 'memo', 'medical_action', 'duplicate_target',
             'merchant', 'manual_action', 'human_general_kind', 'reconciliation_decision'}
 GROUP_ACTIONS = ['確定', '分割', '結合', '拒否', '保留']
-PAYMENT_DATE_HINT = '原本の支払日。PCではダブルクリックでカレンダー選択。直接入力も可：yyyy/mm/dd（例：2026/10/04）。入力途中は空欄可、確定時は必須。iPhoneでカレンダーが出ない場合は直接入力してください。'
 
 
 def payment_date_ui_requests(rows, *, sheet_id=SHEET_ID, start_row_index=0):
@@ -48,32 +47,6 @@ def payment_date_ui_requests(rows, *, sheet_id=SHEET_ID, start_row_index=0):
                 'userEnteredFormat': {'numberFormat': {'type': 'DATE', 'pattern': 'yyyy/mm/dd'}},
                 'note': PAYMENT_DATE_HINT}, 'fields': 'userEnteredFormat.numberFormat,note'}}])
     return requests
-
-
-def sheet_date_value(value):
-    """Keep calendar dates as Sheets serials; never convert through a timestamp."""
-    if value is None or value == '':
-        return ''
-    epoch = date(1899, 12, 30)
-    try:
-        if isinstance(value, bool):
-            raise ValueError()
-        if isinstance(value, (int, float)):
-            serial = int(value)
-            if serial != value:
-                raise ValueError()
-            epoch + timedelta(days=serial)  # Reject out-of-range calendar dates.
-            return serial
-        if type(value) is date:
-            day = value
-        else:
-            parts = re.fullmatch(r'(\d{4})([-/])(\d{1,2})\2(\d{1,2})', str(value).strip())
-            if not parts:
-                raise ValueError()
-            day = date(int(parts[1]), int(parts[3]), int(parts[4]))
-        return (day - epoch).days
-    except (ValueError, OverflowError, TypeError):
-        raise StateError('pdf_date_input_invalid') from None
 
 
 def sheet_amount_value(value):
@@ -181,14 +154,6 @@ def check_snapshot(snapshot, expected):
     if snapshot['original_link'] != link:
         raise StateError('pdf_review_original_link_changed')
     return {r[0]:r[2] for r in snapshot['rows']}
-
-
-def original_uri(source_id, number):
-    if source_id.startswith('synthetic-'):
-        return ''
-    if not re.fullmatch(r'[A-Za-z0-9_-]{10,150}',source_id):
-        raise StateError('pdf_review_source_invalid')
-    return 'https://drive.google.com/file/d/'+source_id+'/view#page='+str(number)
 
 
 class PageReviewSheet(GroupingSheet):

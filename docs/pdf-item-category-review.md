@@ -10,11 +10,11 @@
 
 日付はDATE_IS_VALID、strict、yyyy/mm/dd。日付・合計・各商品カテゴリだけ空欄時に条件付き書式で薄黄を表示し、入力後は自動解除する。任意欄の空欄は通常色。明細構造の追加確認は独立したオレンジ表示を保持する。
 
-商品名・符号付き金額は保護された解析candidateに対応する表示であり、今回の編集対象は商品カテゴリと上部の支払情報。商品名や金額のセル改変、item数/順序/identityの変化は受付時に拒否する。明細の原本訂正が必要なら新candidateの明示的な再確認が必要で、セル変更でreread Gateを解除しない。
+商品名・符号付き金額も既存セルで訂正できる。元の解析candidate、item ID、kind、件数、順序は固定し、訂正値は別snapshotとして保持する。差のある商品だけに初回/再読取比較行を付ける。安定した商品のカテゴリや本人入力値を一律に戻さない。名前・金額の訂正や「確認済み」選択だけではreread Gateは解除されない。
 
 ## カテゴリ
 
-独立読取で商品名・数量・金額・カテゴリが一致し、confidenceが0.8以上で既存マスタに存在する商品カテゴリのみpre-fillする。reread/replayに不一致があればカテゴリを空欄にする。旧candidateに商品別corroborationがない場合は、旧レシートカテゴリが有効でも全商品カテゴリを空欄にする。
+独立読取で同じ元itemへ対応付けられ、数量・金額・カテゴリが一致し、confidenceが0.8以上で既存マスタに存在する商品カテゴリのみpre-fillする。NFKCで等価な幅の表記差はitem対応には利用できるが、明細確認済みの証明にはしない。カテゴリ競合はその商品だけ空欄にする。分離/transaction等の追加Gateがある場合は事前入力しない。旧candidateに商品別corroborationがない場合、レシート全体のカテゴリを商品へ展開しない。
 
 本人は既存マスタの「大｜小」1セルdropdownから商品ごとに選択する。Receipt Unit全体のカテゴリを全商品へ暗黙に適用しない。旧画面で本人が入力済みのレシート共通カテゴリがあれば参考値として保持し、商品へ自動転記しない。明示的な一括適用helperは空欄だけを埋め、既に入っている値を上書きしない。日常UIへの追加一括操作は今回は不要。
 
@@ -32,22 +32,26 @@
 
 操作dropdownはReceipt Unitごとに「未選択／記帳する／保留する」。初期値は未選択。保留では値を保持し、会計writeをしない。
 
-`receipt_item_queue.capture`は既存hidden `_PDF確認受付`を使うrunner側adapter。simple onEditには依存しない。現在のlive Apps Script onEditはperiod guardのみで、PDF受付handlerは未接続。したがって今回の実装だけでは、liveセル選択が自動でhidden受付へ配送されるわけではない。capture/executeはdefault disabled、schedule/workflow/Apps Script sourceは変更しない。
+「記帳する」は要求入力だけ。既存Google OIDCの画面で原本/明細/税/値引き/カテゴリを明示確認し、完全なsnapshotへ署名検証済みactorをbindingする。既存onEdit/trigger/schedule/通常workflowを変更しない。現在の限定運用では、operatorがfresh snapshotから10分限定の本人確認リンクを既存カードへ提示する。セル選択だけで認証やwriterは起動しない。
 
-将来live導入する最小接続は、既存runnerの許可された1回の周期で対象Receipt Unitをfresh readし、このadapterを既存single-runner lock/concurrencyの内側から呼ぶこと。これには別の限定canaryが必要。新triggerや推測したeditor identityを導入しない。
+`receipt_item_auth_transport`は既存OIDC/state/nonce/PKCE/CSRF/完全一致Origin検証を再利用する。request UUID、candidate digest、source/page/review/revision、Receipt Unit、元item ID、値引き対応、入力snapshotを固定する。認証済みの明示POSTでのみprivate Drive journalへconditional保存・exact read-backする。過去HGAの本人情報を新snapshotの確定に流用しない。
+
+確定証跡は既存private Driveに置き、GitHub ActionsへはUUIDだけを渡す。既存`pdf-page-manual-canary`のreview入口がprotected contextとrequestをfresh readし、既存production concurrency内で`receipt_item_queue.capture`を呼ぶ。Cloud Runはhidden受付へ並行追記しない。受付は固定6列のexact read-backを行い、同UUID replayは追加0、通信切断後の不明状態を自動再追記しない。
 
 `ReviewRequests`はsource/page/review/HGA/manifestのfreshnessを既存GeneralCompletion.freshへ委譲し、snapshot/item identity、全商品カテゴリ、sum/transaction/構造Gate、duplicateを再検証する。actorは既存Google OIDCが検証したVerifiedActorをtrusted backend adapterから受け取り、owner allowlist・有効期限・request UUID・snapshot digest・Receipt Unit identityへのbindingを検証する。HGAのactorやセルemailを、そのまま会計確定authorityへ流用しない。
 
-既存の認証済みsessionを、そのsession内の新しい明示確認にbackendでbindingできれば再ログインは不要。ただし現live OIDC endpointはHGA/reconciliation用であり、このposting snapshotへのbinding経路は未配置。これを満たすまではlive記帳受付/実行を有効にしない。今回の署名付きOIDC統合はsyntheticのみ。
+`ConfirmedItems`は検証済み本人・request UUID・時刻・snapshot/candidate/input/identity digestに固定する。解除可能な差はreread/replayのitem structureだけ。segmentation、fake adjustment、Medical、PII、transaction、sum不整合等を解除しない。カテゴリだけの補完やセル内actor文字列では成立しない。
+
+今回接続するrunnerはplan専用。既存ReceiptPipelineの同じrow materializerをPlanningDBへ渡し、レシート1行・各itemの支出明細・取込行を生成する。会計tableへのwrite capabilityは持たず、実会計writeには別の明示承認と限定canaryが必要。duplicate候補は保留し、同額だけで確定しない。
 
 受付はrequest UUIDとsnapshot/candidate/plan digestをconditional durable保存する。実行は独立したbackend flagがdefault false。許可されたexecutorは既存writer callbackを再利用し、新しい会計row builderを持たない。runningを保存後にwriterを1回だけ呼び、通信切断後はread-backでcomplete/not_written/unknownを区別する。unknown/partialは自動再追記しない。runningの重複workerもwriterを再送しない。
 
 exact read-back後だけcompleteとし、既存compact permanent event schema/年partitionを再利用する。完了時刻を固定してからhistory adapterを呼ぶ。同request replayでは履歴/authority/会計追加0。terminalカードはrowをhideし、入力、ledger、identity、historyを削除しない。
 
-candidate/入力snapshot/詳細provenanceは既存medium policyの対象。永久eventには識別子・actor hash・時刻・digest・簡潔なprovenanceのみ。cleanupの有効化は行わない。
+candidate/入力snapshot/詳細provenanceは既存medium policy（90日）の対象。認証sessionとroutingは600秒。`item_structure_confirmed`永久eventは既存年partitionへappendし、actor hash・時刻・authority/request digest・source/unit identityのみ保存する。会計未実行なのでterminal eventや確認カード非表示にはしない。cleanupの有効化は行わない。
 
 ## p14限定の終了点
 
-p14の保存済み診断を表示用candidateへ変換する。HGAを変更せず、追加Gemini解析を行わない。10明細（商品9＋負の値引き1）と合計3,801円は解析候補であり、原本との整合確認前に確定値としない。既存reread_item_structure_changed/replay_item_structure_changedを保持し、全商品カテゴリを埋めてもneeds_reviewから昇格しない。
+p14の保存済み2結果は10明細/3,801円で一致し、保存された差は商品名の幅表記4件とカテゴリ2件。元の内部再読取の全文は保持されていないため、過去Gateを自動解除しない。原本には単品割引後の9商品と全体値引き13円があり、印字対象162円のCHARMY Magicへの対応を提案として固定する。内税335円を追加加算しない。7商品を部分事前入力し、バウンシア/NONIO/全品割引は本人選択する。本人の認証付き明示確認と全Safety Gateが成立して初めてplan検証可能になる。
 
-p1 reconciled_existing、p4/p10 HGA0、既存10件29,034円は不変。parent archive_allowed=false、会計/Medical writer、PDF move、main mergeは0。本番write canaryの前に、商品原本照合、p14明細差、税/値引き帰属、live runner受付とposting actor bindingのGateを別途閉じる。
+p1 reconciled_existing、p4/p10 HGA0、既存10件29,034円は不変。parent archive_allowed=false、会計/Medical writer、PDF move、main mergeは0。既存iPhone表示/編集/保存の合格を引き継ぐ。新Sheet/独立画面/新triggerは作らない。

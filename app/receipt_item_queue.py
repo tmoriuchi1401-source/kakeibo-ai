@@ -6,7 +6,7 @@ does not activate polling in a schedule. Live capture is disabled by default.
 """
 import json
 from .drive_run_state import StateError
-from .pdf_grouping_ui import QUEUE
+from .pdf_review_fields import QUEUE
 from .page_receipt_model import digest
 from .receipt_item_review import UUID, check_snapshot
 
@@ -16,7 +16,11 @@ def capture(sheet,expected,snapshot,*,request_id,clock,write_enabled=False):
     fields=check_snapshot(snapshot,expected)
     if fields['action']=='未選択':return {'status':'not_requested','appended':0}
     if fields['action'] not in {'記帳する','保留する'}:raise StateError('item_queue_action_invalid')
-    previous=sheet._get(QUEUE,'A2:F1001')
+    def rows():
+        raw=sheet._get(QUEUE,'A2:F1001')
+        if any(len(r)>6 for r in raw):raise StateError('item_queue_schema_changed')
+        return [list(r)+['']*(6-len(r)) for r in raw]
+    previous=rows()
     for row in previous:
         if len(row)<3:continue
         try:old=json.loads(row[2])
@@ -34,11 +38,11 @@ def capture(sheet,expected,snapshot,*,request_id,clock,write_enabled=False):
     if not write_enabled:return {'status':'would_capture','snapshot_digest':digest(snapshot),'appended':0}
     # Optimistic queue read is rechecked; deployment must provide the existing
     # single-runner lock/concurrency. Never retry an ambiguous append.
-    if sheet._get(QUEUE,'A2:F1001')!=previous:raise StateError('item_queue_changed')
+    if rows()!=previous:raise StateError('item_queue_changed')
     row=[request_id,'accepted',json.dumps(snapshot,ensure_ascii=False,separators=(',',':')),clock(),'','']
     region=f'A{len(previous)+2}:F{len(previous)+2}'
     try:sheet._write([{'range':f"'{QUEUE}'!{region}",'values':[row]}])
     except Exception:pass
-    after=sheet._get(QUEUE,'A2:F1001')
+    after=rows()
     if after!=previous+[row]:raise StateError('item_queue_unknown_delivery')
     return {'status':'accepted','request_id':request_id,'snapshot_digest':digest(snapshot),'appended':1}

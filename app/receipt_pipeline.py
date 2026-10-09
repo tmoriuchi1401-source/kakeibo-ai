@@ -192,6 +192,15 @@ class ReceiptPipeline:
         self._require_ai()
         cats=self.db.categories(); result=self._analyze(image_bytes,mime_type,cats,source_policy)
         notes=self._posting_policy(result,cats,image_bytes,mime_type,privacy)
+        return self._materialize_result(result,source_id,image_url,notes)
+
+    def _materialize_result(self,result,source_id,image_url,notes):
+        """Existing row materialization shared with an isolated review planner.
+
+        Normal intake still reaches this only after its exact privacy/policy
+        gates. A review planner supplies PlanningDB, never a live ledger client.
+        """
+        import_id=f"receipt:{source_id}"
         ok = not notes
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"

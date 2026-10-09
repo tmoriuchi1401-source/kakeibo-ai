@@ -21,6 +21,7 @@ def test_whitelisted_container_can_import_all_confirmation_runtimes(tmp_path):
 import sys
 from services.human_general.page_router import PageRouter
 from services.human_general.reconciliation_runtime import LiveReconciliationRuntime
+from services.human_general.receipt_review_runtime import ReceiptReviewRuntime
 from services.human_general.web import create_app
 for name in sys.modules:
     assert not any(word in name for word in ('gemini','receipt_pipeline','pdf_page_medical','receipt_confirmation_production','google_clients'))
@@ -36,3 +37,21 @@ def test_readonly_wire_contract_matches_existing_sheet_and_source():
     from app.pdf_page_review import SCHEMA
     from app.pdf_unit_readonly_analysis import SOURCE_KEY
     assert reader.SCHEMA==SCHEMA and reader.SOURCE_KEY==SOURCE_KEY
+
+
+def test_existing_actions_dependencies_suffice_for_item_readers():
+    script="""
+import sys
+class NoHostDependencies:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('google.cloud','google.api_core','itsdangerous','flask')):
+            raise AssertionError('runner must not import hosting dependencies')
+sys.meta_path.insert(0,NoHostDependencies())
+from app.receipt_item_runner import authenticated_snapshot,accounting_plan
+from services.human_general.receipt_review_readers import Readers,Journal
+print('existing_runner_dependencies_verified')
+"""
+    root=Path(__file__).resolve().parents[1]
+    result=subprocess.run([sys.executable,'-c',script],cwd=root,capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    assert result.stdout.strip()=='existing_runner_dependencies_verified'

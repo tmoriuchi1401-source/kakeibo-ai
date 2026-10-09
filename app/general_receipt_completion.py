@@ -14,7 +14,7 @@ from .models import ReceiptResult
 from .receipt_validation import apply_receipt_policy, validate_receipt_result
 from .receipt_reimport import _date
 from .pdf_page_general import input_rows, manual_values, CONFIRM_ACTION
-from .pdf_page_review import SCHEMA as UI_SCHEMA, check_snapshot
+from .pdf_review_fields import SCHEMA as UI_SCHEMA
 from .page_receipt_model import digest, page_key, ordered, segmentation_issues, Box, iou, LocatedReceipt
 from .page_receipt_manifest import validate as validate_manifest, SCHEMA as MANIFEST_SCHEMA
 from .human_general_authority import (HumanGeneralAuthorityStore, binding_fields,
@@ -316,6 +316,7 @@ class GeneralCompletion:
         Do not replace other pending/Medical cards with this collection. A
         stale protected draft fails closed instead of rendering old values.
         """
+        from .pdf_page_review import check_snapshot
         output=[]
         for record in self.store.load()['drafts'].values():
             self.fresh(record)
@@ -326,6 +327,7 @@ class GeneralCompletion:
             c['identity']['page_number'],c['identity']['receipt_index']))
 
     def confirm(self,request_id,unit_id,snapshot):
+        from .pdf_page_review import check_snapshot
         if not isinstance(request_id,str) or not UUID.fullmatch(request_id):
             raise StateError('completion_request_invalid')
         state=self.store.load();record=state['drafts'].get(unit_id)

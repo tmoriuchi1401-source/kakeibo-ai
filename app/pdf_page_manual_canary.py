@@ -273,6 +273,16 @@ def execute(env,head):
     if unwrap('KAKEIBO_STATE_FOLDER_ID',env['KAKEIBO_STATE_FOLDER_ID'],pem)!=folder:
         raise StateError('pdf_manual_private_binding_changed')
     local={**env,'KAKEIBO_STATE_FOLDER_ID':folder}
+    if env['PDF_MANUAL_MODE']=='review':
+        from .receipt_item_runner import detect,hosted,authenticated_snapshot
+        authenticated=authenticated_snapshot(folder,info,env['PDF_MANUAL_REQUEST_ID'])
+        if authenticated is not None:return hosted(env,folder,info,env['PDF_MANUAL_REQUEST_ID'],authenticated)
+        from .pdf_grouping_ui import GroupingSheet
+        readonly=GroupingSheet(build('sheets','v4',credentials=credentials(READ_ONLY_SCOPES),cache_discovery=False),SID)
+        selected=[r for r in readonly._get(QUEUE,'A2:F1001') if r and r[0]==env['PDF_MANUAL_REQUEST_ID']]
+        if len(selected)==1 and len(selected[0])>2:
+            snapshot=json.loads(selected[0][2])
+            if detect(snapshot):return hosted(env,folder,info,env['PDF_MANUAL_REQUEST_ID'],snapshot)
     reader=build('drive','v3',credentials=credentials(READ_ONLY_SCOPES),cache_discovery=False);drive_fence(reader)
     completion_id=discover_completion(reader,folder,_digest([folder,legacy_id,SID]))
     cb=GroupingBinding(folder,completion_id)

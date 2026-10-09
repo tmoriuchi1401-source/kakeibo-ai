@@ -6,7 +6,7 @@ columns. Locations come from receipt/item markers, never fixed row numbers.
 """
 import json
 from .drive_run_state import StateError
-from .pdf_page_review import SHEET_ID, SCHEMA as LEGACY, PAYMENT_DATE_HINT, sheet_date_value
+from .pdf_review_fields import SHEET_ID, SCHEMA as LEGACY, PAYMENT_DATE_HINT, sheet_date_value
 from .pdf_page_general import category_choices
 from .receipt_item_review import SCHEMA, ACTIONS, FIELDS, check_snapshot
 
@@ -38,7 +38,7 @@ def encoded_rows(card):
         row[17:21]=[SCHEMA,card['token'],json.dumps(card['identity'],separators=(',',':')),field]
         if field.startswith('item:'):
             item=items[field[5:]];row[16]=item['category'];row[21]=item['item_id']
-            row[22]='review' if card['hard_blocked'] else 'normal'
+            row[22]='review' if (item['item_id'] in card['review_items'] if 'review_items' in card else card['hard_blocked']) else 'normal'
         elif field=='item_header':row[16]='カテゴリ'
         elif field in {'state','reason'}:row[22]='review' if card['hard_blocked'] else 'normal'
         result.append(row)
@@ -105,11 +105,11 @@ def requests(before,expected,cards,categories,*,column_count,row_count,sheet_id=
         is_item=field.startswith('item:') or field=='item_header'
         if not is_item:
             batch.append({'mergeCells':{'range':cell_range(index,1,17,sheet_id=sheet_id),'mergeType':'MERGE_ALL'}})
-        height=48 if is_item else 42 if field in {'reason','notice','memo','result'} else 34
+        height=80 if field.startswith('compare:') else 90 if field=='notice' and any(c.get('editable_items') for c in cards) else 48 if is_item else 42 if field in {'reason','notice','memo','result'} else 34
         batch.append({'updateDimensionProperties':{'range':{'sheetId':sheet_id,'dimension':'ROWS','startIndex':index,'endIndex':index+1},
             'properties':{'pixelSize':height},'fields':'pixelSize'}})
         if field=='original':
-            from .pdf_page_review import original_uri
+            from .pdf_review_fields import original_uri
             uri=original_uri(source,page)
             if uri:batch.append({'repeatCell':{'range':cell_range(index,1,sheet_id=sheet_id),
                 'cell':{'userEnteredFormat':{'textFormat':{'link':{'uri':uri}}}},'fields':'userEnteredFormat.textFormat.link'}})
@@ -131,6 +131,10 @@ def requests(before,expected,cards,categories,*,column_count,row_count,sheet_id=
         if field=='action':
             batch.append({'setDataValidation':{'range':cell_range(index,1,sheet_id=sheet_id),'rule':{
                 'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in ACTIONS]},'strict':True,'showCustomUi':True}}})
+        if field=='structure_confirmation':
+            from .receipt_item_confirmation import CHOICES
+            batch.append({'setDataValidation':{'range':cell_range(index,1,sheet_id=sheet_id),'rule':{
+                'condition':{'type':'ONE_OF_LIST','values':[{'userEnteredValue':v} for v in CHOICES]},'strict':True,'showCustomUi':True}}})
     # Caller removes ONLY this renderer's previously verified rules before a
     # repeat projection. Never purge other pages' CF or data validation.
     for rule in reversed(rules_for_rows(rows,start,sheet_id=sheet_id)):

@@ -17,7 +17,7 @@ SCHEMA='human-general-page-profiles-v1'
 
 
 def validate_profiles(value):
-    if set(value) not in ({'schema','profiles'},{'schema','profiles','reconciliation'}) or value['schema']!=SCHEMA:
+    if not {'schema','profiles'}<=set(value) or set(value)-{'schema','profiles','reconciliation','receipt_review'} or value['schema']!=SCHEMA:
         raise StateError('real_page_profiles_invalid')
     profiles=value['profiles']
     if not isinstance(profiles,dict) or not profiles or set(profiles)-{'p4','p10','p14'}:
@@ -35,6 +35,10 @@ def validate_profiles(value):
         from .reconciliation_readers import validate_reconciliation_config
         config=validate_reconciliation_config(value['reconciliation'])
         if config['drive']!=profiles.get('p14'):raise StateError('reconciliation_profile_source_changed')
+    if 'receipt_review' in value:
+        from .receipt_review_runtime import validate_config_review
+        config=validate_config_review(value['receipt_review'])
+        if config['drive']!=profiles.get('p14'):raise StateError('item_confirmation_profile_source_changed')
     return deepcopy(value)
 
 
@@ -44,6 +48,7 @@ class PageRouter(SyntheticRuntime):
         verified=validate_profiles(profiles)
         self.profiles=verified['profiles']
         if 'reconciliation' in verified:self.profiles={**self.profiles,'p1':verified['reconciliation']}
+        if 'receipt_review' in verified:self.profiles={**self.profiles,'p14_items':verified['receipt_review']}
         self.info=info;self.runtime_factory=runtime_factory
         self.mode='independent_real_pages_authority_only'
         self.selected=None;self.selected_rid=None
@@ -67,6 +72,9 @@ class PageRouter(SyntheticRuntime):
         if record['profile']=='p1':
             from .reconciliation_runtime import LiveReconciliationRuntime
             factory=LiveReconciliationRuntime
+        elif record['profile']=='p14_items':
+            from .receipt_review_runtime import ReceiptReviewRuntime
+            factory=ReceiptReviewRuntime
         runtime=factory(self.client,self.settings,self.key,config,self.info,
             clock=self.clock,identity=self.identity,exchange=self.exchange)
         runtime.drive.begin_request()
@@ -109,13 +117,27 @@ class PageRouter(SyntheticRuntime):
     def seed_page(self,name):
         # Administrative command only; never an HTTP route or Sheet event.
         config=self.profiles.get(name)
-        if config is None or name=='p1':raise StateError('real_page_target_forbidden')
+        if config is None or name not in {'p4','p10','p14'}:raise StateError('real_page_target_forbidden')
         runtime=self.runtime_factory(self.client,self.settings,self.key,config,self.info,
             clock=self.clock,identity=self.identity,exchange=self.exchange)
         link=runtime.seed();rid=parse_qs(urlsplit(link).query)['request'][0]
         self.client.collection('real_request_profiles').document(rid).create(
             {'profile':name,'profile_digest':digest(config),'expires_at':timestamp(int(self.clock())+TTL)},
             retry=None,timeout=10)
+        return link
+
+    def seed_item_review(self):
+        from .receipt_review_runtime import ReceiptReviewRuntime
+        config=self.profiles.get('p14_items')
+        if config is None:raise StateError('item_confirmation_profile_unavailable')
+        runtime=ReceiptReviewRuntime(self.client,self.settings,self.key,config,self.info,
+            clock=self.clock,identity=self.identity,exchange=self.exchange)
+        runtime.drive.begin_request()
+        try:link=runtime.seed()
+        finally:runtime.drive.end_request()
+        rid=parse_qs(urlsplit(link).query)['request'][0]
+        self.client.collection('real_request_profiles').document(rid).create(
+            {'profile':'p14_items','profile_digest':digest(config),'expires_at':timestamp(int(self.clock())+TTL)},retry=None,timeout=10)
         return link
 
     def seed_reconciliation(self):
