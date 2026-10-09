@@ -13,8 +13,8 @@ from .bank_income import (INCOME_HEADERS, INCOME_SHEET, RECEIPT_BUYBACK_REASON,
 
 class ReceiptPipeline:
     def __init__(self,db:SheetsDB,ai:GeminiAI | None, *, medical_review_observer=None,
-                 gemini_factory:Callable[[], GeminiAI] | None=None):
-        self.db=db; self.ai=ai
+                 gemini_factory:Callable[[], GeminiAI] | None=None, clock=None):
+        self.db=db; self.ai=ai; self.clock=clock or (lambda: now_jst_string())
         self.medical_review_observer=medical_review_observer
         self._gemini_factory=gemini_factory
         # Restrictive source provenance survives retries within this pipeline.
@@ -115,16 +115,22 @@ class ReceiptPipeline:
         ok,notes=validate_receipt_result(result,cats)
         notes += self._kind_issues(result, privacy)
         ok = ok and not notes
+        return self._materialize_result(result,source_id,image_url,notes)
+
+    def _materialize_result(self,result,source_id,image_url,notes):
+        """Existing materializer; plan runner supplies memory-only PlanningDB."""
+        import_id=f"receipt:{source_id}"
+        ok=not notes
         receipt_id=f"R-{source_id}"
         status="解析済" if ok else "要確認"
-        receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,now_jst_string(),"; ".join(notes+[result.note] if result.note else notes)]
+        receipt_row=[receipt_id,result.date,result.merchant,result.total,result.payment_method,image_url,status,self.clock(),"; ".join(notes+[result.note] if result.note else notes)]
         raw_hash=canonical_hash(result.model_dump())
         income_row=None
         income_exists=False
         if ok and result.transaction_kind == "buyback":
             # Check the shared ledger before writing even the receipt row.
             income_row,income_exists=self._buyback_income(import_id,result,raw_hash)
-        import_row=[import_id,now_jst_string(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
+        import_row=[import_id,self.clock(),"receipt",source_id,result.date,result.merchant,result.total,result.payment_method,status,"",raw_hash,"; ".join(notes)]
         if any(note.startswith("明細合計") for note in notes):
             # The rejected item list never reaches 支出明細. Save the values
             # actually used by validation before the import commit marker.
