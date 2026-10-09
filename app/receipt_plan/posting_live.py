@@ -21,6 +21,7 @@ def boundary(env,head):
         raise StateError('posting_execution_boundary_required')
 
 class PostingStore:
+    validate_state=staticmethod(posting.validate_state)
     def __init__(self,info,cfg,fid,*,http=None):
         self.info,self.cfg,self.fid=info,cfg,fid
         forbidden={p.CONTEXT_ID,cfg['candidate_file'],cfg['journal_file'],cfg['drive']['folder'],cfg['drive']['authority_file'],cfg['drive']['page']['source']['source_file_id']}
@@ -45,10 +46,10 @@ class PostingStore:
         if r.status_code!=200:raise StateError('posting_file_read_unavailable')
         after=self.metadata()
         if before!=after:raise StateError('posting_file_changed_during_read')
-        value=posting.validate_state(json.loads(r.content))
+        value=self.validate_state(json.loads(r.content))
         return value,before['etag']
     def replace(self,before,tag,after):
-        posting.validate_state(after)
+        self.validate_state(after)
         if (after['grant']!=before['grant'] or after['generation']!=before['generation']+1
             or (before['state'],after['state']) not in {('unused','claimed'),('claimed','unknown'),('claimed','complete'),('unknown','complete')}
             or before['state']!='unused' and before['claim']!=after['claim']):
