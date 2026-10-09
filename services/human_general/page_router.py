@@ -17,7 +17,7 @@ SCHEMA='human-general-page-profiles-v1'
 
 
 def validate_profiles(value):
-    if not {'schema','profiles'}<=set(value) or set(value)-{'schema','profiles','reconciliation','receipt_review'} or value['schema']!=SCHEMA:
+    if not {'schema','profiles'}<=set(value) or set(value)-{'schema','profiles','reconciliation','receipt_review','receipt_reviews'} or value['schema']!=SCHEMA:
         raise StateError('real_page_profiles_invalid')
     profiles=value['profiles']
     if not isinstance(profiles,dict) or not profiles or set(profiles)-{'p4','p10','p14'}:
@@ -39,6 +39,19 @@ def validate_profiles(value):
         from .receipt_review_runtime import validate_config_review
         config=validate_config_review(value['receipt_review'])
         if config['drive']!=profiles.get('p14'):raise StateError('item_confirmation_profile_source_changed')
+    if 'receipt_reviews' in value:
+        from .receipt_review_runtime import validate_config_review
+        reviews=value['receipt_reviews']
+        if not isinstance(reviews,dict) or not 1<=len(reviews)<=200:raise StateError('item_confirmation_profiles_invalid')
+        used=set(files)
+        if 'receipt_review' in value:used.update(value['receipt_review'][k] for k in ('candidate_file','journal_file'))
+        for name,config in reviews.items():
+            config=validate_config_review(config);number=config['drive']['page']['page_number']
+            if (number not in {4,10} or name!=f'p{number}_items_'+config['scope']
+                or config['drive']!=profiles.get('p'+str(number))):raise StateError('item_confirmation_profile_source_changed')
+            ids={config['candidate_file'],config['journal_file']}
+            if used&ids:raise StateError('item_confirmation_profile_collision')
+            used.update(ids)
     return deepcopy(value)
 
 
@@ -49,6 +62,9 @@ class PageRouter(SyntheticRuntime):
         self.profiles=verified['profiles']
         if 'reconciliation' in verified:self.profiles={**self.profiles,'p1':verified['reconciliation']}
         if 'receipt_review' in verified:self.profiles={**self.profiles,'p14_items':verified['receipt_review']}
+        self.item_profiles=set(verified.get('receipt_reviews',{}))
+        if 'receipt_review' in verified:self.item_profiles.add('p14_items')
+        self.profiles={**self.profiles,**verified.get('receipt_reviews',{})}
         self.info=info;self.runtime_factory=runtime_factory
         self.mode='independent_real_pages_authority_only'
         self.selected=None;self.selected_rid=None
@@ -72,7 +88,7 @@ class PageRouter(SyntheticRuntime):
         if record['profile']=='p1':
             from .reconciliation_runtime import LiveReconciliationRuntime
             factory=LiveReconciliationRuntime
-        elif record['profile']=='p14_items':
+        elif record['profile'] in self.item_profiles:
             from .receipt_review_runtime import ReceiptReviewRuntime
             factory=ReceiptReviewRuntime
         runtime=factory(self.client,self.settings,self.key,config,self.info,
@@ -126,10 +142,10 @@ class PageRouter(SyntheticRuntime):
             retry=None,timeout=10)
         return link
 
-    def seed_item_review(self):
+    def seed_item_review(self,name='p14_items'):
         from .receipt_review_runtime import ReceiptReviewRuntime
-        config=self.profiles.get('p14_items')
-        if config is None:raise StateError('item_confirmation_profile_unavailable')
+        config=self.profiles.get(name)
+        if name not in self.item_profiles or config is None:raise StateError('item_confirmation_profile_unavailable')
         runtime=ReceiptReviewRuntime(self.client,self.settings,self.key,config,self.info,
             clock=self.clock,identity=self.identity,exchange=self.exchange)
         runtime.drive.begin_request()
@@ -137,7 +153,7 @@ class PageRouter(SyntheticRuntime):
         finally:runtime.drive.end_request()
         rid=parse_qs(urlsplit(link).query)['request'][0]
         self.client.collection('real_request_profiles').document(rid).create(
-            {'profile':'p14_items','profile_digest':digest(config),'expires_at':timestamp(int(self.clock())+TTL)},retry=None,timeout=10)
+            {'profile':name,'profile_digest':digest(config),'expires_at':timestamp(int(self.clock())+TTL)},retry=None,timeout=10)
         return link
 
     def seed_reconciliation(self):

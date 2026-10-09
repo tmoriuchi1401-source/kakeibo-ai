@@ -20,8 +20,8 @@ def validate_config_review(config):
         raise StateError('item_confirmation_config_invalid')
     page=validate_config(config['drive'])
     ids=[config['candidate_file'],config['journal_file']]
-    if (page.page_number!=14 or len(set(ids))!=2 or any(not re.fullmatch('[A-Za-z0-9_-]{10,150}',x) for x in ids)
-        or set(ids)&{page.source.source_file_id,config['drive']['authority_file'],config['drive']['folder']}
+    if (page.page_number not in {4,10,14} or len(set(ids))!=2 or any(not re.fullmatch('[A-Za-z0-9_-]{10,150}',x) for x in ids)
+        or set(ids)&{page.source.source_file_id,config['drive']['authority_file'],config['drive']['folder'],config['drive']['inbox'],*config['drive']['baseline_files']}
         or not re.fullmatch('[a-f0-9]{64}',config['candidate_digest'])
         or config['scope']!=digest(['receipt-item-confirmation-live-v1',config['drive']['binding'],*ids,config['candidate_digest']])):
         raise StateError('item_confirmation_config_invalid')
@@ -64,7 +64,7 @@ class Readers:
             return original(fid,**kw)
         self.drive.request=get
         own=deepcopy(config['drive']);own['authority_file']=config['journal_file']
-        own['binding']=digest([SCHEMA,own['folder'],own['authority_file'],own['page']['source'],14,own['page']['review_identity']])
+        own['binding']=digest([SCHEMA,own['folder'],own['authority_file'],own['page']['source'],self.drive.page.page_number,own['page']['review_identity']])
         self.private=RealPageDrive(own,info);self.private.allowed.add(config['candidate_file'])
         self.sheets=AuthorizedSession(service_account.Credentials.from_service_account_info(info,
             scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']))
@@ -106,7 +106,7 @@ class Readers:
         if not categories:raise StateError('item_confirmation_category_master_unavailable')
         rows=self.sheet_rows("'PDFページ確認'!A1:W1000")
         if len(rows)>=1000:raise StateError('item_confirmation_sheet_truncated')
-        snap=read_snapshot(rows,payload['view'],original_uri(page.source.source_file_id,14))
+        snap=read_snapshot(rows,payload['view'],original_uri(page.source.source_file_id,page.page_number))
         self.cache=(record,snap,categories);return deepcopy(self.cache)
 
 

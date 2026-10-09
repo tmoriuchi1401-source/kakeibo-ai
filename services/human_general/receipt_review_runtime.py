@@ -67,12 +67,12 @@ class ReceiptReviewRuntime(SyntheticRuntime):
                 raise StateError('item_confirmation_actor_rejected')
             return Confirmation()
         return build
-    def label(self,rid):return 'p14 商品明細・記帳要求の確認'
+    def label(self,rid):return f'p{self.drive.page.page_number} 商品明細・記帳要求の確認'
     def start_heading(self,rid):return '商品明細と記帳要求の本人確認'
     def confirmation_text(self,rid):return {'heading':'商品明細を確認して記帳要求を保存',
         'detail':'原本と商品名・金額・値引き・カテゴリを照合済みです。今回は記帳planの検証までで、会計には書き込みません。',
         'button':'原本と明細を確認し記帳要求を保存'}
-    def success_label(self,rid):return 'p14の明細確認と記帳要求を保存しました（会計writeは未実行）'
+    def success_label(self,rid):return f'p{self.drive.page.page_number}の明細確認と記帳要求を保存しました（会計writeは未実行）'
     def validate_result(self,rid,record):
         value=json.loads(self.journal.read_versioned()[0]);r=value['requests'].get(rid)
         if not r or r['proof']['authority_digest']!=record['authority_digest']:raise StateError('item_confirmation_readback_mismatch')
