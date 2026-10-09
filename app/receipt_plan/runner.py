@@ -196,7 +196,9 @@ def execute(readers,port,rid):
         'planned_imports':1,'total':3801,'plan_digest':first['plan_digest'],'snapshot_digest':first['snapshot_digest'],
         'ledger_digest':first['ledger_digest'],'replay_exact':True,'accounting_writes':0,'medical':0,'gemini':0,'source_moves':0}
     encoded=json.dumps(result,sort_keys=True,separators=(',',':'))
-    desired=[rid,'plan_only_complete',row[2],row[3],encoded,first['stamp']]
+    finished=row[5] if row[1]=='plan_only_complete' else datetime.now(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S')
+    if not finished:raise StateError('p14_plan_result_timestamp_missing')
+    desired=[rid,'plan_only_complete',row[2],row[3],encoded,finished]
     if row[1]=='plan_only_complete' and row!=desired:raise StateError('p14_plan_completed_result_changed')
     if row!=desired:port.replace(port.rows(),number,desired,rid)
     if port.rows()[number-1]!=desired:raise StateError('p14_plan_result_readback_mismatch')
