@@ -1,0 +1,66 @@
+name: explicit receipt unit posting canary
+run-name: receipt unit posting ${{ inputs.operation }} ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      context_file_id:
+        description: Private Drive context reference (one p4 or p10 Receipt Unit)
+        required: true
+        type: string
+      request_id:
+        description: Existing authenticated item confirmation UUID
+        required: true
+        type: string
+      posting_file:
+        description: Private Drive one-time explicit financial approval reference
+        required: true
+        type: string
+      operation:
+        required: true
+        type: choice
+        options: [apply, replay]
+      confirm:
+        description: Type POST_CONFIRMED_RECEIPT_UNIT
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  post:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' && inputs.confirm == 'POST_CONFIRMED_RECEIPT_UNIT' &&
+      vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Reject debug before Secrets
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Bound private approval, existing writer, exact accounting read-back
+        env:
+          KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+          KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          RECEIPT_UNIT_CONTEXT_ID: ${{ inputs.context_file_id }}
+          RECEIPT_UNIT_REQUEST_ID: ${{ inputs.request_id }}
+          RECEIPT_UNIT_POSTING_FILE: ${{ inputs.posting_file }}
+          RECEIPT_UNIT_POST_OPERATION: ${{ inputs.operation }}
+          RECEIPT_UNIT_POST_CONFIRM: ${{ inputs.confirm }}
+        run: python -m app.receipt_plan.unit_posting_live
