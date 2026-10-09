@@ -96,6 +96,9 @@ def prepare(readers,rid):
         if (sum(t=='レシート' for t,r in rows)!=1 or len(expenses)!=10 or sum(t=='取込データ' for t,r in rows)!=1
             or sum(r[4] for r in expenses)!=3801 or [r[4] for r in expenses if r[4]<0]!=[-13]
             or expenses[-1][5:7]!=expenses[2][5:7] or len({r[0] for r in expenses})!=10
+            or any(row[3:7]!=[item.name,item.amount,item.major_category,item.minor_category] for row,item in zip(expenses,ReceiptResult.model_validate(validation['parsed']).items))
+            or next(row[3] for title,row in rows if title=='レシート')!=3801
+            or next(row[6] for title,row in rows if title=='取込データ')!=3801
             or sum(i['kind']=='product' for i in record['items'])!=9):
             raise StateError('p14_plan_expected_rows_changed')
         if journal.read_versioned()!=(raw,etag):raise StateError('p14_plan_confirmation_changed')
@@ -194,6 +197,7 @@ def execute(readers,port,rid):
         'ledger_digest':first['ledger_digest'],'replay_exact':True,'accounting_writes':0,'medical':0,'gemini':0,'source_moves':0}
     encoded=json.dumps(result,sort_keys=True,separators=(',',':'))
     desired=[rid,'plan_only_complete',row[2],row[3],encoded,first['stamp']]
+    if row[1]=='plan_only_complete' and row!=desired:raise StateError('p14_plan_completed_result_changed')
     if row!=desired:port.replace(port.rows(),number,desired,rid)
     if port.rows()[number-1]!=desired:raise StateError('p14_plan_result_readback_mismatch')
     if prepare(readers,rid)!=first:raise StateError('p14_plan_post_readback_changed')

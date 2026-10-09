@@ -208,3 +208,22 @@ def test_intake_is_compact_metadata_no_input_clone():
     plan=r.prepare(Readers(),RID);value=r.intake_payload(plan,RID)
     assert set(value)=={'schema','mode','request_id','context_file_id','receipt_unit_id','item_ids','identity_digest','snapshot_digest','authority_digest'}
     assert 'snapshot' not in value and 'rows' not in value and len(json.dumps(value).encode())<2000
+
+
+
+def test_completed_result_never_overwritten_on_replay():
+    rd=Readers();q=Queue();r.execute(rd,q,RID);before=q.writes
+    value=json.loads(q.data[-1][4]);value['plan_digest']='0'*64;q.data[-1][4]=json.dumps(value)
+    with pytest.raises(StateError,match='completed_result_changed'):r.execute(rd,q,RID)
+    assert q.writes==before
+
+
+def test_each_writer_category_must_match_confirmed_item(monkeypatch):
+    original=r.accounting_plan
+    def wrong(*a,**kw):
+        plan=original(*a,**kw)
+        next(row for title,row in plan if title=='支出明細')[5:7]=['日用品','消耗品']
+        return plan
+    monkeypatch.setattr(r,'accounting_plan',wrong);q=Queue()
+    with pytest.raises(StateError,match='expected_rows_changed'):r.execute(Readers(),q,RID)
+    assert q.writes==0
