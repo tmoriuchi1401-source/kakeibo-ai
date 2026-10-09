@@ -255,14 +255,17 @@ def test_actual_existing_writer_item_category_and_readback_recovery(monkeypatch)
     monkeypatch.setattr(receipt_pipeline,'evaluate_receipt_privacy',lambda *_args,**_kw:_normal_gate())
     d,p,raw,m=candidate();s,t,owner=service(d,p,raw,m);value=snap(d,action='記帳する');owner['current']=value;owner[UUID]=digest(value)
     request=s.capture(UUID,d,value);db=PlanningDB(CATS);events={};calls=[]
+    expected_db=PlanningDB(CATS);parsed=ReceiptResult.model_validate(request['plan']['parsed'])
+    preview=receipt_pipeline.ReceiptPipeline(expected_db,SimpleNamespace(analyze_receipt=lambda *_a,**_k:parsed),clock=lambda:'synthetic-clock')
+    assert preview._process_image_bytes(b'synthetic-png','image/png',request['unit_id'],observe_medical=False)['status']=='imported'
+    expected=deepcopy(expected_db.plan)
     def writer(request):
         calls.append(1);parsed=ReceiptResult.model_validate(request['plan']['parsed'])
         pipeline=receipt_pipeline.ReceiptPipeline(db,SimpleNamespace(analyze_receipt=lambda *_a,**_k:parsed),clock=lambda:'synthetic-clock')
         assert pipeline._process_image_bytes(b'synthetic-png','image/png',request['unit_id'],observe_medical=False)['status']=='imported'
         raise TimeoutError('response lost after actual writer returned')
     def readback(request):
-        spend=[row for title,row in db.plan if title=='支出明細']
-        return 'complete' if len(spend)==2 and [tuple(row[5:7]) for row in spend]==CATS else 'unknown'
+        return 'complete' if db.plan==expected else 'unknown'
     def history(request):events.setdefault(request['request_id'],{'event_type':'imported','ledger_id':'R-'+request['unit_id'],'authority_digest':digest(request['snapshot'])})
     out=s.execute(UUID,d,existing_writer=writer,accounting_readback=readback,append_history=history,execution_enabled=True)
     assert out['terminal'] and not out['visible_in_daily_review']
@@ -270,6 +273,10 @@ def test_actual_existing_writer_item_category_and_readback_recovery(monkeypatch)
     before=deepcopy(db.plan),t.writes
     assert s.execute(UUID,d,existing_writer=writer,accounting_readback=readback,append_history=history,execution_enabled=True)['replayed']
     assert len(calls)==len(events)==1 and before==(db.plan,t.writes)
+    next(row for title,row in db.plan if title=='支出明細')[1]='2026-10-06'
+    with pytest.raises(StateError,match='accounting_conflict'):
+        s.execute(UUID,d,existing_writer=writer,accounting_readback=readback,append_history=history,execution_enabled=True)
+    assert len(calls)==len(events)==1
 
 
 @pytest.mark.parametrize('outcome',['unknown','partial','not_written'])
