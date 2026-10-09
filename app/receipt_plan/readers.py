@@ -13,13 +13,13 @@ from .proof import binding,ConfirmedItems,ACTION
 from .fields import original_uri
 from .drive import RealPageDrive,validate_config,validate_verified,SCHEMA,ISSUER
 SID='1G44cDDUryVpZazTDwuCT4eZrir5KJb2WVm9baHTRPow'
-def validate_config_review(config):
+def validate_config_review(config,*,allowed_pages=(14,)):
     if set(config)!={'drive','candidate_file','candidate_digest','journal_file','scope'}:
         raise StateError('item_confirmation_config_invalid')
-    page=validate_config(config['drive'])
+    page=validate_config(config['drive'],allowed_pages=allowed_pages)
     ids=[config['candidate_file'],config['journal_file']]
-    if (page.page_number!=14 or len(set(ids))!=2 or any(not re.fullmatch('[A-Za-z0-9_-]{10,150}',x) for x in ids)
-        or set(ids)&{page.source.source_file_id,config['drive']['authority_file'],config['drive']['folder']}
+    if (len(set(ids))!=2 or any(not re.fullmatch('[A-Za-z0-9_-]{10,150}',x) for x in ids)
+        or set(ids)&{page.source.source_file_id,config['drive']['authority_file'],config['drive']['folder'],config['drive']['inbox'],*config['drive']['baseline_files']}
         or not re.fullmatch('[a-f0-9]{64}',config['candidate_digest'])
         or config['scope']!=digest(['receipt-item-confirmation-live-v1',config['drive']['binding'],*ids,config['candidate_digest']])):
         raise StateError('item_confirmation_config_invalid')
@@ -50,18 +50,19 @@ def validate_journal(value,scope):
     return value
 
 class Readers:
-    def __init__(self,config,info,owner_sub=None,*,owner_actor_id=None):
-        self.config=validate_config_review(config);self.owner_sub=owner_sub
+    def __init__(self,config,info,owner_sub=None,*,owner_actor_id=None,allowed_pages=(14,)):
+        self.config=validate_config_review(config,allowed_pages=allowed_pages);self.owner_sub=owner_sub
+        self.allowed_pages=tuple(allowed_pages)
         self.owner_actor_id=owner_actor_id or digest([ISSUER,owner_sub])
-        self.drive=RealPageDrive(config['drive'],info)
+        self.drive=RealPageDrive(config['drive'],info,allowed_pages=self.allowed_pages)
         original=self.drive.request
         def get(fid,**kw):
             if kw.get('put') is not None:raise StateError('item_confirmation_hga_write_forbidden')
             return original(fid,**kw)
         self.drive.request=get
         own=deepcopy(config['drive']);own['authority_file']=config['journal_file']
-        own['binding']=digest([SCHEMA,own['folder'],own['authority_file'],own['page']['source'],14,own['page']['review_identity']])
-        self.private=RealPageDrive(own,info);self.private.allowed.add(config['candidate_file'])
+        own['binding']=digest([SCHEMA,own['folder'],own['authority_file'],own['page']['source'],self.drive.page.page_number,own['page']['review_identity']])
+        self.private=RealPageDrive(own,info,allowed_pages=self.allowed_pages);self.private.allowed.add(config['candidate_file'])
         self.sheets=AuthorizedSession(service_account.Credentials.from_service_account_info(info,
             scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']))
         self.cache=None
@@ -94,7 +95,7 @@ class Readers:
         raw_grants=json.loads(self.drive.read(self.config['drive']['authority_file'])[0])
         actors=[e['actor'] for e in raw_grants.get('actor_evidence',{}).values()]
         if len(actors)!=1 or actors[0]['actor_id']!=self.owner_actor_id:raise StateError('item_confirmation_hga_actor_stale')
-        grants=validate_verified(raw_grants,self.config['drive'],self.owner_sub or actors[0]['subject'])
+        grants=validate_verified(raw_grants,self.config['drive'],self.owner_sub or actors[0]['subject'],allowed_pages=self.allowed_pages)
         grant=grants['authority']['grants'].get(page_key(page));validate_grant(grant,page)
         # Existing category master, never private embedded category values.
         categories=self.sheet_rows("'カテゴリ'!A1:B1000")
@@ -102,7 +103,7 @@ class Readers:
         if not categories:raise StateError('item_confirmation_category_master_unavailable')
         rows=self.sheet_rows("'PDFページ確認'!A1:W1000")
         if len(rows)>=1000:raise StateError('item_confirmation_sheet_truncated')
-        snap=read_snapshot(rows,payload['view'],original_uri(page.source.source_file_id,14))
+        snap=read_snapshot(rows,payload['view'],original_uri(page.source.source_file_id,page.page_number))
         self.cache=(record,snap,categories);return deepcopy(self.cache)
 
 class Journal:

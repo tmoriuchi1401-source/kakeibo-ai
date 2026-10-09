@@ -16,12 +16,13 @@ def request_binding(page,rid,action):
     return {**binding_fields(page),'request_id':rid,'requested_action':action,'page_processing_status':page.processing_status}
 def strong_etag(value):
     return isinstance(value,str) and bool(re.fullmatch(r'"[^"\r\n]+"',value))
-def validate_config(config):
+def validate_config(config,*,allowed_pages=(14,)):
     try:
+        if not allowed_pages or set(allowed_pages)-{4,10,14}:raise ValueError()
         if set(config)!={'page','folder','inbox','authority_file','baseline_files','owner_digest','binding'}:raise ValueError()
         page=PageUnit.model_validate(config['page'])
         if (page.source.source_file_id!=SOURCE or page.source.source_content_hash!=HASH or page.source.page_count!=14
-                or page.page_number!=14 or page.authority_revision!=2 or page.processing_status!='observed'
+                or page.page_number not in allowed_pages or page.authority_revision!=2 or page.processing_status!='observed'
                 or page.automatic_classification!='sensitive_unknown' or page.automatic_reason!='privacy_unresolved'
                 or not eligible(page) or page.review_identity!=review_identity(page)):raise ValueError()
         fixed={'1ju2rEDWrlpALr-9d4JEN9yaPfTuKtFCq','1atHszVu7J-OXPbJkhCMhsvhiyz6QEdsR',
@@ -35,9 +36,9 @@ def validate_config(config):
     except Exception:raise StateError('real_page_configuration_invalid') from None
     return page
 
-def validate_verified(value,config,owner_sub):
+def validate_verified(value,config,owner_sub,*,allowed_pages=(14,)):
     try:
-        page=validate_config(config);binding=config['binding']
+        page=validate_config(config,allowed_pages=allowed_pages);binding=config['binding']
         if set(value)!={'schema','binding','authority','actor_evidence'} or value['schema']!=SCHEMA or value['binding']!=binding:raise ValueError()
         state=validate_state(value['authority'],binding)
         if len(state['grants'])>1 or any(k!=page_key(page) for k in state['grants']):raise ValueError()
@@ -60,8 +61,8 @@ def validate_verified(value,config,owner_sub):
 
 class RealPageDrive:
     """Existing SA, read-only Drive scope. Exact IDs; no write API."""
-    def __init__(self,config,info,*,session=None):
-        self.page=validate_config(config);self.config=config;self.sa=info['client_email']
+    def __init__(self,config,info,*,session=None,allowed_pages=(14,)):
+        self.page=validate_config(config,allowed_pages=allowed_pages);self.config=config;self.sa=info['client_email']
         auth=service_account.Credentials.from_service_account_info(info,scopes=['https://www.googleapis.com/auth/drive.readonly'])
         self.http=session or AuthorizedSession(auth)
         self.allowed={SOURCE,config['folder'],config['authority_file'],*config['baseline_files']}
