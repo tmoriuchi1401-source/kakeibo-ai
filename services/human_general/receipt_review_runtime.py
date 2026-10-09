@@ -24,7 +24,9 @@ class ReceiptReviewRuntime(SyntheticRuntime):
         self.audit=FirestoreAuditRepository(client,digest(['receipt-item-confirmation-permanent-v1',config['scope']]),write_enabled=True)
         self._stages=lambda *_a,**_k:None
     def state(self,rid,kind):
-        if kind=='requests':return FirestoreConditionalState(self.client.collection('receipt_item_auth_requests').document(rid),clock=self.clock)
+        # Reuse the existing short-lived request collection and its active TTL.
+        # UUID, profile routing and scoped payload validators isolate this flow.
+        if kind=='requests':return FirestoreConditionalState(self.client.collection('requests').document(rid),clock=self.clock)
         if kind=='authorities':return self.journal
         raise StateError('item_confirmation_state_forbidden')
     def gateway(self,rid):
@@ -83,7 +85,7 @@ class ReceiptReviewRuntime(SyntheticRuntime):
     def seed(self):
         candidate,snapshot,categories=self.readers.read();rid=str(uuid4());now=int(self.clock())
         if json.loads(self.journal.read_versioned()[0])['requests']:raise StateError('item_confirmation_existing_request_requires_readback')
-        self.client.collection('receipt_item_auth_requests').document(rid).create(
+        self.client.collection('requests').document(rid).create(
             {'payload':canonical(empty_auth_state(self.config['scope'])),'expires_at':timestamp(now+TTL)},retry=None,timeout=10)
         self.gateway(rid).prepare(binding(candidate,snapshot,rid),request_id=rid)
         proof=URLSafeTimedSerializer(self.key,salt='hga-link-v1').dumps({'request':rid})
