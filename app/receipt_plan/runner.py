@@ -132,13 +132,7 @@ class QueuePort:
         if (self.rows()!=before or row[0]!=rid or len(row)!=6 or row[1] not in {'accepted','plan_only_complete'}
             or not 2<=number<=1001 or number>len(before)+1):raise StateError('p14_plan_queue_changed')
         envelope=json.loads(row[2])
-        if (set(envelope)!={'schema','mode','request_id','context_file_id','receipt_unit_id','item_ids','identity_digest','snapshot_digest','authority_digest'}
-            or envelope['schema']!=SCHEMA or envelope['mode']!='plan_only' or envelope['request_id']!=rid
-            or envelope['context_file_id']!=CONTEXT_ID or not isinstance(envelope['item_ids'],list)
-            or len(envelope['item_ids'])!=10 or len(set(envelope['item_ids']))!=10
-            or not isinstance(envelope['receipt_unit_id'],str) or not re.fullmatch('page-receipt-v1:[a-f0-9]{64}',envelope['receipt_unit_id'])
-            or any(not isinstance(v,str) or not re.fullmatch('[a-f0-9]{64}',v) for v in [envelope['identity_digest'],envelope['snapshot_digest'],envelope['authority_digest'],*envelope['item_ids']])):
-            raise StateError('p14_plan_queue_scope_invalid')
+        self.validate_envelope(envelope,rid)
         if number<=len(before) and (before[number-1][0]!=rid or before[number-1][2:4]!=row[2:4]):
             raise StateError('p14_plan_queue_other_request')
         expected=deepcopy(before)
@@ -154,6 +148,15 @@ class QueuePort:
             if self.rows()!=expected:raise StateError('p14_plan_queue_delivery_unknown') from None
         if self.rows()!=expected:raise StateError('p14_plan_queue_readback_mismatch')
 
+    def validate_envelope(self,envelope,rid):
+        if (set(envelope)!={'schema','mode','request_id','context_file_id','receipt_unit_id','item_ids','identity_digest','snapshot_digest','authority_digest'}
+            or envelope['schema']!=SCHEMA or envelope['mode']!='plan_only' or envelope['request_id']!=rid
+            or envelope['context_file_id']!=CONTEXT_ID or not isinstance(envelope['item_ids'],list)
+            or len(envelope['item_ids'])!=10 or len(set(envelope['item_ids']))!=10
+            or not isinstance(envelope['receipt_unit_id'],str) or not re.fullmatch('page-receipt-v1:[a-f0-9]{64}',envelope['receipt_unit_id'])
+            or any(not isinstance(v,str) or not re.fullmatch('[a-f0-9]{64}',v) for v in [envelope['identity_digest'],envelope['snapshot_digest'],envelope['authority_digest'],*envelope['item_ids']])):
+            raise StateError('p14_plan_queue_scope_invalid')
+
 
 def intake_payload(plan,rid):
     # Compact references only: signed full inputs remain in the private journal.
@@ -164,10 +167,11 @@ def intake_payload(plan,rid):
         'authority_digest':plan['authority_digest']}
 
 
-def capture(port,rid,plan):
+def capture(port,rid,plan,*,envelope=None):
     previous=port.rows();matches=[(n,r) for n,r in enumerate(previous[1:],2) if r[0]==rid]
     if len(matches)>1:raise StateError('p14_plan_duplicate_queue_identity')
-    envelope=intake_payload(plan,rid)
+    envelope=intake_payload(plan,rid) if envelope is None else envelope
+    if envelope.get('request_id')!=rid:raise StateError('p14_plan_queue_request_conflict')
     payload=json.dumps(envelope,sort_keys=True,ensure_ascii=False,separators=(',',':'))
     if matches:
         number,row=matches[0]
