@@ -1,0 +1,53 @@
+name: p14 authenticated plan only
+run-name: p14 plan only ${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Existing authenticated private request UUID (p14 only)
+        required: true
+        type: string
+      mode:
+        description: Accounting writes are unavailable
+        required: true
+        type: choice
+        options: [plan_only]
+        default: plan_only
+permissions:
+  contents: read
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  plan:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      P14_PLAN_REQUEST_ID: ${{ inputs.request_id }}
+      P14_PLAN_MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reject debug logging
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Fresh read, queue intake, memory-only writer plan and exact read-back
+        run: python -m app.receipt_plan.runner
