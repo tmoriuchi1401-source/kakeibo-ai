@@ -109,6 +109,21 @@ def draft(page,manifest,unit_id,readings=(),*,categories,text='',gate=None,confi
         'parsed':last.model_dump() if last else None,'hard_issues':sorted(set(hard)),
         'provenance':{f:'gemini' if values[f]!='' else 'missing' for f in FIELDS},
         'mode':'itemized' if last is not None else 'manual',**FLAGS}
+    # Item categories are corroborated independently. A mixed-category receipt
+    # is valid; the old receipt-level category must not erase its item choices.
+    record['item_category_evidence']=[]
+    if last is not None:
+        for index,item in enumerate(last.items):
+            pair=(item.major_category,item.minor_category)
+            stable=(len(trusted)>=2 and not hard and
+                all(len(r.items)==len(last.items) and
+                    (r.items[index].name,r.items[index].quantity,r.items[index].amount)==
+                    (item.name,item.quantity,item.amount) and
+                    (r.items[index].major_category,r.items[index].minor_category)==pair and
+                    r.items[index].confidence>=.8 for r in trusted))
+            record['item_category_evidence'].append({
+                'item_index':index+1,'category':'｜'.join(pair) if stable and pair in set(categories) else '',
+                'corroborated':bool(stable and pair in set(categories))})
     record['candidate_digest']=digest(record)
     return record
 
@@ -134,7 +149,7 @@ def validate_draft(record):
     copied=deepcopy(record)
     signature=copied.pop('candidate_digest',None)
     if (signature!=digest(copied) or record.get('schema')!=SCHEMA
-            or set(record)!={'schema','identity','prefill','blank_reasons','parsed','hard_issues',
+            or set(record)-{'item_category_evidence'}!={'schema','identity','prefill','blank_reasons','parsed','hard_issues',
                               'provenance','mode','candidate_digest',*FLAGS}
             or any(record.get(k) is not False for k in FLAGS)
             or set(record.get('prefill',{}))!=set(FIELDS)
@@ -144,6 +159,14 @@ def validate_draft(record):
         raise StateError('completion_candidate_changed')
     if record['parsed'] is not None:
         LocatedReceipt(bbox=record['identity']['bbox'],receipt=record['parsed'])
+    if 'item_category_evidence' in record:
+        evidence=record['item_category_evidence']
+        items=(record.get('parsed') or {}).get('items',[])
+        if (not isinstance(evidence,list) or len(evidence)!=len(items) or
+                any(set(e)!={'item_index','category','corroborated'} or e['item_index']!=i or
+                    type(e['corroborated']) is not bool or not isinstance(e['category'],str) or
+                    bool(e['category'])!=e['corroborated'] for i,e in enumerate(evidence,1))):
+            raise StateError('completion_item_evidence_invalid')
     return record
 
 
@@ -172,9 +195,12 @@ def evaluate(record,fields,categories):
     if parsed is not None:
         parsed.update(date=inputs['date'],total=inputs['amount'],merchant=inputs['merchant'],
                       payment_method=inputs['payment'],note=inputs['note'])
-        # Owner category choice belongs to this Receipt Unit only.
-        for item in parsed['items']:
-            item.update(major_category=inputs['major'],minor_category=inputs['minor'])
+        # Legacy single-item forms remain compatible. Multiple items require
+        # the item review form, never a silently broadcast receipt category.
+        if len(parsed['items'])==1:
+            parsed['items'][0].update(major_category=inputs['major'],minor_category=inputs['minor'])
+        else:
+            issues.append('item_category_review_required')
         result=ReceiptResult.model_validate(parsed)
         _,normal_issues=validate_receipt_result(result,categories)
         issues.extend(normal_issues)

@@ -1,0 +1,53 @@
+# PDF確認：支払カード＋商品別カテゴリ
+
+既存「PDFページ確認」のReceipt Unitごとに、上部の原本・支払情報と下部の商品一覧を統合する。新Sheet、Web UI、trigger、scheduleは作らない。Medical、HGA、元PDF移動の安全境界は変更しない。
+
+## 表示と入力
+
+上部はページ/Receipt Unit・状態・原本リンク・支払日・合計・店舗名・支払方法・メモ・確認理由。下部は「商品名／金額／カテゴリ」。商品、印字済み全体値引き、外税を既存解析itemsと同じ単位で表示する。解析候補の表示は原本との一致や記帳許可を意味しない。
+
+旧UIのC:Pは他ページのhidden metadataなので、そのまま保持する。A/B/Qを画面上で連続する3列として使用し、新カードのmetadataはR:Wへ置く。上部の値はB:Qをmergeする。幅は107+74+133=314px、行見出し46pxを含め360pxを目安とする。行番号はsource/page/Receipt Unit/itemのmarkerから検出し、固定セル番地は使用しない。
+
+日付はDATE_IS_VALID、strict、yyyy/mm/dd。日付・合計・各商品カテゴリだけ空欄時に条件付き書式で薄黄を表示し、入力後は自動解除する。任意欄の空欄は通常色。明細構造の追加確認は独立したオレンジ表示を保持する。
+
+商品名・符号付き金額は保護された解析candidateに対応する表示であり、今回の編集対象は商品カテゴリと上部の支払情報。商品名や金額のセル改変、item数/順序/identityの変化は受付時に拒否する。明細の原本訂正が必要なら新candidateの明示的な再確認が必要で、セル変更でreread Gateを解除しない。
+
+## カテゴリ
+
+独立読取で商品名・数量・金額・カテゴリが一致し、confidenceが0.8以上で既存マスタに存在する商品カテゴリのみpre-fillする。reread/replayに不一致があればカテゴリを空欄にする。旧candidateに商品別corroborationがない場合は、旧レシートカテゴリが有効でも全商品カテゴリを空欄にする。
+
+本人は既存マスタの「大｜小」1セルdropdownから商品ごとに選択する。Receipt Unit全体のカテゴリを全商品へ暗黙に適用しない。旧画面で本人が入力済みのレシート共通カテゴリがあれば参考値として保持し、商品へ自動転記しない。明示的な一括適用helperは空欄だけを埋め、既に入っている値を上書きしない。日常UIへの追加一括操作は今回は不要。
+
+各商品のcategory provenanceはgemini/human/human_override/missing。完成candidateでは既存「支出明細」のnoteに短いcategory_source enumを残せるため、長期履歴へGemini全文や入力snapshotを複製しない。
+
+`approved_product_prefill`は既存の承認済み商品ルール/完全一致matcherを再利用する。信頼できる取込時刻・店舗・商品名・既存カテゴリを照合し、service/store_totalルールを各商品へ展開しない。Geminiとルールが競合すれば空欄、明細構造Gateがあれば適用しない。これは本人セル編集前だけに使用する。ルール由来は本人承認済みルールとしてhuman provenanceに加え、rule ID/revision/methodを軽量metadataで区別する。p14は構造Gateがあるため適用0。
+
+## 税・値引き
+
+既存prompt/writerは商品に紐づく値引きをその商品のnet amountへ反映し、印字済み全体値引きは負の独立明細、外税は正の独立明細として扱う。内税、小計、税対象額を追加加算しない。writerは各itemをその符号のまま1行にし、合計とtotalの完全一致を維持する。
+
+今回、比例配賦・架空調整額・新カテゴリを追加しない。複数カテゴリにまたがる全体値引き/税の帰属が確定できない場合はtax_discount_allocation_review。信頼できる原本検証adapterが既存itemへの対応を固定できた場合だけ、その対象商品と同じカテゴリで検証できる。セルのカテゴリ選択だけでは対応証明にならない。
+
+## 受付と実行
+
+操作dropdownはReceipt Unitごとに「未選択／記帳する／保留する」。初期値は未選択。保留では値を保持し、会計writeをしない。
+
+`receipt_item_queue.capture`は既存hidden `_PDF確認受付`を使うrunner側adapter。simple onEditには依存しない。現在のlive Apps Script onEditはperiod guardのみで、PDF受付handlerは未接続。したがって今回の実装だけでは、liveセル選択が自動でhidden受付へ配送されるわけではない。capture/executeはdefault disabled、schedule/workflow/Apps Script sourceは変更しない。
+
+将来live導入する最小接続は、既存runnerの許可された1回の周期で対象Receipt Unitをfresh readし、このadapterを既存single-runner lock/concurrencyの内側から呼ぶこと。これには別の限定canaryが必要。新triggerや推測したeditor identityを導入しない。
+
+`ReviewRequests`はsource/page/review/HGA/manifestのfreshnessを既存GeneralCompletion.freshへ委譲し、snapshot/item identity、全商品カテゴリ、sum/transaction/構造Gate、duplicateを再検証する。actorは既存Google OIDCが検証したVerifiedActorをtrusted backend adapterから受け取り、owner allowlist・有効期限・request UUID・snapshot digest・Receipt Unit identityへのbindingを検証する。HGAのactorやセルemailを、そのまま会計確定authorityへ流用しない。
+
+既存の認証済みsessionを、そのsession内の新しい明示確認にbackendでbindingできれば再ログインは不要。ただし現live OIDC endpointはHGA/reconciliation用であり、このposting snapshotへのbinding経路は未配置。これを満たすまではlive記帳受付/実行を有効にしない。今回の署名付きOIDC統合はsyntheticのみ。
+
+受付はrequest UUIDとsnapshot/candidate/plan digestをconditional durable保存する。実行は独立したbackend flagがdefault false。許可されたexecutorは既存writer callbackを再利用し、新しい会計row builderを持たない。runningを保存後にwriterを1回だけ呼び、通信切断後はread-backでcomplete/not_written/unknownを区別する。unknown/partialは自動再追記しない。runningの重複workerもwriterを再送しない。
+
+exact read-back後だけcompleteとし、既存compact permanent event schema/年partitionを再利用する。完了時刻を固定してからhistory adapterを呼ぶ。同request replayでは履歴/authority/会計追加0。terminalカードはrowをhideし、入力、ledger、identity、historyを削除しない。
+
+candidate/入力snapshot/詳細provenanceは既存medium policyの対象。永久eventには識別子・actor hash・時刻・digest・簡潔なprovenanceのみ。cleanupの有効化は行わない。
+
+## p14限定の終了点
+
+p14の保存済み診断を表示用candidateへ変換する。HGAを変更せず、追加Gemini解析を行わない。10明細（商品9＋負の値引き1）と合計3,801円は解析候補であり、原本との整合確認前に確定値としない。既存reread_item_structure_changed/replay_item_structure_changedを保持し、全商品カテゴリを埋めてもneeds_reviewから昇格しない。
+
+p1 reconciled_existing、p4/p10 HGA0、既存10件29,034円は不変。parent archive_allowed=false、会計/Medical writer、PDF move、main mergeは0。本番write canaryの前に、商品原本照合、p14明細差、税/値引き帰属、live runner受付とposting actor bindingのGateを別途閉じる。

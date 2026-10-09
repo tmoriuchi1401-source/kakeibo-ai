@@ -34,6 +34,11 @@ def corroborate_replay(first,second):
         if shape(a)!=shape(b):issues.add('replay_item_structure_changed')
         if a['transaction_kind']!=b['transaction_kind']:issues.add('replay_transaction_kind_changed')
     elif a!=b:issues.add('replay_item_structure_changed')
+    if 'item_category_evidence' in result:
+        previous=first.get('item_category_evidence',[])
+        for i,evidence in enumerate(result['item_category_evidence']):
+            if (issues or i>=len(previous) or previous[i]!=evidence):
+                evidence.update(category='',corroborated=False)
     result['hard_issues']=sorted(issues)
     result.pop('candidate_digest');result['candidate_digest']=digest(result)
     return validate_draft(result)
