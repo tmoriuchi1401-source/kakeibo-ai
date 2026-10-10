@@ -94,8 +94,9 @@ def receipts(settings, *, apply: bool) -> dict:
                 from .expense_view import ExpenseViewPipeline
                 ExpenseViewPipeline(db).refresh()
         except Exception as error:
-            from .production_run import SourceFailure
-            raise SourceFailure(source_error_code(error), stage, counts) from None
+            from .production_run import SourceFailure,failure_diagnostic
+            raise SourceFailure(source_error_code(error), stage, counts,
+                                **failure_diagnostic(error)) from None
         return counts
     # Read-only preview inspects identities and the existing local privacy gate.
     # AI extraction/write counts cannot be promised before the approved AI run.

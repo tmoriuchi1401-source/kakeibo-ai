@@ -260,6 +260,8 @@ def main():
         print(json.dumps(execute(env,sys.argv[1]=='apply',diagnostic=lambda value:stage.__setitem__(0,value)),sort_keys=True))
     except Exception as error:
         from .production_source import source_error_code
-        print(json.dumps({'failure':1,'error':source_error_code(error),'stage':stage[0]}));raise SystemExit(1)
+        from .production_run import failure_diagnostic
+        print(json.dumps({'failure':1,'error':source_error_code(error),'stage':stage[0],
+                          **failure_diagnostic(error)}));raise SystemExit(1)
 
 if __name__=='__main__':main()

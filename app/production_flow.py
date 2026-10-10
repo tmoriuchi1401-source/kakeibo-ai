@@ -129,7 +129,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
             except (ValueError,AttributeError):
                 code=None
             if isinstance(code,str) and code in SAFE_SOURCE_ERRORS:
-                raise SourceFailure(code, failure.get('stage', ''), failure)
+                raise SourceFailure(code, failure.get('stage', ''), failure,
+                                    failure_class=failure.get('failure_class',''),failure_site=failure.get('failure_site',''))
         if source == "receipt_reimport":
             try:
                 code=json.loads(result.stdout).get("error")
