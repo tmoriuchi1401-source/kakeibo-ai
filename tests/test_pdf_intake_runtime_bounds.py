@@ -15,6 +15,22 @@ def registered():
     return store,keys
 
 
+def test_production_context_constructs_real_runner_without_ai_or_write(monkeypatch):
+    from app.pdf_intake_production import Context
+    from app.pdf_intake_runner import PageIntake
+    import app.utils as utils
+    store,keys=registered();before=store.io.raw,store.io.tag,store.io.writes
+    context=Context.__new__(Context)
+    context.store=store;context.db=object();context.proof=object()
+    monkeypatch.setattr(utils,'now_jst_string',lambda:'2026-10-10 21:00:00')
+    runner=context.runner(SimpleNamespace(gemini_api_key='',normal_receipt_gemini_model='unused'))
+    assert isinstance(runner,PageIntake)
+    assert runner.clock()=='2026-10-10 21:00:00'
+    assert runner.unit_limit==3 and runner.written==0
+    assert runner.source.__self__ is context
+    assert (store.io.raw,store.io.tag,store.io.writes)==before
+
+
 def test_unchanged_complete_registration_replay_does_not_ocr_or_write(monkeypatch):
     import app.pdf_intake_production as production
     monkeypatch.setattr(production,'page_count',lambda _:3)

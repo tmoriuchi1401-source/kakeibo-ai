@@ -92,7 +92,7 @@ class Context:
             from .page_receipt_ai import GeminiPageReceipts
             ai=GeminiAI(settings.gemini_api_key,settings.normal_receipt_gemini_model,request_attempts=1)
             return GeminiPageReceipts(ai.client,ai.model,permission)
-        from .sheets import now_jst_string
+        from .utils import now_jst_string
         return PageIntake(self.store,self.source,self.db,self.proof,analyzer,clock=now_jst_string,unit_limit=3)
 
 
