@@ -1,0 +1,335 @@
+{
+  "schema": "shared-login-synthetic-items-v1",
+  "candidate": {
+    "schema": "general-receipt-item-review-v1",
+    "legacy": {
+      "schema": "general-receipt-completion-v1",
+      "identity": {
+        "source_file_id": "synthetic-source-id",
+        "source_content_hash": "42c16b976e6a5474768f128fe3cf551ed94d73ce12b6e859df48f4916984bc9e",
+        "page_count": 1,
+        "source_kind": "pdf",
+        "page_number": 1,
+        "stable_page_identity": "ff65a8c7e706f3739eb7240e16fee67c5b547f3f74d8050916be54b39ed99d67",
+        "review_identity": "0fa63753d9d01cbebab2ac32d65f2cf621ab7d7d90e9eb3cccbf4ca8e2017b8a",
+        "authority_revision": 1,
+        "automatic_classification": "normal",
+        "automatic_reason": "normal_receipt_evidence",
+        "human_page_kind": null,
+        "observation_complete": true,
+        "extraction_status": "extracted",
+        "clearly_sensitive": false,
+        "processing_status": "observed",
+        "receipt_unit_id": "page-receipt-v1:c9ba512c14fc0413ebf35647e1b96801b6173a423a9ca99a6ac73cbf26cf8014",
+        "segmentation_digest": "8b7ec770f053bcbf73febe4174865fb10893ae9372246009d3298220aa840bde",
+        "receipt_index": 1,
+        "bbox": {
+          "bottom": 0.98,
+          "left": 0.05,
+          "right": 0.95,
+          "top": 0.02
+        }
+      },
+      "prefill": {
+        "date": "2026-10-05",
+        "amount": 730,
+        "category": "",
+        "merchant": "",
+        "payment": "",
+        "memo": ""
+      },
+      "blank_reasons": {
+        "date": [],
+        "amount": [],
+        "category": [
+          "field_validation_failed"
+        ],
+        "merchant": [
+          "field_validation_failed"
+        ],
+        "payment": [
+          "field_validation_failed"
+        ],
+        "memo": [
+          "field_validation_failed"
+        ]
+      },
+      "parsed": {
+        "merchant": "",
+        "transaction_kind": "purchase",
+        "date": "2026-10-05",
+        "total": 730,
+        "payment_method": "",
+        "items": [
+          {
+            "name": "牛乳",
+            "quantity": 1.0,
+            "amount": 250,
+            "major_category": "食費",
+            "minor_category": "食品",
+            "note": "",
+            "confidence": 0.8
+          },
+          {
+            "name": "洗剤",
+            "quantity": 1.0,
+            "amount": 480,
+            "major_category": "日用品",
+            "minor_category": "消耗品",
+            "note": "",
+            "confidence": 0.8
+          }
+        ],
+        "note": ""
+      },
+      "hard_issues": [],
+      "provenance": {
+        "date": "gemini",
+        "amount": "gemini",
+        "category": "missing",
+        "merchant": "missing",
+        "payment": "missing",
+        "memo": "missing"
+      },
+      "mode": "itemized",
+      "accounting_allowed": false,
+      "medical_handoff_allowed": false,
+      "archive_allowed": false,
+      "item_category_evidence": [
+        {
+          "item_index": 1,
+          "category": "食費｜食品",
+          "corroborated": true
+        },
+        {
+          "item_index": 2,
+          "category": "日用品｜消耗品",
+          "corroborated": true
+        }
+      ],
+      "candidate_digest": "c29cb99405ea7abb0ba541c5d9cb75f2ae12d8b8c0e1e5b1510b00998646fbbf"
+    },
+    "items": [
+      {
+        "item_id": "9fe42fb21aaf85f0c5d009492ea64319599b89022678b84978181aa721e1adfc",
+        "item_index": 1,
+        "kind": "product",
+        "name": "牛乳",
+        "amount": 250,
+        "category": "食費｜食品"
+      },
+      {
+        "item_id": "024824269b1fd842252a6c027c31488fd8290ccc0a6f95f774646f5ee026ab93",
+        "item_index": 2,
+        "kind": "product",
+        "name": "洗剤",
+        "amount": 480,
+        "category": "日用品｜消耗品"
+      }
+    ],
+    "adjustment_targets": {},
+    "legacy_category": "",
+    "accounting_allowed": false,
+    "medical_handoff_allowed": false,
+    "archive_allowed": false,
+    "review_evidence": {
+      "schema": 1,
+      "items": [
+        {
+          "item_id": "9fe42fb21aaf85f0c5d009492ea64319599b89022678b84978181aa721e1adfc",
+          "mapped": true,
+          "shape_agrees": true,
+          "category_agrees": true,
+          "category": "食費｜食品",
+          "readings": [
+            {
+              "name": "牛乳",
+              "quantity": 1.0,
+              "amount": 250,
+              "category": "食費｜食品"
+            },
+            {
+              "name": "牛乳",
+              "quantity": 1.0,
+              "amount": 250,
+              "category": "食費｜食品"
+            }
+          ]
+        },
+        {
+          "item_id": "024824269b1fd842252a6c027c31488fd8290ccc0a6f95f774646f5ee026ab93",
+          "mapped": true,
+          "shape_agrees": true,
+          "category_agrees": true,
+          "category": "日用品｜消耗品",
+          "readings": [
+            {
+              "name": "洗剤",
+              "quantity": 1.0,
+              "amount": 480,
+              "category": "日用品｜消耗品"
+            },
+            {
+              "name": "洗剤",
+              "quantity": 1.0,
+              "amount": 480,
+              "category": "日用品｜消耗品"
+            }
+          ]
+        }
+      ],
+      "full_structure_confirmation_required": false
+    },
+    "digest": "b4814cebbd570e81c89723d370a32bcd69bc85e7163dc824ca437a2bbb018bc7"
+  },
+  "snapshot": {
+    "identity": {
+      "source_file_id": "synthetic-source-id",
+      "source_content_hash": "42c16b976e6a5474768f128fe3cf551ed94d73ce12b6e859df48f4916984bc9e",
+      "page_count": 1,
+      "source_kind": "pdf",
+      "page_number": 1,
+      "stable_page_identity": "ff65a8c7e706f3739eb7240e16fee67c5b547f3f74d8050916be54b39ed99d67",
+      "review_identity": "0fa63753d9d01cbebab2ac32d65f2cf621ab7d7d90e9eb3cccbf4ca8e2017b8a",
+      "authority_revision": 1,
+      "automatic_classification": "normal",
+      "automatic_reason": "normal_receipt_evidence",
+      "human_page_kind": null,
+      "observation_complete": true,
+      "extraction_status": "extracted",
+      "clearly_sensitive": false,
+      "processing_status": "observed",
+      "receipt_unit_id": "page-receipt-v1:c9ba512c14fc0413ebf35647e1b96801b6173a423a9ca99a6ac73cbf26cf8014",
+      "segmentation_digest": "8b7ec770f053bcbf73febe4174865fb10893ae9372246009d3298220aa840bde",
+      "receipt_index": 1,
+      "bbox": {
+        "bottom": 0.98,
+        "left": 0.05,
+        "right": 0.95,
+        "top": 0.02
+      },
+      "schema": "general-receipt-item-review-v1",
+      "kind": "general_receipt_item_review",
+      "page_numbers": [
+        1
+      ],
+      "candidate_digest": "b4814cebbd570e81c89723d370a32bcd69bc85e7163dc824ca437a2bbb018bc7",
+      "item_ids": [
+        "9fe42fb21aaf85f0c5d009492ea64319599b89022678b84978181aa721e1adfc",
+        "024824269b1fd842252a6c027c31488fd8290ccc0a6f95f774646f5ee026ab93"
+      ]
+    },
+    "token": "b94bce712964f856e12161e6cf2252e886cc6b1ce3d46895b1d281707374db1f",
+    "rows": [
+      [
+        "target",
+        "対象",
+        "p1 レシート 1"
+      ],
+      [
+        "state",
+        "状態",
+        "入力検証済み・記帳要求待ち"
+      ],
+      [
+        "original",
+        "原本",
+        "ページ全体を見る"
+      ],
+      [
+        "date",
+        "支払日",
+        "2026-10-05"
+      ],
+      [
+        "amount",
+        "レシート合計（円）",
+        730
+      ],
+      [
+        "merchant",
+        "店舗名（任意）",
+        ""
+      ],
+      [
+        "payment",
+        "支払方法（任意）",
+        ""
+      ],
+      [
+        "memo",
+        "メモ（任意）",
+        ""
+      ],
+      [
+        "reason",
+        "確認理由",
+        "必須欄と各商品カテゴリを確認してください"
+      ],
+      [
+        "notice",
+        "入力案内",
+        "黄色のカテゴリとオレンジの明細を原本確認。「確認済み」→「記帳する」→本人確認。今回はplan検証のみ。"
+      ],
+      [
+        "item_header",
+        "商品名",
+        "金額"
+      ],
+      [
+        "item:9fe42fb21aaf85f0c5d009492ea64319599b89022678b84978181aa721e1adfc",
+        "牛乳",
+        250
+      ],
+      [
+        "item:024824269b1fd842252a6c027c31488fd8290ccc0a6f95f774646f5ee026ab93",
+        "洗剤",
+        480
+      ],
+      [
+        "structure_confirmation",
+        "原本と明細を確認",
+        "確認済み"
+      ],
+      [
+        "action",
+        "レシート単位の操作",
+        "記帳する"
+      ],
+      [
+        "result",
+        "処理結果",
+        "検証中：会計writeは無効。要求・記帳完了は別状態です。"
+      ]
+    ],
+    "items": [
+      {
+        "item_id": "9fe42fb21aaf85f0c5d009492ea64319599b89022678b84978181aa721e1adfc",
+        "item_index": 1,
+        "kind": "product",
+        "name": "牛乳",
+        "amount": 250,
+        "category": "食費｜食品"
+      },
+      {
+        "item_id": "024824269b1fd842252a6c027c31488fd8290ccc0a6f95f774646f5ee026ab93",
+        "item_index": 2,
+        "kind": "product",
+        "name": "洗剤",
+        "amount": 480,
+        "category": "日用品｜消耗品"
+      }
+    ],
+    "original_link": ""
+  },
+  "categories": [
+    [
+      "食費",
+      "食品"
+    ],
+    [
+      "日用品",
+      "消耗品"
+    ]
+  ]
+}

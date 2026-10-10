@@ -1,0 +1,540 @@
+diff --git a/app/human_general_auth_transport.py b/app/human_general_auth_transport.py
+index da61400..d604177 100644
+--- a/app/human_general_auth_transport.py
++++ b/app/human_general_auth_transport.py
+@@ -28,6 +28,7 @@ SCHEMA = 'human-general-auth-requests-v1'
+ ACTION = 'general_receipt'
+ AI_CONSENT_ACTION = 'general_receipt_and_gemini_permission'
+ TTL = 600
++ACTOR_METHODS = {('google_oidc_code_pkce_v1', 1), ('google_oidc_shared_session_v2', 2)}
+ UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
+ 
+ 
+@@ -77,6 +78,12 @@ def validate_auth_state(value, binding, *, allowed_actions=None):
+                 fields.update({'actor', 'evidence_digest'})
+             if record['status'] == 'complete':
+                 fields.add('authority_digest')
++            if 'login_evidence' in record and record['status'] in {'authenticated', 'claimed', 'complete'}:
++                fields.add('login_evidence')
++                if (set(record['login_evidence']) != {'handle', 'policy'}
++                        or any(not isinstance(v, str) or not re.fullmatch('[a-f0-9]{64}', v)
++                               for v in record['login_evidence'].values())):
++                    raise ValueError()
+             if set(record) != fields:
+                 raise ValueError()
+             if record['status'] != 'prepared':
+@@ -88,13 +95,14 @@ def validate_auth_state(value, binding, *, allowed_actions=None):
+                 actor = record['actor']
+                 if (set(actor) != {'issuer', 'subject', 'email', 'method', 'verified_at', 'request_id',
+                                   'request_digest', 'policy_revision', 'verification_revision', 'actor_id'}
+-                        or actor['issuer'] != ISSUER or actor['method'] != 'google_oidc_code_pkce_v1'
++                        or actor['issuer'] != ISSUER
++                        or (actor['method'], actor['verification_revision']) not in ACTOR_METHODS
++                        or (actor['verification_revision'] == 2 and 'login_evidence' not in record)
+                         or not re.fullmatch(r'[0-9]{1,255}', actor['subject'])
+                         or actor['actor_id'] != digest([ISSUER, actor['subject']])
+                         or type(actor['verified_at']) is not int
+                         or not record['created_at'] <= actor['verified_at'] < record['expires_at']
+                         or type(actor['policy_revision']) is not int or actor['policy_revision'] < 1
+-                        or actor['verification_revision'] != 1
+                         or actor['request_digest'] != record['digest']
+                         or actor['request_id'] != rid
+                         or record['evidence_digest'] != digest(actor)):
+@@ -249,6 +257,7 @@ class AuthenticatedGeneralConfirmation:
+         if requested_action not in {ACTION,AI_CONSENT_ACTION}:fail('request_invalid')
+         self.requested_action=requested_action
+         self.stage=stage or (lambda *_:None)
++        self.verify_login = None
+ 
+     def fresh(self, record):
+         binding = record['binding']
+@@ -272,8 +281,41 @@ class AuthenticatedGeneralConfirmation:
+             fail('replay_or_unknown_request')
+         if not record['created_at'] <= int(self.clock()) < record['expires_at']:
+             fail('request_expired')
++        if 'login_evidence' in record:
++            if self.verify_login is None:
++                fail('trusted_login_adapter_required')
++            self.verify_login(record)
+         return state, record
+ 
++    def bind_login(self, rid, evidence):
++        state, record = self.record(rid, 'authenticated')
++        if 'login_evidence' in record:
++            fail('request_replaced')
++        record['login_evidence'] = evidence
++        self.store.save(state)
++
++    def resume_login(self, rid, actor, evidence):
++        """Trusted host only. Login grants no operation or accounting authority."""
++        state, record = self.record(rid, 'prepared')
++        self.fresh(record)
++        if (not isinstance(actor, VerifiedActor)
++                or (actor.method, actor.verification_revision) != ('google_oidc_shared_session_v2', 2)
++                or actor.request_id != rid or actor.request_digest != record['digest']
++                or actor.subject != self.identity.owner_subject or actor.issuer != ISSUER
++                or actor.policy_revision != self.identity.policy_revision
++                or not record['created_at'] <= actor.verified_at <= int(self.clock()) < record['expires_at']):
++            fail('actor_policy_changed')
++        cookie, oauth_state, nonce, csrf, verifier = [secrets.token_urlsafe(32) for _ in range(5)]
++        record.update(status='authenticated', session={
++            'cookie': fingerprint(cookie), 'state': fingerprint(oauth_state),
++            'nonce': fingerprint(nonce), 'csrf': fingerprint(csrf)},
++            actor=actor.record(), evidence_digest=digest(actor.record()), login_evidence=evidence)
++        if self.verify_login is None:
++            fail('trusted_login_adapter_required')
++        self.verify_login(record)
++        self.store.save(state)
++        return BrowserSession(rid, cookie, oauth_state, nonce, csrf, verifier, '')
++
+     def prepare(self, expected, *, request_id=None):
+         # Caller is trusted projection/Drive reader, not browser/Sheet JSON.
+         rid = request_id if request_id is not None else str(uuid4())
+@@ -334,7 +376,8 @@ class AuthenticatedGeneralConfirmation:
+         self.fresh(record)
+         actor = record['actor']
+         if (actor['subject'] != self.identity.owner_subject or actor['policy_revision'] != self.identity.policy_revision
+-                or actor['verification_revision'] != 1 or actor['actor_id'] != digest([ISSUER, actor['subject']])
++                or (actor['method'], actor['verification_revision']) not in ACTOR_METHODS
++                or actor['actor_id'] != digest([ISSUER, actor['subject']])
+                 or not record['created_at'] <= actor['verified_at'] < record['expires_at']):
+             fail('actor_policy_changed')
+         return VerifiedActor(**{k: v for k, v in actor.items() if k != 'actor_id'})
+diff --git a/app/receipt_item_confirmation.py b/app/receipt_item_confirmation.py
+index 33b5b62..4c4a692 100644
+--- a/app/receipt_item_confirmation.py
++++ b/app/receipt_item_confirmation.py
+@@ -77,7 +77,8 @@ def attest(record,snapshot,current,actor,*,request_id,owner_actor_id,now,categor
+     from .receipt_item_review import evaluate
+     expected=binding(record,snapshot,request_id)
+     if (not isinstance(actor,VerifiedActor) or actor.issuer!=ISSUER or actor.actor_id!=owner_actor_id
+-            or actor.method!='google_oidc_code_pkce_v1' or actor.verification_revision!=1
++            or (actor.method,actor.verification_revision) not in {
++                ('google_oidc_code_pkce_v1',1),('google_oidc_shared_session_v2',2)}
+             or actor.request_id!=request_id or actor.request_digest!=digest(expected)
+             or not actor.verified_at<=now<actor.verified_at+600):
+         raise StateError('item_confirmation_verified_actor_required')
+diff --git a/app/receipt_item_review.py b/app/receipt_item_review.py
+index 634fdb3..bc799a2 100644
+--- a/app/receipt_item_review.py
++++ b/app/receipt_item_review.py
+@@ -358,8 +358,9 @@ class ReviewRequests:
+         actor=self.actor(rid,snapshot_digest,identity)
+         bound=digest([SCHEMA,'post_receipt',rid,snapshot_digest,identity])
+         if (not isinstance(actor,VerifiedActor) or actor.issuer!=ISSUER or
+-                actor.actor_id!=self.owner_actor_id or actor.method!='google_oidc_code_pkce_v1' or
+-                actor.request_id!=rid or actor.request_digest!=bound or actor.verification_revision!=1 or
++                actor.actor_id!=self.owner_actor_id or
++                (actor.method,actor.verification_revision) not in {('google_oidc_code_pkce_v1',1),('google_oidc_shared_session_v2',2)} or
++                actor.request_id!=rid or actor.request_digest!=bound or
+                 type(actor.policy_revision) is not int or actor.policy_revision<1 or
+                 type(actor.verified_at) is not int or not actor.verified_at<=self.clock()<actor.verified_at+600):
+             raise StateError('item_review_verified_actor_required')
+diff --git a/app/receipt_reconciliation_authority.py b/app/receipt_reconciliation_authority.py
+index 98877c2..4c4ebd3 100644
+--- a/app/receipt_reconciliation_authority.py
++++ b/app/receipt_reconciliation_authority.py
+@@ -51,8 +51,9 @@ class ReconciliationConfirmation:
+             raise StateError('reconciliation_request_expired')
+         actor = self.actor(request_id)  # Existing Google OIDC trusted adapter, not a plain dict.
+         if (not isinstance(actor, VerifiedActor) or actor.issuer != ISSUER or actor.actor_id != self.owner
+-                or actor.method != 'google_oidc_code_pkce_v1' or actor.request_id != request_id
+-                or actor.request_digest != record['digest'] or actor.verification_revision != 1
++                or (actor.method, actor.verification_revision) not in {
++                    ('google_oidc_code_pkce_v1',1),('google_oidc_shared_session_v2',2)}
++                or actor.request_id != request_id or actor.request_digest != record['digest']
+                 or actor.policy_revision < 1 or not created.timestamp() <= actor.verified_at < expires.timestamp()
+                 or actor.verified_at > now.timestamp()):
+             raise StateError('reconciliation_actor_rejected')
+diff --git a/services/human_general/page_router.py b/services/human_general/page_router.py
+index 2fd727c..f725462 100644
+--- a/services/human_general/page_router.py
++++ b/services/human_general/page_router.py
+@@ -81,6 +81,15 @@ class PageRouter(SyntheticRuntime):
+             raise StateError('human_general_auth_replay_or_unknown_request')
+         if record['expires_at'].timestamp()<=self.clock():
+             raise StateError('human_general_auth_request_expired')
++        if record['profile']=='session_canary':
++            from .session_canary import SessionCanaryRuntime,PROFILE_DIGEST
++            if self.settings.get('session_canary_enabled') is not True or record['profile_digest']!=PROFILE_DIGEST:
++                raise StateError('session_canary_disabled')
++            runtime=SessionCanaryRuntime(self.client,self.settings,self.key,clock=self.clock,
++                                        identity=self.identity,exchange=self.exchange)
++            runtime.browser_login_cookie=self.browser_login_cookie
++            self.selected,self.selected_rid=runtime,rid
++            return runtime
+         config=self.profiles.get(record['profile'])
+         if config is None or digest(config)!=record['profile_digest']:
+             raise StateError('real_page_profile_stale')
+@@ -93,6 +102,7 @@ class PageRouter(SyntheticRuntime):
+             factory=ReceiptReviewRuntime
+         runtime=factory(self.client,self.settings,self.key,config,self.info,
+             clock=self.clock,identity=self.identity,exchange=self.exchange)
++        runtime.browser_login_cookie=self.browser_login_cookie
+         runtime.drive.begin_request()
+         self.selected,self.selected_rid=runtime,rid
+         return runtime
+@@ -100,7 +110,7 @@ class PageRouter(SyntheticRuntime):
+     @property
+     def drive(self):
+         # HTTP teardown always discards the selected request's fresh cache.
+-        return self.selected.drive if self.selected is not None else None
++        return getattr(self.selected,'drive',None) if self.selected is not None else None
+ 
+     def gateway(self,rid):return self._select(rid).gateway(rid)
+     def state(self,rid,kind):return self._select(rid).state(rid,kind)
+@@ -142,6 +152,16 @@ class PageRouter(SyntheticRuntime):
+             retry=None,timeout=10)
+         return link
+ 
++    def seed_session_canary(self,operation):
++        from .session_canary import SessionCanaryRuntime,PROFILE_DIGEST
++        runtime=SessionCanaryRuntime(self.client,self.settings,self.key,clock=self.clock,
++                                    identity=self.identity,exchange=self.exchange)
++        link=runtime.seed_operation(operation);rid=parse_qs(urlsplit(link).query)['request'][0]
++        self.client.collection('real_request_profiles').document(rid).create(
++            {'profile':'session_canary','profile_digest':PROFILE_DIGEST,'expires_at':timestamp(int(self.clock())+TTL)},
++            retry=None,timeout=10)
++        return link
++
+     def seed_item_review(self,name='p14_items'):
+         from .receipt_review_runtime import ReceiptReviewRuntime
+         config=self.profiles.get(name)
+diff --git a/services/human_general/real_page.py b/services/human_general/real_page.py
+index 89ff9a2..fe90a76 100644
+--- a/services/human_general/real_page.py
++++ b/services/human_general/real_page.py
+@@ -65,9 +65,11 @@ def validate_verified(value,config,owner_sub):
+                     or type(actor['verified_at']) is not int
+                     or evidence['explicit_consent']!=AI_CONSENT_ACTION
+                     or actor['issuer']!=ISSUER or actor['subject']!=owner_sub
+-                    or actor['actor_id']!=digest([ISSUER,owner_sub]) or actor['method']!='google_oidc_code_pkce_v1'
++                    or actor['actor_id']!=digest([ISSUER,owner_sub])
++                    or (actor['method'],actor['verification_revision']) not in {
++                        ('google_oidc_code_pkce_v1',1),('google_oidc_shared_session_v2',2)}
+                     or actor['request_id']!=event['request_id'] or actor['request_digest']!=digest(expected)
+-                    or actor['verification_revision']!=1 or actor['policy_revision']!=1
++                    or type(actor['policy_revision']) is not int or actor['policy_revision']<1
+                     or state['grants'][page_key(page)]['confirmer']!={'provider':'google','subject':actor['email']}):raise ValueError()
+     except Exception:raise StateError('real_page_verified_state_invalid') from None
+     return value
+diff --git a/services/human_general/real_runtime.py b/services/human_general/real_runtime.py
+index f6c96e1..ed04c4a 100644
+--- a/services/human_general/real_runtime.py
++++ b/services/human_general/real_runtime.py
+@@ -33,11 +33,11 @@ class RealPageRuntime(SyntheticRuntime):
+         from .stages import Stages
+         if not hasattr(self,'_stages') or self._stage_request!=rid:
+             self._stage_request=rid;self._stages=Stages(rid)
+-        return AuthenticatedGeneralConfirmation(
++        return self.with_login(AuthenticatedGeneralConfirmation(
+             AuthRequestStore(self.state(rid,'requests'),self.config['binding'],preflight=lambda:None),self.identity,
+             lambda sid,n:self.current_page(rid,sid,n),self.source,
+             redirect_uri=self.origin+'/oauth/callback',exchange_code=self.exchange,clock=self.clock,
+-            requested_action=AI_CONSENT_ACTION,stage=self._stages)
++            requested_action=AI_CONSENT_ACTION,stage=self._stages))
+ 
+     def reconcile(self,rid):
+         # Read only. Never adopt a failed request or retry a PUT.
+diff --git a/services/human_general/receipt_review_runtime.py b/services/human_general/receipt_review_runtime.py
+index 135452d..b2ecd8f 100644
+--- a/services/human_general/receipt_review_runtime.py
++++ b/services/human_general/receipt_review_runtime.py
+@@ -30,9 +30,9 @@ class ReceiptReviewRuntime(SyntheticRuntime):
+         if kind=='authorities':return self.journal
+         raise StateError('item_confirmation_state_forbidden')
+     def gateway(self,rid):
+-        return AuthenticatedItemReview(AuthRequestStore(self.state(rid,'requests'),self.config['scope'],
++        return self.with_login(AuthenticatedItemReview(AuthRequestStore(self.state(rid,'requests'),self.config['scope'],
+             preflight=lambda:None,validator=validate_item_auth),self.identity,readers=self.readers.read,
+-            redirect_uri=self.origin+'/oauth/callback',exchange_code=self.exchange,clock=self.clock)
++            redirect_uri=self.origin+'/oauth/callback',exchange_code=self.exchange,clock=self.clock))
+     def factory(self,rid,expected_tag=None):
+         runtime=self
+         class Confirmation:
+diff --git a/services/human_general/reconciliation_runtime.py b/services/human_general/reconciliation_runtime.py
+index 7cbb993..b4012af 100644
+--- a/services/human_general/reconciliation_runtime.py
++++ b/services/human_general/reconciliation_runtime.py
+@@ -37,10 +37,10 @@ class ReconciliationRuntime(SyntheticRuntime):
+         raise StateError('reconciliation_state_forbidden')
+ 
+     def gateway(self,rid):
+-        return AuthenticatedReconciliation(AuthRequestStore(self.state(rid,'requests'),self.binding,
++        return self.with_login(AuthenticatedReconciliation(AuthRequestStore(self.state(rid,'requests'),self.binding,
+             preflight=lambda:None,validator=validate_reconciliation_auth),self.identity,
+             self.current_identity,self.source_hash,self.ledger,self.repository,
+-            redirect_uri=self.origin+'/oauth/callback',exchange_code=self.exchange,clock=self.clock,current_decision=self.current_decision)
++            redirect_uri=self.origin+'/oauth/callback',exchange_code=self.exchange,clock=self.clock,current_decision=self.current_decision))
+ 
+     def factory(self,rid,expected_tag=None):
+         def build(actor):
+diff --git a/services/human_general/runtime.py b/services/human_general/runtime.py
+index f6d1dc6..2a81f84 100644
+--- a/services/human_general/runtime.py
++++ b/services/human_general/runtime.py
+@@ -24,6 +24,7 @@ from app.human_general_authority import (HumanGeneralConfirmation, HumanGeneralA
+ from app.page_receipt_model import PageUnit, SourceRef, stable_page, digest
+ from app.drive_run_state import StateError
+ from .backend import FirestoreConditionalState, EncryptedTickets, canonical, timestamp
++from .shared_login import SharedLogins, Lifetime
+ 
+ RAW = b'kakeibo-hga-isolated-synthetic-source-v1'
+ BINDING = digest(['hga-cloud-run-synthetic-v1'])
+@@ -62,10 +63,30 @@ class SyntheticRuntime:
+             raise StateError('synthetic_configuration_invalid')
+         self.client, self.settings, self.clock, self.key = client, settings, clock, key
+         self.origin = settings['origin']
+-        self.identity = identity or GoogleIdentityVerifier(settings['client_id'], settings['owner_sub'], clock=clock)
++        self.identity = identity or GoogleIdentityVerifier(settings['client_id'], settings['owner_sub'],
++            policy_revision=settings.get('owner_policy_revision',1), clock=clock)
+         self.exchange = exchange or GoogleCodeExchange(settings['client_id'], settings['client_secret'],
+                                       self.origin+'/oauth/callback', requests.Session())
+         self.tickets = EncryptedTickets(client, key, clock=clock)
++        self.logins = SharedLogins(client, key, self.identity, clock=clock,
++            lifetime=Lifetime(settings.get('login_absolute_seconds',28800),
++                              settings.get('login_idle_seconds',3600)))
++        self.browser_login_cookie = None  # HTTP-local only, never persisted/logged.
++
++    def with_login(self, gateway):
++        gateway.verify_login = lambda record:self.logins.verify_bound(record,self.browser_login_cookie)
++        return gateway
++
++    def resume(self, rid, cookie):
++        gateway = self.gateway(rid)
++        gateway.verify_login = lambda record: self.logins.verify_bound(record,cookie)
++        _, record = gateway.record(rid,'prepared')
++        gateway.fresh(record)
++        actor = self.logins.actor(cookie,record)
++        self.logins.touch(cookie)
++        ticket = gateway.resume_login(rid,actor,self.logins.evidence(cookie))
++        self.tickets.save(ticket,record['expires_at'])
++        return ticket
+ 
+     def state(self, rid, kind):
+         return FirestoreConditionalState(self.client.collection(kind).document(rid), clock=self.clock)
+@@ -89,9 +110,9 @@ class SyntheticRuntime:
+ 
+     def gateway(self, rid):
+         store = AuthRequestStore(self.state(rid, 'requests'), BINDING, preflight=lambda: None)
+-        return AuthenticatedGeneralConfirmation(store, self.identity,
++        return self.with_login(AuthenticatedGeneralConfirmation(store, self.identity,
+             lambda source_id, number: self.current_page(rid, source_id, number), self.source,
+-            redirect_uri=self.origin+'/oauth/callback', exchange_code=self.exchange, clock=self.clock)
++            redirect_uri=self.origin+'/oauth/callback', exchange_code=self.exchange, clock=self.clock))
+ 
+     def factory(self, rid, expected_tag=None):
+         def build(actor):
+@@ -132,6 +153,10 @@ def configured_runtime():
+     oauth = json.loads(Path(os.environ['HGA_CONFIG_PATH']).read_text())
+     owner = json.loads(Path(os.environ['HGA_OWNER_PATH']).read_text())
+     settings = {**oauth, 'owner_issuer': owner['issuer'], 'owner_sub': owner['sub'],
++        'owner_policy_revision':owner.get('revision',1),
++        'login_absolute_seconds':int(os.environ.get('HGA_LOGIN_ABSOLUTE_SECONDS','28800')),
++        'login_idle_seconds':int(os.environ.get('HGA_LOGIN_IDLE_SECONDS','3600')),
++        'session_canary_enabled':os.environ.get('HGA_SESSION_CANARY_ENABLED')=='true',
+         'origin': os.environ['HGA_ORIGIN'], 'database': os.environ['HGA_DATABASE'],
+         'mode': 'synthetic_only'}
+     key = Path(os.environ['HGA_SESSION_KEY_PATH']).read_bytes().strip()
+diff --git a/services/human_general/web.py b/services/human_general/web.py
+index 119a345..0942cbe 100644
+--- a/services/human_general/web.py
++++ b/services/human_general/web.py
+@@ -15,6 +15,7 @@ from app.human_general_auth_transport import UUID, TTL
+ 
+ COOKIE = '__Host-hga'
+ START_COOKIE = '__Host-hga-start'
++LOGIN_COOKIE = '__Host-hga-login'
+ 
+ 
+ def screen(text, content=''):
+@@ -36,6 +37,7 @@ def create_app(runtime_factory):
+     def runtime():
+         if not hasattr(g,'hga_runtime'):
+             g.hga_runtime=runtime_factory()
++            g.hga_runtime.browser_login_cookie=request.cookies.get(LOGIN_COOKIE)
+             drive=getattr(g.hga_runtime,'drive',None)
+             if drive is not None:drive.begin_request()
+         return g.hga_runtime
+@@ -59,6 +61,20 @@ def create_app(runtime_factory):
+         value = rt.tickets.load(request.cookies.get(COOKIE))
+         return value
+ 
++    def gateway(rt, value):
++        result = rt.gateway(value)
++        result.verify_login = lambda record: rt.logins.verify_bound(record,request.cookies.get(LOGIN_COOKIE))
++        return result
++
++    def logout_form(rt):
++        cookie = request.cookies.get(LOGIN_COOKIE)
++        if not rt.logins.current(cookie):
++            return ''
++        token = URLSafeTimedSerializer(rt.key,salt='hga-logout-v1').dumps(
++            {'login_hash':sha256(cookie.encode()).hexdigest()})
++        return ('<form method="post" action="/logout"><input type="hidden" name="csrf" value="'
++                +str(escape(token))+'"><button>ログアウト</button></form>')
++
+     @app.before_request
+     def https_only():
+         # Cloud Run terminates TLS. Origin is fixed from private config, never
+@@ -86,6 +102,10 @@ def create_app(runtime_factory):
+         code = str(error)
+         if code == 'HTTP_412':
+             message, status = '現在の状態が変わりました。最初から確認してください', 412
++        elif code in {'login_session_unavailable','login_session_save_unknown','login_session_create_unknown','login_session_readback_required'}:
++            message, status = '現在、本人確認を利用できません。再確定せず状態を確認してください', 503
++        elif code.startswith('login_session_'):
++            message, status = '本人確認の有効期間が切れたか、ログアウトされました。新しい確認から本人認証してください', 403
+         elif code.endswith('identity_rejected'):
+             message, status = 'このアカウントでは確定できません', 403
+         elif code.endswith('request_expired'):
+@@ -124,18 +144,23 @@ def create_app(runtime_factory):
+             raise StateError('human_general_auth_request_invalid') from None
+         signer = URLSafeTimedSerializer(rt.key, salt='hga-start-v1')
+         if request.method == 'GET':
+-            gateway = rt.gateway(value)
+-            gateway.record(value, 'prepared')
++            operation = gateway(rt,value)
++            operation.record(value, 'prepared')
+             label=rt.label(value) if hasattr(rt,'label') else 'synthetic page'
+             nonce = secrets.token_urlsafe(32)
+             token = signer.dumps({'request': value, 'nonce_hash': sha256(nonce.encode()).hexdigest()})
+             heading=rt.start_heading(value) if hasattr(rt,'start_heading') else '一般レシートの確認'
++            logged_in=rt.logins.current(request.cookies.get(LOGIN_COOKIE)) is not None
++            guidance='本人確認済みです。対象の操作を個別に確定します。' if logged_in else 'Googleで本人確認後、明示的に確定します。'
++            button='確認へ進む' if logged_in else 'Googleで本人確認する'
++            switch=('<button name="login" value="reauth">Googleアカウントを変更して本人確認する</button>'
++                    if logged_in else '')
+             response = Response(screen(heading,
+-                '<p>対象：'+str(escape(label))+'</p><p>Googleで本人確認後、明示的に確定します。</p>'
++                '<p>対象：'+str(escape(label))+'</p><p>'+guidance+'</p>'
+                 '<form method="post" action="/start"><input type="hidden" name="request" value="'+value+'">'
+                 '<input type="hidden" name="proof" value="'+str(escape(proof))+'">'
+                 '<input type="hidden" name="csrf" value="'+str(escape(token))+'">'
+-                '<button>Googleで本人確認する</button></form>'))
++                '<button>'+button+'</button>'+switch+'</form>'+logout_form(rt)))
+             response.set_cookie(START_COOKIE, nonce, max_age=TTL, secure=True, httponly=True, samesite='Lax', path='/')
+             return response
+         own_origin(rt)
+@@ -146,11 +171,22 @@ def create_app(runtime_factory):
+                 raise ValueError()
+         except (ValueError, KeyError, BadSignature, SignatureExpired):
+             raise StateError('human_general_auth_csrf_invalid') from None
+-        session = rt.begin(value)
+-        response = redirect(session.authorization_url, code=303)
++        login_cookie=request.cookies.get(LOGIN_COOKIE)
++        login=rt.logins.current(login_cookie)
++        force_login=request.form.get('login')=='reauth'
++        if force_login and login:
++            rt.logins.revoke(login_cookie)
++        if login and not force_login:
++            session=rt.resume(value,login_cookie)
++            response=redirect('/confirm',code=303)
++        else:
++            session=rt.begin(value)
++            response=redirect(session.authorization_url,code=303)
+         # form_post from Google is cross-site; None is required here. State,
+         # nonce, PKCE, callback Origin and explicit-confirm CSRF still apply.
+         response.set_cookie(COOKIE, session.cookie, max_age=TTL, secure=True, httponly=True, samesite='None', path='/')
++        if not login or force_login:
++            response.delete_cookie(LOGIN_COOKIE,secure=True,httponly=True,samesite='Lax',path='/')
+         response.delete_cookie(START_COOKIE, secure=True, httponly=True, samesite='Lax', path='/')
+         return response
+ 
+@@ -162,19 +198,25 @@ def create_app(runtime_factory):
+         session = ticket(rt)
+         if request.form.get('error'):
+             raise StateError('human_general_auth_identity_rejected')
+-        rt.gateway(session.request_id).callback(session, cookie=request.cookies.get(COOKIE),
++        operation=gateway(rt,session.request_id)
++        actor=operation.callback(session, cookie=request.cookies.get(COOKIE),
+             state=request.form.get('state'), code=request.form.get('code'))
+-        return redirect('/confirm', code=303)
++        login_cookie=rt.logins.create(actor)
++        operation.bind_login(session.request_id,rt.logins.evidence(login_cookie))
++        response=redirect('/confirm',code=303)
++        response.set_cookie(LOGIN_COOKIE,login_cookie,max_age=rt.logins.lifetime.absolute,
++                            secure=True,httponly=True,samesite='Lax',path='/')
++        return response
+ 
+     @app.route('/confirm', methods=['GET', 'POST'])
+     def confirm():
+         rt = runtime()
+         session = ticket(rt)
+-        gateway = rt.gateway(session.request_id)
++        operation = gateway(rt,session.request_id)
+         if request.method == 'GET':
+-            _, record = gateway.record(session.request_id, 'authenticated')
+-            gateway.browser(record, session, request.cookies.get(COOKIE))
+-            gateway.fresh(record)
++            _, record = operation.record(session.request_id, 'authenticated')
++            operation.browser(record, session, request.cookies.get(COOKIE))
++            operation.fresh(record)
+             _, tag = rt.state(session.request_id, 'authorities').read_versioned()
+             label=rt.label(session.request_id) if hasattr(rt,'label') else 'synthetic page'
+             text=rt.confirmation_text(session.request_id) if hasattr(rt,'confirmation_text') else {
+@@ -188,7 +230,7 @@ def create_app(runtime_factory):
+                 '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
+                 '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
+                 '<button name="action" value="confirm">'+str(escape(text['button']))+'</button>'
+-                '<button name="action" value="cancel">キャンセル</button></form>'))
++                '<button name="action" value="cancel">キャンセル</button></form>'+logout_form(rt)))
+         own_origin(rt)
+         if request.form.get('action') == 'cancel':
+             if not hmac.compare_digest(request.form.get('csrf', ''), session.csrf):
+@@ -201,7 +243,12 @@ def create_app(runtime_factory):
+         if not request.form.get('etag'):
+             raise StateError('HTTP_412')
+         try:
+-            gateway.confirm(session, cookie=request.cookies.get(COOKIE), csrf=request.form.get('csrf'),
++            if not hmac.compare_digest(request.form.get('csrf',''),session.csrf):
++                raise StateError('human_general_auth_csrf_invalid')
++            _,record=operation.record(session.request_id,'authenticated')
++            if 'login_evidence' in record:
++                rt.logins.touch(request.cookies.get(LOGIN_COOKIE))
++            operation.confirm(session, cookie=request.cookies.get(COOKIE), csrf=request.form.get('csrf'),
+                 origin=request.headers.get('Origin'), method='POST',
+                 confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
+         except Exception as error:
+@@ -215,10 +262,10 @@ def create_app(runtime_factory):
+     def result():
+         rt = runtime()
+         session = ticket(rt)
+-        gateway = rt.gateway(session.request_id)
+-        _, record = gateway.record(session.request_id, 'complete')
+-        gateway.browser(record, session, request.cookies.get(COOKIE))
+-        page = gateway.fresh(record)
++        operation = gateway(rt,session.request_id)
++        _, record = operation.record(session.request_id, 'complete')
++        operation.browser(record, session, request.cookies.get(COOKIE))
++        page = operation.fresh(record)
+         if hasattr(rt,'validate_result'):
+             rt.validate_result(session.request_id,record)
+         else:
+@@ -226,7 +273,25 @@ def create_app(runtime_factory):
+             if grant['confirmation_digest'] != record['authority_digest']:
+                 raise StateError('synthetic_readback_mismatch')
+         label=rt.success_label(session.request_id) if hasattr(rt,'success_label') else 'synthetic確認を保存しました'
+-        return Response(screen('確認が完了しました','<p>'+str(escape(label))+'。</p><p>会計処理は実行していません。</p>'))
++        return Response(screen('確認が完了しました','<p>'+str(escape(label))+'。</p><p>会計処理は実行していません。</p>'+logout_form(rt)))
++
++    @app.route('/logout',methods=['POST'])
++    def logout():
++        rt=runtime()
++        own_origin(rt)
++        cookie=request.cookies.get(LOGIN_COOKIE,'')
++        try:
++            token=URLSafeTimedSerializer(rt.key,salt='hga-logout-v1').loads(request.form.get('csrf',''),max_age=TTL)
++            if not cookie or token!={'login_hash':sha256(cookie.encode()).hexdigest()}:
++                raise ValueError()
++        except (ValueError,BadSignature,SignatureExpired):
++            raise StateError('human_general_auth_csrf_invalid') from None
++        if rt.logins.current(cookie):
++            rt.logins.revoke(cookie)
++        response=Response(screen('ログアウトしました','<p>次の確認ではGoogleで本人確認してください。</p>'))
++        response.delete_cookie(LOGIN_COOKIE,secure=True,httponly=True,samesite='Lax',path='/')
++        response.delete_cookie(COOKIE,secure=True,httponly=True,samesite='None',path='/')
++        return response
+ 
+     return app
+ 
