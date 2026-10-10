@@ -1,0 +1,218 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const ctx=vm.createContext({JSON,Date,Error,Number,String});
+vm.runInContext(fs.readFileSync(__dirname+'/CategoryConfirmation.gs','utf8'),ctx);
+
+test('month summary and historical examples cannot mix dates',()=>{
+  const expense=(date,amount,category=['その他','未分類'])=>['id',date,'長い摘要','自動計上',amount,...category];
+  const result=ctx.ccSummary_([expense('2025-10-16',10846),expense('2026-02-03',8980),expense('2026-08-21',6240),expense('2026-09-12',500),expense('2026-09-13',300,['食費','外食']),expense('2026-10-01',700)],'2026-09');
+  assert.equal(result.monthCount,1);assert.equal(result.monthAmount,500);
+  assert.equal(result.allCount,5);assert.equal(result.allAmount,27266);
+  assert.deepEqual(Array.from(result.samples,e=>e[1]),['2026-08-21','2026-02-03','2025-10-16']);
+});
+
+test('month navigation separates historical and future-only candidates without deletion',()=>{
+  const candidates=[{key:'past',summary:{monthCount:0,allCount:3}},{key:'current',summary:{monthCount:2,allCount:5}},{key:'future',summary:{monthCount:0,allCount:0}}];
+  for(const [filter,key] of [['対象月の未分類','current'],['他月の未処理','past'],['その他の候補','future']]){
+    const p=ctx.ccPartition_(candidates,filter);
+    assert.deepEqual(Array.from(p.visible,c=>c.key),[key]);
+    assert.equal(p.groups.reduce((n,g)=>n+g.length,0),3);
+  }
+  assert.equal(ctx.ccPartition_(candidates,'すべて').visible.length,3);
+  assert.equal(candidates.length,3);
+});
+
+test('opening a fresh candidate never inherits all-period or future-ON choices',()=>{
+  const candidate={key:'new',sig:'snapshot',proof:{merchant:'new'},physical:['','','食費｜外食']};
+  const state=ctx.ccInitial_(candidate,'2026-09','対象月の未分類');
+  assert.equal(state.scope,'反映しない');assert.equal(state.future,'OFF');
+  assert.equal(state.category,'食費 ＞ 外食');assert.equal(state.fixed,undefined);assert.equal(state.pending,undefined);
+});
+
+test('completed transaction snapshot stays excluded after key regeneration, new transactions remain reviewable',()=>{
+  const crypto=require('node:crypto');
+  const modelCtx=vm.createContext({JSON,Date,Error,Number,String,Utilities:{DigestAlgorithm:{SHA_256:'sha'},Charset:{UTF_8:'utf8'},
+    computeDigest:(_a,text)=>Array.from(crypto.createHash('sha256').update(text).digest())}});
+  vm.runInContext(fs.readFileSync(__dirname+'/CategoryConfirmation.gs','utf8'),modelCtx);
+  modelCtx.CATEGORY_UI='legacy';
+  const proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC'};
+  const row=Array(12).fill('');row[6]='original-key';row[11]=JSON.stringify(proof);
+  const rules=[['■ 1. カテゴリを選ぶ・今後の自動分類'],Array(12).fill(''),row,['■ 2. 過去分の固定プレビュー']];
+  const expenses=[['支出ID'],['a','2026-09-01','ABC','自動計上',100,'その他','未分類','','','','i1','','active']];
+  const imported=[['取込ID'],['i1','','PayPay','','2026-09-01','ABC',100,'','auto_expense','a']];
+  const log=[['snapshot','key','uuid']];
+  const sheet=(rows,month)=>({getLastRow:()=>rows.length,getRange:a1=>({getDisplayValues:()=>rows,getDisplayValue:()=>month})});
+  const legacy=sheet(rules,'2026-09');
+  const sheets={legacy,'支出明細':sheet(expenses),'取込データ':sheet(imported),'_カテゴリ確認ログ':sheet(log)};
+  const ss={getSheetByName:name=>sheets[name]};
+  const candidate=modelCtx.ccModel_(ss).candidates[0];assert.equal(candidate.key,'original-key');
+  log.push([candidate.sig,candidate.key,'completed-uuid']);
+  assert.equal(modelCtx.ccModel_(ss).candidates.length,0);
+  row[6]='regenerated-key';assert.equal(modelCtx.ccModel_(ss).candidates.length,0);
+  expenses.push(['b','2026-09-02','ABC','自動計上',200,'その他','未分類','','','','i2','','active']);
+  imported.push(['i2','','PayPay','','2026-09-02','ABC',200,'','auto_expense','b']);
+  assert.equal(modelCtx.ccModel_(ss).candidates.length,1);
+  assert.equal(log.length,2);
+});
+
+test('exact evidence binding excludes unrelated source/account/target/inactive rows',()=>{
+  const e=(id,importId,status='active')=>[id,'2026-09-01','原文','自動計上',100,'その他','未分類','','','',''+importId,'',status];
+  const tx=(id,source,merchant,target)=>[id,'',source,'','',merchant,100,'','auto_expense',target];
+  const proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC STORE'};
+  const expenses=[['header'],e('a','i1'),e('b','i2'),e('c','i3'),e('d','i4'),e('x','i5','inactive')];
+  const imports={i1:tx('i1','PayPay','ABC STORE','a'),i2:tx('i2','au PAY','ABC STORE','b'),i3:tx('i3','PayPay','ABC','c'),i4:tx('i4','PayPay','ABC STORE','other'),i5:tx('i5','PayPay','ABC STORE','x')};
+  assert.deepEqual(Array.from(ctx.ccMembers_(proof,expenses,imports),e=>e[0]),['a']);
+});
+
+test('capture clears every other action including bank group approval',()=>{
+  const row=()=>Array(12).fill('');const marker=m=>[m,...Array(11).fill('')];
+  const selected=row();selected[6]='chosen';const other=row();other[6]='other';other[4]='登録する';other[5]='TRUE';
+  const bank=row();bank[5]='TRUE';bank[8]='group';
+  const fixed=row();fixed[6]='audit';
+  const rows=[marker('■ 1. カテゴリを選ぶ・今後の自動分類'),row(),selected,other,marker('■ 2. 過去分の固定プレビュー'),row(),marker('■ 3. 固定プレビューを確認して反映'),row(),fixed,marker('■ 4. 銀行取引をまとめて確認'),row(),bank];
+  const output=ctx.ccCapture_(rows,'chosen','食費｜外食','confirm',{scope:'反映しない',future:'OFF',fixed:{id:'audit',count:1}});
+  assert.equal(output[2][4],'登録しない');assert.equal(output[2][5],'FALSE');
+  assert.equal(output[3][4],'未選択');assert.equal(output[3][5],'FALSE');assert.equal(output[11][5],'FALSE');
+  assert.equal(rows[3][4],'登録する');assert.equal(rows[11][5],'TRUE');
+});
+
+test('visible unsaved settings stop confirmation before ledger access',()=>{
+  const saved={category:'食費 ＞ 外食',future:'OFF',scope:'反映しない'};
+  const sheet={getRange:a1=>({getValue:()=>JSON.stringify(saved),getDisplayValue:()=>a1==='A15'?'食費 ＞ 食料品':a1==='A17'?'OFF':'反映しない'})};
+  assert.throws(()=>ctx.ccPrepare_({getSheetByName:()=>sheet},'この内容で確定'),/選択の保存/);
+});
+
+test('only correlated complete requests hide a candidate, once',()=>{
+  ctx.CATEGORY_BUSY=['dispatching','running'];ctx.CATEGORY_QUEUE='queue';
+  let state={pending:'uuid',key:'key',sig:'before',category:'食費 ＞ 外食',future:'OFF',scope:'反映しない',fixed:{id:'fixed',count:1}},queue=['uuid','running','','','','result'];
+  const request=['fixed','','previewed'];
+  const logged=[];
+  const panel={getRange:()=>({getValue:()=>JSON.stringify(state),setValue:v=>{if(typeof v==='string' && v.startsWith('{'))state=JSON.parse(v);},getDisplayValue:()=>''}),setRowHeight:()=>{}};
+  const log={getLastRow:()=>1,getRange:()=>({getDisplayValues:()=>[['header']]}),appendRow:r=>logged.push(r)};
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:name==='queue'?{getRange:()=>({getDisplayValues:()=>[queue]})}:name==='カテゴリ過去反映要求'?{getLastRow:()=>2,getRange:()=>({getDisplayValues:()=>[['header'],request]})}:log};
+  ctx.ccModel_=()=>({candidates:[{key:'key',sig:'after'}]});ctx.ccRefresh_=()=>{};ctx.ccPaint_=()=>{};
+  ctx.ccSync_(ss);assert.equal(logged.length,0);assert.equal(state.pending,'uuid');
+  queue[1]='error';ctx.ccSync_(ss);assert.equal(logged.length,0);assert.equal(state.pending,undefined);
+  state.pending='uuid';queue[1]='complete';ctx.ccSync_(ss);assert.equal(logged.length,0); // Queue completion alone cannot hide an unapplied audit preview.
+  state.pending='uuid';request[2]='complete';ctx.ccSync_(ss);assert.equal(logged.length,1);assert.equal(logged[0][0],'after');
+  ctx.ccSync_(ss);assert.equal(logged.length,1);
+});
+
+function freshContext(){
+  const c=vm.createContext({JSON,Date,Error,Number,String});
+  vm.runInContext(fs.readFileSync(__dirname+'/CategoryConfirmation.gs','utf8'),c);return c;
+}
+
+test('no-history action requires preview before it offers confirmation',()=>{
+  const c=freshContext(),values={},dropdowns={};
+  c.ccDropdown_=(_s,a1,options)=>{dropdowns[a1]=options;};c.ccFit_=()=>{};
+  const sheet={getRange:a1=>({setValue:value=>{values[a1]=value;},getDisplayValue:()=>values[a1]||''})};
+  const state={scope:'反映しない',future:'OFF',category:'食費 ＞ 外食'};
+  c.ccPaint_(sheet,state);
+  assert.deepEqual(Array.from(dropdowns.A24),['操作を選択','対象件数を確認']);
+  assert.match(values.A21,/対象月の未分類だけ/);assert.match(values.A21,/追加の過去反映は0件/);
+  state.fixed={count:1,amount:101};c.ccPaint_(sheet,state);
+  assert.deepEqual(Array.from(dropdowns.A24),['操作を選択','この内容で確定']);
+  assert.match(values.A21,/固定対象 1件/);
+});
+
+test('no-history fixed audit binds month, fallback category, identity set and digest',()=>{
+  const c=freshContext(),proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC'};
+  const payload={...proof,billing_name:'ABC',merchant:'',category:['食費','外食']};
+  const row=['audit','','previewed',JSON.stringify(payload),'2026-08-01','2026-08-31','1','101','digest','FALSE'];
+  const target=['audit','M-1',2,'2026-08-10',101,'その他','未分類','食費','外食','','previewed'];
+  const sheet=rows=>({getLastRow:()=>rows.length,getRange:()=>({getDisplayValues:()=>rows})});
+  const ss={getSheetByName:name=>sheet([['header'],name==='カテゴリ過去反映要求'?row:target])};
+  const state={scope:'反映しない',month:'2026-08',category:'食費 ＞ 外食',proof,fixed:{id:'audit',count:1,amount:101,digest:'digest',ids:['M-1']}};
+  assert.equal(c.ccFixedValid_(ss,state),true);
+  target[1]='M-other';assert.equal(c.ccFixedValid_(ss,state),false);target[1]='M-1';
+  target[3]='2026-07-31';assert.equal(c.ccFixedValid_(ss,state),false);target[3]='2026-08-10';
+  target[5]='食費';assert.equal(c.ccFixedValid_(ss,state),false);target[5]='その他';
+  row[8]='changed';assert.equal(c.ccFixedValid_(ss,state),false);row[8]='digest';
+  row[9]='TRUE';assert.equal(c.ccFixedValid_(ss,state),false);row[9]='FALSE';
+  row[4]='';row[5]='';assert.equal(c.ccFixedValid_(ss,state),false);
+});
+
+test('no-history confirmation without a fixed preview stops before any writes',()=>{
+  const c=freshContext();
+  const state={key:'key',sig:'sig',month:'2026-08',category:'食費 ＞ 外食',future:'OFF',scope:'反映しない'};
+  const panel={getRange:a1=>({getValue:()=>JSON.stringify(state),getDisplayValue:()=>({A15:state.category,A17:state.future,A20:state.scope})[a1],getDisplayValues:()=>[['食費 ＞ 外食','食費｜外食']]})};
+  c.ccModel_=()=>({month:state.month,candidates:[{key:state.key,sig:state.sig}],legacy:{getRange:()=>assert.fail('no writes')}});
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:{getLastRow:()=>2}};
+  assert.throws(()=>c.ccPrepare_(ss,'この内容で確定'),/先に対象件数/);
+});
+
+test('zero and invalid preview counts never offer or capture confirmation',()=>{
+  for(const count of [0,-1,0.5,'NaN',Infinity]){
+    const c=freshContext(),values={},dropdowns={};
+    c.ccDropdown_=(_s,a1,options)=>{dropdowns[a1]=options;};c.ccFit_=()=>{};
+    const sheet={getRange:a1=>({setValue:value=>{values[a1]=value;},getDisplayValue:()=>values[a1]||''})};
+    const state={scope:'反映しない',future:'ON',category:'食費 ＞ 外食',fixed:{id:'audit',count,amount:0},message:'反映対象は0件です。設定を確認して確定してください。'};
+    c.ccPaint_(sheet,state);
+    assert.ok(!dropdowns.A24.includes('この内容で確定'));
+    assert.match(values.A21,/確定できる未分類明細がありません/);
+    assert.doesNotMatch(values.A21,/だけを確定/);
+    assert.match(values.A25,/確定できる未分類明細がありません/);assert.doesNotMatch(values.A25,/確定してください/);
+    assert.throws(()=>c.ccCapture_([],'key','食費｜外食','confirm',state),/確定できる未分類/);
+    assert.equal(c.ccFixedValid_({getSheetByName:()=>assert.fail('no request access')},state),false);
+  }
+});
+
+test('server prepare rejects zero targets before any model, ledger or queue writes',()=>{
+  const c=freshContext();
+  const state={key:'key',category:'食費 ＞ 外食',future:'OFF',scope:'反映しない',fixed:{id:'',count:0,digest:''}};
+  const panel={getRange:a1=>({getValue:()=>JSON.stringify(state),getDisplayValue:()=>({A15:state.category,A17:state.future,A20:state.scope})[a1]})};
+  c.ccModel_=()=>assert.fail('no model access or mutation');
+  assert.throws(()=>c.ccPrepare_({getSheetByName:()=>panel},'この内容で確定'),/確定できる未分類/);
+});
+
+test('zero confirmation queue completion never logs or removes a candidate, including replay',()=>{
+  const c=freshContext();c.CATEGORY_BUSY=['running'];c.CATEGORY_QUEUE='queue';
+  let state={stage:'confirm',pending:'uuid',key:'key',fixed:{id:'',count:0}};
+  const panel={getRange:()=>({getValue:()=>JSON.stringify(state),setValue:v=>{if(typeof v==='string' && v.startsWith('{'))state=JSON.parse(v);}})};
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:name==='queue'?{getRange:()=>({getDisplayValues:()=>[['uuid','complete']]})}:assert.fail('no log/request access')};
+  c.ccPaint_=()=>{};c.ccModel_=()=>assert.fail('candidate retained');c.ccRefresh_=()=>assert.fail('no removal');
+  c.ccSync_(ss);assert.equal(state.pending,undefined);assert.equal(state.key,'key');
+  assert.match(state.message,/確認済みにはしていません/);
+  c.ccSync_(ss);assert.equal(state.key,'key');
+});
+
+test('empty preview retains candidate and explains reconciliation without enabling confirmation',()=>{
+  const c=freshContext();c.CATEGORY_BUSY=['running'];c.CATEGORY_QUEUE='queue';c.CATEGORY_UI='legacy';
+  let state={stage:'preview',pending:'uuid',key:'key',before:[]};
+  const legacy=Array(12).fill('');legacy[0]='condition\npreview_empty:';legacy[7]='displayed:key';
+  const panel={getRange:()=>({getValue:()=>JSON.stringify(state),setValue:v=>{if(typeof v==='string' && v.startsWith('{'))state=JSON.parse(v);}})};
+  const rows=values=>({getLastRow:()=>values.length,getRange:()=>({getDisplayValues:()=>values})});
+  const ss={getSheetByName:name=>name==='カテゴリ確認'?panel:name==='queue'?{getRange:()=>({getDisplayValues:()=>[['uuid','complete']]})}:name==='legacy'?rows([legacy]):rows([['header']])};
+  c.ccPaint_=()=>{};c.ccEmptyReason_=()=> '照合待ちの明細は安全確認のため対象外です。';
+  c.ccSync_(ss);assert.equal(state.key,'key');assert.equal(state.pending,undefined);
+  assert.equal(state.fixed.count,0);assert.equal(c.ccHasTargets_(state),false);assert.match(state.message,/照合待ち/);
+  c.ccSync_(ss);assert.equal(state.key,'key');
+});
+
+test('zero reason uses candidate-specific current-month rows, never changes safety flags',()=>{
+  const c=freshContext(),row=['id','2026-09-14','','',923,'その他','未分類','','','','import'];
+  let members=[row];c.ccModel_=()=>({candidates:[{key:'key',members}]});
+  const tx=Array(12).fill('');tx[0]='import';tx[11]='au PAY実支出。レシート等との照合待ち';
+  const ss={getSheetByName:()=>({getLastRow:()=>1,getRange:()=>({getDisplayValues:()=>[tx]})})};
+  const state={key:'key',month:'2026-09',scope:'反映しない'};
+  assert.match(c.ccEmptyReason_(ss,state),/照合待ち/);assert.match(tx[11],/照合待ち/);
+  members=[row.slice()];members[0][1]='2026-08-31';
+  assert.match(c.ccEmptyReason_(ss,state),/対象月に未分類明細がありません/);
+  members=[row.slice()];members[0][5]='食費';members[0][6]='外食';
+  assert.match(c.ccEmptyReason_(ss,state),/すでに分類済み/);
+  members=[row];tx[11]='';assert.match(c.ccEmptyReason_(ss,state),/安全条件/);
+});
+
+test('fixed-target month accepts raw serial display without changing snapshot or digest',()=>{
+  const c=freshContext(),serial=(Date.UTC(2026,7,10)-Date.UTC(1899,11,30))/86400000;
+  assert.equal(c.ccTargetMonth_(serial),'2026-08');assert.equal(c.ccTargetMonth_(String(serial+0.99999)),'2026-08');
+  assert.equal(c.ccTargetMonth_('2026/08/10'),'2026-08');assert.equal(c.ccTargetMonth_(2958466),'');
+  const proof={kind:'service',source:'PayPay',account_alias:'',merchant:'ABC'};
+  const payload={...proof,billing_name:'ABC',merchant:'',category:['食費','外食']};
+  const request=['audit','','previewed',JSON.stringify(payload),'2026-08-01','2026-08-31','1','101','digest','FALSE'];
+  const target=['audit','M-1',2,String(serial),101,'その他','未分類','食費','外食','','previewed'];
+  const ss={getSheetByName:()=>({getLastRow:()=>2,getRange:()=>({getDisplayValues:()=>[['header'],target]})})};
+  const state={scope:'反映しない',month:'2026-08',category:'食費 ＞ 外食',proof};
+  assert.equal(c.ccPreviewBound_(ss,state,request),true);assert.equal(target[3],String(serial));assert.equal(request[8],'digest');
+  request[6]='0';assert.equal(c.ccPreviewBound_(ss,state,request),false);
+});
