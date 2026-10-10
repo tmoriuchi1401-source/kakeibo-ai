@@ -25,7 +25,9 @@ def annotated(record, readings, categories, *, adjustment_targets=None):
         pairs={(s.major_category,s.minor_category) for s in samples}
         stable=mapped and len(pairs)==1 and next(iter(pairs)) in set(categories) and all(s.confidence>=.8 for s in samples)
         # Only the two narrow reread gates may coexist with local prefill.
-        safe=not set(record['legacy']['hard_issues'])-RESOLVABLE
+        # Voucher classification is a posting gate, not a reason to erase a
+        # separately corroborated product category. The gate itself remains.
+        safe=not set(record['legacy']['hard_issues'])-(RESOLVABLE|{'settlement_classification_required'})
         item['category']='｜'.join(next(iter(pairs))) if stable and safe and item['kind']=='product' else ''
         evidence.append({'item_id':item['item_id'],'mapped':mapped,'shape_agrees':same_shape,
             'category_agrees':stable,'category':item['category'],

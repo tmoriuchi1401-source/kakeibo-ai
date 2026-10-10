@@ -167,6 +167,10 @@ def test_voucher_classification_is_hard_not_cell_completion_bypass():
     raw=receipt((1000,-500),500)
     value=draft(p,c['manifest'],uid,[raw,raw],categories=CAT,text='ポイントお買物券 -500')
     assert 'settlement_classification_required' in value['hard_issues']
+    from app.receipt_item_review import prepare
+    record=annotated(prepare(value,CAT),[raw,raw],CAT)
+    assert record['items'][0]['category']=='食費｜外食'
+    assert 'settlement_classification_required' in evaluate(record,fields(record),CAT)['issues']
 
 
 def test_repair_plan_uses_existing_writer_with_explicit_tax_category():
