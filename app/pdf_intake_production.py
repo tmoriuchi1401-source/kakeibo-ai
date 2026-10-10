@@ -8,6 +8,8 @@ from hashlib import sha256
 from io import BytesIO
 import json
 import os
+from time import monotonic
+from time import time
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -22,6 +24,8 @@ from .pdf_review_fields import SHEET_ID, original_uri
 CONFIG_SCHEMA='pdf-intake-production-config-v1'
 PAGE_MARKER='pdf-intake-page-review-v1'
 MAX_FILES=3
+MAX_NEW_PAGE_ANALYSES=1
+PROCESS_BUDGET_SECONDS=600
 
 
 def page_count(raw):
@@ -67,15 +71,18 @@ class Context:
         self.proof=ProofClient(config['origin'],self.info)
 
     def source(self,sid):
-        from .google_clients import download_drive_file
+        from .google_clients import download_drive_file,read_only_drive_service
+        # OCR/AI can take minutes. Freshness checks use a fresh transport
+        # rather than a connection left idle during local processing.
+        reader=read_only_drive_service()
         fields='id,mimeType,parents,version,trashed,size'
-        before=self.reader.files().get(fileId=sid,fields=fields).execute(num_retries=0)
+        before=reader.files().get(fileId=sid,fields=fields).execute(num_retries=0)
         if (before.get('id')!=sid or before.get('mimeType')!='application/pdf' or before.get('trashed')
                 or before.get('parents') not in ([self.config['registry']['inbox_id']],[self.config['registry']['processed_id']])):
             raise StateError('pdf_intake_source_location_changed')
         if not 0<int(before.get('size',0))<=50*1024*1024:raise StateError('pdf_intake_source_size_limit')
-        raw=download_drive_file(sid,self.reader)
-        if len(raw)>50*1024*1024 or self.reader.files().get(fileId=sid,fields=fields).execute(num_retries=0)!=before:
+        raw=download_drive_file(sid,reader)
+        if len(raw)>50*1024*1024 or reader.files().get(fileId=sid,fields=fields).execute(num_retries=0)!=before:
             raise StateError('pdf_intake_source_changed')
         return raw
 
@@ -167,7 +174,19 @@ class Projection:
 def process(context,settings,plans,*,apply):
     runner=context.runner(settings);projection=Projection(context)
     counts={'found':0,'written':0,'needs_review':0,'unchanged':0,'failure':0}
+    started=monotonic();analyzed=0
     if len(plans)>MAX_FILES:raise StateError('pdf_intake_file_limit')
+    sources={p['source_id'] for p in plans}
+    pending=[key for key,r in context.store.load()['pages'].items()
+             if r['page']['source']['source_file_id'] in sources and not r['analysis']
+             and r['status']!='privacy_observation_changed' and r['page']['observation_complete']
+             and not r['page']['clearly_sensitive']
+             and (r['page']['automatic_classification']=='normal' or r['authority'].get('single_page_ai'))]
+    pending.sort()
+    # Rotate the bounded AI slot each three-hour window. A single failing
+    # page must not indefinitely starve other independently eligible pages.
+    offset=(int(time())//10800)%len(pending) if pending else 0
+    selected=set((pending[offset:]+pending[:offset])[:MAX_NEW_PAGE_ANALYSES])
     for source in plans:
         # The scanner plan is NOT permission. Runtime rereads registry and source.
         try:
@@ -178,7 +197,15 @@ def process(context,settings,plans,*,apply):
             if len(keys)!=source['page_count']:raise StateError('pdf_intake_source_pages_missing')
         except Exception:counts['failure']+=1;continue
         for key in keys:
+            record=context.store.load()['pages'][key]
+            new_analysis=key in pending
+            if (monotonic()-started>=PROCESS_BUDGET_SECONDS
+                    or new_analysis and key not in selected
+                    or new_analysis and analyzed>=MAX_NEW_PAGE_ANALYSES
+                    or new_analysis and runner.written>=runner.unit_limit):
+                counts['deferred']=counts.get('deferred',0)+1;continue
             try:
+                if new_analysis:analyzed+=1
                 result=runner.analyze(key)
                 if not context.store.load()['pages'][key]['units']:
                     counts['needs_review']+=1

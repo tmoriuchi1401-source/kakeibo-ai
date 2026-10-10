@@ -89,9 +89,10 @@ def open_context(env,apply):
     processed_folder=getattr(settings,'processed_drive_folder_id','')
     processed=normalize_folder_id(processed_folder) if processed_folder else ''
     def metadata(source,folder):
+        fresh_reader=read_only_drive_service()
         return verify_receipt_source(source,folder,inbox,processed,
-            lambda sid:reader.files().get(fileId=sid,fields='id,parents,mimeType,version,trashed').execute(num_retries=0),
-            lambda sid:download_drive_file(sid,reader))
+            lambda sid:fresh_reader.files().get(fileId=sid,fields='id,parents,mimeType,version,trashed').execute(num_retries=0),
+            lambda sid:download_drive_file(sid,fresh_reader))
     db=SheetsDB(settings.spreadsheet_id,service=None if apply else read_only_sheets_service(),
         read_pacer=SheetsReadPacer() if apply else None,read_retry_base=20)
     return settings,store,db,metadata
@@ -118,7 +119,8 @@ def sync_review_visibility(review):
     if requests:db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,body={'requests':requests}).execute(num_retries=0)
 
 
-def execute(env,apply):
+def execute(env,apply,diagnostic=lambda _:None):
+    diagnostic('confirmation_context')
     if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
     from .google_clients import read_only_drive_service,download_drive_file
     settings,store,db,metadata=open_context(env,apply)
@@ -169,6 +171,7 @@ def execute(env,apply):
     plans=[];multipage_plans=[];pdf_context=None;blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
+        diagnostic('confirmation_source_read')
         if not is_supported_receipt_mime(f['mimeType']):continue
         counts['found']+=1
         source=dict(source_id=f['id'],mime_type=f['mimeType'],version=f['version'])
@@ -194,11 +197,13 @@ def execute(env,apply):
                     from .pdf_intake_production import archive_terminal
                     archive_terminal(pdf_context,f['id'],source['sha256'])
                     counts['archived']+=1;continue
-                try:keys=observe_source(payload,f['id'],pdf_context.store)
+                diagnostic('pdf_registration')
+                try:keys=observe_source(payload,f['id'],pdf_context.store,reuse_complete=True)
                 except StateError:
                     counts['blocked']+=1;blocked_sources.add(f['id']);continue
                 multipage_plans.append({**source,'page_count':number,'page_keys':keys})
                 counts['multipage_sources']=counts.get('multipage_sources',0)+1
+                reader=read_only_drive_service()
                 continue
         owner_route=review.route_owner_intake(source,folder)
         if owner_route and owner_route!='医療':
@@ -220,10 +225,12 @@ def execute(env,apply):
         else:
             counts['blocked']+=1;blocked_sources.add(f['id'])
             review.observe_intake_hold(source,folder,gate)
+    diagnostic('confirmation_apply')
     review.finish_intake_scan(blocked_sources)
     counts['written']+=review.apply_confirmations()
     counts['archived']+=archive()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
+    diagnostic('confirmation_ui')
     create_ui=TITLE not in db.sheet_titles()
     counts['review_rows']=review.render()
     if create_ui or not store.value.get('confirmation_ui_configured'):
@@ -243,15 +250,16 @@ def execute(env,apply):
 
 
 def main():
+    stage=['confirmation_context']
     try:
         from .production_flow import verify_execution_boundary,REPO
         import subprocess
         env=dict(os.environ);head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()
         verify_execution_boundary(env,head)
         if len(sys.argv)!=2 or sys.argv[1] not in {'preview','apply'}:raise StateError('confirmation_mode_invalid')
-        print(json.dumps(execute(env,sys.argv[1]=='apply'),sort_keys=True))
+        print(json.dumps(execute(env,sys.argv[1]=='apply',diagnostic=lambda value:stage.__setitem__(0,value)),sort_keys=True))
     except Exception as error:
         from .production_source import source_error_code
-        print(json.dumps({'failure':1,'error':source_error_code(error)}));raise SystemExit(1)
+        print(json.dumps({'failure':1,'error':source_error_code(error),'stage':stage[0]}));raise SystemExit(1)
 
 if __name__=='__main__':main()

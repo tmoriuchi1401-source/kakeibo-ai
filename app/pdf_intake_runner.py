@@ -21,8 +21,19 @@ from .receipt_item_review import prepare, fields, evaluate, card, check_snapshot
 from .receipt_item_review_ui import read_snapshot
 
 
-def observe_source(raw, source_id, store, *, observer=observe_pdf):
+def observe_source(raw, source_id, store, *, observer=observe_pdf, reuse_complete=False):
     """Observe ALL pages before any allowed page reaches an external parser."""
+    if reuse_complete:
+        # Reuse only fully observed, unchanged bytes. The exact fresh PNG
+        # still passes local privacy and source checks before each AI send.
+        from .pdf_intake_production import page_count
+        source = SourceRef(source_file_id=source_id,source_content_hash=sha256(raw).hexdigest(),page_count=page_count(raw))
+        same = [r for r in store.load()['pages'].values() if r['page']['source']['source_file_id']==source_id]
+        if any(r['page']['source'] != source.model_dump() for r in same):
+            raise StateError('pdf_intake_source_changed')
+        if (len(same)==source.page_count and {r['page']['page_number'] for r in same}==set(range(1,source.page_count+1))
+                and all(r['page']['observation_complete'] for r in same)):
+            return [page_key(r['page']) for r in sorted(same,key=lambda r:r['page']['page_number'])]
     observed = observer(raw, source_id)
     source = SourceRef(source_file_id=source_id,source_content_hash=sha256(raw).hexdigest(),page_count=len(observed.pages))
     if observed.source_content_hash != source.source_content_hash or not 2 <= source.page_count <= 50:
