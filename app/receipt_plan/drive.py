@@ -9,6 +9,10 @@ from .authority import validate_state,review_identity,eligible,binding_fields
 SCHEMA='human-general-verified-drive-canary-v1'
 SOURCE='1fcmMMGj86DLq54G0inD8LI_XSyQSPfTY'
 HASH='ca1b8cba60addc14a364438d691c40164e250708103bce76a320f671629491bf'
+# Existing lifecycle destination for this hash-pinned, completed canary only.
+# Moving the same Drive ID is not a new page/authority and must not invalidate
+# permanent evidence. Arbitrary folders, copies and changed bytes stay blocked.
+PROCESSED='1pSlZUwZuVQ2jBaDg1E-kJ2-A7wosUnNP'
 ISSUER='https://accounts.google.com'
 AI_CONSENT_ACTION='general_receipt_and_gemini_permission'
 def request_binding(page,rid,action):
@@ -87,7 +91,9 @@ class RealPageDrive:
             raise StateError('real_page_drive_metadata_invalid')
         folder=self.config['inbox'] if fid==SOURCE else self.config['folder']
         mime='application/pdf' if fid==SOURCE else 'application/json'
-        if value.get('parents')!=[{'id':folder}] or value.get('mimeType')!=mime:
+        parents=value.get('parents')
+        locations=([{'id':folder}],[{'id':PROCESSED}]) if fid==SOURCE else ([{'id':folder}],)
+        if parents not in locations or value.get('mimeType')!=mime:
             raise StateError('real_page_source_or_state_moved')
         return value
 
