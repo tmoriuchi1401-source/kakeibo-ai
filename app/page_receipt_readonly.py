@@ -123,6 +123,8 @@ class ReadonlyPageReceipts:
             if segmentation_issues(*readings):
                 report.update(build_receipt_units(page,*readings,self.categories,previous=previous));return report
             texts,gates=unit_observations(payload,readings[1])
+            from .receipt_settlement import normalize_readings
+            readings=normalize_readings(readings,texts,self.categories)
             result=build_receipt_units(page,*readings,self.categories,previous=previous,unit_texts=texts,unit_gates=gates)
             report.update(result)
             if result['status']=='receipts_observed':

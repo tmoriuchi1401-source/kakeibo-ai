@@ -281,6 +281,7 @@ class PageIntake:
         """Request input only. A simulated shape proof never enables posting."""
         from .receipt_item_confirmation import ConfirmedItems
         record=self.store.load()['pages'][key];unit=record['units'][uid];candidate=unit['candidate']
+        if unit['status']=='settlement_projection_pending':return {'status':'settlement_projection_pending'}
         if unit['intent'] is not None or unit['status'] in TERMINAL:return {'status':'terminal_or_claimed'}
         self.gate().authorize(record['page'])
         categories=self.db.categories();current=check_snapshot(snapshot,card(candidate['record'],categories=categories))
