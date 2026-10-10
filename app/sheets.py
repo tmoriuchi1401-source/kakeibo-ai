@@ -24,6 +24,24 @@ def workflow_sections(blocks):
     return [key for key in WORKFLOW_MARKERS if key in blocks]
 
 
+def representative_transaction_formula(spreadsheet_id: str, expense_sheet_id: int, row_num: int) -> str:
+    """Link a category candidate to its current ledger row by stable H-column expense ID.
+
+    A composite category/bank refresh rewrites the whole UI grid, so this
+    formula must be restored inside that same atomic rewrite. Never rely on a
+    previously observed ledger row number after an unrelated refresh.
+    """
+    match = f"MATCH(H{row_num},'支出明細'!A:A,0)"
+    base = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
+            f"#gid={expense_sheet_id}&range=A")
+    return (
+        f'=IFNA(HYPERLINK("{base}"&{match}&":M"&{match},'
+        f'"代表取引を見る｜"&TEXT(INDEX(\'支出明細\'!B:B,{match}),"yyyy-mm-dd")'
+        f'&"｜"&TEXT(INDEX(\'支出明細\'!E:E,{match}),"#,##0")&"円"),'
+        '"代表取引が見つかりません")'
+    )
+
+
 CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
 # The shared helper sheet has two disjoint horizontal spill surfaces.  Ledger
 # G may only read B:ZY; the opt-in rule UI may only read ZZ:ALL.  Keeping this
@@ -432,9 +450,14 @@ class SheetsDB:
             blocks=self._category_workflow_blocks()
             self._check_category_workflow_input(prior)
             start=self._workflow_positions(blocks)[section]["start"]
-            data=[{"range":f"{CATEGORY_WORKFLOW_SHEET}!A{start+row_num-2}",
-                   "values":[self._workflow_physical_row(section, row, compact=bool(self._compact_category_helper()))]}
-                  for row_num,row in rows]
+            # Category changes must not replace A-column HYPERLINK formulas
+            # with their displayed labels. Approval/status fields live in B:L.
+            data=[]
+            for row_num,row in rows:
+                physical=self._workflow_physical_row(section, row, compact=bool(self._compact_category_helper()))
+                first_column="B" if section == "rule" else "A"
+                data.append({"range":f"{CATEGORY_WORKFLOW_SHEET}!{first_column}{start+row_num-2}",
+                             "values":[physical[1:] if section == "rule" else physical]})
             self.svc.spreadsheets().values().batchUpdate(
                 spreadsheetId=self.sid,
                 body={"valueInputOption":"RAW","data":data}
@@ -851,6 +874,20 @@ class SheetsDB:
             if len(values)+offset>extent:
                 requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)+offset-extent}})
             request=_cells(sheet_id,offset+1,0,values,12)
+            # The compact writer represents strings literally, so ordinary
+            # bank/preview refreshes would silently erase A-column links.
+            # Write just the rule-row A formulas as formulaValue in the same
+            # batch, leaving all user input, approvals and other sections alone.
+            expense_sheet=next((candidate for candidate in self._sheet_metadata()["sheets"]
+                                if candidate["properties"]["title"] == "支出明細"),None)
+            if expense_sheet:
+                first_rule_row=positions["rule"]["start"]
+                for row_num,row in enumerate(blocks["rule"][1],start=first_rule_row):
+                    if len(row)>7 and str(row[7]).strip():
+                        index=row_num-(offset+1)
+                        request["updateCells"]["rows"][index]["values"][0]={
+                            "userEnteredValue":{"formulaValue":representative_transaction_formula(
+                                self.sid, expense_sheet["properties"]["sheetId"], row_num)}}
             request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values)+offset)
             requests.append(request)
             self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
