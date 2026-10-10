@@ -337,18 +337,32 @@ index f6d1dc6..2a81f84 100644
          'mode': 'synthetic_only'}
      key = Path(os.environ['HGA_SESSION_KEY_PATH']).read_bytes().strip()
 diff --git a/services/human_general/web.py b/services/human_general/web.py
-index 119a345..0942cbe 100644
+index 119a345..c18925a 100644
 --- a/services/human_general/web.py
 +++ b/services/human_general/web.py
-@@ -15,6 +15,7 @@ from app.human_general_auth_transport import UUID, TTL
+@@ -15,9 +15,10 @@ from app.human_general_auth_transport import UUID, TTL
  
  COOKIE = '__Host-hga'
  START_COOKIE = '__Host-hga-start'
 +LOGIN_COOKIE = '__Host-hga-login'
  
  
- def screen(text, content=''):
-@@ -36,6 +37,7 @@ def create_app(runtime_factory):
+-def screen(text, content=''):
++def screen(text, content='', *, logout_link=True):
+     return ('<!doctype html><html lang="ja"><meta charset="utf-8">'
+         '<meta name="viewport" content="width=device-width,initial-scale=1">'
+         '<title>一般レシートの確認</title><style>'
+@@ -26,7 +27,8 @@ def screen(text, content=''):
+         'button,a{display:block;box-sizing:border-box;width:100%;padding:16px;margin-top:18px;'
+         'font:inherit;text-align:center;border-radius:10px}button{background:#166450;color:white;'
+         'border:0;min-height:54px}a{color:#166450}small{font-size:14px}</style>'
+-        '<main><h1>'+str(escape(text))+'</h1>'+content+'</main></html>')
++        '<main><h1>'+str(escape(text))+'</h1>'+content
++        +('<a href="/logout">本人確認を終了（ログアウト）</a>' if logout_link else '')+'</main></html>')
+ 
+ 
+ def create_app(runtime_factory):
+@@ -36,6 +38,7 @@ def create_app(runtime_factory):
      def runtime():
          if not hasattr(g,'hga_runtime'):
              g.hga_runtime=runtime_factory()
@@ -356,7 +370,7 @@ index 119a345..0942cbe 100644
              drive=getattr(g.hga_runtime,'drive',None)
              if drive is not None:drive.begin_request()
          return g.hga_runtime
-@@ -59,6 +61,20 @@ def create_app(runtime_factory):
+@@ -59,6 +62,20 @@ def create_app(runtime_factory):
          value = rt.tickets.load(request.cookies.get(COOKIE))
          return value
  
@@ -365,9 +379,9 @@ index 119a345..0942cbe 100644
 +        result.verify_login = lambda record: rt.logins.verify_bound(record,request.cookies.get(LOGIN_COOKIE))
 +        return result
 +
-+    def logout_form(rt):
++    def logout_form(rt, *, clear_expired=False):
 +        cookie = request.cookies.get(LOGIN_COOKIE)
-+        if not rt.logins.current(cookie):
++        if not cookie or (not clear_expired and not rt.logins.current(cookie)):
 +            return ''
 +        token = URLSafeTimedSerializer(rt.key,salt='hga-logout-v1').dumps(
 +            {'login_hash':sha256(cookie.encode()).hexdigest()})
@@ -377,7 +391,7 @@ index 119a345..0942cbe 100644
      @app.before_request
      def https_only():
          # Cloud Run terminates TLS. Origin is fixed from private config, never
-@@ -86,6 +102,10 @@ def create_app(runtime_factory):
+@@ -86,6 +103,10 @@ def create_app(runtime_factory):
          code = str(error)
          if code == 'HTTP_412':
              message, status = '現在の状態が変わりました。最初から確認してください', 412
@@ -388,7 +402,7 @@ index 119a345..0942cbe 100644
          elif code.endswith('identity_rejected'):
              message, status = 'このアカウントでは確定できません', 403
          elif code.endswith('request_expired'):
-@@ -124,18 +144,23 @@ def create_app(runtime_factory):
+@@ -124,18 +145,23 @@ def create_app(runtime_factory):
              raise StateError('human_general_auth_request_invalid') from None
          signer = URLSafeTimedSerializer(rt.key, salt='hga-start-v1')
          if request.method == 'GET':
@@ -416,7 +430,7 @@ index 119a345..0942cbe 100644
              response.set_cookie(START_COOKIE, nonce, max_age=TTL, secure=True, httponly=True, samesite='Lax', path='/')
              return response
          own_origin(rt)
-@@ -146,11 +171,22 @@ def create_app(runtime_factory):
+@@ -146,11 +172,22 @@ def create_app(runtime_factory):
                  raise ValueError()
          except (ValueError, KeyError, BadSignature, SignatureExpired):
              raise StateError('human_general_auth_csrf_invalid') from None
@@ -441,7 +455,7 @@ index 119a345..0942cbe 100644
          response.delete_cookie(START_COOKIE, secure=True, httponly=True, samesite='Lax', path='/')
          return response
  
-@@ -162,19 +198,25 @@ def create_app(runtime_factory):
+@@ -162,19 +199,25 @@ def create_app(runtime_factory):
          session = ticket(rt)
          if request.form.get('error'):
              raise StateError('human_general_auth_identity_rejected')
@@ -473,7 +487,7 @@ index 119a345..0942cbe 100644
              _, tag = rt.state(session.request_id, 'authorities').read_versioned()
              label=rt.label(session.request_id) if hasattr(rt,'label') else 'synthetic page'
              text=rt.confirmation_text(session.request_id) if hasattr(rt,'confirmation_text') else {
-@@ -188,7 +230,7 @@ def create_app(runtime_factory):
+@@ -188,7 +231,7 @@ def create_app(runtime_factory):
                  '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                  '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
                  '<button name="action" value="confirm">'+str(escape(text['button']))+'</button>'
@@ -482,7 +496,7 @@ index 119a345..0942cbe 100644
          own_origin(rt)
          if request.form.get('action') == 'cancel':
              if not hmac.compare_digest(request.form.get('csrf', ''), session.csrf):
-@@ -201,7 +243,12 @@ def create_app(runtime_factory):
+@@ -201,7 +244,12 @@ def create_app(runtime_factory):
          if not request.form.get('etag'):
              raise StateError('HTTP_412')
          try:
@@ -496,7 +510,7 @@ index 119a345..0942cbe 100644
                  origin=request.headers.get('Origin'), method='POST',
                  confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
          except Exception as error:
-@@ -215,10 +262,10 @@ def create_app(runtime_factory):
+@@ -215,10 +263,10 @@ def create_app(runtime_factory):
      def result():
          rt = runtime()
          session = ticket(rt)
@@ -511,16 +525,23 @@ index 119a345..0942cbe 100644
          if hasattr(rt,'validate_result'):
              rt.validate_result(session.request_id,record)
          else:
-@@ -226,7 +273,25 @@ def create_app(runtime_factory):
+@@ -226,7 +274,33 @@ def create_app(runtime_factory):
              if grant['confirmation_digest'] != record['authority_digest']:
                  raise StateError('synthetic_readback_mismatch')
          label=rt.success_label(session.request_id) if hasattr(rt,'success_label') else 'synthetic確認を保存しました'
 -        return Response(screen('確認が完了しました','<p>'+str(escape(label))+'。</p><p>会計処理は実行していません。</p>'))
 +        return Response(screen('確認が完了しました','<p>'+str(escape(label))+'。</p><p>会計処理は実行していません。</p>'+logout_form(rt)))
 +
-+    @app.route('/logout',methods=['POST'])
++    @app.route('/logout',methods=['GET','POST'])
 +    def logout():
 +        rt=runtime()
++        if request.method == 'GET':
++            # No operation ticket/UUID is needed and GET never revokes identity.
++            # Also allow a signed POST to clear an expired browser cookie.
++            form=logout_form(rt,clear_expired=True)
++            return Response(screen('本人確認を終了',
++                '<p>ログアウトすると、次の確認でGoogle本人認証が必要になります。</p>'+form
++                if form else '<p>現在、このブラウザはログアウトしています。</p>',logout_link=False))
 +        own_origin(rt)
 +        cookie=request.cookies.get(LOGIN_COOKIE,'')
 +        try:
@@ -531,9 +552,10 @@ index 119a345..0942cbe 100644
 +            raise StateError('human_general_auth_csrf_invalid') from None
 +        if rt.logins.current(cookie):
 +            rt.logins.revoke(cookie)
-+        response=Response(screen('ログアウトしました','<p>次の確認ではGoogleで本人確認してください。</p>'))
++        response=Response(screen('ログアウトしました','<p>次の確認ではGoogleで本人確認してください。</p>',logout_link=False))
 +        response.delete_cookie(LOGIN_COOKIE,secure=True,httponly=True,samesite='Lax',path='/')
 +        response.delete_cookie(COOKIE,secure=True,httponly=True,samesite='None',path='/')
++        response.delete_cookie(START_COOKIE,secure=True,httponly=True,samesite='Lax',path='/')
 +        return response
  
      return app

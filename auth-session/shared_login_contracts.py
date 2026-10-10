@@ -10,7 +10,7 @@ import pytest
 from app.drive_run_state import StateError
 from app.human_general_auth_transport import fingerprint, validate_auth_state
 from services.human_general.shared_login import SharedLogins, Lifetime, METHOD
-from services.human_general.web import COOKIE, LOGIN_COOKIE
+from services.human_general.web import COOKIE, LOGIN_COOKIE, START_COOKIE
 from test_human_general_http import http, ORIGIN
 from test_human_general_auth_transport import keys
 
@@ -149,10 +149,54 @@ def test_logout_revokes_pending_operation_and_old_cookie_then_reauth(http):
 def test_logout_origin_and_csrf_and_get_cannot_revoke(http):
     cookie=login(http);fields=form(http.get('/confirm'),'/logout')
     before=deepcopy(http.db.data)
-    assert http.get('/logout').status_code==405
+    assert http.get('/logout').status_code==200
     assert http.post('/logout',fields,origin='null').status_code==400
     assert http.post('/logout',{'csrf':'wrong'}).status_code==400
     assert http.runtime.logins.current(cookie) is not None and http.db.data==before
+
+
+def test_standalone_logout_after_used_and_expired_request_keeps_authority(http):
+    cookie=login(http)
+    assert http.confirm().status_code==303
+    authority=deepcopy(http.grants())
+    http.now+=601
+    http.client.delete_cookie(COOKIE,domain=DOMAIN)
+    before=deepcopy(http.db.data)
+    page=http.get('/logout')
+    assert page.status_code==200 and http.db.data==before
+    assert 'action="/logout"' in page.get_data(as_text=True)
+    response=http.post('/logout',form(page,'/logout'))
+    assert response.status_code==200 and http.runtime.logins.current(cookie) is None
+    assert http.grants()==authority
+    for name in (LOGIN_COOKIE,COOKIE,START_COOKIE):
+        assert http.client.get_cookie(name,domain=DOMAIN) is None
+    assert len(response.headers.getlist('Set-Cookie'))==3
+    fields=next_request(http)
+    assert http.post('/start',fields).location.startswith('https://accounts.google.com/')
+
+
+@pytest.mark.parametrize('origin',[None,'null','https://other.test',ORIGIN+'.evil'])
+def test_standalone_logout_rejects_missing_or_wrong_origin(http,origin):
+    cookie=login(http)
+    page=http.get('/logout');fields=form(page,'/logout');before=deepcopy(http.db.data)
+    headers={} if origin is None else {'Origin':origin}
+    assert http.client.post('/logout',data=fields,base_url=ORIGIN,headers=headers).status_code==400
+    assert http.db.data==before and http.runtime.logins.current(cookie) is not None
+
+
+def test_standalone_logout_without_login_or_ticket_is_read_only(http):
+    before=deepcopy(http.db.data)
+    page=http.get('/logout')
+    assert page.status_code==200 and http.db.data==before
+    assert 'action="/logout"' not in page.get_data(as_text=True)
+
+
+def test_standalone_logout_csrf_is_bound_to_this_cookie(http):
+    cookie=login(http);fields=form(http.get('/logout'),'/logout')
+    before=deepcopy(http.db.data)
+    http.client.set_cookie(LOGIN_COOKIE,'x'*43,domain=DOMAIN)
+    assert http.post('/logout',fields).status_code==400
+    assert http.db.data==before and http.runtime.logins.current(cookie) is not None
 
 
 def test_account_switch_revokes_login_forces_google_and_rotates_id(http):
