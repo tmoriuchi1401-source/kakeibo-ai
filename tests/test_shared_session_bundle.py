@@ -22,7 +22,7 @@ def test_patch_additions_and_scope_are_exactly_hash_pinned():
     manifest = BUNDLE.MANIFEST
     assert manifest["baseline_commit"] == "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa"
     assert len(manifest["baseline_files"]) == 40
-    assert len(manifest["added_files"]) == 3
+    assert len(manifest["added_files"]) == 6
     patch = BUNDLE.normalized(BUNDLE.HERE / "existing-service.patch")
     assert sha256(patch).hexdigest() == manifest["patch_sha256"]
     paths = {line.split()[2][2:] for line in patch.decode().splitlines() if line.startswith("diff --git ")}
@@ -32,7 +32,13 @@ def test_patch_additions_and_scope_are_exactly_hash_pinned():
         "services/human_general/shared_login.py",
         "services/human_general/session_canary.py",
         "services/human_general/session_fixture.json",
+        "services/human_general/generic_intake.py",
+        "services/human_general/generic_review.py",
+        "services/human_general/generic_archive.py",
     }
+    assert set(manifest['repository_files'])=={'app/pdf_intake_authority.py','app/pdf_intake_registry.py'}
+    for name,expected in manifest['repository_files'].items():
+        assert sha256(BUNDLE.normalized(ROOT/name)).hexdigest()==expected
     for name, expected in manifest["added_files"].items():
         assert sha256(BUNDLE.normalized(BUNDLE.HERE / Path(name).name)).hexdigest() == expected
     assert not {"app/sheets.py", "app/receipt_pipeline.py", "app/medical_manual.py", ".env"} & set(manifest["baseline_files"])

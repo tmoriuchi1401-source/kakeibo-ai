@@ -65,12 +65,20 @@ def compose(output,*,test_tree=False):
         data=normalized(HERE/Path(name).name)
         if sha256(data).hexdigest()!=expected:raise ValueError('bundle_addition_changed')
         (output/name).write_bytes(data)
+    for name,expected in MANIFEST.get('repository_files',{}).items():
+        checked_path(name)
+        if name not in {'app/pdf_intake_authority.py','app/pdf_intake_registry.py'}:
+            raise ValueError('container_repository_scope_invalid')
+        data=normalized(ROOT/name)
+        if sha256(data).hexdigest()!=expected:raise ValueError('container_repository_file_changed')
+        (output/name).write_bytes(data)
     if test_tree:
         shutil.copyfile(HERE/'shared_login_contracts.py',output/'tests/test_google_shared_login.py')
+        shutil.copyfile(HERE/'generic_contracts.py',output/'tests/test_registered_intake.py')
         shutil.copyfile(ROOT/'app/receipt_plan/drive.py',output/'app/receipt_plan/drive.py')
     files={p.relative_to(output).as_posix():sha256(normalized(p)).hexdigest()
            for p in output.rglob('*') if p.is_file()}
-    if not test_tree and set(files)!=set(MANIFEST['baseline_files'])|set(MANIFEST['added_files']):
+    if not test_tree and set(files)!=set(MANIFEST['baseline_files'])|set(MANIFEST['added_files'])|set(MANIFEST.get('repository_files',{})):
         raise ValueError('container_scope_changed')
     return files
 
@@ -85,7 +93,7 @@ def main():
             destination=Path(temporary)/'fixture'
             compose(destination,test_tree=True)
             subprocess.run([sys.executable,'-m','pytest','-q','--tb=short',
-                'tests/test_google_shared_login.py','tests/test_human_general_http.py',
+                'tests/test_registered_intake.py','tests/test_google_shared_login.py','tests/test_human_general_http.py',
                 'tests/test_human_general_auth_transport.py','tests/test_human_general_real_page.py',
                 'tests/test_receipt_item_confirmation.py','tests/test_receipt_reconciliation_auth_transport.py',
                 'tests/test_receipt_retention_audit.py','tests/test_human_general_container_boundary.py',

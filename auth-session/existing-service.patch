@@ -141,13 +141,73 @@ diff --git a/app/receipt_reconciliation_authority.py b/app/receipt_reconciliatio
                  or actor.policy_revision < 1 or not created.timestamp() <= actor.verified_at < expires.timestamp()
                  or actor.verified_at > now.timestamp()):
              raise StateError('reconciliation_actor_rejected')
+diff --git a/services/human_general/Dockerfile b/services/human_general/Dockerfile
+--- a/services/human_general/Dockerfile
++++ b/services/human_general/Dockerfile
+@@ -4,7 +4,7 @@
+ COPY services/human_general/requirements.txt /tmp/requirements.txt
+ RUN pip install --no-cache-dir -r /tmp/requirements.txt
+ # Explicit whitelist: no Google clients, processors or accounting writers.
+-COPY app/__init__.py app/drive_run_state.py app/conditional_drive_state_v2.py app/human_general_authority.py app/human_general_auth_transport.py app/page_receipt_model.py app/pdf_page_identity.py app/models.py app/receipt_validation.py ./app/
++COPY app/pdf_intake_authority.py app/pdf_intake_registry.py app/__init__.py app/drive_run_state.py app/conditional_drive_state_v2.py app/human_general_authority.py app/human_general_auth_transport.py app/page_receipt_model.py app/pdf_page_identity.py app/models.py app/receipt_validation.py ./app/
+ COPY app/receipt_retention.py app/receipt_audit.py app/receipt_audit_firestore.py app/receipt_reconciliation_authority.py app/receipt_reconciliation_auth_transport.py ./app/
+ COPY app/pdf_review_fields.py app/receipt_reimport.py app/utils.py app/pdf_page_general.py app/page_receipt_manifest.py app/general_receipt_completion.py app/receipt_item_review.py app/receipt_item_review_ui.py app/receipt_item_queue.py app/receipt_item_confirmation.py app/receipt_item_auth_transport.py ./app/
+ COPY services/human_general/ ./services/human_general/
 diff --git a/services/human_general/page_router.py b/services/human_general/page_router.py
 --- a/services/human_general/page_router.py
 +++ b/services/human_general/page_router.py
-@@ -81,6 +81,15 @@
+@@ -17,7 +17,7 @@
+ 
+ 
+ def validate_profiles(value):
+-    if not {'schema','profiles'}<=set(value) or set(value)-{'schema','profiles','reconciliation','receipt_review','receipt_reviews'} or value['schema']!=SCHEMA:
++    if not {'schema','profiles'}<=set(value) or set(value)-{'schema','profiles','reconciliation','receipt_review','receipt_reviews','intake','intake_spreadsheet'} or value['schema']!=SCHEMA:
+         raise StateError('real_page_profiles_invalid')
+     profiles=value['profiles']
+     if not isinstance(profiles,dict) or not profiles or set(profiles)-{'p4','p10','p14'}:
+@@ -66,6 +66,8 @@
+         if 'receipt_review' in verified:self.item_profiles.add('p14_items')
+         self.profiles={**self.profiles,**verified.get('receipt_reviews',{})}
+         self.info=info;self.runtime_factory=runtime_factory
++        self.intake_config=verified.get('intake')
++        self.intake_spreadsheet=verified.get('intake_spreadsheet')
+         self.mode='independent_real_pages_authority_only'
+         self.selected=None;self.selected_rid=None
+ 
+@@ -77,10 +79,44 @@
+             return self.selected
+         snap=self.client.collection('real_request_profiles').document(rid).get(retry=None,timeout=10)
+         record=snap.to_dict() if snap.exists else None
+-        if not record or set(record)!={'profile','profile_digest','expires_at'}:
++        expected_fields={'profile','profile_digest','expires_at'}
++        if record and record.get('profile') in {'registered_page','registered_review'}:expected_fields.add('target')
++        if record and record.get('profile')=='registered_review':expected_fields.add('unit_id')
++        if not record or set(record)!=expected_fields:
              raise StateError('human_general_auth_replay_or_unknown_request')
          if record['expires_at'].timestamp()<=self.clock():
              raise StateError('human_general_auth_request_expired')
++        if record['profile']=='registered_review':
++            from .generic_review import RegisteredReviewRuntime
++            if self.intake_config is None or not self.intake_spreadsheet:raise StateError('registered_page_disabled')
++            runtime=RegisteredReviewRuntime(self.client,self.settings,self.key,self.intake_config,
++                record['target'],record['unit_id'],self.info,self.intake_spreadsheet,
++                clock=self.clock,identity=self.identity,exchange=self.exchange)
++            candidate=runtime.readers.candidate()
++            if digest([candidate['record']['digest'],candidate['posting']])!=record['profile_digest']:
++                raise StateError('item_confirmation_snapshot_stale')
++            runtime.browser_login_cookie=self.browser_login_cookie;runtime.drive.begin_request()
++            self.selected,self.selected_rid=runtime,rid
++            return runtime
++        if record['profile']=='registered_page':
++            from .generic_intake import RegisteredPageRuntime
++            if self.intake_config is None:raise StateError('registered_page_disabled')
++            runtime=RegisteredPageRuntime(self.client,self.settings,self.key,self.intake_config,record['target'],self.info,
++                                          clock=self.clock,identity=self.identity,exchange=self.exchange)
++            if digest(runtime.drive.expected)!=record['profile_digest']:raise StateError('registered_page_stale')
++            runtime.browser_login_cookie=self.browser_login_cookie
++            runtime.drive.begin_request()
++            self.selected,self.selected_rid=runtime,rid
++            return runtime
 +        if record['profile']=='session_canary':
 +            from .session_canary import SessionCanaryRuntime,PROFILE_DIGEST
 +            if self.settings.get('session_canary_enabled') is not True or record['profile_digest']!=PROFILE_DIGEST:
@@ -160,7 +220,7 @@ diff --git a/services/human_general/page_router.py b/services/human_general/page
          config=self.profiles.get(record['profile'])
          if config is None or digest(config)!=record['profile_digest']:
              raise StateError('real_page_profile_stale')
-@@ -93,6 +102,7 @@
+@@ -93,6 +129,7 @@
              factory=ReceiptReviewRuntime
          runtime=factory(self.client,self.settings,self.key,config,self.info,
              clock=self.clock,identity=self.identity,exchange=self.exchange)
@@ -168,7 +228,7 @@ diff --git a/services/human_general/page_router.py b/services/human_general/page
          runtime.drive.begin_request()
          self.selected,self.selected_rid=runtime,rid
          return runtime
-@@ -100,7 +110,7 @@
+@@ -100,7 +137,7 @@
      @property
      def drive(self):
          # HTTP teardown always discards the selected request's fresh cache.
@@ -177,7 +237,7 @@ diff --git a/services/human_general/page_router.py b/services/human_general/page
  
      def gateway(self,rid):return self._select(rid).gateway(rid)
      def state(self,rid,kind):return self._select(rid).state(rid,kind)
-@@ -142,6 +152,16 @@
+@@ -142,6 +179,16 @@
              retry=None,timeout=10)
          return link
  
@@ -194,6 +254,28 @@ diff --git a/services/human_general/page_router.py b/services/human_general/page
      def seed_item_review(self,name='p14_items'):
          from .receipt_review_runtime import ReceiptReviewRuntime
          config=self.profiles.get(name)
+@@ -173,3 +220,21 @@
+             {'profile':'p1','profile_digest':digest(config),'expires_at':timestamp(int(self.clock())+TTL)},
+             retry=None,timeout=10)
+         return link
++
++    def seed_intake(self,target,unit=None):
++        from .generic_intake import RegisteredPageRuntime
++        if self.intake_config is None:raise StateError('registered_page_disabled')
++        if unit is None:
++            runtime=RegisteredPageRuntime(self.client,self.settings,self.key,self.intake_config,target,self.info,
++                                          clock=self.clock,identity=self.identity,exchange=self.exchange)
++        else:
++            from .generic_review import RegisteredReviewRuntime
++            runtime=RegisteredReviewRuntime(self.client,self.settings,self.key,self.intake_config,target,unit,self.info,
++                self.intake_spreadsheet,clock=self.clock,identity=self.identity,exchange=self.exchange)
++        runtime.drive.begin_request()
++        try:return runtime.seed()
++        finally:runtime.drive.end_request()
++
++    def verify_intake(self,bearer,query):
++        from .generic_intake import verify_registered_proof
++        return verify_registered_proof(self,bearer,query)
 diff --git a/services/human_general/real_page.py b/services/human_general/real_page.py
 --- a/services/human_general/real_page.py
 +++ b/services/human_general/real_page.py
@@ -413,7 +495,62 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
          elif code.endswith('identity_rejected'):
              message, status = 'このアカウントでは確定できません', 403
          elif code.endswith('request_expired'):
-@@ -124,18 +145,23 @@
+@@ -107,6 +128,54 @@
+     def http_failure(error):
+         return Response(screen('この操作は利用できません'), status=error.code)
+ 
++    @app.route('/intake/verify', methods=['POST'])
++    def verify_intake():
++        rt=runtime()
++        if not hasattr(rt,'verify_intake'):raise StateError('registered_page_disabled')
++        return rt.verify_intake(request.headers.get('Authorization'),request.get_json(silent=True))
++
++    @app.route('/intake/archive',methods=['POST'])
++    def intake_archive():
++        from .generic_archive import authenticate,summary
++        rt=runtime();authenticate(rt,request.headers.get('Authorization'))
++        return summary(rt,request.get_json(silent=True))
++
++    @app.route('/intake/preflight',methods=['POST'])
++    def intake_preflight():
++        from .generic_archive import authenticate,preflight
++        rt=runtime();authenticate(rt,request.headers.get('Authorization'))
++        return preflight(rt,request.get_json(silent=True))
++
++    @app.route('/review', methods=['GET','POST'])
++    def registered_review():
++        rt=runtime()
++        if not hasattr(rt,'seed_intake') or rt.intake_config is None:raise StateError('registered_page_disabled')
++        target=request.args.get('target') if request.method=='GET' else request.form.get('target')
++        unit=request.args.get('unit') if request.method=='GET' else request.form.get('unit')
++        import re
++        if unit is not None and (not isinstance(unit,str) or not re.fullmatch('page-receipt-v1:[0-9a-f]{64}',unit)):
++            raise StateError('item_confirmation_unit_stale')
++        if not isinstance(target,str) or not re.fullmatch('[0-9a-f]{64}',target):raise StateError('registered_page_stale')
++        signer=URLSafeTimedSerializer(rt.key,salt='hga-registered-start-v1')
++        if request.method=='GET':
++            nonce=secrets.token_urlsafe(32)
++            csrf=signer.dumps({'target':target,'unit':unit,'nonce_hash':sha256(nonce.encode()).hexdigest()})
++            response=Response(screen('一般レシートの確認',
++                ('<p>原本と入力内容を確認し、このレシートの記帳許可へ進みます。</p>' if unit else '<p>原本を確認し、このページの送信許可へ進みます。</p>')
++                +'<form method="post" action="/review"><input type="hidden" name="target" value="'+target+'">'
++                +('<input type="hidden" name="unit" value="'+unit+'">' if unit else '')+'<input type="hidden" name="csrf" value="'+str(escape(csrf))+'"><button>確認へ進む</button></form>'))
++            response.set_cookie(START_COOKIE,nonce,max_age=TTL,secure=True,httponly=True,samesite='Lax',path='/')
++            return response
++        own_origin(rt)
++        try:
++            token=signer.loads(request.form.get('csrf',''),max_age=TTL)
++            cookie=request.cookies.get(START_COOKIE,'')
++            if token['target']!=target or token.get('unit')!=unit or not cookie or not hmac.compare_digest(token['nonce_hash'],sha256(cookie.encode()).hexdigest()):raise ValueError()
++        except (ValueError,KeyError,BadSignature,SignatureExpired):raise StateError('human_general_auth_csrf_invalid') from None
++        response=redirect(rt.seed_intake(target,unit),code=303)
++        response.delete_cookie(START_COOKIE,secure=True,httponly=True,samesite='Lax',path='/')
++        return response
++
+     @app.route('/health', methods=['GET'])
+     def health():
+         return {'status': 'ok', 'mode':getattr(runtime(),'mode','synthetic_only')}
+@@ -124,18 +193,23 @@
              raise StateError('human_general_auth_request_invalid') from None
          signer = URLSafeTimedSerializer(rt.key, salt='hga-start-v1')
          if request.method == 'GET':
@@ -441,7 +578,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
              response.set_cookie(START_COOKIE, nonce, max_age=TTL, secure=True, httponly=True, samesite='Lax', path='/')
              return response
          own_origin(rt)
-@@ -146,11 +172,22 @@
+@@ -146,11 +220,22 @@
                  raise ValueError()
          except (ValueError, KeyError, BadSignature, SignatureExpired):
              raise StateError('human_general_auth_csrf_invalid') from None
@@ -466,7 +603,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
          response.delete_cookie(START_COOKIE, secure=True, httponly=True, samesite='Lax', path='/')
          return response
  
-@@ -162,19 +199,25 @@
+@@ -162,19 +247,25 @@
          session = ticket(rt)
          if request.form.get('error'):
              raise StateError('human_general_auth_identity_rejected')
@@ -498,7 +635,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
              _, tag = rt.state(session.request_id, 'authorities').read_versioned()
              label=rt.label(session.request_id) if hasattr(rt,'label') else 'synthetic page'
              text=rt.confirmation_text(session.request_id) if hasattr(rt,'confirmation_text') else {
-@@ -188,7 +231,7 @@
+@@ -188,7 +279,7 @@
                  '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                  '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
                  '<button name="action" value="confirm">'+str(escape(text['button']))+'</button>'
@@ -507,7 +644,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
          own_origin(rt)
          if request.form.get('action') == 'cancel':
              if not hmac.compare_digest(request.form.get('csrf', ''), session.csrf):
-@@ -201,7 +244,12 @@
+@@ -201,7 +292,12 @@
          if not request.form.get('etag'):
              raise StateError('HTTP_412')
          try:
@@ -521,7 +658,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
                  origin=request.headers.get('Origin'), method='POST',
                  confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
          except Exception as error:
-@@ -215,10 +263,10 @@
+@@ -215,10 +311,10 @@
      def result():
          rt = runtime()
          session = ticket(rt)
@@ -536,7 +673,7 @@ diff --git a/services/human_general/web.py b/services/human_general/web.py
          if hasattr(rt,'validate_result'):
              rt.validate_result(session.request_id,record)
          else:
-@@ -226,7 +274,33 @@
+@@ -226,7 +322,33 @@
              if grant['confirmation_digest'] != record['authority_digest']:
                  raise StateError('synthetic_readback_mismatch')
          label=rt.success_label(session.request_id) if hasattr(rt,'success_label') else 'synthetic確認を保存しました'

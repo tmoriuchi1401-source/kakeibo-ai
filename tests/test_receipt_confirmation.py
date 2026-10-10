@@ -354,6 +354,7 @@ def test_general_missing_details_require_explicit_confirmation_and_replay_once()
 
 
 def test_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(monkeypatch,tmp_path):
+    monkeypatch.setattr('app.pdf_intake_production.page_count',lambda _:1)
     import json
     from app import receipt_confirmation_production as runtime,google_clients,settings,private_state_bindings
     store=Store();store.value['manifest'].update(owner_email='owner@example.invalid',sa_email='sa@example.invalid')

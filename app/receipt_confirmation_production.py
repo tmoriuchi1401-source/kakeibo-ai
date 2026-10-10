@@ -166,7 +166,7 @@ def execute(env,apply):
     result=reader.files().list(q=f"'{folder}' in parents and trashed=false",pageSize=100,orderBy='createdTime',
         fields='nextPageToken,files(id,mimeType,version)',supportsAllDrives=True,includeItemsFromAllDrives=True).execute(num_retries=0)
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
-    plans=[];blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
+    plans=[];multipage_plans=[];pdf_context=None;blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
     for f in result.get('files',[]):
         if not is_supported_receipt_mime(f['mimeType']):continue
@@ -176,6 +176,30 @@ def execute(env,apply):
         payload=download_drive_file(f['id'],reader)
         if before!=metadata(source,folder):raise StateError('confirmation_source_changed')
         source['sha256']=sha256(payload).hexdigest()
+        if f['mimeType']=='application/pdf':
+            from .pdf_intake_production import page_count,Context,MAX_FILES
+            # Always separate multipage PDFs, including when the adapter is
+            # unavailable. No fall-through to whole-document AI or archive.
+            try:number=page_count(payload)
+            except StateError:
+                counts['blocked']+=1;blocked_sources.add(f['id']);continue
+            if number>1:
+                intake_enabled=(env.get('PDF_INTAKE_AUTOMATION_ENABLED')=='true' or env.get('GITHUB_EVENT_NAME')=='workflow_dispatch')
+                if not intake_enabled or not env.get('PDF_INTAKE_CONFIG_FILE_ID') or len(multipage_plans)>=MAX_FILES:
+                    counts['blocked']+=1;blocked_sources.add(f['id']);continue
+                if pdf_context is None:pdf_context=Context(env,settings,db,writable=True)
+                from .pdf_intake_runner import observe_source
+                archived=pdf_context.proof.archive(f['id'],source['sha256'])
+                if archived['archive_allowed']:
+                    from .pdf_intake_production import archive_terminal
+                    archive_terminal(pdf_context,f['id'],source['sha256'])
+                    counts['archived']+=1;continue
+                try:keys=observe_source(payload,f['id'],pdf_context.store)
+                except StateError:
+                    counts['blocked']+=1;blocked_sources.add(f['id']);continue
+                multipage_plans.append({**source,'page_count':number,'page_keys':keys})
+                counts['multipage_sources']=counts.get('multipage_sources',0)+1
+                continue
         owner_route=review.route_owner_intake(source,folder)
         if owner_route and owner_route!='医療':
             continue
@@ -209,7 +233,7 @@ def execute(env,apply):
     sync_review_visibility(review)
     counts.update(review.review_counts())
     if env.get('RECEIPT_SCAN_PLAN'):
-        path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans}),encoding='utf-8');path.chmod(0o600)
+        path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans,'multipage_sources':multipage_plans}),encoding='utf-8');path.chmod(0o600)
     if review.refresh_needed():
         # Existing display writer, only after actual accounting changes.
         from .expense_view import ExpenseViewPipeline
