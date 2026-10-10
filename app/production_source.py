@@ -74,15 +74,21 @@ def receipts(settings, *, apply: bool) -> dict:
             if result.get("medical_shadow_status") == "handoff_failed":
                 counts["failure"] += 1
         try:
-            approved=None
+            approved=None;multipage=[]
             if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
                 if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
-                approved=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())['sources']
+                scan_plan=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())
+                approved=scan_plan['sources'];multipage=scan_plan.get('multipage_sources',[])
             process_inbox(
                 settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
                 settings.processed_drive_folder_id, progress=progress,
                 **({'approved_sources':approved} if approved is not None else {}),
             )
+            if multipage:
+                from .pdf_intake_production import Context,process
+                stage='pdf_page_intake'
+                pdf_counts=process(Context(dict(os.environ),settings,db,writable=True),settings,multipage,apply=True)
+                for key,value in pdf_counts.items():counts[key]=counts.get(key,0)+value
             if counts['written']:
                 stage = 'receipt_projection'
                 from .expense_view import ExpenseViewPipeline
@@ -111,7 +117,17 @@ def receipts(settings, *, apply: bool) -> dict:
         if f"receipt:{file['id']}" in identities:
             counts["unchanged"] += 1
             continue
-        gate = evaluate_receipt_privacy(download_drive_file(file["id"], service=service), file["mimeType"])
+        raw=download_drive_file(file['id'],service=service)
+        if file['mimeType']=='application/pdf':
+            from .pdf_intake_production import page_count
+            if page_count(raw)>1:
+                from .receipt_pdf_units import observe_pdf
+                pages=observe_pdf(raw,file['id']).pages
+                counts['new_eligible']+=sum(p.classification=='normal' and p.observation_complete and not p.clearly_sensitive for p in pages)
+                counts['needs_review']+=sum(p.classification!='normal' or not p.observation_complete or p.clearly_sensitive for p in pages)
+                counts['multipage_sources']=counts.get('multipage_sources',0)+1
+                continue
+        gate = evaluate_receipt_privacy(raw,file['mimeType'])
         if gate.classification == "normal" and gate.gemini_allowed:
             counts["new_eligible"] += 1
         else:

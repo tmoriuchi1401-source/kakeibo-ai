@@ -131,6 +131,8 @@ jobs:
       KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
       # Dedicated review store: encrypted ID plus pinned existing manifest hash.
       RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
+      # Private configuration reference only; no session or page binding in GitHub.
+      PDF_INTAKE_CONFIG_FILE_ID: ${{ vars.PDF_INTAKE_CONFIG_FILE_ID }}
       # Medical is complete owner entry only; no Medical automation flag.
     steps:
       - uses: actions/checkout@v4

@@ -47,18 +47,26 @@
     "app/receipt_item_confirmation.py": "56fdd25067119733082d1d2725aa4499b5446dc207c2d5f1f645224b69621108",
     "app/receipt_item_review.py": "a7fe5df8eafd001e0101491e0d99291baef1f41691eca0aac35c1ab9beddb2dc",
     "app/receipt_reconciliation_authority.py": "48e0049f07c8063df27bfa4008256164b09712115efb3e95e9f3928611b354b4",
-    "services/human_general/page_router.py": "c91fc6928ead3f04c53490b33834c9a63371e99be5690d2b615488d20671bfe2",
+    "services/human_general/Dockerfile": "37a198e5bab9a3d3ca8292260aab2a3895d75f3346f434d34b8ad9e7b09987ef",
+    "services/human_general/page_router.py": "ff8e13b1d7c4e70ef119996390eea75937acc384bf47a769387f82e030fa69a3",
     "services/human_general/real_page.py": "e97d0a7d901945357ced4483b1f299fa6a74a6e5cf9157f3639d8a1a030acf2d",
     "services/human_general/real_runtime.py": "2f9d6fca87b6529bf53002428875933b693ec9de5a9fbdb1f46d23243b6273c3",
     "services/human_general/receipt_review_runtime.py": "3996c0904d91c2ec3486d68d3b5a7e0f1213a43cccbc8f29b963f7878baa16d1",
     "services/human_general/reconciliation_runtime.py": "3923537798730d40b89609e5efe03f4252b2ff73f8f5afae9554c21470094600",
     "services/human_general/runtime.py": "3ab61faaf02e3a06efc4951e8c66fd16f6c155f6044b4d8adf4507f04d6edcbf",
-    "services/human_general/web.py": "00bee3e9f2820390ba9e81398ec62a11f7d94be34d47f515e59975b6a90f315f"
+    "services/human_general/web.py": "a1eabb968bb757f61e8233973bf4d87938d9cb4e4b9f29488d2d602987473a4b"
   },
   "added_files": {
     "services/human_general/shared_login.py": "d907b516176e64bf18735e56e57f478d65747191ba0daff1f4de4b68491cd719",
     "services/human_general/session_canary.py": "433dfb34f4f95871e710c43c729c14c60437acf905dac5fc8f09209ceb3649f0",
-    "services/human_general/session_fixture.json": "a09db438659e24d5b87097f893dc71fde785f39de94e9e9810c5fe83b46df018"
+    "services/human_general/session_fixture.json": "a09db438659e24d5b87097f893dc71fde785f39de94e9e9810c5fe83b46df018",
+    "services/human_general/generic_intake.py": "d4372c9012ce0bf50a2484ee310a67c452fb829ce13e44421cc933b02f7116b0",
+    "services/human_general/generic_review.py": "60312e093169b45d7cd472d47ca73bf1b07108c5d72e4902b10c3339da24a3cd",
+    "services/human_general/generic_archive.py": "cf0f802ccea3a97e493cb2f5cf2f4c6028d95ce2a9fa0b1a05c53fd6f99e5f75"
   },
-  "patch_sha256": "695ee6d47ec37e009b4d0d41dcabca477ba3caf55f8d33bfa0b3c61b74b628b6"
+  "patch_sha256": "28bed62cc1c2f02ec516c292dfc289974580ae19f79d28c465ffe6496d5538a6",
+  "repository_files": {
+    "app/pdf_intake_authority.py": "e6de1256c5a5c5f53ed24649cc53999dabb1e32ac1e28d1c1e878563030a5b3e",
+    "app/pdf_intake_registry.py": "fbcd72ba649c3f3732be64b05ce79371299dafd8201215b58d2dcde42830c978"
+  }
 }

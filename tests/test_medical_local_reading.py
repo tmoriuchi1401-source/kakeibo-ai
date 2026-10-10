@@ -158,6 +158,8 @@ def test_local_prepare_consumes_no_cloud_crop_or_network(monkeypatch):
     crop.assert_not_called()
 
 def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp_path):
+    # Legacy names-as-bytes fixture: structure parsing is tested separately.
+    monkeypatch.setattr('app.pdf_intake_production.page_count',lambda _:1)
     import base64,json
     from hashlib import sha256
     from app import receipt_confirmation_production as runtime,google_clients,medical_candidate_preparation as prep

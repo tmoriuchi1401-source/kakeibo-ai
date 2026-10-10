@@ -57,7 +57,8 @@ authorities are unchanged. The next fresh operation requires Google login.
 
 The existing live service was built from `c29ecc44e1fb9fcc854cde1da5cce940e633e8fa`
 and its Docker whitelist, while PR #91 remains unmerged. `baseline.json` pins
-all 40 deployed source hashes; `existing-service.patch` and three additions
+all 40 deployed source hashes; `existing-service.patch`, six additions and two
+explicitly whitelisted private-registry modules
 are the only container changes. `compose.py` refuses unknown paths, baseline
 hash changes or result changes. It has no deployment, Secrets, writer, AI or
 dispatch interface. It does not merge unrelated PR #91 files into main.
