@@ -108,7 +108,8 @@ def review_registered(monkeypatch,keys):
     from app.receipt_item_review import prepare,fields,card,snapshot,evaluate
     from app.receipt_item_confirmation import annotated,ConfirmedItems
     from app.receipt_audit import MemoryAuditRepository
-    from app.receipt_item_review_ui import encoded_rows
+    from app.receipt_item_review_ui import encoded_rows,read_snapshot
+    from app.pdf_review_fields import original_uri
     from services.human_general.generic_review import RegisteredReviewRuntime,RegisteredReaders
     record,p,raw,manifest=candidate()
     page=p.model_dump();page['review_identity']=review_identity(page);p=PageUnit.model_validate(page)
@@ -116,7 +117,8 @@ def review_registered(monkeypatch,keys):
     record=prepare(draft(p,manifest,uid,[parsed,parsed],categories=CATS),CATS)
     record=annotated(record,[parsed,parsed],CATS)
     current=fields(record);current.update(action='記帳する',structure_confirmation='確認済み')
-    s=snapshot(card(record,categories=CATS),current)
+    s=read_snapshot(encoded_rows(card(record,current,categories=CATS)),card(record,categories=CATS),
+        original_uri(p.source.source_file_id,p.page_number))
     pseudo=ConfirmedItems('00000000-0000-4000-8000-000000000009',record['digest'],digest(s),digest(current),digest(record['legacy']['identity']),'a'*64,1,'a'*64)
     validation=evaluate(record,current,CATS,confirmation=pseudo)
     drive=Drive();drive.store=RegistryStore(Memory(),'anchor');drive.expected=page;drive.page=p
