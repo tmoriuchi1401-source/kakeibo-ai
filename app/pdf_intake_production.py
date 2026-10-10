@@ -132,6 +132,9 @@ class Projection:
         if allowed:self.link(start+3,self.context.config['origin']+'/review?'+urlencode({'target':key}))
     def unit(self,key,uid):
         state=self.context.store.load();unit=state['pages'][key]['units'][uid];candidate=unit['candidate'];rows=self.rows()
+        # A two-resource candidate revision is reconciled by exact read-back,
+        # never silently appended as another card by a scheduled run.
+        if unit['status']=='settlement_projection_pending':return
         view=candidate['view'];found=[i for i,r in enumerate(rows) if len(r)>18 and r[17]==SCHEMA and r[18]==view['token']]
         if found:
             read_snapshot(rows,view,original_uri(state['pages'][key]['page']['source']['source_file_id'],state['pages'][key]['page']['page_number']))

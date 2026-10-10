@@ -97,6 +97,8 @@ def draft(page,manifest,unit_id,readings=(),*,categories,text='',gate=None,confi
         if len({r.transaction_kind for r in trusted})>1:hard.append('reread_transaction_kind_changed')
         if any('原本で確認できない調整明細' in i for i in issues):hard.append('unverified_adjustment')
         if any('明細不正' in i for i in issues):hard.append('invalid_item_structure')
+        if any('ポイント券の値引き・支払手段の確認が必要' in i for i in issues):
+            hard.append('settlement_classification_required')
         if any('原本の買取表示と取引種別が不一致' in i for i in issues):hard.append('transaction_kind_evidence_conflict')
         if any('原本の明示的な支払方法と解析結果が矛盾' in i for i in issues):
             values['payment']='';reasons['payment']=['explicit_payment_contradiction']
@@ -104,6 +106,8 @@ def draft(page,manifest,unit_id,readings=(),*,categories,text='',gate=None,confi
         # Retain actual items but do not offer uncorroborated guesses as values.
         issues,checks=apply_receipt_policy(last,categories,text=text)
         hard.append('independent_reread_required')
+        if any('ポイント券の値引き・支払手段の確認が必要' in i for i in issues):
+            hard.append('settlement_classification_required')
     record={'schema':SCHEMA,'identity':identity,'prefill':values,'blank_reasons':reasons,
         'parsed':last.model_dump() if last else None,'hard_issues':sorted(set(hard)),
         'provenance':{f:'gemini' if values[f]!='' else 'missing' for f in FIELDS},

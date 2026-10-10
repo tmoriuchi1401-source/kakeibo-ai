@@ -33,6 +33,8 @@ def apply_receipt_policy(result, categories, *, text='', gate=None, readings=())
     payment labels remain reviewable; no payment method is inferred here.
     """
     _, issues = validate_receipt_result(result, categories)
+    from .receipt_settlement import settlement_issues
+    issues.extend(settlement_issues(text))
     if result.transaction_kind == 'unknown':
         issues.append('購入・買取の別が不明')
     elif gate is not None and gate.buyback_evidence != (result.transaction_kind == 'buyback'):
