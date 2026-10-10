@@ -94,3 +94,39 @@ def test_invalid_category_is_rejected_before_claim_or_ledger_write():
         execute(db, FIRST)
     assert db.queue[1][1] == 'error'
     assert db.ledger == []
+
+
+@pytest.mark.parametrize('payment',['','PayPay','現金'])
+def test_optional_payment_and_merchant_are_not_inferred(payment):
+    db=FakeDB();db.add(payload={'date':'2026-09-24','amount':500,'merchant':'',
+        'major':'食費','minor':'外食','note':'','payment':payment})
+    assert execute(db,FIRST)=={'manual_posted':1}
+    assert db.ledger[0][2]=='' and db.ledger[0][7]==payment
+
+
+def test_pdf_source_barrier_runs_before_append_and_failure_never_posts():
+    db=FakeDB();db.add()
+    def changed(request_id,row):
+        assert request_id==FIRST and not db.ledger
+        raise StateError('manual_pdf_source_changed')
+    with pytest.raises(StateError,match='source_changed'):
+        execute(db,FIRST,before_append=changed)
+    assert db.ledger==[] and db.queue[1][1]=='error'
+    assert execute(db,FIRST)=={'manual_ignored':1}
+
+
+def test_matching_id_with_different_content_is_never_overwritten():
+    db=FakeDB();db.add();execute(db,FIRST)
+    db.queue[1][1]='dispatching';db.ledger[0][4]=501
+    with pytest.raises(StateError,match='content_conflict'):execute(db,FIRST)
+    assert db.ledger[0][4]==501 and len(db.ledger)==1
+
+
+def test_incorrect_readback_stays_error_no_automatic_second_append():
+    db=FakeDB();db.add();append=db.append_raw
+    def wrong(title,rows):
+        append(title,rows);db.ledger[0][4]+=1
+    db.append_raw=wrong
+    with pytest.raises(StateError,match='readback_failed'):execute(db,FIRST)
+    assert db.queue[1][1]=='error'
+    assert execute(db,FIRST)=={'manual_ignored':1} and len(db.ledger)==1

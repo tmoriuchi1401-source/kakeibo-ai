@@ -314,6 +314,69 @@ class DriveStateTransport:
         except Exception:
             raise StateError("state_drive_write_unknown") from None
 
+    def _versioned_metadata(self):
+        """Optional conditional-write boundary; legacy writers are unchanged."""
+        headers = {}
+        request = self.service.files().get(fileId=self.binding.file_id, supportsAllDrives=True,
+            fields="id,parents,trashed,mimeType,version,capabilities(canEdit)")
+        request.add_response_callback(lambda response: headers.update(response))
+        meta = self._read_request(request)
+        etag = headers.get('etag')
+        if (meta.get('id') != self.binding.file_id or meta.get('trashed') or meta.get('parents') != [self.binding.folder_id]
+                or meta.get('mimeType') != 'application/json'):
+            raise StateError('state_drive_target_mismatch')
+        if (not isinstance(etag, str) or not etag.startswith('"') or not etag.endswith('"')
+                or '\r' in etag or '\n' in etag or not meta.get('version')):
+            raise StateError('state_conditional_write_unavailable')
+        return meta, etag
+
+    def read_versioned(self):
+        """Bind media bytes to a strong file ETag; never synthesize a token."""
+        try:
+            before, tag = self._versioned_metadata()
+            payload = self._read_request(self.service.files().get_media(
+                fileId=self.binding.file_id, supportsAllDrives=True))
+            after, current = self._versioned_metadata()
+            if tag != current or before != after:
+                raise StateError('state_changed_during_read')
+            if not isinstance(payload, bytes) or len(payload) > MAX_BYTES:
+                raise StateError('state_size_limit')
+            return payload, tag
+        except StateError:
+            raise
+        except Exception:
+            raise StateError('state_drive_read_failed') from None
+
+    def replace_versioned(self, expected, tag, proposed):
+        """Server-conditional single update plus exact read-back, no write retry.
+
+        Requires a strong ETag. A deployment whose Drive responses do not expose
+        one must stop; it must not fall back to a read-then-unconditional write.
+        """
+        from googleapiclient.http import MediaIoBaseUpload
+        from googleapiclient.errors import HttpError
+        if not isinstance(proposed, bytes) or len(proposed) > MAX_BYTES:
+            raise StateError('state_size_limit')
+        current, current_tag = self.read_versioned()
+        if current != expected or current_tag != tag:
+            raise StateError('state_changed_since_read')
+        if not self._metadata().get('capabilities', {}).get('canEdit'):
+            raise StateError('state_drive_not_editable')
+        request = self.service.files().update(fileId=self.binding.file_id, supportsAllDrives=True,
+            media_body=MediaIoBaseUpload(io.BytesIO(proposed), mimetype='application/json', resumable=False),
+            fields='id')
+        request.headers['If-Match'] = tag
+        try:
+            request.execute(num_retries=0)
+        except Exception as error:
+            if isinstance(error, HttpError) and error.resp.status == 412:
+                raise StateError('state_changed_since_read') from None
+            # Ambiguous delivery may be acknowledged only by exact read-back.
+            if self.read_versioned()[0] != proposed:
+                raise StateError('state_drive_write_unknown') from None
+        if self.read_versioned()[0] != proposed:
+            raise StateError('state_save_readback_mismatch')
+
 
 class DurableState:
     def __init__(self, transport: Transport, binding: StateBinding):

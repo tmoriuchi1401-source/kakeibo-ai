@@ -14,6 +14,10 @@ function onOpen() {
     .addItem('入力内容を処理する', 'submitCategoryInput')
     .addItem('実行状況を確認', 'checkCategoryStatus')
     .addItem('初回設定', 'configureCategorySubmit').addToUi();
+  if (typeof refreshPdfGrouping === 'function') {
+    SpreadsheetApp.getUi().createMenu('PDFページ確認')
+      .addItem('候補を更新する', 'refreshPdfGrouping').addToUi();
+  }
 }
 
 function configureCategorySubmit() {
@@ -93,6 +97,7 @@ function installCategorySubmit() {
 }
 
 function categorySubmitEdited(e) {
+  if (typeof pdfGroupingEdited === 'function') pdfGroupingEdited(e);
   if (!e || !e.range || e.range.getSheet().getName() !== CATEGORY_UI ||
       e.range.getA1Notation() !== 'B1' || e.value !== 'TRUE') return;
   submitCategoryInput();

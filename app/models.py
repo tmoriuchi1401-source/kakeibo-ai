@@ -1,10 +1,10 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal, Optional
 
 class ReceiptItem(BaseModel):
     name: str
-    quantity: float = 1
+    quantity: Optional[float] = 1
     amount: int = Field(description="税込の明細合計金額。値引き反映後が読める場合は反映")
     major_category: str
     minor_category: str
@@ -12,13 +12,18 @@ class ReceiptItem(BaseModel):
     confidence: float = Field(default=0.8, ge=0, le=1)
 
 class ReceiptResult(BaseModel):
-    merchant: str
+    merchant: str = ''
     transaction_kind: Literal["purchase", "buyback", "unknown"] = "purchase"
     date: str = Field(description="YYYY-MM-DD。読めない場合は空文字")
     total: int
     payment_method: str = ""
     items: list[ReceiptItem]
     note: str = ""
+
+    @field_validator('merchant', 'payment_method', mode='before')
+    @classmethod
+    def optional_text(cls, value):
+        return '' if value is None else value
 
 class ProductClassification(BaseModel):
     asin: str

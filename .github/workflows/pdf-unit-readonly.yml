@@ -9,7 +9,7 @@ on:
         required: true
       mode:
         type: choice
-        options: [preflight, p2, remaining]
+        options: [preflight, p2, remaining, page_p2, page_remaining, page_replay, page_multi, page_diagnose, page_p4, page_p10, page_p14]
         default: p2
         required: true
       confirm:
@@ -18,6 +18,16 @@ on:
         required: true
       p2_run_id:
         description: Successful p2 run ID required for remaining; same approved SHA and authority
+        type: string
+        required: false
+      page_batch:
+        description: New page-array model only; bounded sequential batch after page_p2
+        type: choice
+        options: [p3-p6, p7-p10, p11-p14, problem-pages]
+        default: p3-p6
+        required: false
+      hga_binding_id:
+        description: Private Drive binding file ID only; no binding JSON or actor metadata
         type: string
         required: false
 permissions:
@@ -94,11 +104,13 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           RECEIPT_DRIVE_FOLDER_ID: ${{ secrets.RECEIPT_DRIVE_FOLDER_ID }}
           PDF_GROUPING_BINDING: ${{ vars.PDF_GROUPING_BINDING }}
+          PDF_HGA_READONLY_BINDING_ID: ${{ inputs.hga_binding_id }}
           GITHUB_TOKEN: ${{ github.token }}
           PDF_READONLY_APPROVED_SHA: ${{ inputs.approved_sha }}
           PDF_READONLY_MODE: ${{ inputs.mode }}
           PDF_READONLY_CONFIRM: ${{ inputs.confirm }}
           PDF_READONLY_P2_RUN_ID: ${{ inputs.p2_run_id }}
+          PDF_READONLY_PAGE_BATCH: ${{ inputs.page_batch }}
           PDF_ACCOUNTING_ENABLED: 'false'
           PDF_MEDICAL_ENABLED: 'false'
           PDF_ARCHIVE_ENABLED: 'false'
