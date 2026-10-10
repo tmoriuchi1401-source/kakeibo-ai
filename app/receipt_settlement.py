@@ -22,6 +22,7 @@ class SettlementFacts:
     payable: int
     method: str
     evidence_digest: str
+    voucher_decision: str | None = None
 
 
 def _text(text):
@@ -98,7 +99,7 @@ def printed_facts(text, *, voucher_decision=None):
     if tax <= 0 or tax > net:
         raise StateError('settlement_external_tax_invalid')
     evidence = [net, gross, tax, payable, method, voucher_decision]
-    return SettlementFacts(net, gross, tax, payable, method, digest(evidence))
+    return SettlementFacts(net, gross, tax, payable, method, digest(evidence), voucher_decision)
 
 
 def add_external_tax(result, facts, categories):

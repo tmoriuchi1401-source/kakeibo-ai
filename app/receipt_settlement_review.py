@@ -39,6 +39,9 @@ def repair_candidate(unit, current, facts, categories):
         raise StateError('settlement_tax_already_present')
     legacy = deepcopy(old['legacy'])
     legacy['parsed'] = fixed.model_dump()
+    resolved_voucher = facts.voucher_decision == 'discount' and 'settlement_classification_required' in legacy['hard_issues']
+    if resolved_voucher:
+        legacy['hard_issues'].remove('settlement_classification_required')
     legacy['item_category_evidence'] = [
         {'item_index':i+1, 'category':'', 'corroborated':False} for i in range(len(fixed.items))]
     # A printed fact fixes a tax omission, never unrelated structural gates.
@@ -47,6 +50,7 @@ def repair_candidate(unit, current, facts, categories):
     record = prepare(legacy, categories)
     if 'review_evidence' in old:
         evidence = deepcopy(old['review_evidence'])
+        if resolved_voucher:evidence['full_structure_confirmation_required'] = True
         for item, e in zip(record['items'], evidence['items']):
             e.update(item_id=item['item_id'], category=item['category'])
         tax = record['items'][-1]
@@ -58,6 +62,10 @@ def repair_candidate(unit, current, facts, categories):
             'category_agrees':True, 'category':pair, 'readings':[
                 {'name':tax['name'], 'quantity':1, 'amount':tax['amount'], 'category':pair}] * 2})
         record['review_evidence'] = evidence
+    elif resolved_voucher:
+        # Without an existing typed independent-read review adapter the
+        # classification cannot be confirmed by the ordinary category form.
+        raise StateError('settlement_voucher_structure_confirmation_required')
     record.pop('digest'); record['digest'] = digest(record); validate(record)
     changed = {f:deepcopy(current[f]) for f in FIELDS}
     changed['items'] = []
@@ -78,5 +86,6 @@ def repair_candidate(unit, current, facts, categories):
         'evidence_digest':facts.evidence_digest, 'method':facts.method,
         'net':facts.net, 'gross':facts.gross, 'external_tax':facts.tax, 'payable':facts.payable,
         'tax_item_id':tax['item_id'], 'provenance':'source_document',
+        'voucher_decision':facts.voucher_decision,
         'category_provenance':'same_product_category', 'confirmation_required':True}
     return result, changed

@@ -119,6 +119,23 @@ def test_authenticated_or_started_candidate_is_not_repaired(field):
     with pytest.raises(StateError,match='immutable'):repair_candidate(u,current,printed_facts('本体合計730\n消費税58\n総合計788'),CATEGORIES)
 
 
+def test_voucher_classification_repair_still_requires_bound_owner_confirmation():
+    from dataclasses import replace
+    runner,key,uid,db,current=taxed_rig();u=runner.store.load()['pages'][key]['units'][uid]
+    legacy=u['candidate']['record']['legacy'];legacy['hard_issues'].append('settlement_classification_required')
+    legacy.pop('candidate_digest');legacy['candidate_digest']=digest(legacy)
+    from app.receipt_item_review import prepare
+    reading=ReceiptResult.model_validate(legacy['parsed']);record=prepare(legacy,CATEGORIES)
+    u['candidate']['record']=annotated(record,[reading,reading],CATEGORIES)
+    current=fields(u['candidate']['record']);current.update(amount=788,action='記帳する',structure_confirmation='確認済み')
+    for i in current['items']:i['category']='食費｜食料品'
+    facts=replace(printed_facts('本体合計730\n消費税58\n総合計788'),voucher_decision='discount')
+    updated,inputs=repair_candidate(u,current,facts,CATEGORIES)
+    assert 'settlement_classification_required' not in updated['record']['legacy']['hard_issues']
+    assert 'human_structure_confirmation_required' in evaluate(updated['record'],inputs,CATEGORIES)['issues']
+    assert updated['settlement_repair']['voucher_decision']=='discount' and db.writes==[]
+
+
 def test_future_page_normalization_preserves_unit_identity_and_replay():
     from test_pdf_intake_authority import page
     p=PageUnit.model_validate(page())
