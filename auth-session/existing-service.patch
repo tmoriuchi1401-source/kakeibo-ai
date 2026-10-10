@@ -1,8 +1,7 @@
 diff --git a/app/human_general_auth_transport.py b/app/human_general_auth_transport.py
-index da61400..d604177 100644
 --- a/app/human_general_auth_transport.py
 +++ b/app/human_general_auth_transport.py
-@@ -28,6 +28,7 @@ SCHEMA = 'human-general-auth-requests-v1'
+@@ -28,6 +28,7 @@
  ACTION = 'general_receipt'
  AI_CONSENT_ACTION = 'general_receipt_and_gemini_permission'
  TTL = 600
@@ -10,7 +9,7 @@ index da61400..d604177 100644
  UUID = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
  
  
-@@ -77,6 +78,12 @@ def validate_auth_state(value, binding, *, allowed_actions=None):
+@@ -77,6 +78,12 @@
                  fields.update({'actor', 'evidence_digest'})
              if record['status'] == 'complete':
                  fields.add('authority_digest')
@@ -23,7 +22,7 @@ index da61400..d604177 100644
              if set(record) != fields:
                  raise ValueError()
              if record['status'] != 'prepared':
-@@ -88,13 +95,14 @@ def validate_auth_state(value, binding, *, allowed_actions=None):
+@@ -88,13 +95,14 @@
                  actor = record['actor']
                  if (set(actor) != {'issuer', 'subject', 'email', 'method', 'verified_at', 'request_id',
                                    'request_digest', 'policy_revision', 'verification_revision', 'actor_id'}
@@ -40,7 +39,7 @@ index da61400..d604177 100644
                          or actor['request_digest'] != record['digest']
                          or actor['request_id'] != rid
                          or record['evidence_digest'] != digest(actor)):
-@@ -249,6 +257,7 @@ class AuthenticatedGeneralConfirmation:
+@@ -249,6 +257,7 @@
          if requested_action not in {ACTION,AI_CONSENT_ACTION}:fail('request_invalid')
          self.requested_action=requested_action
          self.stage=stage or (lambda *_:None)
@@ -48,7 +47,7 @@ index da61400..d604177 100644
  
      def fresh(self, record):
          binding = record['binding']
-@@ -272,8 +281,41 @@ class AuthenticatedGeneralConfirmation:
+@@ -272,7 +281,40 @@
              fail('replay_or_unknown_request')
          if not record['created_at'] <= int(self.clock()) < record['expires_at']:
              fail('request_expired')
@@ -57,7 +56,7 @@ index da61400..d604177 100644
 +                fail('trusted_login_adapter_required')
 +            self.verify_login(record)
          return state, record
- 
++
 +    def bind_login(self, rid, evidence):
 +        state, record = self.record(rid, 'authenticated')
 +        if 'login_evidence' in record:
@@ -86,11 +85,10 @@ index da61400..d604177 100644
 +        self.verify_login(record)
 +        self.store.save(state)
 +        return BrowserSession(rid, cookie, oauth_state, nonce, csrf, verifier, '')
-+
+ 
      def prepare(self, expected, *, request_id=None):
          # Caller is trusted projection/Drive reader, not browser/Sheet JSON.
-         rid = request_id if request_id is not None else str(uuid4())
-@@ -334,7 +376,8 @@ class AuthenticatedGeneralConfirmation:
+@@ -334,7 +376,8 @@
          self.fresh(record)
          actor = record['actor']
          if (actor['subject'] != self.identity.owner_subject or actor['policy_revision'] != self.identity.policy_revision
@@ -101,10 +99,9 @@ index da61400..d604177 100644
              fail('actor_policy_changed')
          return VerifiedActor(**{k: v for k, v in actor.items() if k != 'actor_id'})
 diff --git a/app/receipt_item_confirmation.py b/app/receipt_item_confirmation.py
-index 33b5b62..4c4a692 100644
 --- a/app/receipt_item_confirmation.py
 +++ b/app/receipt_item_confirmation.py
-@@ -77,7 +77,8 @@ def attest(record,snapshot,current,actor,*,request_id,owner_actor_id,now,categor
+@@ -77,7 +77,8 @@
      from .receipt_item_review import evaluate
      expected=binding(record,snapshot,request_id)
      if (not isinstance(actor,VerifiedActor) or actor.issuer!=ISSUER or actor.actor_id!=owner_actor_id
@@ -115,10 +112,9 @@ index 33b5b62..4c4a692 100644
              or not actor.verified_at<=now<actor.verified_at+600):
          raise StateError('item_confirmation_verified_actor_required')
 diff --git a/app/receipt_item_review.py b/app/receipt_item_review.py
-index 634fdb3..bc799a2 100644
 --- a/app/receipt_item_review.py
 +++ b/app/receipt_item_review.py
-@@ -358,8 +358,9 @@ class ReviewRequests:
+@@ -358,8 +358,9 @@
          actor=self.actor(rid,snapshot_digest,identity)
          bound=digest([SCHEMA,'post_receipt',rid,snapshot_digest,identity])
          if (not isinstance(actor,VerifiedActor) or actor.issuer!=ISSUER or
@@ -131,10 +127,9 @@ index 634fdb3..bc799a2 100644
                  type(actor.verified_at) is not int or not actor.verified_at<=self.clock()<actor.verified_at+600):
              raise StateError('item_review_verified_actor_required')
 diff --git a/app/receipt_reconciliation_authority.py b/app/receipt_reconciliation_authority.py
-index 98877c2..4c4ebd3 100644
 --- a/app/receipt_reconciliation_authority.py
 +++ b/app/receipt_reconciliation_authority.py
-@@ -51,8 +51,9 @@ class ReconciliationConfirmation:
+@@ -51,8 +51,9 @@
              raise StateError('reconciliation_request_expired')
          actor = self.actor(request_id)  # Existing Google OIDC trusted adapter, not a plain dict.
          if (not isinstance(actor, VerifiedActor) or actor.issuer != ISSUER or actor.actor_id != self.owner
@@ -147,10 +142,9 @@ index 98877c2..4c4ebd3 100644
                  or actor.verified_at > now.timestamp()):
              raise StateError('reconciliation_actor_rejected')
 diff --git a/services/human_general/page_router.py b/services/human_general/page_router.py
-index 2fd727c..f725462 100644
 --- a/services/human_general/page_router.py
 +++ b/services/human_general/page_router.py
-@@ -81,6 +81,15 @@ class PageRouter(SyntheticRuntime):
+@@ -81,6 +81,15 @@
              raise StateError('human_general_auth_replay_or_unknown_request')
          if record['expires_at'].timestamp()<=self.clock():
              raise StateError('human_general_auth_request_expired')
@@ -166,7 +160,7 @@ index 2fd727c..f725462 100644
          config=self.profiles.get(record['profile'])
          if config is None or digest(config)!=record['profile_digest']:
              raise StateError('real_page_profile_stale')
-@@ -93,6 +102,7 @@ class PageRouter(SyntheticRuntime):
+@@ -93,6 +102,7 @@
              factory=ReceiptReviewRuntime
          runtime=factory(self.client,self.settings,self.key,config,self.info,
              clock=self.clock,identity=self.identity,exchange=self.exchange)
@@ -174,7 +168,7 @@ index 2fd727c..f725462 100644
          runtime.drive.begin_request()
          self.selected,self.selected_rid=runtime,rid
          return runtime
-@@ -100,7 +110,7 @@ class PageRouter(SyntheticRuntime):
+@@ -100,7 +110,7 @@
      @property
      def drive(self):
          # HTTP teardown always discards the selected request's fresh cache.
@@ -183,7 +177,7 @@ index 2fd727c..f725462 100644
  
      def gateway(self,rid):return self._select(rid).gateway(rid)
      def state(self,rid,kind):return self._select(rid).state(rid,kind)
-@@ -142,6 +152,16 @@ class PageRouter(SyntheticRuntime):
+@@ -142,6 +152,16 @@
              retry=None,timeout=10)
          return link
  
@@ -201,10 +195,19 @@ index 2fd727c..f725462 100644
          from .receipt_review_runtime import ReceiptReviewRuntime
          config=self.profiles.get(name)
 diff --git a/services/human_general/real_page.py b/services/human_general/real_page.py
-index 89ff9a2..fe90a76 100644
 --- a/services/human_general/real_page.py
 +++ b/services/human_general/real_page.py
-@@ -65,9 +65,11 @@ def validate_verified(value,config,owner_sub):
+@@ -23,6 +23,9 @@
+ SCHEMA='human-general-verified-drive-canary-v1'
+ SOURCE='1fcmMMGj86DLq54G0inD8LI_XSyQSPfTY'
+ HASH='ca1b8cba60addc14a364438d691c40164e250708103bce76a320f671629491bf'
++# Existing lifecycle destination for this hash-pinned, completed canary only.
++# Same file ID/hash/page structure; no new authority or arbitrary-folder bypass.
++PROCESSED='1pSlZUwZuVQ2jBaDg1E-kJ2-A7wosUnNP'
+ 
+ 
+ def validate_config(config):
+@@ -65,9 +68,11 @@
                      or type(actor['verified_at']) is not int
                      or evidence['explicit_consent']!=AI_CONSENT_ACTION
                      or actor['issuer']!=ISSUER or actor['subject']!=owner_sub
@@ -218,11 +221,21 @@ index 89ff9a2..fe90a76 100644
                      or state['grants'][page_key(page)]['confirmer']!={'provider':'google','subject':actor['email']}):raise ValueError()
      except Exception:raise StateError('real_page_verified_state_invalid') from None
      return value
+@@ -121,7 +126,9 @@
+             raise StateError('real_page_drive_metadata_invalid')
+         folder=self.config['inbox'] if fid==SOURCE else self.config['folder']
+         mime='application/pdf' if fid==SOURCE else 'application/json'
+-        if value.get('parents')!=[{'id':folder}] or value.get('mimeType')!=mime:
++        parents=value.get('parents')
++        locations=([{'id':folder}],[{'id':PROCESSED}]) if fid==SOURCE else ([{'id':folder}],)
++        if parents not in locations or value.get('mimeType')!=mime:
+             raise StateError('real_page_source_or_state_moved')
+         return value
+ 
 diff --git a/services/human_general/real_runtime.py b/services/human_general/real_runtime.py
-index f6c96e1..ed04c4a 100644
 --- a/services/human_general/real_runtime.py
 +++ b/services/human_general/real_runtime.py
-@@ -33,11 +33,11 @@ class RealPageRuntime(SyntheticRuntime):
+@@ -33,11 +33,11 @@
          from .stages import Stages
          if not hasattr(self,'_stages') or self._stage_request!=rid:
              self._stage_request=rid;self._stages=Stages(rid)
@@ -237,10 +250,9 @@ index f6c96e1..ed04c4a 100644
      def reconcile(self,rid):
          # Read only. Never adopt a failed request or retry a PUT.
 diff --git a/services/human_general/receipt_review_runtime.py b/services/human_general/receipt_review_runtime.py
-index 135452d..b2ecd8f 100644
 --- a/services/human_general/receipt_review_runtime.py
 +++ b/services/human_general/receipt_review_runtime.py
-@@ -30,9 +30,9 @@ class ReceiptReviewRuntime(SyntheticRuntime):
+@@ -30,9 +30,9 @@
          if kind=='authorities':return self.journal
          raise StateError('item_confirmation_state_forbidden')
      def gateway(self,rid):
@@ -253,10 +265,9 @@ index 135452d..b2ecd8f 100644
          runtime=self
          class Confirmation:
 diff --git a/services/human_general/reconciliation_runtime.py b/services/human_general/reconciliation_runtime.py
-index 7cbb993..b4012af 100644
 --- a/services/human_general/reconciliation_runtime.py
 +++ b/services/human_general/reconciliation_runtime.py
-@@ -37,10 +37,10 @@ class ReconciliationRuntime(SyntheticRuntime):
+@@ -37,10 +37,10 @@
          raise StateError('reconciliation_state_forbidden')
  
      def gateway(self,rid):
@@ -270,10 +281,9 @@ index 7cbb993..b4012af 100644
      def factory(self,rid,expected_tag=None):
          def build(actor):
 diff --git a/services/human_general/runtime.py b/services/human_general/runtime.py
-index f6d1dc6..2a81f84 100644
 --- a/services/human_general/runtime.py
 +++ b/services/human_general/runtime.py
-@@ -24,6 +24,7 @@ from app.human_general_authority import (HumanGeneralConfirmation, HumanGeneralA
+@@ -24,6 +24,7 @@
  from app.page_receipt_model import PageUnit, SourceRef, stable_page, digest
  from app.drive_run_state import StateError
  from .backend import FirestoreConditionalState, EncryptedTickets, canonical, timestamp
@@ -281,7 +291,7 @@ index f6d1dc6..2a81f84 100644
  
  RAW = b'kakeibo-hga-isolated-synthetic-source-v1'
  BINDING = digest(['hga-cloud-run-synthetic-v1'])
-@@ -62,10 +63,30 @@ class SyntheticRuntime:
+@@ -62,10 +63,30 @@
              raise StateError('synthetic_configuration_invalid')
          self.client, self.settings, self.clock, self.key = client, settings, clock, key
          self.origin = settings['origin']
@@ -313,7 +323,7 @@ index f6d1dc6..2a81f84 100644
  
      def state(self, rid, kind):
          return FirestoreConditionalState(self.client.collection(kind).document(rid), clock=self.clock)
-@@ -89,9 +110,9 @@ class SyntheticRuntime:
+@@ -89,9 +110,9 @@
  
      def gateway(self, rid):
          store = AuthRequestStore(self.state(rid, 'requests'), BINDING, preflight=lambda: None)
@@ -325,7 +335,7 @@ index f6d1dc6..2a81f84 100644
  
      def factory(self, rid, expected_tag=None):
          def build(actor):
-@@ -132,6 +153,10 @@ def configured_runtime():
+@@ -132,6 +153,10 @@
      oauth = json.loads(Path(os.environ['HGA_CONFIG_PATH']).read_text())
      owner = json.loads(Path(os.environ['HGA_OWNER_PATH']).read_text())
      settings = {**oauth, 'owner_issuer': owner['issuer'], 'owner_sub': owner['sub'],
@@ -337,22 +347,23 @@ index f6d1dc6..2a81f84 100644
          'mode': 'synthetic_only'}
      key = Path(os.environ['HGA_SESSION_KEY_PATH']).read_bytes().strip()
 diff --git a/services/human_general/web.py b/services/human_general/web.py
-index 119a345..c18925a 100644
 --- a/services/human_general/web.py
 +++ b/services/human_general/web.py
-@@ -15,9 +15,10 @@ from app.human_general_auth_transport import UUID, TTL
+@@ -15,9 +15,10 @@
  
  COOKIE = '__Host-hga'
  START_COOKIE = '__Host-hga-start'
-+LOGIN_COOKIE = '__Host-hga-login'
- 
- 
+-
+-
 -def screen(text, content=''):
++LOGIN_COOKIE = '__Host-hga-login'
++
++
 +def screen(text, content='', *, logout_link=True):
      return ('<!doctype html><html lang="ja"><meta charset="utf-8">'
          '<meta name="viewport" content="width=device-width,initial-scale=1">'
          '<title>一般レシートの確認</title><style>'
-@@ -26,7 +27,8 @@ def screen(text, content=''):
+@@ -26,7 +27,8 @@
          'button,a{display:block;box-sizing:border-box;width:100%;padding:16px;margin-top:18px;'
          'font:inherit;text-align:center;border-radius:10px}button{background:#166450;color:white;'
          'border:0;min-height:54px}a{color:#166450}small{font-size:14px}</style>'
@@ -362,7 +373,7 @@ index 119a345..c18925a 100644
  
  
  def create_app(runtime_factory):
-@@ -36,6 +38,7 @@ def create_app(runtime_factory):
+@@ -36,6 +38,7 @@
      def runtime():
          if not hasattr(g,'hga_runtime'):
              g.hga_runtime=runtime_factory()
@@ -370,10 +381,11 @@ index 119a345..c18925a 100644
              drive=getattr(g.hga_runtime,'drive',None)
              if drive is not None:drive.begin_request()
          return g.hga_runtime
-@@ -59,6 +62,20 @@ def create_app(runtime_factory):
+@@ -58,6 +61,20 @@
+     def ticket(rt):
          value = rt.tickets.load(request.cookies.get(COOKIE))
          return value
- 
++
 +    def gateway(rt, value):
 +        result = rt.gateway(value)
 +        result.verify_login = lambda record: rt.logins.verify_bound(record,request.cookies.get(LOGIN_COOKIE))
@@ -387,11 +399,10 @@ index 119a345..c18925a 100644
 +            {'login_hash':sha256(cookie.encode()).hexdigest()})
 +        return ('<form method="post" action="/logout"><input type="hidden" name="csrf" value="'
 +                +str(escape(token))+'"><button>ログアウト</button></form>')
-+
+ 
      @app.before_request
      def https_only():
-         # Cloud Run terminates TLS. Origin is fixed from private config, never
-@@ -86,6 +103,10 @@ def create_app(runtime_factory):
+@@ -86,6 +103,10 @@
          code = str(error)
          if code == 'HTTP_412':
              message, status = '現在の状態が変わりました。最初から確認してください', 412
@@ -402,7 +413,7 @@ index 119a345..c18925a 100644
          elif code.endswith('identity_rejected'):
              message, status = 'このアカウントでは確定できません', 403
          elif code.endswith('request_expired'):
-@@ -124,18 +145,23 @@ def create_app(runtime_factory):
+@@ -124,18 +145,23 @@
              raise StateError('human_general_auth_request_invalid') from None
          signer = URLSafeTimedSerializer(rt.key, salt='hga-start-v1')
          if request.method == 'GET':
@@ -430,7 +441,7 @@ index 119a345..c18925a 100644
              response.set_cookie(START_COOKIE, nonce, max_age=TTL, secure=True, httponly=True, samesite='Lax', path='/')
              return response
          own_origin(rt)
-@@ -146,11 +172,22 @@ def create_app(runtime_factory):
+@@ -146,11 +172,22 @@
                  raise ValueError()
          except (ValueError, KeyError, BadSignature, SignatureExpired):
              raise StateError('human_general_auth_csrf_invalid') from None
@@ -455,7 +466,7 @@ index 119a345..c18925a 100644
          response.delete_cookie(START_COOKIE, secure=True, httponly=True, samesite='Lax', path='/')
          return response
  
-@@ -162,19 +199,25 @@ def create_app(runtime_factory):
+@@ -162,19 +199,25 @@
          session = ticket(rt)
          if request.form.get('error'):
              raise StateError('human_general_auth_identity_rejected')
@@ -487,7 +498,7 @@ index 119a345..c18925a 100644
              _, tag = rt.state(session.request_id, 'authorities').read_versioned()
              label=rt.label(session.request_id) if hasattr(rt,'label') else 'synthetic page'
              text=rt.confirmation_text(session.request_id) if hasattr(rt,'confirmation_text') else {
-@@ -188,7 +231,7 @@ def create_app(runtime_factory):
+@@ -188,7 +231,7 @@
                  '<form method="post" action="/confirm"><input type="hidden" name="csrf" value="'+str(escape(session.csrf))+'">'
                  '<input type="hidden" name="etag" value="'+str(escape(tag))+'">'
                  '<button name="action" value="confirm">'+str(escape(text['button']))+'</button>'
@@ -496,7 +507,7 @@ index 119a345..c18925a 100644
          own_origin(rt)
          if request.form.get('action') == 'cancel':
              if not hmac.compare_digest(request.form.get('csrf', ''), session.csrf):
-@@ -201,7 +244,12 @@ def create_app(runtime_factory):
+@@ -201,7 +244,12 @@
          if not request.form.get('etag'):
              raise StateError('HTTP_412')
          try:
@@ -510,7 +521,7 @@ index 119a345..c18925a 100644
                  origin=request.headers.get('Origin'), method='POST',
                  confirmation_factory=rt.factory(session.request_id, expected_tag=request.form['etag']))
          except Exception as error:
-@@ -215,10 +263,10 @@ def create_app(runtime_factory):
+@@ -215,10 +263,10 @@
      def result():
          rt = runtime()
          session = ticket(rt)
@@ -525,7 +536,7 @@ index 119a345..c18925a 100644
          if hasattr(rt,'validate_result'):
              rt.validate_result(session.request_id,record)
          else:
-@@ -226,7 +274,33 @@ def create_app(runtime_factory):
+@@ -226,7 +274,33 @@
              if grant['confirmation_digest'] != record['authority_digest']:
                  raise StateError('synthetic_readback_mismatch')
          label=rt.success_label(session.request_id) if hasattr(rt,'success_label') else 'synthetic確認を保存しました'

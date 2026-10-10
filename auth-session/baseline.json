@@ -48,7 +48,7 @@
     "app/receipt_item_review.py": "a7fe5df8eafd001e0101491e0d99291baef1f41691eca0aac35c1ab9beddb2dc",
     "app/receipt_reconciliation_authority.py": "48e0049f07c8063df27bfa4008256164b09712115efb3e95e9f3928611b354b4",
     "services/human_general/page_router.py": "c91fc6928ead3f04c53490b33834c9a63371e99be5690d2b615488d20671bfe2",
-    "services/human_general/real_page.py": "4aa04656ffe09ce31d98cf8032002a117b38abddf3c90858248437fc22c56e1b",
+    "services/human_general/real_page.py": "e97d0a7d901945357ced4483b1f299fa6a74a6e5cf9157f3639d8a1a030acf2d",
     "services/human_general/real_runtime.py": "2f9d6fca87b6529bf53002428875933b693ec9de5a9fbdb1f46d23243b6273c3",
     "services/human_general/receipt_review_runtime.py": "3996c0904d91c2ec3486d68d3b5a7e0f1213a43cccbc8f29b963f7878baa16d1",
     "services/human_general/reconciliation_runtime.py": "3923537798730d40b89609e5efe03f4252b2ff73f8f5afae9554c21470094600",
@@ -60,5 +60,5 @@
     "services/human_general/session_canary.py": "433dfb34f4f95871e710c43c729c14c60437acf905dac5fc8f09209ceb3649f0",
     "services/human_general/session_fixture.json": "a09db438659e24d5b87097f893dc71fde785f39de94e9e9810c5fe83b46df018"
   },
-  "patch_sha256": "9b40aca8f9c9e232960ee8feabefdd7afd68bfdd013b1a1c5c10eb06672653de"
+  "patch_sha256": "695ee6d47ec37e009b4d0d41dcabca477ba3caf55f8d33bfa0b3c61b74b628b6"
 }
