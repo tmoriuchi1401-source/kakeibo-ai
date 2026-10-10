@@ -37,6 +37,11 @@ Medicalは外部AIを使わず手入力待ちに保持する。Medicalを一般�
 ## 件数・再実行・保存
 
 1回最大3ファイル・3Receipt Unitの新規write、1PDF最大50ページ/50MiB。
+新規AI解析は1回1ページ、処理開始から600秒を目安に次のページを保留する。
+3時間ごとに対象枠を巡回し、1ページの失敗で他ページを恒久的に止めない。
+同じhash/page countで全ページ観測済みならOCR登録を再利用するが、送信直前の
+fresh PNG privacy/source確認は省略しない。Drive freshnessは新しい読取transportを使う。
+障害診断には固定stage/error codeだけを出し、原本情報・token・API本文は出さない。
 上限で後回しになった正常候補は次回へ引継ぎ、手入力へ強制変更しない。
 曖昧なduplicate、明細差、本人許可欠落は該当ページ/Unitだけ保留する。
 原本hash/page count/registry構造不一致はその共通sourceのGateである。
