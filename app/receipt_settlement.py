@@ -35,9 +35,9 @@ def _amount(text, label):
     for line in _text(text).splitlines():
         if not re.match(r'^\s*(?:'+label+r')', line):
             continue
-        match = re.search(r'([0-9][0-9,]*)\s*円?\s*$', line)
+        match = re.search(r'([-−▲△]?[0-9][0-9,]*)\s*円?\s*$', line)
         if match:
-            amounts.append(int(match[1].replace(',', '')))
+            amounts.append(int(re.sub('[−▲△]', '-', match[1]).replace(',', '')))
     return amounts[0] if len(amounts) == 1 else None
 
 
@@ -109,6 +109,11 @@ def add_external_tax(result, facts, categories):
     are known. Existing printed discounts retain their amounts and categories.
     """
     result = ReceiptResult.model_validate(result.model_dump())
+    if (facts.evidence_digest != digest([facts.net, facts.gross, facts.tax, facts.payable,
+                                        facts.method, facts.voucher_decision])
+            or facts.method not in {'printed_external_tax','printed_subtotal_tax_bridge'}
+            or facts.net + facts.tax != facts.gross):
+        raise StateError('settlement_evidence_changed')
     positives = [i for i in result.items if i.amount >= 0 and not re.search(r'外税|消費税|税額', i.name)]
     taxes = [i for i in result.items if re.search(r'外税|消費税|税額', i.name)]
     negatives = sum(i.amount for i in result.items if i.amount < 0)
