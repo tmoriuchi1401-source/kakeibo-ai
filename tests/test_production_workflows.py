@@ -17,13 +17,30 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
-        if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml"}:
+        if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue
         assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name
         for job in workflow["jobs"].values():
             assert "github.ref == 'refs/heads/main'" in job["if"], name
             assert "concurrency" not in job, name  # no parent/child lock deadlock
         assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}, name
+
+
+def test_shared_login_contract_workflow_is_credential_free_ci_only():
+    workflow = workflows()["hga-shared-session-checks.yml"]
+    source = (ROOT / ".github/workflows/hga-shared-session-checks.yml").read_text("utf-8")
+    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert workflow["permissions"] == {"contents": "read"}
+    assert "secrets." not in source and "environment:" not in source
+    assert "workflow_dispatch" not in source and "schedule:" not in source
+    job = workflow["jobs"]["shared-session"]
+    checkout = job["steps"][0]
+    assert checkout["with"]["persist-credentials"] == "false"
+    assert [step["run"] for step in job["steps"] if "run" in step] == [
+        "pip install -r requirements-test.txt Flask==3.1.3 google-cloud-firestore==2.34.0",
+        "python auth-session/compose.py --test",
+        "python auth-session/compose.py --output /tmp/hga-session-container",
+    ]
 
 
 def test_bank_diagnostic_branch_is_read_only_and_fixed_to_validated_baseline():

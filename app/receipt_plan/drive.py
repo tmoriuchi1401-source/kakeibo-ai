@@ -52,9 +52,11 @@ def validate_verified(value,config,owner_sub,*,allowed_pages=(14,)):
                     or type(actor['verified_at']) is not int
                     or evidence['explicit_consent']!=AI_CONSENT_ACTION
                     or actor['issuer']!=ISSUER or actor['subject']!=owner_sub
-                    or actor['actor_id']!=digest([ISSUER,owner_sub]) or actor['method']!='google_oidc_code_pkce_v1'
+                    or actor['actor_id']!=digest([ISSUER,owner_sub])
+                    or (actor['method'],actor['verification_revision']) not in {
+                        ('google_oidc_code_pkce_v1',1),('google_oidc_shared_session_v2',2)}
                     or actor['request_id']!=event['request_id'] or actor['request_digest']!=digest(expected)
-                    or actor['verification_revision']!=1 or actor['policy_revision']!=1
+                    or type(actor['policy_revision']) is not int or actor['policy_revision']<1
                     or state['grants'][page_key(page)]['confirmer']!={'provider':'google','subject':actor['email']}):raise ValueError()
     except Exception:raise StateError('real_page_verified_state_invalid') from None
     return value
