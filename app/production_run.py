@@ -49,6 +49,16 @@ SAFE_SOURCE_ERRORS = frozenset({
     'bank_recurring_window_exceeds_authority', 'bank_recurring_file_bound_exceeded',
     'bank_recurring_preview_cursor_invalid',
     'processed_folder_is_inbox',
+    'receipt_result_changed', 'receipt_result_write_unknown', 'receipt_result_readback_mismatch',
+    'pdf_intake_drive_unavailable', 'pdf_intake_drive_deadline',
+    'pdf_intake_private_acl_changed', 'pdf_intake_registry_changed_during_read',
+    'pdf_intake_registry_invalid', 'pdf_intake_registry_unavailable',
+    'pdf_intake_registry_write_outcome_unknown', 'pdf_intake_source_changed',
+    'pdf_intake_config_invalid', 'pdf_intake_config_acl_changed',
+    'pdf_intake_folder_binding_changed', 'pdf_intake_archive_backend_rejected',
+    'pdf_intake_archive_outcome_unknown', 'pdf_intake_review_changed',
+    'pdf_intake_review_sheet_changed', 'pdf_intake_review_extent_limit',
+    'pdf_intake_review_projection_invalid', 'pdf_intake_review_fragmented',
 })
 
 
@@ -110,7 +120,24 @@ COUNT_KEYS = frozenset({
 
 
 SOURCE_STAGES = frozenset({'receipt_preflight', 'receipt_processing',
-                           'receipt_archive', 'receipt_projection'})
+                           'receipt_archive', 'receipt_projection', 'pdf_page_intake',
+                           'confirmation_context', 'confirmation_source_read',
+                           'pdf_registration', 'confirmation_apply', 'confirmation_ui'})
+FAILURE_CLASSES=frozenset({'StateError','RuntimeError','HttpError','SSLError','SSLEOFError',
+    'TimeoutError','ValueError','KeyError','TypeError','AttributeError','OSError','OtherError'})
+FAILURE_FILES=frozenset({'receipt_confirmation_production.py','pdf_intake_production.py',
+    'pdf_intake_runner.py','pdf_intake_registry.py','pdf_intake_proof_client.py',
+    'receipt_confirmation.py','receipt_reimport_production.py','google_clients.py',
+    'sheets.py','drive_run_state.py','receipt_privacy_gate.py'})
+
+
+def failure_diagnostic(error):
+    """Code location and fixed class only; no message, locals or stack text."""
+    import traceback
+    kind=type(error).__name__
+    frames=[f for f in traceback.extract_tb(error.__traceback__) if Path(f.filename).name in FAILURE_FILES]
+    site=f'{Path(frames[-1].filename).name}:{frames[-1].lineno}' if frames else ''
+    return {'failure_class':kind if kind in FAILURE_CLASSES else 'OtherError','failure_site':site}
 
 
 class SourceFailure(StateError):
@@ -119,16 +146,22 @@ class SourceFailure(StateError):
     Counts are a lower bound after a failed/unknown write, never permission to
     replay or clear the durable pending marker.
     """
-    def __init__(self, code, stage='', counts=None):
+    def __init__(self, code, stage='', counts=None, *, failure_class='',failure_site=''):
         super().__init__(code if isinstance(code, str) and code in SAFE_SOURCE_ERRORS
                          else 'source_execution_failed')
         self.stage = stage if isinstance(stage, str) and stage in SOURCE_STAGES else ''
+        self.failure_class=failure_class if failure_class in FAILURE_CLASSES else ''
+        import re
+        match=re.fullmatch(r'([a-z_]+\.py):([1-9][0-9]{0,3})',failure_site) if isinstance(failure_site,str) else None
+        self.failure_site=failure_site if match and match[1] in FAILURE_FILES else ''
         self.counts = {key: value for key, value in (counts or {}).items()
                        if key in COUNT_KEYS and type(value) is int and value >= 0}
 
     def report(self):
         return {**self.counts, 'failure': 1, 'error': str(self),
-                **({'stage': self.stage} if self.stage else {})}
+                **({'stage': self.stage} if self.stage else {}),
+                **({'failure_class':self.failure_class} if self.failure_class else {}),
+                **({'failure_site':self.failure_site} if self.failure_site else {})}
 
 
 def require_success(result: Mapping) -> None:
@@ -219,6 +252,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 outcome.update(status="failed", error=safe_source_error(error))
                 if isinstance(error, SourceFailure) and error.stage:
                     outcome.update(stage=error.stage, counts=error.report())
+                    if error.failure_class:outcome['failure_class']=error.failure_class
+                    if error.failure_site:outcome['failure_site']=error.failure_site
                     outcome['counts'] = {key: value for key, value in outcome['counts'].items()
                                          if key in COUNT_KEYS}
         outcome["duration_seconds"] = round(monotonic() - started, 3)

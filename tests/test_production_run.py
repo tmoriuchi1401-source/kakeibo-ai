@@ -146,3 +146,17 @@ def test_only_exact_allowlisted_state_codes_reach_summary(message,expected):
     report=execute_serial(sources)
     assert report['sources']['receipts']['error']==expected
     assert 'private' not in json.dumps(report)
+
+
+def test_pdf_stage_diagnostics_cross_boundary_without_exception_content():
+    from app.production_run import SourceFailure
+    calls=[];sources=runners(calls)
+    def fail():
+        raise SourceFailure('pdf_intake_drive_unavailable','pdf_page_intake',{'written':0},
+                            failure_class='StateError',failure_site='pdf_intake_registry.py:153')
+    sources['receipts']=fail
+    value=execute_serial(sources)['sources']['receipts']
+    assert value['stage']=='pdf_page_intake' and value['failure_class']=='StateError'
+    assert value['failure_site']=='pdf_intake_registry.py:153'
+    rejected=SourceFailure('private token','private token',{},failure_class='private token',failure_site='https://secret:123')
+    assert rejected.report()=={'failure':1,'error':'source_execution_failed'}
