@@ -260,3 +260,80 @@ def test_existing_workflow_roundtrip_reads_all_inputs_and_conflicts_preserve_edi
                         if q.get("setDataValidation", {}).get("rule", {}).get("condition", {}).get("type") == "ONE_OF_RANGE")
     assert category_rule["range"]["endRowIndex"] == 1052
     assert category_rule["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("$A$3")
+
+
+def test_category_workflow_atomic_rewrite_restores_representative_links():
+    """Bank/preview refreshes must not turn existing category links into plain text."""
+    from app.sheets import representative_transaction_formula
+
+    class Call:
+        def execute(self, **kwargs): return {}
+
+    class Service:
+        def __init__(self): self.requests = []
+        def spreadsheets(self): return self
+        def batchUpdate(self, **kwargs):
+            self.requests.extend(kwargs["body"]["requests"])
+            return Call()
+
+    class DB(SheetsDB):
+        def _ensure_category_workflow_sheet(self): pass
+        def sheet_titles(self): return ["カテゴリ操作", "_カテゴリ実行受付"]
+        def _compact_category_helper(self): return True
+        def _sheet_metadata(self):
+            return {"sheets": [
+                {"properties": {"title": "カテゴリ操作", "sheetId": 20,
+                                "gridProperties": {"rowCount": 100, "columnCount": 27}}},
+                {"properties": {"title": "支出明細", "sheetId": 0}},
+            ]}
+        def _configure_category_workflow(self, blocks, positions): pass
+
+    service = Service()
+    db = DB("fixture-workbook", service=service)
+    rule = ["visible label", "pending", "食費", "食料品", False, False, "group:key",
+            "EXP-1", "2025-11-16", "PayPay", "service", "snapshot"]
+    blocks = {"rule": (["header"] * 12, [rule]),
+              "backfill": (["header"] * 10, []),
+              "confirm": (["header"] * 5, []),
+              "bank": (["header"] * 12, [])}
+    db._write_category_workflow_blocks(blocks)
+    update = next(r["updateCells"] for r in service.requests if "updateCells" in r)
+    # Marker is physical row 6, heading row 7, representative row 8.
+    cells = update["rows"][2]["values"]
+    assert cells[0]["userEnteredValue"] == {"formulaValue": representative_transaction_formula(
+        "fixture-workbook", 0, 8)}
+    assert cells[7]["userEnteredValue"] == {"stringValue": "EXP-1"}
+    assert cells[2]["userEnteredValue"] == {"stringValue": "食費｜食料品"}
+    assert "MATCH(H8,'支出明細'!A:A,0)" in cells[0]["userEnteredValue"]["formulaValue"]
+
+
+def test_category_rule_updates_preserve_existing_representative_link_cell():
+    class Call:
+        def execute(self, **kwargs): return {}
+
+    class Service:
+        def __init__(self): self.data = []
+        def spreadsheets(self): return self
+        def values(self): return self
+        def batchUpdate(self, **kwargs):
+            self.data.extend(kwargs["body"]["data"])
+            assert kwargs["body"]["valueInputOption"] == "RAW"
+            return Call()
+
+    class DB(SheetsDB):
+        def sheet_titles(self): return ["カテゴリ操作", "_カテゴリ実行受付"]
+        def _category_workflow_blocks(self): return blocks
+        def _compact_category_helper(self): return True
+
+    rule = ["existing hyperlink label", "pending", "食費", "食料品", False, False,
+            "group:key", "EXP-1", "2025-11-16", "PayPay", "service", "snapshot"]
+    blocks = {"rule": (["header"] * 12, [rule]),
+              "backfill": (["header"] * 10, []),
+              "confirm": (["header"] * 5, [])}
+    service = Service()
+    db = DB("fixture-workbook", service=service)
+    db.update_rows("カテゴリ自動分類", [(2, rule)])
+    assert len(service.data) == 1
+    assert service.data[0]["range"] == "カテゴリ操作!B8"
+    assert service.data[0]["values"][0][0] == "pending"
+    assert service.data[0]["values"][0][6] == "EXP-1"
