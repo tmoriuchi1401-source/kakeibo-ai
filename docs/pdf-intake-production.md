@@ -2,6 +2,8 @@
 
 既存の3時間receipt runnerと実行ロックを使用する。PR #91全体は統合しない。
 単ページの取込・Medical手入力・給与経路・会計writerは既存実装を維持する。
+新着複数ページの定期接続は初期disabledで、mainの手動限定canary成功後に
+`PDF_INTAKE_AUTOMATION_ENABLED=true`へ切り替える。既存scheduleは変更しない。
 
 ## 認証と受渡し
 

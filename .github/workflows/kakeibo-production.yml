@@ -133,6 +133,7 @@ jobs:
       RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
       # Private configuration reference only; no session or page binding in GitHub.
       PDF_INTAKE_CONFIG_FILE_ID: ${{ vars.PDF_INTAKE_CONFIG_FILE_ID }}
+      PDF_INTAKE_AUTOMATION_ENABLED: ${{ vars.PDF_INTAKE_AUTOMATION_ENABLED || 'false' }}
       # Medical is complete owner entry only; no Medical automation flag.
     steps:
       - uses: actions/checkout@v4

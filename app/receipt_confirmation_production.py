@@ -184,7 +184,8 @@ def execute(env,apply):
             except StateError:
                 counts['blocked']+=1;blocked_sources.add(f['id']);continue
             if number>1:
-                if not env.get('PDF_INTAKE_CONFIG_FILE_ID') or len(multipage_plans)>=MAX_FILES:
+                intake_enabled=(env.get('PDF_INTAKE_AUTOMATION_ENABLED')=='true' or env.get('GITHUB_EVENT_NAME')=='workflow_dispatch')
+                if not intake_enabled or not env.get('PDF_INTAKE_CONFIG_FILE_ID') or len(multipage_plans)>=MAX_FILES:
                     counts['blocked']+=1;blocked_sources.add(f['id']);continue
                 if pdf_context is None:pdf_context=Context(env,settings,db,writable=True)
                 from .pdf_intake_runner import observe_source

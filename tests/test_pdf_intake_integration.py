@@ -85,6 +85,8 @@ def test_no_whole_pdf_fallback_or_schedule_change():
     wf=Path('.github/workflows/kakeibo-production.yml').read_text('utf8')
     assert "cron: '31 */3 * * *'" in wf and 'group: kakeibo-production' in wf
     assert 'PDF_INTAKE_CONFIG_FILE_ID: ${{ vars.PDF_INTAKE_CONFIG_FILE_ID }}' in wf
+    assert "PDF_INTAKE_AUTOMATION_ENABLED || 'false'" in wf
+    assert "env.get('GITHUB_EVENT_NAME')=='workflow_dispatch'" in scan
 
 
 @pytest.mark.parametrize('raw',[b'not a pdf',b'%PDF-corrupt'])
