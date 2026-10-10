@@ -45,6 +45,14 @@ Parallel tabs retain separate request/ticket/CSRF bindings; mismatched tabs
 fail closed rather than confirming another request. Open concurrent cards
 sequentially in Safari. Logout revokes pending operations tied to that login.
 
+The stable `/logout` entry works without an operation UUID, ticket, or unused
+confirmation link. Existing screens link to it; the existing PDF review Sheet
+can link to the same HTTPS path. GET only displays the existing styled screen.
+The button sends a same-origin POST with a signed, expiring CSRF value bound to
+the login cookie. POST revokes the server-side login with CAS/read-back and
+clears login, operation-ticket, and start cookies. Successful operation
+authorities are unchanged. The next fresh operation requires Google login.
+
 ## Why a pinned delta
 
 The existing live service was built from `c29ecc44e1fb9fcc854cde1da5cce940e633e8fa`
