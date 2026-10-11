@@ -77,7 +77,7 @@ class Rig(NavigationMaintenance):
                     continue
                 if title == WORKFLOW and c == 0:
                     identity = next(i for row, i in sources if row == r+1)
-                    url = sheet_url(self.sid, 0) + f"&range=A{positions[identity]}:N{positions[identity]}"
+                    url = sheet_url(self.sid, 0) + f"&range=N{positions[identity]}"
                     cell["effectiveValue"] = entered("代表取引を見る")
                 else:
                     identity = cells[r, 0]["userEnteredValue"]["stringValue"]

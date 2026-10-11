@@ -94,7 +94,7 @@ def test_canary_is_bounded_and_forward_missing_duplicate_ids_have_no_link():
     formula = representative_transaction_formula("synthetic", 0, 999)
     assert "SUMPRODUCT(N('支出明細'!A:A=INDEX($H:$H,ROW())))<>1" in formula
     assert '"代表取引を確認（ID不一致）"' in formula
-    assert "999" not in formula and ":N" in formula
+    assert "999" not in formula and "&range=N" in formula and ":N" not in formula
 
 
 def test_dynamic_formulas_are_balanced_and_id_comparison_is_literal():

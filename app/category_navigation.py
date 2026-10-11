@@ -23,9 +23,11 @@ def representative_transaction_formula(spreadsheet_id, expense_sheet_id, row_num
     identity = "INDEX($H:$H,ROW())"
     match = f"MATCH(TRUE,ARRAYFORMULA('支出明細'!A:A={identity}),0)"
     count = f"SUMPRODUCT(N('支出明細'!A:A={identity}))"
-    base = sheet_url(spreadsheet_id, expense_sheet_id) + "&range=A"
+    # Selecting a wide A:N range leaves N offscreen in Sheets. Select the
+    # return cell on the same transaction row so navigation is immediately visible.
+    base = sheet_url(spreadsheet_id, expense_sheet_id) + "&range=N"
     return (f'=IF({identity}="","",IF({count}<>1,"代表取引を確認（ID不一致）",'
-            f'IFNA(HYPERLINK("{base}"&{match}&":N"&{match},'
+            f'IFNA(HYPERLINK("{base}"&{match},'
             f'"代表取引を見る｜"&TEXT(INDEX(\'支出明細\'!B:B,{match}),"yyyy-mm-dd")'
             f'&"｜"&TEXT(INDEX(\'支出明細\'!E:E,{match}),"#,##0")&"円"),'
             '"代表取引が見つかりません")))')
