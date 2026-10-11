@@ -7,6 +7,7 @@ from copy import deepcopy
 import json
 import math
 import os
+import re
 
 from .category_navigation import (LEDGER, WORKFLOW, HEADER,
     INLINE_MARKER, INLINE_VERSION, A_WIDTH,
@@ -211,11 +212,37 @@ class NavigationMaintenance:
                 raise ValueError("category_navigation_return_target_mismatch")
         return matched
 
-    def apply(self, mode):
+    def audit_references(self, snapshot, sheet_id):
+        """Read-only reference audit for an explicitly requested sheet ID."""
+        target = next((s for s in snapshot["sheets"].values() if s["properties"]["sheetId"] == sheet_id), None)
+        title = target["properties"]["title"] if target else None
+        result = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
+            spreadsheetId=self.db.sid, includeGridData=True,
+            fields="namedRanges,sheets(properties,conditionalFormats,charts,"
+                   "data(startRow,startColumn,rowData(values(userEnteredValue,hyperlink,userEnteredFormat(textFormat(link)),textFormatRuns(format(link)),dataValidation))))"))
+        total = 0
+        def visit(value):
+            nonlocal total
+            if isinstance(value, dict):
+                if value.get("sheetId") == sheet_id: total += 1
+                for key, item in value.items():
+                    if isinstance(item, str) and ((title and key in ("formulaValue", "userEnteredValue") and title in item)
+                        or re.search(r"(?:[#?&])gid=" + str(sheet_id) + r"(?:&|$)", item)): total += 1
+                    elif isinstance(item, (dict, list)): visit(item)
+            elif isinstance(value, list):
+                for item in value: visit(item)
+        visit(result.get("namedRanges", []))
+        for sheet in result.get("sheets", []):
+            for key in ("data", "conditionalFormats", "charts"): visit(sheet.get(key, []))
+        return {"audit_sheet_present": bool(target), "audit_references": total}
+
+    def apply(self, mode, *, audit_sheet_id=None):
         before = self.snapshot()
         plan = self.plan(before, mode)
         report = {k: v for k, v in plan.items() if k not in ("requests", "selected", "allowed")}
-        if mode == "preview": return {**report, "planned_requests": len(plan["requests"]), "write_requests": 0}
+        audit = self.audit_references(before, audit_sheet_id) if audit_sheet_id is not None else {}
+        if audit.get("audit_references"): raise ValueError("category_navigation_references_remain")
+        if mode == "preview": return {**report, **audit, "planned_requests": len(plan["requests"]), "write_requests": 0}
         if not plan["installed"]: return report
         if self.snapshot() != before: raise ValueError("category_navigation_input_changed")
         if plan["requests"]:
@@ -224,7 +251,9 @@ class NavigationMaintenance:
             self.db._invalidate_sheet_metadata()
         after = self.snapshot()
         matched = self.verify(before, after, plan)
-        return {**report, "write_requests": int(bool(plan["requests"])),
+        audit = self.audit_references(after, audit_sheet_id) if audit_sheet_id is not None else {}
+        if audit.get("audit_references"): raise ValueError("category_navigation_references_remain")
+        return {**report, **audit, "write_requests": int(bool(plan["requests"])),
             "id_matches": matched, "formula_errors": 0,
             "ledger_and_inputs_unchanged": True, "frozen_rows": 4, "frozen_columns": 1}
 
@@ -232,6 +261,7 @@ class NavigationMaintenance:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("inline-preview", "inline-refresh"), default="inline-preview")
+    parser.add_argument("--audit-sheet-id", type=int)
     args = parser.parse_args()
     from .production_flow import verify_execution_boundary
     from .google_clients import read_only_sheets_service, shipping_backfill_sheets_service
@@ -240,7 +270,7 @@ def main():
     service = read_only_sheets_service() if args.mode == "inline-preview" else shipping_backfill_sheets_service()
     try:
         report = NavigationMaintenance(SheetsDB(os.environ["SPREADSHEET_ID"], service=service)).apply(
-            args.mode[7:])
+            args.mode[7:], audit_sheet_id=args.audit_sheet_id)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     except Exception as exc:
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("category_navigation_") else "category_navigation_failed"

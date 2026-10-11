@@ -9,6 +9,10 @@ on:
         options: [inline-preview, inline-refresh]
         default: inline-preview
         required: true
+      audit_sheet_id:
+        description: Optional native sheet ID for a read-only reference audit
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -47,5 +51,8 @@ jobs:
       - name: Verify and maintain navigation only
         env:
           NAVIGATION_MODE: ${{ inputs.mode }}
+          AUDIT_SHEET_ID: ${{ inputs.audit_sheet_id }}
         run: |
-          python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"
+          args=()
+          if [ -n "$AUDIT_SHEET_ID" ]; then args+=(--audit-sheet-id "$AUDIT_SHEET_ID"); fi
+          python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE" "${args[@]}"

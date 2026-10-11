@@ -200,3 +200,24 @@ def test_canary_scope_stays_limited_on_automatic_refresh():
     before=rig.snapshot(); result=rig.apply('refresh')
     assert result['id_matches']==3 and result['target_rows']==3
     assert rig.state['cells'][WORKFLOW][10,0]==before['cells'][WORKFLOW][10,0]
+
+
+@pytest.mark.parametrize("response", [
+    {"namedRanges":[{"range":{"sheetId":99}}]},
+    {"sheets":[{"charts":[{"spec":{"data":{"sheetId":99}}}]}]},
+    {"sheets":[{"data":[{"rowData":[{"values":[{"userEnteredValue":{"formulaValue":"='派生表示'!A3"}}]}]}]}]},
+    {"sheets":[{"data":[{"rowData":[{"values":[{"textFormatRuns":[{"format":{"link":{"uri":"https://example.test/#gid=99&range=A3"}}}]}]}]}]}]},
+])
+def test_optional_read_only_audit_blocks_writes_for_remaining_references(response):
+    rig=Rig(); rig.state['sheets']['派生表示']={'properties':{'title':'派生表示','sheetId':99}}
+    rig.ref_response=response
+    with pytest.raises(ValueError,match='references_remain'): rig.apply('refresh',audit_sheet_id=99)
+    assert rig.calls==0
+
+
+def test_optional_audit_is_read_only_and_can_verify_a_deleted_target():
+    rig=Rig()
+    rig.ref_response={'sheets':[{'properties':{'sheetId':99,'title':'派生表示'},'data':[{'rowData':[{'values':[
+        {'hyperlink':'https://example.test/#gid=999&range=A3'}]}]}]}]}
+    result=rig.apply('preview',audit_sheet_id=99)
+    assert not result['audit_sheet_present'] and result['audit_references']==0 and rig.calls==0
