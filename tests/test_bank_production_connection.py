@@ -11,19 +11,18 @@ from test_bank_category_request_integration import CombinedUI, snapshot
 from test_bank_review_requests import prepared
 
 
-def test_regenerated_category_links_wait_for_committed_layout():
+def test_regenerated_category_summaries_wait_for_committed_layout():
     db = RequestDB()
-    links = []
-    db.link_category_rule_representatives = lambda rows, records: links.append((deepcopy(rows), records))
+    summaries = []
+    db.render_category_rule_representatives = lambda rows: summaries.append(deepcopy(rows))
     adapter = CapturedCategoryDB(db, blocks(db))
     new_rows = [["new candidate", "", "", "", False, False, "new-key", "expense-id", "", "", "", ""]]
-    records = {"expense-id": (2, ["expense-id", "2026-09-01"])}
     adapter.replace_category_rule_ui_rows(new_rows, adapter.blocks["rule"][0])
-    adapter.link_category_rule_representatives(new_rows, records)
-    assert links == [] and db.ui == []
+    adapter.render_category_rule_representatives(new_rows)
+    assert summaries == [] and db.ui == []
     db._write_category_workflow_blocks(adapter.blocks)
-    adapter.write_representative_links(adapter.blocks)
-    assert links[0][0] == db.ui == new_rows
+    adapter.write_representative_summaries(adapter.blocks)
+    assert summaries[0] == db.ui == new_rows
 
 
 def test_unanswered_submit_refreshes_groups_without_approval_or_financial_replay():

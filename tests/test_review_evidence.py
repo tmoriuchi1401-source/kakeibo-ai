@@ -244,15 +244,14 @@ def test_category_rule_representative_resolves_current_row_by_id():
         "title": "支出明細", "sheetId": 33}}]}
     db._category_workflow_blocks = lambda: {"rule": ([], [])}
     db._workflow_positions = lambda _: {"rule": {"start": 7}}
-    db.link_category_rule_representatives(
+    db.render_category_rule_representatives(
         [["条件", "", "", "", "", "", "key", "expense:known"],
-         ["条件2", "", "", "", "", "", "key2", "missing"]],
-        {"expense:known": (319, ["expense:known", "2026-09-01", "店", "", 100])})
+         ["条件2", "", "", "", "", "", "key2", "missing"]])
     data = db.svc.body["data"]
     assert len(data) == 2
     assert data[0]["range"].endswith("!A7")
-    assert "gid=33&range=N" in data[0]["values"][0][0]
+    assert "HYPERLINK" not in data[0]["values"][0][0]
     assert "INDEX($H:$H,ROW())" in data[0]["values"][0][0]
     assert "A319" not in data[0]["values"][0][0]
-    assert "代表取引を見る" in data[0]["values"][0][0]
+    assert "代表取引" in data[0]["values"][0][0]
 

@@ -1,10 +1,8 @@
 from copy import deepcopy
 import pytest
 
-from app.category_navigation import (
-    HEADER, RULE_MARKER, NEXT_MARKER, navigation_plan,
-    representative_transaction_formula, return_formula, source_rows,
-)
+from app.category_navigation import (HEADER, RULE_MARKER, NEXT_MARKER,
+    representative_summary_formula, representative_summary, return_formula, source_rows)
 
 
 def workflow(ids=("EXP-2", "EXP-1")):
@@ -14,101 +12,37 @@ def workflow(ids=("EXP-2", "EXP-1")):
               for i, identity in enumerate(ids)], [], [NEXT_MARKER], ["header"]]
 
 
-def plan(rows=None, ledger=None, current=None, **kw):
-    return navigation_plan(spreadsheet_id="synthetic", ledger_sheet_id=0, workflow_sheet_id=20,
-        ledger_ids=ledger if ledger is not None else [["EXP-1"], ["EXP-2"], ["OTHER"]],
-        workflow_rows=rows if rows is not None else workflow(),
-        current=current or [], install=True, **kw)
-
-
-def apply(state, requests):
-    for request in requests:
-        body = request.get("updateCells")
-        if not body:
-            continue
-        start = body["start"]
-        table = state[start["sheetId"]]
-        r, c = start["rowIndex"], start["columnIndex"]
-        while len(table) <= r:
-            table.append([])
-        while len(table[r]) <= c:
-            table[r].append("")
-        value = body["rows"][0]["values"][0].get("userEnteredValue", {})
-        table[r][c] = next(iter(value.values()), "")
-
-
-def test_roundtrip_multiple_sources_reorder_regeneration_and_idempotence():
-    rows = workflow()
-    before = deepcopy(rows)
-    state = {0: [["accounting"] * 13 for _ in range(4)], 20: deepcopy(rows)}
-    first = plan(rows=rows)
-    assert first["return_links"] == 2 and first["formula_rows"] == 3
-    apply(state, first["requests"])
-    assert [r[:13] for r in state[0]] == [["accounting"] * 13 for _ in range(4)]
-    assert [r[1:] for r in state[20]] == [r[1:] for r in before]
-    current = [[r[13]] for r in state[0]]
-    assert plan(rows=state[20], current=current)["requests"] == []
-    # N uses current A/ROW, so partial A:M or whole-row sorting has the same
-    # binding. It is independent of expense row, dates, amounts and selection.
-    reordered = [state[20][0], *state[20][1:3], state[20][4], state[20][3],
-                 *state[20][5:]]
-    assert source_rows(reordered) == [(4, "EXP-1"), (5, "EXP-2")]
-    assert plan(rows=reordered, ledger=[["OTHER"], ["EXP-2"], ["EXP-1"]],
-                current=current)["requests"] == []
-    regenerated = workflow(("EXP-1",))
-    regenerated[3][0] = representative_transaction_formula("synthetic", 0, 4)
-    assert plan(rows=regenerated, current=current)["requests"] == []
-
-
-def test_removed_and_ambiguous_sources_never_choose_first_silently():
-    result = plan(rows=workflow(("EXP-1", "EXP-1")))
-    assert result["return_links"] == 1 and result["ambiguous"] == 1
-    formula = return_formula("synthetic", 20)
-    assert 'IF(n=0,"",IF(n=1,' in formula
-    assert '&range=A1","↩ カテゴリ操作の一覧（複数候補）"' in formula
-    assert "INDEX($A:$A,ROW())" in formula
-    assert "MATCH(TRUE,ARRAYFORMULA(ids=id),0)" in formula
-    assert RULE_MARKER in formula and NEXT_MARKER in formula
-    # Formula stays in place when the source vanishes, recalculating to blank.
-    assert plan(rows=workflow(()))["return_links"] == 0
-
-
-@pytest.mark.parametrize("kwargs,error", [
-    ({"current": [["occupied"]]}, "column_occupied"),
-    ({"current": [[HEADER], ["unexpected"]]}, "column_changed"),
-    ({"ledger": [["EXP-1"], ["EXP-1"]]}, "duplicate_id"),
-    ({"ledger": [["EXP-1"]]}, "representative_missing"),
-    ({"rows": [["no markers"]]}, "markers_invalid"),
-    ({"canary_ids": ["missing"]}, "canary_unknown"),
-])
-def test_preflight_stops_without_writes(kwargs, error):
-    with pytest.raises(ValueError, match=error):
-        plan(**kwargs)
-
-
-def test_canary_is_bounded_and_forward_missing_duplicate_ids_have_no_link():
-    result = plan(canary_ids=["EXP-2"])
-    cells = [r["updateCells"] for r in result["requests"] if "updateCells" in r]
-    assert [(c["start"]["sheetId"], c["start"]["rowIndex"], c["start"]["columnIndex"])
-            for c in cells] == [(0, 0, 13), (0, 2, 13), (20, 3, 0)]
-    formula = representative_transaction_formula("synthetic", 0, 999)
-    assert "SUMPRODUCT(N('支出明細'!A:A=INDEX($H:$H,ROW())))<>1" in formula
-    assert '"代表取引を確認（ID不一致）"' in formula
-    assert "999" not in formula and "&range=N" in formula and ":N" not in formula
-
-
-def test_dynamic_formulas_are_balanced_and_id_comparison_is_literal():
-    for formula in (return_formula("synthetic", 20),
-                    representative_transaction_formula("synthetic", 0, 4)):
-        depth = 0
-        quoted = False
+def test_summary_uses_only_h_identity_and_has_no_navigation_or_technical_fields():
+    formula = representative_summary_formula()
+    assert "INDEX($H:$H,ROW())" in formula
+    assert "MATCH(TRUE,ARRAYFORMULA('支出明細'!A:A=id),0)" in formula
+    assert 'IF(OR(id="",n<>1),"代表取引を確認できません"' in formula
+    for forbidden in ("HYPERLINK", "COUNTIF", "取込ID", "計上状態", "代表取引を見る"):
+        assert forbidden not in formula
+    for column in "BCDEHI": assert f"'支出明細'!{column}:{column}" in formula
+    for formula in (formula, return_formula("synthetic", 20)):
+        depth=0; quoted=False
         for char in formula:
             if char == '"': quoted = not quoted
             if not quoted and char == '(': depth += 1
             if not quoted and char == ')': depth -= 1
             assert depth >= 0
-        assert depth == 0 and not quoted
-        assert "COUNTIF" not in formula  # No wildcard interpretation of IDs.
+        assert not quoted and depth == 0
+
+
+def test_return_links_scope_literal_ids_and_never_choose_ambiguous_source():
+    formula = return_formula("synthetic", 20)
+    assert "INDEX($A:$A,ROW())" in formula and "MATCH(TRUE,ARRAYFORMULA(ids=id),0)" in formula
+    assert 'IF(n=0,"",IF(n=1,' in formula and "複数候補" in formula
+    assert source_rows(workflow(("EXP-*", "EXP-*"))) == [(4, "EXP-*"), (5, "EXP-*")]
+    with pytest.raises(ValueError, match="markers_invalid"): source_rows([["no marker"]])
+
+
+def test_summary_zero_and_empty_fields_are_not_confused():
+    row = ["ID", "2025-11-16", "よこちゃん", "自動計上", 0, "", "", "PayPay残高", "PayPay", "", "", "", "active"]
+    assert representative_summary(row) == "代表取引\nよこちゃん\n2025/11/16｜0円\nPayPay残高｜PayPay\n内容：自動計上"
+    row[2]=""; row[3]=""; row[4]=""
+    assert representative_summary(row).endswith("内容：—") and "｜—" in representative_summary(row)
 
 
 def test_append_only_fills_installed_new_rows_and_rejects_foreign_cells():

@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta
+import unicodedata
 
 WORKFLOW = "カテゴリ操作"
 LEDGER = "支出明細"
 HEADER = "カテゴリ操作へ戻る"
 MARKER = "kakeibo.category.navigation"
 VERSION = "v1"
-NOTE = ("固定支出IDで元のカテゴリ操作行へ戻ります。複数候補は一覧を開きます。"
-        "Sheetsアプリで移動しない場合は、リンクをSafariで開いてください。")
+INLINE_MARKER = "kakeibo.category.inline"
+CANARY_SCOPE = "kakeibo.category.inline.canary"
+INLINE_VERSION = "inline-v3"
+LEGACY_VIEW = "代表取引確認"
+UNAVAILABLE = "代表取引を確認できません"
+A_WIDTH = 180
 RULE_MARKER = "■ 1. カテゴリを選ぶ・今後の自動分類"
 NEXT_MARKER = "■ 2. 過去分の固定プレビュー"
 
@@ -18,30 +24,57 @@ def sheet_url(spreadsheet_id, sheet_id):
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={sheet_id}"
 
 
-def representative_transaction_formula(spreadsheet_id, expense_sheet_id, row_num, *, viewer_sheet_id=None):
-    # ROW binds to the current row even after an A-only sort or row insertion.
-    identity = "INDEX($H:$H,ROW())"
-    match = f"MATCH(TRUE,ARRAYFORMULA('支出明細'!A:A={identity}),0)"
-    count = f"SUMPRODUCT(N('支出明細'!A:A={identity}))"
-    # Selecting a wide A:N range leaves N offscreen in Sheets. Select the
-    # return cell on the same transaction row so navigation is immediately visible.
-    base = sheet_url(spreadsheet_id, expense_sheet_id) + "&range=N"
-    legacy = (f'=IF({identity}="","",IF({count}<>1,"代表取引を確認（ID不一致）",'
-            f'IFNA(HYPERLINK("{base}"&{match},'
-            f'"代表取引を見る｜"&TEXT(INDEX(\'支出明細\'!B:B,{match}),"yyyy-mm-dd")'
-            f'&"｜"&TEXT(INDEX(\'支出明細\'!E:E,{match}),"#,##0")&"円"),'
-            '"代表取引が見つかりません")))')
-    if viewer_sheet_id is None:
-        return legacy
-    from .category_representative_view import VIEW
-    view_count = f"SUMPRODUCT(N('{VIEW}'!N:N={identity}))"
-    view_match = f"MATCH(TRUE,ARRAYFORMULA('{VIEW}'!N:N={identity}),0)"
-    target = sheet_url(spreadsheet_id, viewer_sheet_id) + "&range=A"
-    viewed = legacy.replace(f'"{base}"&{match}', f'"{target}"&{view_match}', 1)
-    # During the three-ID canary other representatives retain the legacy route.
-    # Duplicate viewer identities never choose the first matching row.
-    return (f'=IF({view_count}=0,{legacy[1:]},IF({view_count}<>1,'
-            f'"代表取引の表示を確認（ID不一致）",{viewed[1:]}))')
+def representative_summary_formula():
+    # H/ROW is the sole relation key. Dates and amounts are display fields only.
+    def value(column): return f"INDEX('{LEDGER}'!{column}:{column},pos)"
+    def shown(column): return f'IF(ISBLANK({value(column)}),"—",{value(column)})'
+    date = f'IF(ISBLANK({value("B")}),"—",TEXT({value("B")},"yyyy/mm/dd"))'
+    amount = f'IF(ISBLANK({value("E")}),"—",TEXT({value("E")},"#,##0")&"円")'
+    return (f'=LET(id,INDEX($H:$H,ROW()),n,SUMPRODUCT(N(\'{LEDGER}\'!A:A=id)),'
+        f'IF(OR(id="",n<>1),"{UNAVAILABLE}",IFERROR(LET(pos,'
+        f'MATCH(TRUE,ARRAYFORMULA(\'{LEDGER}\'!A:A=id),0),'
+        f'"代表取引"&CHAR(10)&{shown("C")}&CHAR(10)&{date}&"｜"&{amount}'
+        f'&CHAR(10)&{shown("H")}&"｜"&{shown("I")}&CHAR(10)&"内容："&{shown("D")}),'
+        f'"{UNAVAILABLE}")))')
+
+
+def representative_summary(record):
+    """Independent expected display for native readback; record is ledger A:M."""
+    def field(index): return "—" if record[index] in ("", None) else str(record[index])
+    date = record[1]
+    if isinstance(date, (int, float)):
+        date = (datetime(1899, 12, 30) + timedelta(days=date)).strftime("%Y/%m/%d")
+    elif date:
+        date = datetime.fromisoformat(str(date)[:10]).strftime("%Y/%m/%d")
+    else: date = "—"
+    amount = "—" if record[4] in ("", None) else format(record[4], ",.0f") + "円"
+    return f"代表取引\n{field(2)}\n{date}｜{amount}\n{field(7)}｜{field(8)}\n内容：{field(3)}"
+
+
+def summary_height(text):
+    # Conservative width estimate with explicit and wrapped lines, no truncation.
+    lines = sum(max(1, (sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
+        for c in line) + 25)//26) for line in text.split("\n"))
+    return max(132, lines*18+18)
+
+
+def inline_scope(meta):
+    import json
+    sheet = next((s for s in meta.get("sheets", []) if s["properties"]["title"] == WORKFLOW), {})
+    marker = next((m for m in sheet.get("developerMetadata", []) if m.get("metadataKey") == INLINE_MARKER), None)
+    if marker:
+        phase = marker.get("metadataValue")
+        if phase == INLINE_VERSION: return None
+        if phase not in ("canary-inline-v3", "verified-inline-v3"):
+            raise ValueError("category_navigation_inline_phase_changed")
+        scopes = [m for m in sheet.get("developerMetadata", []) if m.get("metadataKey") == CANARY_SCOPE]
+        if len(scopes) != 1: raise ValueError("category_navigation_canary_scope_changed")
+        values = json.loads(scopes[0]["metadataValue"])
+        if not isinstance(values, list) or not 1 <= len(values) <= 3 or len(set(values)) != len(values):
+            raise ValueError("category_navigation_canary_scope_changed")
+        return set(values)
+    # Before migration keep the existing rollout scope, without generating old links.
+    return set() if any(s["properties"]["title"] == LEGACY_VIEW for s in meta.get("sheets", [])) else None
 
 
 def return_formula(spreadsheet_id, workflow_sheet_id):
@@ -77,56 +110,6 @@ def source_rows(rows):
             if len(rows[i]) > 7 and rows[i][7]]
 
 
-def navigation_plan(*, spreadsheet_id, ledger_sheet_id, workflow_sheet_id,
-                    ledger_ids, workflow_rows, current, install=False, canary_ids=None):
-    """Only N and rule A may change; validate before emitting any request."""
-    header = current[0][0] if current and current[0] else ""
-    if header != HEADER:
-        if not install:
-            return {"installed": False, "requests": []}
-        if any(any(row) for row in current):
-            raise ValueError("category_navigation_column_occupied")
-    formula = return_formula(spreadsheet_id, workflow_sheet_id)
-    if header == HEADER and any(row and row[0] not in ("", formula) for row in current[1:]):
-        raise ValueError("category_navigation_column_changed")
-    ids = [str(row[0]) if row and row[0] else "" for row in ledger_ids]
-    counts = Counter(identity for identity in ids if identity)
-    if any(n != 1 for n in counts.values()):
-        raise ValueError("category_navigation_ledger_duplicate_id")
-    sources = source_rows(workflow_rows)
-    missing = [identity for _, identity in sources if counts[identity] != 1]
-    if missing:
-        raise ValueError("category_navigation_representative_missing")
-    representatives = Counter(identity for _, identity in sources)
-    selected = None if canary_ids is None else set(canary_ids)
-    if selected is not None and (not selected or not selected <= representatives.keys()):
-        raise ValueError("category_navigation_canary_unknown")
-    requests = []
-    def cell(sheet, row, column, value):
-        requests.append({"updateCells": {"start": {"sheetId": sheet,
-            "rowIndex": row - 1, "columnIndex": column},
-            "rows": [{"values": [{"userEnteredValue": value} if value else {}]}], "fields": "userEnteredValue"}})
-    if header != HEADER:
-        cell(ledger_sheet_id, 1, 13, {"stringValue": HEADER})
-    # Install on existing records only, never on thousands of empty grid rows.
-    # Formulas on other records display nothing and make partial sorts safe.
-    for number, identity in enumerate(ids, 2):
-        wanted = formula if identity and (selected is None or identity in selected) else ""
-        present = current[number-1][0] if number <= len(current) and current[number-1] else ""
-        if present != wanted:
-            cell(ledger_sheet_id, number, 13,
-                 {"formulaValue": wanted} if wanted else {})
-    for number, identity in sources:
-        if selected is None or identity in selected:
-            wanted = representative_transaction_formula(spreadsheet_id, ledger_sheet_id, number)
-            if workflow_rows[number-1][0] != wanted:
-                cell(workflow_sheet_id, number, 0, {"formulaValue": wanted})
-    return {"installed": True, "requests": requests, "representatives": len(sources),
-            "return_links": len(representatives), "ambiguous": sum(n > 1 for n in representatives.values()),
-            "formula_rows": sum(bool(i) for i in ids),
-            "canary_links": len(selected) if selected is not None else None}
-
-
 def installed(meta):
     return any(s.get("properties", {}).get("title") == LEDGER and any(
         m.get("metadataKey") == MARKER and m.get("metadataValue") == VERSION
@@ -134,30 +117,10 @@ def installed(meta):
 
 
 def refresh_navigation(db):
-    """Maintain an explicitly installed UI column during existing refreshes."""
+    """Maintain installed inline summaries without broadening the canary scope."""
     meta = db._sheet_metadata()
-    from .category_representative_view import viewer_sheet, ViewMaintenance
-    if viewer_sheet(meta):
-        return ViewMaintenance(db).apply("refresh")
-    if not installed(meta):
+    if not any(m.get("metadataKey") == INLINE_MARKER for s in meta.get("sheets", [])
+               if s["properties"]["title"] == WORKFLOW for m in s.get("developerMetadata", [])):
         return {"installed": False}
-    if db.get_raw("'支出明細'!N1:N1") != [[HEADER]]:
-        raise ValueError("category_navigation_header_changed")
-    sheets = {s["properties"]["title"]: s["properties"] for s in meta["sheets"]}
-    ledger, workflow = sheets[LEDGER], sheets[WORKFLOW]
-    extent = ledger["gridProperties"]["rowCount"]
-    workflow_extent = workflow["gridProperties"]["rowCount"]
-    # FORMULA read avoids turning existing formulas into their displayed labels.
-    current = db._execute_sheet_read(lambda: db.svc.spreadsheets().values().get(
-        spreadsheetId=db.sid, range=f"'{LEDGER}'!N1:N{extent}",
-        valueRenderOption="FORMULA")).get("values", [])
-    workflow_rows = db._execute_sheet_read(lambda: db.svc.spreadsheets().values().get(
-        spreadsheetId=db.sid, range=f"'{WORKFLOW}'!A1:L{workflow_extent}",
-        valueRenderOption="FORMULA")).get("values", [])
-    plan = navigation_plan(spreadsheet_id=db.sid, ledger_sheet_id=ledger["sheetId"],
-        workflow_sheet_id=workflow["sheetId"], ledger_ids=db.get_raw(f"'{LEDGER}'!A2:A{extent}"),
-        workflow_rows=workflow_rows, current=current)
-    if plan["requests"]:
-        db.svc.spreadsheets().batchUpdate(spreadsheetId=db.sid,
-            body={"requests": plan["requests"]}).execute(num_retries=0)
-    return {key: value for key, value in plan.items() if key != "requests"}
+    from .category_navigation_maintenance import NavigationMaintenance
+    return NavigationMaintenance(db).apply("refresh")

@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Viewer UI only; expand after existing canary and iPhone Sheets verification
+        description: Inline summary UI only; retire after verified full rollout and zero legacy references
         type: choice
-        options: [view-preview, view-canary, view-expand]
-        default: view-preview
+        options: [inline-preview, inline-canary, inline-expand, inline-retire]
+        default: inline-preview
         required: true
       iphone_sheets_verified:
-        description: Confirmed scroll visibility and round trips in the iPhone Sheets app
+        description: Confirmed summary visibility, category choices and checkboxes in the iPhone Sheets app
         type: boolean
         default: false
 

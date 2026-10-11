@@ -75,7 +75,7 @@ class CapturedCategoryDB:
     def __init__(self, db, blocks):
         self.db = db
         self.blocks = deepcopy(blocks)
-        self._representative_records = None
+        self._representatives_pending = False
 
     def __getattr__(self, name):
         return getattr(self.db, name)
@@ -88,16 +88,15 @@ class CapturedCategoryDB:
     def replace_category_backfill_ui_rows(self, rows, header): self._replace("backfill", rows, header)
     def replace_category_backfill_confirmation_rows(self, rows, header): self._replace("confirm", rows, header)
 
-    def link_category_rule_representatives(self, rows, records):
-        # Candidate regeneration can grow the rule block. Native links must
+    def render_category_rule_representatives(self, rows):
+        # Candidate regeneration can grow the rule block. Inline summaries must
         # wait for the final merged layout or they can overwrite the next
         # section's marker at the old row positions.
-        self._representative_records = deepcopy(records)
+        self._representatives_pending = True
 
-    def write_representative_links(self, merged):
-        if self._representative_records is not None and hasattr(self.db, "link_category_rule_representatives"):
-            self.db.link_category_rule_representatives(
-                merged["rule"][1], self._representative_records)
+    def write_representative_summaries(self, merged):
+        if self._representatives_pending and hasattr(self.db, "render_category_rule_representatives"):
+            self.db.render_category_rule_representatives(merged["rule"][1])
 
     def _replace(self, section, rows, header):
         self.blocks[section] = (deepcopy(header), deepcopy(rows))
@@ -266,7 +265,7 @@ def execute_request(db, request_id, *, env, refresh_projection, store=None, bank
         db._category_workflow_blocks()
         db._check_category_workflow_input(prior)
         db._write_category_workflow_blocks(merged)
-        adapter.write_representative_links(merged)
+        adapter.write_representative_summaries(merged)
         result["category_later_edits_retained"] = retained
         if bank_counts:
             confirmed = bank_counts['bank_groups_confirmed'] + bank_counts['bank_groups_already_confirmed']
