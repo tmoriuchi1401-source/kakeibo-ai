@@ -304,7 +304,7 @@ def test_category_workflow_atomic_rewrite_restores_representative_links():
         "fixture-workbook", 0, 8)}
     assert cells[7]["userEnteredValue"] == {"stringValue": "EXP-1"}
     assert cells[2]["userEnteredValue"] == {"stringValue": "食費｜食料品"}
-    assert "MATCH(H8,'支出明細'!A:A,0)" in cells[0]["userEnteredValue"]["formulaValue"]
+    assert "INDEX($H:$H,ROW())" in cells[0]["userEnteredValue"]["formulaValue"]
 
 
 def test_category_rule_updates_preserve_existing_representative_link_cell():

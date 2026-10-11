@@ -4,6 +4,7 @@ import re
 import time
 from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
+from .category_navigation import representative_transaction_formula
 
 CATEGORY_SEPARATOR = "｜"
 CATEGORY_RULE_UI_SHEET = "カテゴリ操作"
@@ -22,24 +23,6 @@ WORKFLOW_MARKERS = {**CATEGORY_WORKFLOW_MARKERS, **OPTIONAL_WORKFLOW_MARKERS}
 
 def workflow_sections(blocks):
     return [key for key in WORKFLOW_MARKERS if key in blocks]
-
-
-def representative_transaction_formula(spreadsheet_id: str, expense_sheet_id: int, row_num: int) -> str:
-    """Link a category candidate to its current ledger row by stable H-column expense ID.
-
-    A composite category/bank refresh rewrites the whole UI grid, so this
-    formula must be restored inside that same atomic rewrite. Never rely on a
-    previously observed ledger row number after an unrelated refresh.
-    """
-    match = f"MATCH(H{row_num},'支出明細'!A:A,0)"
-    base = (f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit"
-            f"#gid={expense_sheet_id}&range=A")
-    return (
-        f'=IFNA(HYPERLINK("{base}"&{match}&":M"&{match},'
-        f'"代表取引を見る｜"&TEXT(INDEX(\'支出明細\'!B:B,{match}),"yyyy-mm-dd")'
-        f'&"｜"&TEXT(INDEX(\'支出明細\'!E:E,{match}),"#,##0")&"円"),'
-        '"代表取引が見つかりません")'
-    )
 
 
 CATEGORY_RULE_UI_HELPER_SHEET = "_支出明細カテゴリ候補"
@@ -266,6 +249,7 @@ class SheetsDB:
         its owned helper sheet.  Business imports must never create UI support
         sheets implicitly or overwrite categories.
         """
+        self._restore_expense_navigation_for_append(reply)
         updated = str(reply.get("updates", {}).get("updatedRange", ""))
         match = re.search(r"!A(\d+):[A-Z]+(\d+)$", updated)
         if not match:
@@ -290,6 +274,30 @@ class SheetsDB:
             "requests": growth + expense_minor_category_validation_requests(start, end),
         }).execute()
         if growth:self._invalidate_sheet_metadata()
+    def _restore_expense_navigation_for_append(self, reply):
+        from .category_navigation import HEADER, installed, return_formula
+        if not installed(self._sheet_metadata()):
+            return
+        if self.get_raw("'支出明細'!N1:N1") != [[HEADER]]:
+            raise ValueError("category_navigation_header_changed")
+        updated=str(reply.get("updates", {}).get("updatedRange", ""))
+        match=re.search(r"!A(\d+):[A-Z]+(\d+)$", updated)
+        if not match:
+            raise ValueError("category_navigation_append_range_missing")
+        start,end=map(int,match.groups())
+        meta=self._sheet_metadata()
+        props={s["properties"]["title"]:s["properties"] for s in meta["sheets"]}
+        formula=return_formula(self.sid,props[CATEGORY_WORKFLOW_SHEET]["sheetId"])
+        current=self._execute_sheet_read(lambda:self.svc.spreadsheets().values().get(
+            spreadsheetId=self.sid,range=f"'支出明細'!N{start}:N{end}",
+            valueRenderOption="FORMULA")).get("values",[])
+        if any(row and row[0] not in ("",formula) for row in current):
+            raise ValueError("category_navigation_column_changed")
+        self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":[{
+            "repeatCell":{"range":{"sheetId":props["支出明細"]["sheetId"],
+                "startRowIndex":start-1,"endRowIndex":end,"startColumnIndex":13,"endColumnIndex":14},
+                "cell":{"userEnteredValue":{"formulaValue":formula}},"fields":"userEnteredValue"}}]}).execute(num_retries=0)
+
     def append_raw(self, sheet:str, rows:list[list]):
         """Append literal ledger values; do not interpret bank descriptions as formulas."""
         if not rows:return
@@ -897,6 +905,10 @@ class SheetsDB:
             self.clear(f"{CATEGORY_WORKFLOW_SHEET}!A{offset+1}:L1000")
             self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A{offset+1}",valueInputOption="RAW",body={"values":values}).execute()
         self._configure_category_workflow(blocks, positions)
+        if not compact:
+            self.link_category_rule_representatives(blocks["rule"][1], {})
+        from .category_navigation import refresh_navigation
+        refresh_navigation(self)
 
     def ensure_category_rule_ui_sheet(self, header):
         """Create the opt-in mobile request surface only after UI approval."""
@@ -907,26 +919,16 @@ class SheetsDB:
         self._replace_category_workflow_section("rule", rows, header)
     def link_category_rule_representatives(self, rows:list[list], records:dict):
         """Make each rule's exact representative ledger row available in one tap."""
-        from .review_evidence import ReviewResource
         if not rows: return
         meta=self._sheet_metadata()
         expense_sheet=next((s for s in meta["sheets"]
                             if s["properties"]["title"] == "支出明細"), None)
         if expense_sheet is None: return
         start=self._workflow_positions(self._category_workflow_blocks())["rule"]["start"]
-        data=[]
-        for offset,row in enumerate(rows):
-            representative=records.get(str(row[7])) if len(row)>7 else None
-            if representative is None: continue
-            expense=representative[1]
-            date=str(expense[1]).replace('"', '').replace('\n', ' ')
-            amount=str(expense[4]).replace('"', '').replace('\n', ' ')
-            resource=ReviewResource.sheet_row(
-                label=f"代表取引を見る｜{date}｜{amount}円",role="comparison",spreadsheet_id=self.sid,
-                sheet_id=expense_sheet["properties"]["sheetId"],
-                row=representative[0],last_column="M")
-            data.append({"range":f"'{CATEGORY_WORKFLOW_SHEET}'!A{start+offset}",
-                         "values":[[resource.formula()]]})
+        data=[{"range":f"'{CATEGORY_WORKFLOW_SHEET}'!A{start+offset}",
+               "values":[[representative_transaction_formula(
+                   self.sid, expense_sheet["properties"]["sheetId"], start+offset)]]}
+              for offset,row in enumerate(rows) if len(row)>7 and str(row[7]).strip()]
         if data:
             self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid,
                 body={"valueInputOption":"USER_ENTERED","data":data}).execute()

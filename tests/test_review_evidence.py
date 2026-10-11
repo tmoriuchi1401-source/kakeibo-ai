@@ -226,7 +226,7 @@ def test_resource_rejects_unverified_or_malformed_identity():
         raise AssertionError("unsafe file id accepted")
 
 
-def test_category_rule_representative_uses_exact_ledger_row():
+def test_category_rule_representative_resolves_current_row_by_id():
     class Request:
         def execute(self): return {}
     class Service:
@@ -249,8 +249,10 @@ def test_category_rule_representative_uses_exact_ledger_row():
          ["条件2", "", "", "", "", "", "key2", "missing"]],
         {"expense:known": (319, ["expense:known", "2026-09-01", "店", "", 100])})
     data = db.svc.body["data"]
-    assert len(data) == 1
+    assert len(data) == 2
     assert data[0]["range"].endswith("!A7")
-    assert "gid=33&range=A319:M319" in data[0]["values"][0][0]
+    assert "gid=33&range=A" in data[0]["values"][0][0]
+    assert "INDEX($H:$H,ROW())" in data[0]["values"][0][0]
+    assert "A319" not in data[0]["values"][0][0]
     assert "代表取引を見る" in data[0]["values"][0][0]
 
