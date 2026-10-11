@@ -153,6 +153,12 @@ class WriteService:
     def values(self):
         return self
 
+    def get(self, **kwargs):
+        # Appending may inspect the explicit navigation installation marker.
+        # This fixture has no installed UI; the read must add no write calls.
+        assert "range" not in kwargs
+        return SimpleNamespace(execute=lambda: {"sheets": []})
+
     def request(self, **kwargs):
         def execute(**_):
             self.calls.append(kwargs)

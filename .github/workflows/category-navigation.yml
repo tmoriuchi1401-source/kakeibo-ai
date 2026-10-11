@@ -1,0 +1,50 @@
+name: Category navigation UI maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: UI only; expansion requires a verified three-link canary
+        type: choice
+        options: [preview, canary, expand]
+        default: preview
+        required: true
+
+permissions:
+  contents: read
+
+# Share the existing writer lock, without invoking any finance pipeline.
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  navigation:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITHUB_SHA: ${{ github.sha }}
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Verify and maintain navigation only
+        env:
+          NAVIGATION_MODE: ${{ inputs.mode }}
+        run: python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"
