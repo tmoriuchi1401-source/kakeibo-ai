@@ -109,3 +109,39 @@ def test_dynamic_formulas_are_balanced_and_id_comparison_is_literal():
             assert depth >= 0
         assert depth == 0 and not quoted
         assert "COUNTIF" not in formula  # No wildcard interpretation of IDs.
+
+
+def test_append_only_fills_installed_new_rows_and_rejects_foreign_cells():
+    from app.sheets import SheetsDB
+    from app.category_navigation import MARKER, VERSION
+    class Call:
+        def __init__(self, result): self.result = result
+        def execute(self, **kw): return self.result
+    class Service:
+        def __init__(self): self.requests = []; self.current = []
+        def spreadsheets(self): return self
+        def values(self): return self
+        def get(self, **kw):
+            assert kw["range"] == "'支出明細'!N8001:N8002"
+            assert kw["valueRenderOption"] == "FORMULA"
+            return Call({"values": self.current})
+        def batchUpdate(self, **kw):
+            self.requests.extend(kw["body"]["requests"])
+            return Call({})
+    service = Service()
+    db = SheetsDB("synthetic", service=service)
+    db._sheet_metadata_cache = {"sheets": [
+        {"properties": {"title": "支出明細", "sheetId": 0}, "developerMetadata": [
+            {"metadataKey": MARKER, "metadataValue": VERSION}]},
+        {"properties": {"title": "カテゴリ操作", "sheetId": 20}}]}
+    db.get_raw = lambda rng: [[HEADER]]
+    reply = {"updates": {"updatedRange": "'支出明細'!A8001:M8002"}}
+    db._restore_expense_navigation_for_append(reply)
+    rule = service.requests[0]["repeatCell"]
+    assert rule["range"] == {"sheetId": 0, "startRowIndex": 8000, "endRowIndex": 8002,
+                              "startColumnIndex": 13, "endColumnIndex": 14}
+    assert rule["cell"]["userEnteredValue"] == {"formulaValue": return_formula("synthetic", 20)}
+    service.current = [["someone's value"]]
+    with pytest.raises(ValueError, match="column_changed"):
+        db._restore_expense_navigation_for_append(reply)
+    assert len(service.requests) == 1
