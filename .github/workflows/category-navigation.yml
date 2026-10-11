@@ -4,15 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Inline summary UI only; retire after verified full rollout and zero legacy references
+        description: Verify or maintain installed inline summaries without accounting writes
         type: choice
-        options: [inline-preview, inline-canary, inline-expand, inline-retire]
+        options: [inline-preview, inline-refresh]
         default: inline-preview
         required: true
-      iphone_sheets_verified:
-        description: Confirmed summary visibility, category choices and checkboxes in the iPhone Sheets app
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -51,8 +47,5 @@ jobs:
       - name: Verify and maintain navigation only
         env:
           NAVIGATION_MODE: ${{ inputs.mode }}
-          IPHONE_SHEETS_VERIFIED: ${{ inputs.iphone_sheets_verified }}
         run: |
-          args=()
-          if [ "$IPHONE_SHEETS_VERIFIED" = "true" ]; then args+=(--iphone-sheets-verified); fi
-          python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE" "${args[@]}"
+          python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"

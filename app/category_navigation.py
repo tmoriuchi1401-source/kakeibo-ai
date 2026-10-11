@@ -14,7 +14,6 @@ VERSION = "v1"
 INLINE_MARKER = "kakeibo.category.inline"
 CANARY_SCOPE = "kakeibo.category.inline.canary"
 INLINE_VERSION = "inline-v3"
-LEGACY_VIEW = "代表取引確認"
 UNAVAILABLE = "代表取引を確認できません"
 A_WIDTH = 180
 RULE_MARKER = "■ 1. カテゴリを選ぶ・今後の自動分類"
@@ -79,8 +78,7 @@ def inline_scope(meta):
         if not isinstance(values, list) or not 1 <= len(values) <= 3 or len(set(values)) != len(values):
             raise ValueError("category_navigation_canary_scope_changed")
         return set(values)
-    # Before migration keep the existing rollout scope, without generating old links.
-    return set() if any(s["properties"]["title"] == LEGACY_VIEW for s in meta.get("sheets", [])) else None
+    return None
 
 
 def return_formula(spreadsheet_id, workflow_sheet_id):
