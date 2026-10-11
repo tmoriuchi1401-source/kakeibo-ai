@@ -251,7 +251,7 @@ def test_category_rule_representative_resolves_current_row_by_id():
     data = db.svc.body["data"]
     assert len(data) == 2
     assert data[0]["range"].endswith("!A7")
-    assert "gid=33&range=A" in data[0]["values"][0][0]
+    assert "gid=33&range=N" in data[0]["values"][0][0]
     assert "INDEX($H:$H,ROW())" in data[0]["values"][0][0]
     assert "A319" not in data[0]["values"][0][0]
     assert "代表取引を見る" in data[0]["values"][0][0]

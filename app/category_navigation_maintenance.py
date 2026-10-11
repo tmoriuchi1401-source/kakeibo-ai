@@ -154,7 +154,7 @@ class NavigationMaintenance:
             if identity not in selected:
                 continue
             forward = after["cells"][WORKFLOW].get((row_num-1, 0), {})
-            expected = sheet_url(self.db.sid, sid) + f"&range=A{positions[identity]}:N{positions[identity]}"
+            expected = sheet_url(self.db.sid, sid) + f"&range=N{positions[identity]}"
             if forward.get("hyperlink") != expected:
                 raise ValueError("category_navigation_forward_target_mismatch")
         for number, row in enumerate(ledger[1:], 2):
