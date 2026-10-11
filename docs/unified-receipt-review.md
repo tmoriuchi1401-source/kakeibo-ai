@@ -1,4 +1,4 @@
-# Unified receipt review: blocked read-only stage
+# Unified receipt review: isolated legacy hold, read-only stage
 
 This change adds an **offline Stage 1 prototype**, not a production cutover.
 It reads bounded CellData snapshots and native receipt confirmation state.
@@ -8,9 +8,13 @@ instantiated. Existing confirmation and PDF entry points remain unchanged.
 
 The live audit found an old medical review ID absent from the current native
 confirmation state, without an established Receipt Unit/index mapping. The
-same page also has an unresolved existing-ledger reconciliation. Production
-writes and the real-original canary must remain stopped until those bindings
-are established from original evidence. Never infer a binding from a file ID,
+same page also has an unresolved existing-ledger reconciliation. Keep that
+medical reference in `LEGACY_UNMAPPED_HOLD`: one history/hold entry, labelled
+旧案件・対応確認保留, with every operation, accounting write, AI send,
+authority issuance/transfer, source move and automatic retry disabled.
+Display the explicitly audited reconciliation as a separate related detail,
+never as the same case. A correct existing ledger does not complete the orphan.
+This hold does not stop independent clean-new-case development. Never infer a binding from a file ID,
 page number, date, merchant, or amount, and never transfer another review's
 owner confirmation or authority.
 
@@ -80,10 +84,36 @@ python -m app.unified_receipt_preview --receipt-snapshot <private-receipt.json> 
 Optional `--posting-receipt <private-candidate.json> <private-native-receipt.json>`
 may be repeated. It does not grant permission, write accounting, or move files.
 
+`--related-references <private-explicit-references.json>` accepts exact case IDs
+and the audit-only provenance `explicit_audit_reference_only`. It copies no
+identity, input, owner decision or authority. Never generate this manifest by
+joining similar values or file/page keys.
+
+`--eligibility-evidence <private-audit-results.json>` evaluates scoped statements
+of existing validator results for future routing. This local audit manifest
+is **not authenticated authority**, a validator adapter, or an executable
+permission. Production has no such complete manifest in the audited snapshots.
+Before any future writable route, native validators must freshly verify the
+original/input snapshots and authenticated grants themselves.
+
+Eligibility requires complete source ID/hash/version, uniquely observed stable
+page identities, Unit/index/purpose, exact current raw snapshot, resolved/no
+duplicate, Unit-bound send/posting permission, native writer readback/replay
+capability and one operation owner. Medical additionally requires fully manual
+input and denied AI sending; reconciliation permits only an existing-ledger
+link. Repackaging the quarantined original/page as a new Unit is denied.
+Missing evidence disables only that reference. Multiple targets, conflicting
+bindings, owners or page identities stop the batch. Legacy-entry aliases may
+reference the same exact target and immutable scope; they cannot create two
+actions. Proposed target counts and enabled action counts are separate:
+**enabled actions remain zero even for eligible synthetic fixtures**.
+
 ## Remaining rollout gates
 
-1. Resolve orphan legacy identity/reconciliation without replacing inputs,
-   minting substitute authority, or posting the medical receipt again.
+1. Preserve the unmappable legacy hold without replacing inputs, minting
+   substitute authority, retrying it or posting the medical receipt again.
+   Independently develop complete new fixtures; legacy mapping is not a global
+   prerequisite. Reactivating that old case requires explicit original proof.
 2. Extend read-only projection to native-only reviews, page observations,
    terminal Units, successor relationships and complete original/readback
    evidence; reconcile all counts, states and links.
@@ -91,10 +121,12 @@ may be repeated. It does not grant permission, write accounting, or move files.
    bindings. Preserve source/input snapshot preconditions, CAS/claim, pending
    readback recovery and unique operation routing across both legacy entries.
 4. Run synthetic operations for every requested receipt/structure/privacy,
-   duplicate, stale-input, re-entry and concurrent-request case. Current new
-   tests cover projection only; existing writer tests are not evidence of a
-   unified writable route.
-5. Run one real-original canary only after safety blockers are cleared;
+   duplicate, stale-input, re-entry and concurrent-request case. New tests also
+   exercise fake-DB native writers, CAS claims, partial/lost-response readback
+   and manual/link-only medical behavior. These verify native capabilities,
+   not an implemented unified write route or a real-original canary.
+5. Propose one untreated new original with complete identity from intake.
+   Do not reuse the old original. Run it only after separate approval;
    report writes, duplicate zero, AI sends, source moves and exact readback.
 6. Obtain user approval before main merge or production entry switch.
 7. Make legacy PDF review a read-only history only after the new route is
@@ -103,3 +135,11 @@ may be repeated. It does not grant permission, write accounting, or move files.
 
 Desktop and a 390px browser viewport were checked for the prototype. iPhone
 device testing has **not** been performed. This work is not release complete.
+
+The isolation revision passes 3,892 local tests (50 new cases plus the existing
+3,842). Live read-only audit: 99 reference cards, one legacy hold, one separate
+related reconciliation, zero eligible production cases and zero enabled
+targets. The seven inbox originals yielded no fully evidenced canary candidate.
+Before/after reads found zero cell changes in review/queue and accounting,
+identical six native state files, and identical original bytes, parent and
+revision. Private evidence and medical/financial values stay outside Git.

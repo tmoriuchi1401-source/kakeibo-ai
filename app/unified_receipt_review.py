@@ -14,6 +14,9 @@ STATES = ('入力が必要', '原本確認が必要', '本人確認が必要', '
 PDF_SCHEMAS = {'pdf-page-review-v1', 'general-receipt-item-review-v1', 'pdf-intake-page-review-v1'}
 TERMINAL = {'applied', 'closed_user', 'closed_machine', 'imported', 'manual_imported',
             'medical_manual_imported', 'reconciled_existing', 'duplicate_confirmed', 'intentionally_skipped'}
+LEGACY_UNMAPPED_HOLD = 'LEGACY_UNMAPPED_HOLD'
+LEGACY_HOLD_LABEL = '旧案件・対応確認保留'
+LEGACY_HOLD_REASON = '旧確認と新Receipt Unitの対応を証明できないため自動処理不可'
 
 
 def digest(value):
@@ -39,6 +42,16 @@ class Case:
     last_processed_at: str = ''
     unfinished_reason: str = ''
     summary: dict = field(default_factory=dict)
+    disposition: str = ''
+    audit_findings: list = field(default_factory=list)
+    related_to: str = ''
+
+    @property
+    def restrictions(self):
+        # The prototype has no mutation capability for any case. Explicitly
+        # expose every forbidden legacy capability for the audit view.
+        return dict(operation=False,accounting_write=False,ai_send=False,
+                    authority_issue=False,authority_transfer=False,source_move=False,automatic_retry=False)
 
     @property
     def case_id(self):
@@ -72,6 +85,8 @@ class Case:
         return tuple(json.dumps(v, sort_keys=True) for v in (i['source_file_id'], i['source_content_hash'], page, i['receipt_unit_id'], i['receipt_index']))
 
     def display(self):
+        if self.disposition == LEGACY_UNMAPPED_HOLD:
+            return '保留・再確認', LEGACY_HOLD_REASON
         if self.issues or self.authority_status in {'held', 'superseded', 'needs_review', 'privacy_observation_changed'}:
             return '保留・再確認', '対応・原本・入力を再確認してください'
         terminal_kind = self.kind not in {'intake', 'grouping', 'page_kind'}
@@ -216,6 +231,14 @@ def pdf_cases(rows, items):
             case.issues.append('旧確認IDが現在のauthorityに存在しません')
         if case.kind in {'medical', 'receipt_reconciliation', 'general_receipt_item_review'} and case.unit_key is None:
             case.issues.append('原本版・page identity・Receipt Unit・receipt indexの対応が未確定')
+        if (case.schema == 'pdf-page-review-v1' and case.kind == 'medical'
+                and (not review or review not in items or case.unit_key is None)):
+            case.disposition = LEGACY_UNMAPPED_HOLD
+            case.audit_findings = [
+                ['mapping_result','一意対応','対応不能：欠けたidentityを類似値で補いません'],
+                ['authority_reference','旧確認IDのnative authority','存在未確認' if review not in items else 'Unit対応未確定'],
+                ['unit_mapping','Receipt Unit / receipt index','未確定。発行・移植・再記帳を禁止'],
+            ]
     return list(grouped.values())
 
 
@@ -236,6 +259,25 @@ def project(receipt_rows, pdf_rows, items):
         if matches:
             case.issues.append('既存記帳照合を先に解決。同一なら新規医療記帳不要')
     # No operation target in Stage 1; no person confirmation is reused.
+    return cases
+
+
+def relate_legacy_references(cases, relations):
+    """Display explicit audit references together without merging their identity.
+
+    Relations must name exact case IDs observed by the auditor. No matching by
+    file/page/date/facility/amount and no authority or snapshot propagation.
+    """
+    by_id={c.case_id:c for c in cases}; seen=set()
+    for relation in relations:
+        parent=by_id.get(relation.get('primary_case_id'))
+        child=by_id.get(relation.get('related_case_id'))
+        if (parent is None or child is None or parent is child or child.case_id in seen
+                or parent.disposition != LEGACY_UNMAPPED_HOLD
+                or child.kind != 'receipt_reconciliation'
+                or relation.get('provenance') != 'explicit_audit_reference_only'):
+            raise StateError('unified_legacy_relation_invalid')
+        seen.add(child.case_id);child.related_to=parent.case_id
     return cases
 
 
@@ -287,5 +329,7 @@ def inventory(cases):
             'legacy_pdf_cards':sum(c.origin=='PDFページ確認' for c in cases),
             'history':sum(c.history for c in cases), 'synthetic':sum(c.synthetic for c in cases),
             'blocked':sum(bool(c.issues) for c in cases),
+            'legacy_unmapped_holds':sum(c.disposition==LEGACY_UNMAPPED_HOLD for c in cases),
+            'related_references':sum(bool(c.related_to) for c in cases),
             'states':{s:sum(c.display()[0]==s for c in cases) for s in STATES},
             'operation_targets':0, 'accounting_writes':0, 'source_moves':0, 'ai_sends':0}
