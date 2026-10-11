@@ -1,4 +1,4 @@
-"""Locked inline-representative migration; no accounting or approval pipeline."""
+"""Maintain installed inline summaries; no accounting or approval pipeline."""
 from __future__ import annotations
 
 import argparse
@@ -9,8 +9,8 @@ import math
 import os
 import re
 
-from .category_navigation import (LEDGER, WORKFLOW, HEADER, MARKER, VERSION,
-    INLINE_MARKER, CANARY_SCOPE, INLINE_VERSION, LEGACY_VIEW, A_WIDTH,
+from .category_navigation import (LEDGER, WORKFLOW, HEADER,
+    INLINE_MARKER, INLINE_VERSION, A_WIDTH,
     representative_summary_formula, representative_summary, summary_height,
     return_formula, sheet_url, source_rows, inline_scope)
 
@@ -79,34 +79,19 @@ class NavigationMaintenance:
         if len(markers) > 1: raise ValueError("category_navigation_metadata_ambiguous")
         return markers[0] if markers else None
 
-    def plan(self, snapshot, mode, *, iphone_sheets_verified=False):
+    def plan(self, snapshot, mode):
+        if mode not in ("preview", "refresh"):
+            raise ValueError("category_navigation_mode_invalid")
         workflow = self.rows(snapshot, WORKFLOW, 27, formulas=True)
         ledger = self.rows(snapshot, LEDGER, 14, formulas=True)
         sources = source_rows(workflow)
         marker = self.phase(snapshot)
         phase = marker["metadataValue"] if marker else None
-        if mode == "expand" and (phase not in ("verified-inline-v3", INLINE_VERSION) or not iphone_sheets_verified):
-            raise ValueError("category_navigation_iphone_verified_canary_required")
-        if mode == "retire" and phase != INLINE_VERSION:
-            raise ValueError("category_navigation_full_inline_required")
-        if mode == "canary" and phase == INLINE_VERSION:
-            raise ValueError("category_navigation_already_expanded")
-        if mode == "refresh" and not marker: return {"requests": [], "selected": [], "installed": False}
-        full = mode in ("expand", "retire") or phase == INLINE_VERSION
+        if not marker: return {"requests": [], "selected": [], "installed": False}
+        full = phase == INLINE_VERSION
         if full: selected = set(i for _, i in sources)
-        elif marker:
-            selected = inline_scope({"sheets": list(snapshot["sheets"].values())})
         else:
-            legacy = snapshot["sheets"].get(LEGACY_VIEW, {})
-            markers = legacy.get("developerMetadata", [])
-            scopes = [m for m in markers if m.get("metadataKey") == "kakeibo.category.representative.canary"]
-            if not any(m.get("metadataKey") == "kakeibo.category.representative.view" and
-                       m.get("metadataValue") == "verified-v2" for m in markers) or len(scopes) != 1:
-                raise ValueError("category_navigation_existing_canary_required")
-            values = json.loads(scopes[0]["metadataValue"])
-            if not isinstance(values, list) or len(values) != 3 or len(set(values)) != 3:
-                raise ValueError("category_navigation_existing_canary_invalid")
-            selected = set(values)
+            selected = inline_scope({"sheets": list(snapshot["sheets"].values())})
         if not full and not selected <= {i for _, i in sources}:
             raise ValueError("category_navigation_canary_source_missing")
         counts = Counter(str(r[0]) for r in ledger[1:] if r[0])
@@ -227,11 +212,10 @@ class NavigationMaintenance:
                 raise ValueError("category_navigation_return_target_mismatch")
         return matched
 
-    def references(self, snapshot, *, replacing_rows=()):
-        """Audit every native sheet before retiring the legacy derived tab."""
-        legacy = snapshot["sheets"].get(LEGACY_VIEW)
-        if not legacy: return 0
-        gid = str(legacy["properties"]["sheetId"])
+    def audit_references(self, snapshot, sheet_id):
+        """Read-only reference audit for an explicitly requested sheet ID."""
+        target = next((s for s in snapshot["sheets"].values() if s["properties"]["sheetId"] == sheet_id), None)
+        title = target["properties"]["title"] if target else None
         result = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
             spreadsheetId=self.db.sid, includeGridData=True,
             fields="namedRanges,sheets(properties,conditionalFormats,charts,"
@@ -240,94 +224,44 @@ class NavigationMaintenance:
         def visit(value):
             nonlocal total
             if isinstance(value, dict):
-                if value.get("sheetId") == int(gid) and "title" not in value: total += 1
+                if value.get("sheetId") == sheet_id: total += 1
                 for key, item in value.items():
-                    if isinstance(item, str) and ((key in ("formulaValue", "userEnteredValue") and LEGACY_VIEW in item)
-                        or re.search(r"(?:[#?&])gid=" + gid + r"(?:&|$)", item)): total += 1
+                    if isinstance(item, str) and ((title and key in ("formulaValue", "userEnteredValue") and title in item)
+                        or re.search(r"(?:[#?&])gid=" + str(sheet_id) + r"(?:&|$)", item)): total += 1
                     elif isinstance(item, (dict, list)): visit(item)
             elif isinstance(value, list):
                 for item in value: visit(item)
         visit(result.get("namedRanges", []))
         for sheet in result.get("sheets", []):
-            if sheet.get("properties", {}).get("title") == WORKFLOW:
-                for b in sheet.get("data", []):
-                    for r, row in enumerate(b.get("rowData", []), b.get("startRow", 0)):
-                        for c, cell in enumerate(row.get("values", []), b.get("startColumn", 0)):
-                            if c != 0 or r+1 not in replacing_rows: visit(cell)
-            else: visit(sheet.get("data", []))
-            for key in ("conditionalFormats", "charts"): visit(sheet.get(key, []))
-        return total
+            for key in ("data", "conditionalFormats", "charts"): visit(sheet.get(key, []))
+        return {"audit_sheet_present": bool(target), "audit_references": total}
 
-    def apply(self, mode, *, iphone_sheets_verified=False):
+    def apply(self, mode, *, audit_sheet_id=None):
         before = self.snapshot()
-        plan = self.plan(before, mode, iphone_sheets_verified=iphone_sheets_verified)
+        plan = self.plan(before, mode)
         report = {k: v for k, v in plan.items() if k not in ("requests", "selected", "allowed")}
-        if mode == "preview": return {**report, "planned_requests": len(plan["requests"]), "write_requests": 0}
+        audit = self.audit_references(before, audit_sheet_id) if audit_sheet_id is not None else {}
+        if audit.get("audit_references"): raise ValueError("category_navigation_references_remain")
+        if mode == "preview": return {**report, **audit, "planned_requests": len(plan["requests"]), "write_requests": 0}
         if not plan["installed"]: return report
-        replacing = [] if mode == "retire" else [r for r, i in
-            source_rows(self.rows(before, WORKFLOW, 27, formulas=True)) if i in plan["selected"]]
-        if mode in ("canary", "expand", "retire") and self.references(before, replacing_rows=replacing):
-            raise ValueError("category_navigation_legacy_references_remain")
         if self.snapshot() != before: raise ValueError("category_navigation_input_changed")
-        requests = deepcopy(plan["requests"])
-        marker = self.phase(before)
-        wid = before["sheets"][WORKFLOW]["properties"]["sheetId"]
-        if not marker:
-            for key, value in ((INLINE_MARKER, "canary-inline-v3"), (CANARY_SCOPE, json.dumps(sorted(plan["selected"])))):
-                requests.append({"createDeveloperMetadata": {"developerMetadata": {"metadataKey": key,
-                    "metadataValue": value, "location": {"sheetId": wid}, "visibility": "DOCUMENT"}}})
-        if requests:
-            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": requests}).execute(num_retries=0)
+        if plan["requests"]:
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,
+                body={"requests": plan["requests"]}).execute(num_retries=0)
             self.db._invalidate_sheet_metadata()
         after = self.snapshot()
-        # Expansion must verify all selected rows before its phase is promoted.
-        verification_plan = self.plan(after, "expand", iphone_sheets_verified=True) if mode == "expand" else self.plan(after, "refresh")
-        if verification_plan["requests"]: raise ValueError("category_navigation_readback_failed")
-        # verify's replay follows the current phase; selected rows are checked independently.
         matched = self.verify(before, after, plan)
-        refs = self.references(after) if mode in ("canary", "expand", "retire") else None
-        if refs: raise ValueError("category_navigation_legacy_references_remain")
-        phase = INLINE_VERSION if mode == "expand" else self.phase(after)["metadataValue"] if mode in ("refresh", "retire") else "verified-inline-v3"
-        current = self.phase(after)
-        promotions = []
-        if current["metadataValue"] != phase:
-            promotions.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {"metadataId": current["metadataId"]}}],
-                "developerMetadata": {"metadataValue": phase}, "fields": "metadataValue"}})
-        if mode == "expand":
-            ledger_marker = next((m for m in after["sheets"][LEDGER].get("developerMetadata", []) if m.get("metadataKey") == MARKER), None)
-            if ledger_marker and ledger_marker.get("metadataValue") != VERSION:
-                promotions.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {"metadataId": ledger_marker["metadataId"]}}],
-                    "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
-        if promotions:
-            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": promotions}).execute(num_retries=0)
-            self.db._invalidate_sheet_metadata()
-            if self.phase(self.snapshot())["metadataValue"] != phase: raise ValueError("category_navigation_phase_readback_failed")
-        retired = False
-        if mode == "retire" and LEGACY_VIEW in after["sheets"]:
-            # Fresh verification plus zero references are prerequisites to deletion.
-            fresh = self.snapshot()
-            if fresh != after or fresh != self.snapshot(): raise ValueError("category_navigation_input_changed")
-            legacy = fresh["sheets"][LEGACY_VIEW]
-            if not any(m.get("metadataKey") == "kakeibo.category.representative.view" and
-                m.get("metadataValue") == "verified-v2" for m in legacy.get("developerMetadata", [])):
-                raise ValueError("category_navigation_legacy_sheet_not_owned")
-            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": [
-                {"deleteSheet": {"sheetId": legacy["properties"]["sheetId"]}}]}).execute(num_retries=0)
-            self.db._invalidate_sheet_metadata()
-            final = self.snapshot()
-            if LEGACY_VIEW in final["sheets"]: raise ValueError("category_navigation_retire_readback_failed")
-            self.verify(fresh, final, self.plan(fresh, "refresh"))
-            retired = True
-        return {**report, "phase": phase, "write_requests": int(bool(requests or promotions or retired)),
-            "id_matches": matched, "formula_errors": 0, "ledger_and_inputs_unchanged": True,
-            "legacy_references": refs, "legacy_sheet_deleted": retired,
-            "frozen_rows": 4, "frozen_columns": 1, "safari_verification": "unverified"}
+        audit = self.audit_references(after, audit_sheet_id) if audit_sheet_id is not None else {}
+        if audit.get("audit_references"): raise ValueError("category_navigation_references_remain")
+        return {**report, **audit, "write_requests": int(bool(plan["requests"])),
+            "id_matches": matched, "formula_errors": 0,
+            "ledger_and_inputs_unchanged": True, "frozen_rows": 4, "frozen_columns": 1}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("inline-preview", "inline-canary", "inline-expand", "inline-retire"), default="inline-preview")
-    parser.add_argument("--iphone-sheets-verified", action="store_true")
+    parser.add_argument("--mode", choices=("inline-preview", "inline-refresh"), default="inline-preview")
+    parser.add_argument("--audit-sheet-id", type=int)
     args = parser.parse_args()
     from .production_flow import verify_execution_boundary
     from .google_clients import read_only_sheets_service, shipping_backfill_sheets_service
@@ -336,7 +270,7 @@ def main():
     service = read_only_sheets_service() if args.mode == "inline-preview" else shipping_backfill_sheets_service()
     try:
         report = NavigationMaintenance(SheetsDB(os.environ["SPREADSHEET_ID"], service=service)).apply(
-            args.mode[7:], iphone_sheets_verified=args.iphone_sheets_verified)
+            args.mode[7:], audit_sheet_id=args.audit_sheet_id)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     except Exception as exc:
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("category_navigation_") else "category_navigation_failed"

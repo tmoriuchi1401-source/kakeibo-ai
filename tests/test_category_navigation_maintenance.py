@@ -6,7 +6,7 @@ import pytest
 import yaml
 
 from app.category_navigation import (LEDGER, WORKFLOW, MARKER, HEADER, VERSION,
-    INLINE_MARKER, CANARY_SCOPE, INLINE_VERSION, LEGACY_VIEW, RULE_MARKER, NEXT_MARKER,
+    INLINE_MARKER, CANARY_SCOPE, INLINE_VERSION, RULE_MARKER, NEXT_MARKER,
     representative_summary_formula, representative_summary, return_formula, sheet_url, source_rows)
 from app.category_navigation_maintenance import NavigationMaintenance
 
@@ -25,14 +25,13 @@ class Rig(NavigationMaintenance):
     def __init__(self, corrupt=None):
         self.db=self; self.sid="synthetic"; self.svc=self; self.calls=0; self.corrupt=corrupt
         self.state={"sheets": {}, "cells": {}, "dimensions": {WORKFLOW: {"rowMetadata": {}, "columnMetadata": {}}}}
-        for title, sid in ((LEDGER,0),(WORKFLOW,20),(LEGACY_VIEW,99)):
+        for title, sid in ((LEDGER,0),(WORKFLOW,20)):
             self.state["sheets"][title]={"properties": {"title": title, "sheetId": sid,
                 "gridProperties": {"rowCount": 100, "columnCount": 27, "frozenRowCount":4 if sid==20 else 1}}}
         self.state["sheets"][LEDGER]["protectedRanges"]=[{"range":{"sheetId":0,"endColumnIndex":13}}]
         self.state["sheets"][LEDGER]["developerMetadata"]=[{"metadataKey":MARKER,"metadataValue":"verified-v1","metadataId":1}]
-        self.state["sheets"][LEGACY_VIEW]["developerMetadata"]=[
-            {"metadataKey":"kakeibo.category.representative.view","metadataValue":"verified-v2","metadataId":2},
-            {"metadataKey":"kakeibo.category.representative.canary","metadataValue":json.dumps(["EXP-1","EXP-2","EXP-3"]),"metadataId":3}]
+        self.state["sheets"][WORKFLOW]["developerMetadata"]=[
+            {"metadataKey":INLINE_MARKER,"metadataValue":INLINE_VERSION,"metadataId":2}]
         self.state["sheets"][WORKFLOW]["merges"]=[{"sheetId":20,"startRowIndex":3,"endRowIndex":4,"startColumnIndex":0,"endColumnIndex":6},
             {"sheetId":20,"startRowIndex":4,"endRowIndex":5,"startColumnIndex":0,"endColumnIndex":3}]
         ledger=[["ID"]+["header"]*12+[HEADER]]
@@ -43,7 +42,7 @@ class Rig(NavigationMaintenance):
         rows=[["入力内容を処理する",False,"処理結果を維持"],["処理結果","未送信16件"],["更新日時","保持"],
               ["チェック後に実行してください"],["設定先を開く →","","","対象月","2026-09"],[RULE_MARKER],["header"]]
         for i,identity in enumerate(("EXP-3","EXP-1","EXP-2","EXP-4")):
-            rows.append([f'=HYPERLINK("#gid={99 if i<3 else 0}&range=A3","旧表示")',"承認待ち","食費","食料品","登録しない",True,f"key-{i}",identity,"ignored","ignored","service","approval"])
+            rows.append([f'=HYPERLINK("#gid={0}&range=A3","旧表示")',"承認待ち","食費","食料品","登録しない",True,f"key-{i}",identity,"ignored","ignored","service","approval"])
         rows += [[],[NEXT_MARKER],["header"]]
         for title, table in ((LEDGER,ledger),(WORKFLOW,rows)):
             self.state["cells"][title]={(r,c): {"userEnteredValue":entered(v),"effectiveValue":entered(v)}
@@ -121,99 +120,104 @@ class Rig(NavigationMaintenance):
                 cell["hyperlink"]=sheet_url(self.sid,20)+f"&range=A{target}"
 
 
-def test_canary_only_three_inline_and_inputs_order_instruction_preserved_then_replay_zero():
+def test_full_maintenance_preserves_inputs_order_ledger_then_replay_zero():
     rig=Rig(); before=rig.snapshot()
-    assert rig.apply("preview")["target_rows"]==3 and rig.calls==0
-    result=rig.apply("canary")
-    assert result["id_matches"]==3 and result["formula_errors"]==0
-    assert result["phase"]=="verified-inline-v3" and result["frozen_rows"]==4
+    assert rig.apply("preview")["target_rows"]==4 and rig.calls==0
+    result=rig.apply("refresh")
+    assert result["id_matches"]==4 and result["formula_errors"]==0
+    assert result["phase"]==INLINE_VERSION and result["frozen_rows"]==4
     assert rig.state["cells"][WORKFLOW][3,1]["userEnteredValue"]==before["cells"][WORKFLOW][3,0]["userEnteredValue"]
-    assert rig.state["cells"][LEDGER]==before["cells"][LEDGER]
+    assert all(rig.state["cells"][LEDGER][k]==v for k,v in before["cells"][LEDGER].items() if k[1]<13)
     for key,cell in before["cells"][WORKFLOW].items():
         if key[1]>0: assert rig.state["cells"][WORKFLOW][key]==cell
-    assert rig.state["cells"][WORKFLOW][10,0]==before["cells"][WORKFLOW][10,0]
-    calls=rig.calls; assert rig.apply("canary")["write_requests"]==0 and rig.calls==calls
+    calls=rig.calls; assert rig.apply("refresh")["write_requests"]==0 and rig.calls==calls
 
 
-def test_full_rollout_phone_gate_all_ids_then_retire_and_zero_replay():
-    rig=Rig()
-    with pytest.raises(ValueError,match="iphone_verified_canary_required"): rig.apply("expand",iphone_sheets_verified=True)
-    rig.apply("canary")
-    with pytest.raises(ValueError,match="iphone_verified_canary_required"): rig.apply("expand")
-    with pytest.raises(ValueError,match="full_inline_required"): rig.apply("retire")
-    assert rig.apply("expand",iphone_sheets_verified=True)["id_matches"]==4
-    assert rig.apply("retire")["legacy_sheet_deleted"]
-    assert LEGACY_VIEW not in rig.state["sheets"]
-    assert rig.apply("retire")["write_requests"]==0
+def test_uninstalled_workbook_is_read_only_and_retired_modes_are_rejected():
+    rig=Rig(); rig.state["sheets"][WORKFLOW].pop("developerMetadata")
+    assert not rig.apply("refresh")["installed"] and rig.calls==0
+    for mode in ("expand","retire","canary"):
+        with pytest.raises(ValueError,match="mode_invalid"): rig.apply(mode)
+    assert rig.calls==0
 
 
-def test_sort_and_regeneration_bind_h_identity_without_expanding_canary():
-    rig=Rig(); rig.apply("canary")
+def test_sort_and_regeneration_bind_h_identity():
+    rig=Rig(); rig.apply("refresh")
     for c in range(27):
         a=rig.state["cells"][WORKFLOW].pop((7,c),None); b=rig.state["cells"][WORKFLOW].pop((9,c),None)
         if b: rig.state["cells"][WORKFLOW][7,c]=b
         if a: rig.state["cells"][WORKFLOW][9,c]=a
-    rig.recalculate(); assert rig.apply("refresh")["id_matches"]==3
+    rig.recalculate(); assert rig.apply("refresh")["id_matches"]==4
     rig.state["cells"][WORKFLOW][8,0]["userEnteredValue"]=entered("regenerated label")
-    assert rig.apply("refresh")["target_rows"]==3
-    assert rig.state["cells"][WORKFLOW][10,0]["effectiveValue"]["stringValue"]=="旧表示"
+    assert rig.apply("refresh")["target_rows"]==4
 
 
 @pytest.mark.parametrize("corrupt,error",[("ledger","unrelated_readback_changed"),("input","unrelated_readback_changed"),
     ("order","unrelated_readback_changed"),("protection","protection_changed"),("value","summary_value_mismatch"),("error","formula_error")])
-def test_stop_on_readback_corruption_without_verified_phase(corrupt,error):
+def test_stop_on_readback_corruption(corrupt,error):
     rig=Rig(corrupt)
-    with pytest.raises(ValueError,match=error): rig.apply("canary")
-    assert rig.phase(rig.snapshot())["metadataValue"]=="canary-inline-v3"
+    with pytest.raises(ValueError,match=error): rig.apply("refresh")
 
 
 @pytest.mark.parametrize("ids",[("missing",),("EXP-1","EXP-1")])
 def test_missing_duplicate_expense_identity_stops_before_write(ids):
     rig=Rig(); rig.state["cells"][LEDGER][1,0]["userEnteredValue"]=entered(ids[0])
     if len(ids)>1: rig.state["cells"][LEDGER][2,0]["userEnteredValue"]=entered(ids[1])
-    with pytest.raises(ValueError,match="representative_id_mismatch"): rig.apply("canary")
+    with pytest.raises(ValueError,match="representative_id_mismatch"): rig.apply("refresh")
     assert rig.calls==0
-
-
-def test_retire_rejects_remaining_formula_chart_named_range_and_gid_links():
-    rig=Rig(); rig.apply("canary"); rig.apply("expand",iphone_sheets_verified=True)
-    for response in ({"namedRanges":[{"range":{"sheetId":99}}]},
-        {"sheets":[{"data":[{"rowData":[{"values":[{"userEnteredValue":{"formulaValue":"='代表取引確認'!A3"}}]}]}]}]},
-        {"sheets":[{"data":[{"rowData":[{"values":[{"hyperlink":"https://example.test/#gid=99&range=A3"}]}]}]}]}):
-        rig.ref_response=response; calls=rig.calls
-        with pytest.raises(ValueError,match="legacy_references_remain"): rig.apply("retire")
-        assert LEGACY_VIEW in rig.state["sheets"] and rig.calls==calls
 
 
 def test_workflow_has_same_lock_main_gate_and_only_sheet_credentials():
     data=yaml.safe_load(Path('.github/workflows/category-navigation.yml').read_text())
     assert data['concurrency']['group']=='kakeibo-production'
     assert 'schedule' not in data.get('on',data.get(True))
+    inputs=data.get('on',data.get(True))['workflow_dispatch']['inputs']
+    assert inputs['mode']['options']==['inline-preview','inline-refresh']
     job=data['jobs']['navigation']
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job['if']
     assert set(job['env'])=={'GITHUB_SHA','KAKEIBO_PRODUCTION_ENABLED','KAKEIBO_VALIDATED_MAIN_SHA','SPREADSHEET_ID','GOOGLE_SERVICE_ACCOUNT_JSON'}
     assert 'python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"' in job['steps'][-1]['run']
 
 
-def test_canary_repairs_backlink_after_ledger_a_to_m_sort_without_changing_ledger_data():
-    rig=Rig(); rig.apply("canary")
-    # Sorting A:M alone leaves N at its previous physical location.
+def test_backlink_follows_ledger_a_to_m_sort_without_changing_ledger_data():
+    rig=Rig(); rig.apply("refresh")
     for c in range(13):
         a=rig.state["cells"][LEDGER].pop((1,c),None); b=rig.state["cells"][LEDGER].pop((4,c),None)
         if b: rig.state["cells"][LEDGER][1,c]=b
         if a: rig.state["cells"][LEDGER][4,c]=a
     rig.recalculate(); before=rig.snapshot()
     result=rig.apply("refresh")
-    assert result["id_matches"]==3
+    assert result["id_matches"]==4
     assert rig.state["cells"][LEDGER][4,13]["hyperlink"].endswith("&range=A9")
     assert all(rig.state["cells"][LEDGER][k]==v for k,v in before["cells"][LEDGER].items() if k[1]<13)
     assert rig.apply("refresh")["write_requests"]==0
 
 
-def test_remaining_rich_text_reference_blocks_expansion_before_any_write():
-    rig=Rig(); rig.apply("canary"); calls=rig.calls
-    rig.ref_response={"sheets":[{"data":[{"rowData":[{"values":[{
-        "textFormatRuns":[{"format":{"link":{"uri":"https://example.test/#gid=99"}}}]}]}]}]}]}
-    with pytest.raises(ValueError,match="legacy_references_remain"):
-        rig.apply("expand",iphone_sheets_verified=True)
-    assert rig.calls==calls and rig.phase(rig.snapshot())["metadataValue"]=="verified-inline-v3"
+def test_canary_scope_stays_limited_on_automatic_refresh():
+    rig=Rig(); rig.state["sheets"][WORKFLOW]["developerMetadata"][0]['metadataValue']='verified-inline-v3'
+    rig.state["sheets"][WORKFLOW]["developerMetadata"].append(
+        {'metadataKey':CANARY_SCOPE,'metadataValue':json.dumps(['EXP-1','EXP-2','EXP-3']),'metadataId':3})
+    before=rig.snapshot(); result=rig.apply('refresh')
+    assert result['id_matches']==3 and result['target_rows']==3
+    assert rig.state['cells'][WORKFLOW][10,0]==before['cells'][WORKFLOW][10,0]
+
+
+@pytest.mark.parametrize("response", [
+    {"namedRanges":[{"range":{"sheetId":99}}]},
+    {"sheets":[{"charts":[{"spec":{"data":{"sheetId":99}}}]}]},
+    {"sheets":[{"data":[{"rowData":[{"values":[{"userEnteredValue":{"formulaValue":"='派生表示'!A3"}}]}]}]}]},
+    {"sheets":[{"data":[{"rowData":[{"values":[{"textFormatRuns":[{"format":{"link":{"uri":"https://example.test/#gid=99&range=A3"}}}]}]}]}]}]},
+])
+def test_optional_read_only_audit_blocks_writes_for_remaining_references(response):
+    rig=Rig(); rig.state['sheets']['派生表示']={'properties':{'title':'派生表示','sheetId':99}}
+    rig.ref_response=response
+    with pytest.raises(ValueError,match='references_remain'): rig.apply('refresh',audit_sheet_id=99)
+    assert rig.calls==0
+
+
+def test_optional_audit_is_read_only_and_can_verify_a_deleted_target():
+    rig=Rig()
+    rig.ref_response={'sheets':[{'properties':{'sheetId':99,'title':'派生表示'},'data':[{'rowData':[{'values':[
+        {'hyperlink':'https://example.test/#gid=999&range=A3'}]}]}]}]}
+    result=rig.apply('preview',audit_sheet_id=99)
+    assert not result['audit_sheet_present'] and result['audit_references']==0 and rig.calls==0
