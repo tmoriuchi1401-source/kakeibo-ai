@@ -1,211 +1,347 @@
-"""Locked, UI-only canary/expansion; does not invoke accounting pipelines."""
+"""Locked inline-representative migration; no accounting or approval pipeline."""
 from __future__ import annotations
 
 import argparse
 from collections import Counter
 from copy import deepcopy
 import json
+import math
 import os
+import re
 
-from .category_navigation import (
-    HEADER, LEDGER, MARKER, NOTE, VERSION, WORKFLOW, navigation_plan,
-    representative_transaction_formula, return_formula, sheet_url, source_rows,
-)
+from .category_navigation import (LEDGER, WORKFLOW, HEADER, MARKER, VERSION,
+    INLINE_MARKER, CANARY_SCOPE, INLINE_VERSION, LEGACY_VIEW, A_WIDTH,
+    representative_summary_formula, representative_summary, summary_height,
+    return_formula, sheet_url, source_rows, inline_scope)
+
+
+def entered(cell):
+    result = {k: deepcopy(v) for k, v in cell.items() if k in ("userEnteredValue", "userEnteredFormat", "note", "dataValidation")}
+    if "formulaValue" in cell.get("userEnteredValue", {}):
+        result.get("userEnteredFormat", {}).get("textFormat", {}).pop("link", None)
+    fmt = result.get("userEnteredFormat", {})
+    if fmt.get("textFormat") == {}: fmt.pop("textFormat")
+    if not fmt: result.pop("userEnteredFormat", None)
+    return result
+
+
+def contains(actual, expected):
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(contains(actual.get(k), v) for k, v in expected.items())
+    if isinstance(expected, float) and isinstance(actual, (int, float)):
+        return math.isclose(actual, expected, abs_tol=1e-6)
+    return actual == expected
 
 
 class NavigationMaintenance:
-    def __init__(self, db):
-        self.db = db
+    def __init__(self, db): self.db = db
 
     def snapshot(self):
         meta = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
             spreadsheetId=self.db.sid,
-            fields="sheets(properties,protectedRanges,developerMetadata)"))
+            fields="sheets(properties,protectedRanges,developerMetadata,merges),namedRanges"))
         sheets = {s["properties"]["title"]: s for s in meta["sheets"]}
-        if not all(title in sheets for title in (LEDGER, WORKFLOW)):
+        if not all(t in sheets for t in (LEDGER, WORKFLOW)):
             raise ValueError("category_navigation_sheet_missing")
         if sheets[LEDGER]["properties"]["gridProperties"]["columnCount"] < 14:
             raise ValueError("category_navigation_column_missing")
-        ranges = [f"'{title}'!A1:{end}{sheets[title]['properties']['gridProperties']['rowCount']}"
-                  for title, end in ((LEDGER, "N"), (WORKFLOW, "AA"))]
+        ranges = [f"'{t}'!A1:{end}{sheets[t]['properties']['gridProperties']['rowCount']}"
+                  for t, end in ((LEDGER, "N"), (WORKFLOW, "AA"))]
         result = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
             spreadsheetId=self.db.sid, ranges=ranges, includeGridData=True,
-            fields="sheets(properties(sheetId,title),data(startRow,startColumn,rowData(values("
-                   "userEnteredValue,userEnteredFormat,dataValidation,note,effectiveValue,hyperlink))))"))
-        cells = {}
-        for sheet in result.get("sheets", []):
-            table = cells.setdefault(sheet["properties"]["title"], {})
-            for block in sheet.get("data", []):
-                for i, row in enumerate(block.get("rowData", []), block.get("startRow", 0)):
-                    for j, cell in enumerate(row.get("values", []), block.get("startColumn", 0)):
-                        if cell:
-                            table[i, j] = cell
-        return {"sheets": sheets, "cells": cells}
+            fields="sheets(properties(title),data(startRow,startColumn,rowData(values("
+                "userEnteredValue,userEnteredFormat,dataValidation,note,effectiveValue,hyperlink)),"
+                "columnMetadata(pixelSize),rowMetadata(pixelSize)))"))
+        cells, dimensions = {}, {}
+        for s in result.get("sheets", []):
+            title = s["properties"]["title"]; table = cells.setdefault(title, {})
+            dims = dimensions.setdefault(title, {})
+            for b in s.get("data", []):
+                for r, row in enumerate(b.get("rowData", []), b.get("startRow", 0)):
+                    for c, cell in enumerate(row.get("values", []), b.get("startColumn", 0)):
+                        if cell: table[r, c] = cell
+                for key, start in (("rowMetadata", "startRow"), ("columnMetadata", "startColumn")):
+                    dims.setdefault(key, {}).update({i: v.get("pixelSize") for i, v in
+                        enumerate(b.get(key, []), b.get(start, 0))})
+        return {"sheets": sheets, "cells": cells, "dimensions": dimensions}
 
     @staticmethod
     def rows(snapshot, title, width, *, formulas=False):
         cells = snapshot["cells"].get(title, {})
-        last = max((row for (row, _), cell in cells.items() if cell.get("userEnteredValue")), default=0)
-        result = []
-        for row in range(last + 1):
-            values = []
-            for col in range(width):
-                cell = cells.get((row, col), {})
-                value = cell.get("userEnteredValue" if formulas else "effectiveValue", {})
-                if not value:
-                    value = cell.get("userEnteredValue", {})
-                values.append(next(iter(value.values()), ""))
-            result.append(values)
-        return result
+        last = max((r for (r, _), cell in cells.items() if cell.get("userEnteredValue")), default=0)
+        return [[next(iter(cells.get((r, c), {}).get("userEnteredValue" if formulas else "effectiveValue", {}).values()), "")
+                 for c in range(width)] for r in range(last+1)]
 
     @staticmethod
-    def marker(snapshot):
-        matches = [m for m in snapshot["sheets"][LEDGER].get("developerMetadata", [])
-                   if m.get("metadataKey") == MARKER]
-        if len(matches) > 1:
-            raise ValueError("category_navigation_metadata_ambiguous")
-        return matches[0] if matches else None
+    def phase(snapshot):
+        markers = [m for m in snapshot["sheets"][WORKFLOW].get("developerMetadata", [])
+                   if m.get("metadataKey") == INLINE_MARKER]
+        if len(markers) > 1: raise ValueError("category_navigation_metadata_ambiguous")
+        return markers[0] if markers else None
 
-    def plan(self, snapshot, mode):
-        if "代表取引確認" in snapshot["sheets"]:
-            raise ValueError("category_navigation_view_mode_required")
-        ledger = self.rows(snapshot, LEDGER, 14, formulas=True)
+    def plan(self, snapshot, mode, *, iphone_sheets_verified=False):
         workflow = self.rows(snapshot, WORKFLOW, 27, formulas=True)
+        ledger = self.rows(snapshot, LEDGER, 14, formulas=True)
         sources = source_rows(workflow)
-        marker = self.marker(snapshot)
-        if mode == "expand" and (not marker or marker.get("metadataValue") not in ("verified-v1", VERSION)):
-            raise ValueError("category_navigation_verified_canary_required")
-        if mode == "canary" and marker and marker.get("metadataValue") == VERSION:
+        marker = self.phase(snapshot)
+        phase = marker["metadataValue"] if marker else None
+        if mode == "expand" and (phase not in ("verified-inline-v3", INLINE_VERSION) or not iphone_sheets_verified):
+            raise ValueError("category_navigation_iphone_verified_canary_required")
+        if mode == "retire" and phase != INLINE_VERSION:
+            raise ValueError("category_navigation_full_inline_required")
+        if mode == "canary" and phase == INLINE_VERSION:
             raise ValueError("category_navigation_already_expanded")
-        if marker and marker.get("metadataValue") not in ("canary-v1", "verified-v1", VERSION):
-            raise ValueError("category_navigation_metadata_changed")
-        for (_, col), cell in snapshot["cells"].get(LEDGER, {}).items():
-            if col == 13 and (cell.get("dataValidation") or cell.get("note") not in (None, "", NOTE)):
-                raise ValueError("category_navigation_column_has_constraints")
-        selected = list(dict.fromkeys(identity for _, identity in sources))[:3] if mode == "canary" else None
-        result = navigation_plan(spreadsheet_id=self.db.sid,
-            ledger_sheet_id=snapshot["sheets"][LEDGER]["properties"]["sheetId"],
-            workflow_sheet_id=snapshot["sheets"][WORKFLOW]["properties"]["sheetId"],
-            ledger_ids=[[row[0]] for row in ledger[1:]], workflow_rows=workflow,
-            current=[[row[13]] for row in ledger], install=True, canary_ids=selected)
-        result["selected"] = selected
-        return result
+        if mode == "refresh" and not marker: return {"requests": [], "selected": [], "installed": False}
+        full = mode in ("expand", "retire") or phase == INLINE_VERSION
+        if full: selected = set(i for _, i in sources)
+        elif marker:
+            selected = inline_scope({"sheets": list(snapshot["sheets"].values())})
+        else:
+            legacy = snapshot["sheets"].get(LEGACY_VIEW, {})
+            markers = legacy.get("developerMetadata", [])
+            scopes = [m for m in markers if m.get("metadataKey") == "kakeibo.category.representative.canary"]
+            if not any(m.get("metadataKey") == "kakeibo.category.representative.view" and
+                       m.get("metadataValue") == "verified-v2" for m in markers) or len(scopes) != 1:
+                raise ValueError("category_navigation_existing_canary_required")
+            values = json.loads(scopes[0]["metadataValue"])
+            if not isinstance(values, list) or len(values) != 3 or len(set(values)) != 3:
+                raise ValueError("category_navigation_existing_canary_invalid")
+            selected = set(values)
+        if not full and not selected <= {i for _, i in sources}:
+            raise ValueError("category_navigation_canary_source_missing")
+        counts = Counter(str(r[0]) for r in ledger[1:] if r[0])
+        if any(counts[i] != 1 for i in selected):
+            raise ValueError("category_navigation_representative_id_mismatch")
+        records = {str(r[0]): r[:13] for r in self.rows(snapshot, LEDGER, 14)[1:] if r[0]}
+        sid = snapshot["sheets"][WORKFLOW]["properties"]["sheetId"]
+        lid = snapshot["sheets"][LEDGER]["properties"]["sheetId"]
+        requests, allowed = [], set()
+        def cell(r, c, value, fields):
+            requests.append({"updateCells": {"start": {"sheetId": sid, "rowIndex": r, "columnIndex": c},
+                "rows": [{"values": [value]}], "fields": fields}})
+            allowed.add((r, c))
+        # Two legacy top merges cross the requested frozen-column boundary.
+        # Move only the static instruction into B4:F4; preserve controls/results.
+        for merge in snapshot["sheets"][WORKFLOW].get("merges", []):
+            if merge.get("startColumnIndex", 0) == 0 and merge.get("endColumnIndex", 0) > 1:
+                r, end = merge.get("startRowIndex", 0), merge.get("endRowIndex", 0)
+                if (r, end, merge["endColumnIndex"]) not in ((3, 4, 6), (4, 5, 3)):
+                    raise ValueError("category_navigation_frozen_column_merge_conflict")
+                requests.append({"unmergeCells": {"range": merge}})
+                if r == 4:
+                    # Sheets copies the merged anchor format into B5:C5 on
+                    # unmerge. Restore their original entered formats explicitly.
+                    for c in (1, 2):
+                        requests.append({"updateCells": {"start": {"sheetId": sid, "rowIndex": 4, "columnIndex": c},
+                            "rows": [{"values": [{"userEnteredFormat": deepcopy(snapshot["cells"][WORKFLOW].get((4, c), {}).get("userEnteredFormat", {}))}]}],
+                            "fields": "userEnteredFormat"}})
+                if r == 3:
+                    if snapshot["cells"][WORKFLOW].get((3, 1), {}).get("userEnteredValue"):
+                        raise ValueError("category_navigation_instruction_destination_occupied")
+                    original = entered(snapshot["cells"][WORKFLOW].get((3, 0), {}))
+                    if not original.get("userEnteredValue", {}).get("stringValue"):
+                        raise ValueError("category_navigation_instruction_changed")
+                    cell(3, 1, original, "userEnteredValue,userEnteredFormat,note")
+                    cell(3, 0, {"userEnteredValue": {"stringValue": "操作の説明"}}, "userEnteredValue")
+                    requests.append({"mergeCells": {"range": {**merge, "startColumnIndex": 1}, "mergeType": "MERGE_ALL"}})
+        for r, identity in sources:
+            if identity not in selected: continue
+            value = {"userEnteredValue": {"formulaValue": representative_summary_formula()},
+                "userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP",
+                    "textFormat": {"fontFamily": "Arial", "fontSize": 11, "bold": False,
+                        "underline": False, "foregroundColor": {"red": 41/255, "green": 51/255, "blue": 59/255}}}}
+            current = snapshot["cells"][WORKFLOW].get((r-1, 0), {})
+            if current.get("dataValidation"): raise ValueError("category_navigation_summary_constraints")
+            fields = "userEnteredValue,userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment,userEnteredFormat.textFormat"
+            if not contains(current, value) or current.get("userEnteredFormat", {}).get("textFormat", {}).get("link"):
+                cell(r-1, 0, value, fields)
+            height = summary_height(representative_summary(records[identity]))
+            if snapshot.get("dimensions", {}).get(WORKFLOW, {}).get("rowMetadata", {}).get(r-1) != height:
+                requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS",
+                    "startIndex": r-1, "endIndex": r}, "properties": {"pixelSize": height}, "fields": "pixelSize"}})
+        if snapshot.get("dimensions", {}).get(WORKFLOW, {}).get("columnMetadata", {}).get(0) != A_WIDTH:
+            requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+                "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": A_WIDTH}, "fields": "pixelSize"}})
+        if (3, 1) in allowed or workflow[3][0] == "操作の説明":
+            if snapshot.get("dimensions", {}).get(WORKFLOW, {}).get("rowMetadata", {}).get(3) != 72:
+                requests.append({"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "ROWS",
+                    "startIndex": 3, "endIndex": 4}, "properties": {"pixelSize": 72}, "fields": "pixelSize"}})
+        grid = snapshot["sheets"][WORKFLOW]["properties"]["gridProperties"]
+        if grid.get("frozenRowCount") != 4 or grid.get("frozenColumnCount", 0) != 1:
+            requests.append({"updateSheetProperties": {"properties": {"sheetId": sid,
+                "gridProperties": {"frozenRowCount": 4, "frozenColumnCount": 1}},
+                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
+        back = return_formula(self.db.sid, sid)
+        if ledger[0][13] != HEADER: raise ValueError("category_navigation_header_changed")
+        for r, row in enumerate(ledger[1:], 1):
+            if row[13] not in ("", back): raise ValueError("category_navigation_return_cell_changed")
+            # Repair missing canary backlinks by ID after partial ledger sorts.
+            # Full rollout keeps the ROW-bound formula on every occupied record.
+            if (full or row[0] in selected) and row[0] and row[13] != back:
+                requests.append({"updateCells": {"start": {"sheetId": lid, "rowIndex": r, "columnIndex": 13},
+                    "rows": [{"values": [{"userEnteredValue": {"formulaValue": back}}]}], "fields": "userEnteredValue"}})
+        return {"requests": requests, "selected": selected, "allowed": allowed, "installed": True,
+            "representatives": len(sources), "target_rows": sum(i in selected for _, i in sources), "phase": phase}
 
-    @staticmethod
-    def invariant(snapshot):
-        # Every user-entered value, validation, note and format outside the two
-        # link surfaces remains byte-for-byte equivalent after normalization.
-        return {title: {key: {field: value for field, value in cell.items()
-                            if field not in ("effectiveValue", "hyperlink")}
-                        for key, cell in cells.items()
-                        if not (title == LEDGER and key[1] == 13)
-                        and not (title == WORKFLOW and key[1] == 0)}
-                for title, cells in snapshot["cells"].items()}
-
-    def apply(self, mode):
-        before = self.snapshot()
-        plan = self.plan(before, mode)
-        report = {k: v for k, v in plan.items() if k not in ("requests", "selected")}
-        if mode == "preview":
-            return {**report, "write_requests": 0, "planned_cells": len(plan["requests"])}
-        # Verify the snapshot once more immediately before mutation.
-        if self.snapshot() != before:
-            raise ValueError("category_navigation_input_changed")
-        requests = deepcopy(plan["requests"])
-        marker = self.marker(before)
-        sid = before["sheets"][LEDGER]["properties"]["sheetId"]
-        if not marker:
-            requests.append({"createDeveloperMetadata": {"developerMetadata": {
-                "metadataKey": MARKER, "metadataValue": "canary-v1",
-                "location": {"sheetId": sid}, "visibility": "DOCUMENT"}}})
-            requests.extend([
-                {"updateCells": {"start": {"sheetId": sid, "rowIndex": 0, "columnIndex": 13},
-                    "rows": [{"values": [{"note": NOTE, "userEnteredFormat": {
-                        "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}}]}],
-                    "fields": "note,userEnteredFormat(textFormat,wrapStrategy)"}},
-                {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
-                    "startIndex": 13, "endIndex": 14}, "properties": {"pixelSize": 260}, "fields": "pixelSize"}},
-            ])
-        if requests:
-            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid,
-                body={"requests": requests}).execute(num_retries=0)
-        after = self.snapshot()
-        if self.invariant(before) != self.invariant(after):
-            raise ValueError("category_navigation_unrelated_readback_changed")
+    def verify(self, before, after, plan):
+        allowed = plan["allowed"]
+        merges = deepcopy(before["sheets"][WORKFLOW].get("merges", []))
+        for request in plan["requests"]:
+            if "unmergeCells" in request: merges.remove(request["unmergeCells"]["range"])
+            if "mergeCells" in request: merges.append(request["mergeCells"]["range"])
+        if sorted(map(lambda x: json.dumps(x, sort_keys=True), merges)) != sorted(map(lambda x: json.dumps(x, sort_keys=True), after["sheets"][WORKFLOW].get("merges", []))):
+            raise ValueError("category_navigation_layout_changed")
         for title in (LEDGER, WORKFLOW):
+            for key in set(before["cells"][title]) | set(after["cells"][title]):
+                if title == WORKFLOW and key in allowed or title == LEDGER and key[1] == 13: continue
+                if entered(before["cells"][title].get(key, {})) != entered(after["cells"][title].get(key, {})):
+                    raise ValueError("category_navigation_unrelated_readback_changed")
             if before["sheets"][title].get("protectedRanges", []) != after["sheets"][title].get("protectedRanges", []):
                 raise ValueError("category_navigation_protection_changed")
-        # A contains unrelated controls, markers and bank links. Only the
-        # exact planned representative cells may change there.
-        allowed = {r["updateCells"]["start"]["rowIndex"] for r in plan["requests"]
-                   if "updateCells" in r and r["updateCells"]["start"]["sheetId"] != sid}
-        for key in set(before["cells"][WORKFLOW]) | set(after["cells"][WORKFLOW]):
-            if key[1] == 0 and key[0] not in allowed:
-                if before["cells"][WORKFLOW].get(key) != after["cells"][WORKFLOW].get(key):
-                    raise ValueError("category_navigation_unrelated_link_changed")
-        if self.plan(after, "canary" if mode == "canary" else "preview")["requests"]:
-            raise ValueError("category_navigation_formula_readback_failed")
-        workflow = self.rows(after, WORKFLOW, 27)
-        sources = source_rows(workflow)
-        counts = Counter(identity for _, identity in sources)
-        selected = set(plan["selected"]) if plan["selected"] is not None else set(counts)
-        ledger = self.rows(after, LEDGER, 14)
-        positions = {row[0]: i for i, row in enumerate(ledger[1:], 2) if row[0]}
+            for field in ("rowCount", "columnCount"):
+                if before["sheets"][title]["properties"]["gridProperties"][field] != after["sheets"][title]["properties"]["gridProperties"][field]:
+                    raise ValueError("category_navigation_grid_changed")
+        if self.plan(after, "refresh")["requests"]: raise ValueError("category_navigation_readback_failed")
+        if (3, 1) in allowed and after["cells"][WORKFLOW][3, 1].get("userEnteredValue") != before["cells"][WORKFLOW][3, 0].get("userEnteredValue"):
+            raise ValueError("category_navigation_instruction_readback_changed")
+        sources = source_rows(self.rows(after, WORKFLOW, 27, formulas=True))
+        counts = Counter(str(r[0]) for r in self.rows(after, LEDGER, 14)[1:] if r[0])
+        records = {str(r[0]): r[:13] for r in self.rows(after, LEDGER, 14)[1:] if r[0]}
+        matched = 0
+        for r, identity in sources:
+            if identity not in plan["selected"]: continue
+            cell = after["cells"][WORKFLOW][r-1, 0]
+            if counts[identity] != 1: raise ValueError("category_navigation_representative_id_mismatch")
+            if cell.get("effectiveValue", {}).get("errorValue"): raise ValueError("category_navigation_formula_error")
+            if cell.get("hyperlink") or cell.get("effectiveValue", {}).get("stringValue") != representative_summary(records[identity]):
+                raise ValueError("category_navigation_summary_value_mismatch")
+            matched += 1
         wid = after["sheets"][WORKFLOW]["properties"]["sheetId"]
-        for row_num, identity in sources:
-            if identity not in selected:
-                continue
-            forward = after["cells"][WORKFLOW].get((row_num-1, 0), {})
-            expected = sheet_url(self.db.sid, sid) + f"&range=N{positions[identity]}"
-            if forward.get("hyperlink") != expected:
-                raise ValueError("category_navigation_forward_target_mismatch")
-        for number, row in enumerate(ledger[1:], 2):
-            identity = row[0]
-            backlink = after["cells"][LEDGER].get((number-1, 13), {})
-            if identity in selected:
-                target = next(r for r, i in sources if i == identity) if counts[identity] == 1 else 1
-                expected = sheet_url(self.db.sid, wid) + f"&range=A{target}"
-                if backlink.get("hyperlink") != expected:
-                    raise ValueError("category_navigation_return_target_mismatch")
-            elif backlink.get("hyperlink") or backlink.get("effectiveValue", {}).get("errorValue"):
-                raise ValueError("category_navigation_unexpected_return_link")
-        marker = self.marker(after)
-        phase = "verified-v1" if mode == "canary" else VERSION
-        if marker["metadataValue"] != phase:
-            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": [{
-                "updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {
-                    "metadataId": marker["metadataId"]}}], "developerMetadata": {"metadataValue": phase},
-                    "fields": "metadataValue"}}]}).execute(num_retries=0)
-            if self.marker(self.snapshot())["metadataValue"] != phase:
-                raise ValueError("category_navigation_phase_readback_failed")
-        return {**report, "write_requests": int(bool(requests)), "verified_links": len(selected),
-                "ledger_and_inputs_unchanged": True, "phase": phase}
+        groups = Counter(i for _, i in sources)
+        for r, row in enumerate(self.rows(after, LEDGER, 14, formulas=True)[1:], 1):
+            if not row[13]: continue
+            cell = after["cells"][LEDGER][r, 13]
+            target = next(n for n, i in sources if i == row[0]) if groups[row[0]] == 1 else 1
+            expected = sheet_url(self.db.sid, wid) + f"&range=A{target}" if groups[row[0]] else None
+            if cell.get("hyperlink") != expected or cell.get("effectiveValue", {}).get("errorValue"):
+                raise ValueError("category_navigation_return_target_mismatch")
+        return matched
+
+    def references(self, snapshot, *, replacing_rows=()):
+        """Audit every native sheet before retiring the legacy derived tab."""
+        legacy = snapshot["sheets"].get(LEGACY_VIEW)
+        if not legacy: return 0
+        gid = str(legacy["properties"]["sheetId"])
+        result = self.db._execute_sheet_read(lambda: self.db.svc.spreadsheets().get(
+            spreadsheetId=self.db.sid, includeGridData=True,
+            fields="namedRanges,sheets(properties,conditionalFormats,charts,"
+                   "data(startRow,startColumn,rowData(values(userEnteredValue,hyperlink,userEnteredFormat(textFormat(link)),textFormatRuns(format(link)),dataValidation))))"))
+        total = 0
+        def visit(value):
+            nonlocal total
+            if isinstance(value, dict):
+                if value.get("sheetId") == int(gid) and "title" not in value: total += 1
+                for key, item in value.items():
+                    if isinstance(item, str) and ((key in ("formulaValue", "userEnteredValue") and LEGACY_VIEW in item)
+                        or re.search(r"(?:[#?&])gid=" + gid + r"(?:&|$)", item)): total += 1
+                    elif isinstance(item, (dict, list)): visit(item)
+            elif isinstance(value, list):
+                for item in value: visit(item)
+        visit(result.get("namedRanges", []))
+        for sheet in result.get("sheets", []):
+            if sheet.get("properties", {}).get("title") == WORKFLOW:
+                for b in sheet.get("data", []):
+                    for r, row in enumerate(b.get("rowData", []), b.get("startRow", 0)):
+                        for c, cell in enumerate(row.get("values", []), b.get("startColumn", 0)):
+                            if c != 0 or r+1 not in replacing_rows: visit(cell)
+            else: visit(sheet.get("data", []))
+            for key in ("conditionalFormats", "charts"): visit(sheet.get(key, []))
+        return total
+
+    def apply(self, mode, *, iphone_sheets_verified=False):
+        before = self.snapshot()
+        plan = self.plan(before, mode, iphone_sheets_verified=iphone_sheets_verified)
+        report = {k: v for k, v in plan.items() if k not in ("requests", "selected", "allowed")}
+        if mode == "preview": return {**report, "planned_requests": len(plan["requests"]), "write_requests": 0}
+        if not plan["installed"]: return report
+        replacing = [] if mode == "retire" else [r for r, i in
+            source_rows(self.rows(before, WORKFLOW, 27, formulas=True)) if i in plan["selected"]]
+        if mode in ("canary", "expand", "retire") and self.references(before, replacing_rows=replacing):
+            raise ValueError("category_navigation_legacy_references_remain")
+        if self.snapshot() != before: raise ValueError("category_navigation_input_changed")
+        requests = deepcopy(plan["requests"])
+        marker = self.phase(before)
+        wid = before["sheets"][WORKFLOW]["properties"]["sheetId"]
+        if not marker:
+            for key, value in ((INLINE_MARKER, "canary-inline-v3"), (CANARY_SCOPE, json.dumps(sorted(plan["selected"])))):
+                requests.append({"createDeveloperMetadata": {"developerMetadata": {"metadataKey": key,
+                    "metadataValue": value, "location": {"sheetId": wid}, "visibility": "DOCUMENT"}}})
+        if requests:
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": requests}).execute(num_retries=0)
+            self.db._invalidate_sheet_metadata()
+        after = self.snapshot()
+        # Expansion must verify all selected rows before its phase is promoted.
+        verification_plan = self.plan(after, "expand", iphone_sheets_verified=True) if mode == "expand" else self.plan(after, "refresh")
+        if verification_plan["requests"]: raise ValueError("category_navigation_readback_failed")
+        # verify's replay follows the current phase; selected rows are checked independently.
+        matched = self.verify(before, after, plan)
+        refs = self.references(after) if mode in ("canary", "expand", "retire") else None
+        if refs: raise ValueError("category_navigation_legacy_references_remain")
+        phase = INLINE_VERSION if mode == "expand" else self.phase(after)["metadataValue"] if mode in ("refresh", "retire") else "verified-inline-v3"
+        current = self.phase(after)
+        promotions = []
+        if current["metadataValue"] != phase:
+            promotions.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {"metadataId": current["metadataId"]}}],
+                "developerMetadata": {"metadataValue": phase}, "fields": "metadataValue"}})
+        if mode == "expand":
+            ledger_marker = next((m for m in after["sheets"][LEDGER].get("developerMetadata", []) if m.get("metadataKey") == MARKER), None)
+            if ledger_marker and ledger_marker.get("metadataValue") != VERSION:
+                promotions.append({"updateDeveloperMetadata": {"dataFilters": [{"developerMetadataLookup": {"metadataId": ledger_marker["metadataId"]}}],
+                    "developerMetadata": {"metadataValue": VERSION}, "fields": "metadataValue"}})
+        if promotions:
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": promotions}).execute(num_retries=0)
+            self.db._invalidate_sheet_metadata()
+            if self.phase(self.snapshot())["metadataValue"] != phase: raise ValueError("category_navigation_phase_readback_failed")
+        retired = False
+        if mode == "retire" and LEGACY_VIEW in after["sheets"]:
+            # Fresh verification plus zero references are prerequisites to deletion.
+            fresh = self.snapshot()
+            if fresh != after or fresh != self.snapshot(): raise ValueError("category_navigation_input_changed")
+            legacy = fresh["sheets"][LEGACY_VIEW]
+            if not any(m.get("metadataKey") == "kakeibo.category.representative.view" and
+                m.get("metadataValue") == "verified-v2" for m in legacy.get("developerMetadata", [])):
+                raise ValueError("category_navigation_legacy_sheet_not_owned")
+            self.db.svc.spreadsheets().batchUpdate(spreadsheetId=self.db.sid, body={"requests": [
+                {"deleteSheet": {"sheetId": legacy["properties"]["sheetId"]}}]}).execute(num_retries=0)
+            self.db._invalidate_sheet_metadata()
+            final = self.snapshot()
+            if LEGACY_VIEW in final["sheets"]: raise ValueError("category_navigation_retire_readback_failed")
+            self.verify(fresh, final, self.plan(fresh, "refresh"))
+            retired = True
+        return {**report, "phase": phase, "write_requests": int(bool(requests or promotions or retired)),
+            "id_matches": matched, "formula_errors": 0, "ledger_and_inputs_unchanged": True,
+            "legacy_references": refs, "legacy_sheet_deleted": retired,
+            "frozen_rows": 4, "frozen_columns": 1, "safari_verification": "unverified"}
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("preview", "canary", "expand", "view-preview", "view-canary", "view-expand"), default="view-preview")
+    parser.add_argument("--mode", choices=("inline-preview", "inline-canary", "inline-expand", "inline-retire"), default="inline-preview")
     parser.add_argument("--iphone-sheets-verified", action="store_true")
     args = parser.parse_args()
     from .production_flow import verify_execution_boundary
     from .google_clients import read_only_sheets_service, shipping_backfill_sheets_service
     from .sheets import SheetsDB
     verify_execution_boundary(dict(os.environ), os.environ.get("GITHUB_SHA", ""))
-    service = read_only_sheets_service() if args.mode in ("preview", "view-preview") else shipping_backfill_sheets_service()
+    service = read_only_sheets_service() if args.mode == "inline-preview" else shipping_backfill_sheets_service()
     try:
-        db = SheetsDB(os.environ["SPREADSHEET_ID"], service=service)
-        if args.mode.startswith("view-"):
-            from .category_representative_view import ViewMaintenance
-            report = ViewMaintenance(db).apply(args.mode[5:], iphone_sheets_verified=args.iphone_sheets_verified)
-        else:
-            report = NavigationMaintenance(db).apply(args.mode)
+        report = NavigationMaintenance(SheetsDB(os.environ["SPREADSHEET_ID"], service=service)).apply(
+            args.mode[7:], iphone_sheets_verified=args.iphone_sheets_verified)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     except Exception as exc:
-        # Never print Google error bodies, account data or IDs to Actions logs.
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("category_navigation_") else "category_navigation_failed"
         print(json.dumps({"status": "stopped", "reason": code}))
         raise SystemExit(1)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()

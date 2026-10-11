@@ -4,8 +4,7 @@ import re
 import time
 from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
-from .category_navigation import representative_transaction_formula
-from .category_representative_view import viewer_sheet_id
+from .category_navigation import representative_summary_formula, inline_scope
 
 CATEGORY_SEPARATOR = "｜"
 CATEGORY_RULE_UI_SHEET = "カテゴリ操作"
@@ -866,6 +865,7 @@ class SheetsDB:
         offset=positions["rule"]["marker"]-1
         values=[]
         compact=bool(self._compact_category_helper())
+        representative_values = self._representative_values(blocks["rule"][1])
         for key in workflow_sections(blocks):
             block_header,block_rows=blocks[key]
             values.append([WORKFLOW_MARKERS[key]])
@@ -883,21 +883,12 @@ class SheetsDB:
             if len(values)+offset>extent:
                 requests.append({"appendDimension":{"sheetId":sheet_id,"dimension":"ROWS","length":len(values)+offset-extent}})
             request=_cells(sheet_id,offset+1,0,values,12)
-            # The compact writer represents strings literally, so ordinary
-            # bank/preview refreshes would silently erase A-column links.
-            # Write just the rule-row A formulas as formulaValue in the same
-            # batch, leaving all user input, approvals and other sections alone.
-            expense_sheet=next((candidate for candidate in self._sheet_metadata()["sheets"]
-                                if candidate["properties"]["title"] == "支出明細"),None)
-            if expense_sheet:
-                first_rule_row=positions["rule"]["start"]
-                for row_num,row in enumerate(blocks["rule"][1],start=first_rule_row):
-                    if len(row)>7 and str(row[7]).strip():
-                        index=row_num-(offset+1)
-                        request["updateCells"]["rows"][index]["values"][0]={
-                            "userEnteredValue":{"formulaValue":representative_transaction_formula(
-                                self.sid, expense_sheet["properties"]["sheetId"], row_num,
-                                viewer_sheet_id=viewer_sheet_id(self._sheet_metadata()))}}
+            # Put ID-based summaries into the same atomic category write.
+            # During migration preserve non-canary entered A cells by H identity.
+            for row_num,row in enumerate(blocks["rule"][1], start=positions["rule"]["start"]):
+                if len(row)>7 and str(row[7]).strip():
+                    request["updateCells"]["rows"][row_num-(offset+1)]["values"][0]={
+                        "userEnteredValue": representative_values[str(row[7])]}
             request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values)+offset)
             requests.append(request)
             self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
@@ -908,7 +899,7 @@ class SheetsDB:
             self.svc.spreadsheets().values().update(spreadsheetId=self.sid,range=f"{CATEGORY_WORKFLOW_SHEET}!A{offset+1}",valueInputOption="RAW",body={"values":values}).execute()
         self._configure_category_workflow(blocks, positions)
         if not compact:
-            self.link_category_rule_representatives(blocks["rule"][1], {})
+            self.render_category_rule_representatives(blocks["rule"][1])
         from .category_navigation import refresh_navigation
         refresh_navigation(self)
 
@@ -919,18 +910,30 @@ class SheetsDB:
     def replace_category_rule_ui_rows(self, rows:list[list], header:list[str]):
         """Replace the UI-owned values without inserting rows below controls."""
         self._replace_category_workflow_section("rule", rows, header)
-    def link_category_rule_representatives(self, rows:list[list], records:dict):
-        """Make each rule's exact representative ledger row available in one tap."""
+    def _representative_values(self, rows):
+        meta=self._sheet_metadata(); scope=inline_scope(meta)
+        prior={}
+        if scope is not None:
+            sheet=next(s for s in meta["sheets"] if s["properties"]["title"] == CATEGORY_WORKFLOW_SHEET)
+            extent=sheet["properties"]["gridProperties"]["rowCount"]
+            current=self._execute_sheet_read(lambda: self.svc.spreadsheets().values().get(
+                spreadsheetId=self.sid, range=f"'{CATEGORY_WORKFLOW_SHEET}'!A1:H{extent}",
+                valueRenderOption="FORMULA")).get("values", [])
+            for row in current:
+                if len(row)>7 and row[7]:
+                    value=str(row[0]) if row else ""
+                    prior[str(row[7])] = {"formulaValue" if value.startswith("=") else "stringValue": value}
+        return {str(row[7]): {"formulaValue": representative_summary_formula()}
+                if scope is None or str(row[7]) in scope else prior.get(str(row[7]), {"stringValue": str(row[0])})
+                for row in rows if len(row)>7 and str(row[7]).strip()}
+
+    def render_category_rule_representatives(self, rows:list[list]):
+        """Show each representative inline, retaining the current rollout scope."""
         if not rows: return
-        meta=self._sheet_metadata()
-        expense_sheet=next((s for s in meta["sheets"]
-                            if s["properties"]["title"] == "支出明細"), None)
-        if expense_sheet is None: return
+        values=self._representative_values(rows)
         start=self._workflow_positions(self._category_workflow_blocks())["rule"]["start"]
         data=[{"range":f"'{CATEGORY_WORKFLOW_SHEET}'!A{start+offset}",
-               "values":[[representative_transaction_formula(
-                   self.sid, expense_sheet["properties"]["sheetId"], start+offset,
-                   viewer_sheet_id=viewer_sheet_id(meta))]]}
+               "values":[[next(iter(values[str(row[7])].values()))]]}
               for offset,row in enumerate(rows) if len(row)>7 and str(row[7]).strip()]
         if data:
             self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid,

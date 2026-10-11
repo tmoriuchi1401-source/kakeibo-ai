@@ -262,9 +262,9 @@ def test_existing_workflow_roundtrip_reads_all_inputs_and_conflicts_preserve_edi
     assert category_rule["rule"]["condition"]["values"][0]["userEnteredValue"].endswith("$A$3")
 
 
-def test_category_workflow_atomic_rewrite_restores_representative_links():
-    """Bank/preview refreshes must not turn existing category links into plain text."""
-    from app.sheets import representative_transaction_formula
+def test_category_workflow_atomic_rewrite_restores_representative_summaries():
+    """Bank/preview refreshes retain ID-bound inline summaries."""
+    from app.sheets import representative_summary_formula
 
     class Call:
         def execute(self, **kwargs): return {}
@@ -300,14 +300,13 @@ def test_category_workflow_atomic_rewrite_restores_representative_links():
     update = next(r["updateCells"] for r in service.requests if "updateCells" in r)
     # Marker is physical row 6, heading row 7, representative row 8.
     cells = update["rows"][2]["values"]
-    assert cells[0]["userEnteredValue"] == {"formulaValue": representative_transaction_formula(
-        "fixture-workbook", 0, 8)}
+    assert cells[0]["userEnteredValue"] == {"formulaValue": representative_summary_formula()}
     assert cells[7]["userEnteredValue"] == {"stringValue": "EXP-1"}
     assert cells[2]["userEnteredValue"] == {"stringValue": "食費｜食料品"}
     assert "INDEX($H:$H,ROW())" in cells[0]["userEnteredValue"]["formulaValue"]
 
 
-def test_category_rule_updates_preserve_existing_representative_link_cell():
+def test_category_rule_updates_preserve_existing_representative_summary_cell():
     class Call:
         def execute(self, **kwargs): return {}
 
@@ -325,7 +324,7 @@ def test_category_rule_updates_preserve_existing_representative_link_cell():
         def _category_workflow_blocks(self): return blocks
         def _compact_category_helper(self): return True
 
-    rule = ["existing hyperlink label", "pending", "食費", "食料品", False, False,
+    rule = ["existing summary", "pending", "食費", "食料品", False, False,
             "group:key", "EXP-1", "2025-11-16", "PayPay", "service", "snapshot"]
     blocks = {"rule": (["header"] * 12, [rule]),
               "backfill": (["header"] * 10, []),
