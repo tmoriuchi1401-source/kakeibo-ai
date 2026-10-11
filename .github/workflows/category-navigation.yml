@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: UI only; expansion requires a verified three-link canary
+        description: Viewer UI only; expand after existing canary and iPhone Sheets verification
         type: choice
-        options: [preview, canary, expand]
-        default: preview
+        options: [view-preview, view-canary, view-expand]
+        default: view-preview
         required: true
+      iphone_sheets_verified:
+        description: Confirmed scroll visibility and round trips in the iPhone Sheets app
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -47,4 +51,8 @@ jobs:
       - name: Verify and maintain navigation only
         env:
           NAVIGATION_MODE: ${{ inputs.mode }}
-        run: python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"
+          IPHONE_SHEETS_VERIFIED: ${{ inputs.iphone_sheets_verified }}
+        run: |
+          args=()
+          if [ "$IPHONE_SHEETS_VERIFIED" = "true" ]; then args+=(--iphone-sheets-verified); fi
+          python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE" "${args[@]}"

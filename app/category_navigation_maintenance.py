@@ -67,6 +67,8 @@ class NavigationMaintenance:
         return matches[0] if matches else None
 
     def plan(self, snapshot, mode):
+        if "代表取引確認" in snapshot["sheets"]:
+            raise ValueError("category_navigation_view_mode_required")
         ledger = self.rows(snapshot, LEDGER, 14, formulas=True)
         workflow = self.rows(snapshot, WORKFLOW, 27, formulas=True)
         sources = source_rows(workflow)
@@ -182,15 +184,21 @@ class NavigationMaintenance:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("preview", "canary", "expand"), default="preview")
+    parser.add_argument("--mode", choices=("preview", "canary", "expand", "view-preview", "view-canary", "view-expand"), default="view-preview")
+    parser.add_argument("--iphone-sheets-verified", action="store_true")
     args = parser.parse_args()
     from .production_flow import verify_execution_boundary
     from .google_clients import read_only_sheets_service, shipping_backfill_sheets_service
     from .sheets import SheetsDB
     verify_execution_boundary(dict(os.environ), os.environ.get("GITHUB_SHA", ""))
-    service = read_only_sheets_service() if args.mode == "preview" else shipping_backfill_sheets_service()
+    service = read_only_sheets_service() if args.mode in ("preview", "view-preview") else shipping_backfill_sheets_service()
     try:
-        report = NavigationMaintenance(SheetsDB(os.environ["SPREADSHEET_ID"], service=service)).apply(args.mode)
+        db = SheetsDB(os.environ["SPREADSHEET_ID"], service=service)
+        if args.mode.startswith("view-"):
+            from .category_representative_view import ViewMaintenance
+            report = ViewMaintenance(db).apply(args.mode[5:], iphone_sheets_verified=args.iphone_sheets_verified)
+        else:
+            report = NavigationMaintenance(db).apply(args.mode)
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     except Exception as exc:
         # Never print Google error bodies, account data or IDs to Actions logs.

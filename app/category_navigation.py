@@ -18,7 +18,7 @@ def sheet_url(spreadsheet_id, sheet_id):
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={sheet_id}"
 
 
-def representative_transaction_formula(spreadsheet_id, expense_sheet_id, row_num):
+def representative_transaction_formula(spreadsheet_id, expense_sheet_id, row_num, *, viewer_sheet_id=None):
     # ROW binds to the current row even after an A-only sort or row insertion.
     identity = "INDEX($H:$H,ROW())"
     match = f"MATCH(TRUE,ARRAYFORMULA('支出明細'!A:A={identity}),0)"
@@ -26,11 +26,22 @@ def representative_transaction_formula(spreadsheet_id, expense_sheet_id, row_num
     # Selecting a wide A:N range leaves N offscreen in Sheets. Select the
     # return cell on the same transaction row so navigation is immediately visible.
     base = sheet_url(spreadsheet_id, expense_sheet_id) + "&range=N"
-    return (f'=IF({identity}="","",IF({count}<>1,"代表取引を確認（ID不一致）",'
+    legacy = (f'=IF({identity}="","",IF({count}<>1,"代表取引を確認（ID不一致）",'
             f'IFNA(HYPERLINK("{base}"&{match},'
             f'"代表取引を見る｜"&TEXT(INDEX(\'支出明細\'!B:B,{match}),"yyyy-mm-dd")'
             f'&"｜"&TEXT(INDEX(\'支出明細\'!E:E,{match}),"#,##0")&"円"),'
             '"代表取引が見つかりません")))')
+    if viewer_sheet_id is None:
+        return legacy
+    from .category_representative_view import VIEW
+    view_count = f"SUMPRODUCT(N('{VIEW}'!N:N={identity}))"
+    view_match = f"MATCH(TRUE,ARRAYFORMULA('{VIEW}'!N:N={identity}),0)"
+    target = sheet_url(spreadsheet_id, viewer_sheet_id) + "&range=A"
+    viewed = legacy.replace(f'"{base}"&{match}', f'"{target}"&{view_match}', 1)
+    # During the three-ID canary other representatives retain the legacy route.
+    # Duplicate viewer identities never choose the first matching row.
+    return (f'=IF({view_count}=0,{legacy[1:]},IF({view_count}<>1,'
+            f'"代表取引の表示を確認（ID不一致）",{viewed[1:]}))')
 
 
 def return_formula(spreadsheet_id, workflow_sheet_id):
@@ -125,6 +136,9 @@ def installed(meta):
 def refresh_navigation(db):
     """Maintain an explicitly installed UI column during existing refreshes."""
     meta = db._sheet_metadata()
+    from .category_representative_view import viewer_sheet, ViewMaintenance
+    if viewer_sheet(meta):
+        return ViewMaintenance(db).apply("refresh")
     if not installed(meta):
         return {"installed": False}
     if db.get_raw("'支出明細'!N1:N1") != [[HEADER]]:

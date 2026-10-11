@@ -5,6 +5,7 @@ import time
 from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
 from .category_navigation import representative_transaction_formula
+from .category_representative_view import viewer_sheet_id
 
 CATEGORY_SEPARATOR = "｜"
 CATEGORY_RULE_UI_SHEET = "カテゴリ操作"
@@ -895,7 +896,8 @@ class SheetsDB:
                         index=row_num-(offset+1)
                         request["updateCells"]["rows"][index]["values"][0]={
                             "userEnteredValue":{"formulaValue":representative_transaction_formula(
-                                self.sid, expense_sheet["properties"]["sheetId"], row_num)}}
+                                self.sid, expense_sheet["properties"]["sheetId"], row_num,
+                                viewer_sheet_id=viewer_sheet_id(self._sheet_metadata()))}}
             request["updateCells"]["range"]["endRowIndex"]=max(extent,len(values)+offset)
             requests.append(request)
             self.svc.spreadsheets().batchUpdate(spreadsheetId=self.sid,body={"requests":requests}).execute()
@@ -927,7 +929,8 @@ class SheetsDB:
         start=self._workflow_positions(self._category_workflow_blocks())["rule"]["start"]
         data=[{"range":f"'{CATEGORY_WORKFLOW_SHEET}'!A{start+offset}",
                "values":[[representative_transaction_formula(
-                   self.sid, expense_sheet["properties"]["sheetId"], start+offset)]]}
+                   self.sid, expense_sheet["properties"]["sheetId"], start+offset,
+                   viewer_sheet_id=viewer_sheet_id(meta))]]}
               for offset,row in enumerate(rows) if len(row)>7 and str(row[7]).strip()]
         if data:
             self.svc.spreadsheets().values().batchUpdate(spreadsheetId=self.sid,
