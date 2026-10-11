@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import unicodedata
 
 WORKFLOW = "カテゴリ操作"
@@ -47,7 +48,12 @@ def representative_summary(record):
     elif date:
         date = datetime.fromisoformat(str(date)[:10]).strftime("%Y/%m/%d")
     else: date = "—"
-    amount = "—" if record[4] in ("", None) else format(record[4], ",.0f") + "円"
+    if record[4] in ("", None): amount = "—"
+    else:
+        try:
+            amount = format(Decimal(str(record[4])).quantize(Decimal("1"), rounding=ROUND_HALF_UP), ",f") + "円"
+        except (InvalidOperation, ValueError):
+            raise ValueError("category_navigation_amount_invalid") from None
     return f"代表取引\n{field(2)}\n{date}｜{amount}\n{field(7)}｜{field(8)}\n内容：{field(3)}"
 
 

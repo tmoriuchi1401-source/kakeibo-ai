@@ -79,3 +79,16 @@ def test_append_only_fills_installed_new_rows_and_rejects_foreign_cells():
     with pytest.raises(ValueError, match="column_changed"):
         db._restore_expense_navigation_for_append(reply)
     assert len(service.requests) == 1
+
+
+@pytest.mark.parametrize("value,shown", [("750", "750円"), ("1234", "1,234円"), ("0", "0円"), ("-1234.5", "-1,235円")])
+def test_native_text_amounts_are_verified_without_changing_the_record(value, shown):
+    row = ["ID", "2025-11-16", "店", "内容", value, "", "", "現金", "synthetic", "", "", "", "active"]
+    before = deepcopy(row)
+    assert f"2025/11/16｜{shown}" in representative_summary(row)
+    assert row == before
+
+
+def test_invalid_amount_stops_with_a_safe_reason():
+    with pytest.raises(ValueError, match="category_navigation_amount_invalid"):
+        representative_summary(["ID", "2025-11-16", "店", "内容", "invalid", "", "", "現金", "synthetic", "", "", "", "active"])
