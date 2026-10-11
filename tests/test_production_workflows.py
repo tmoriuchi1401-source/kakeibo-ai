@@ -17,6 +17,16 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "unified-receipt-write-checks.yml":
+            # A stacked, credential-free CI entry is not a production entry.
+            # Assert the complete boundary before exempting its PR mutex.
+            source = (ROOT / ".github/workflows" / name).read_text("utf-8")
+            assert workflow["on"] == {"pull_request": {"branches": ["codex/unified-receipt-readonly"]}}
+            assert workflow["permissions"] == {"contents": "read"}
+            assert workflow["env"] == {"UNIFIED_RECEIPT_WRITE_ENABLED": "false"}
+            assert "secrets." not in source and "vars." not in source and "environment:" not in source
+            assert workflow["jobs"] == workflows()["synthetic-tests.yml"]["jobs"]
+            continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue
         assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name

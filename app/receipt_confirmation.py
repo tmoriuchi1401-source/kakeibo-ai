@@ -399,10 +399,21 @@ class ReceiptConfirmation:
             if len(matches)!=1 or not same_row(title,matches[0],expected):return False
         return True
 
-    def apply_confirmations(self, *, dry_run=False):
-        self.close_keep_existing()
+    def apply_confirmations(self, *, dry_run=False, keys=None):
+        # Optional host-installed gate is shared by legacy and unified callers.
+        # Existing production construction installs no gate and is unchanged.
+        # A targeted adapter must not close or apply unrelated confirmation rows.
+        if keys is not None:
+            if not isinstance(keys,(list,tuple)) or len(keys)!=1 or keys[0] not in self.items:
+                raise StateError('confirmation_exact_target_required')
+        gate=getattr(self,'request_gate',None)
+        if gate is not None and not gate.in_native_execution(self):
+            selected=keys or [k for k,v in self.items.items() if v['status'] in {'waiting','pending'}]
+            return sum(gate.submit_legacy(self,k,dry_run=dry_run) for k in selected)
+        if keys is None:self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
+            if keys is not None and key not in keys:continue
             if old['kind']=='medical' and old.get('decision_origin')=='automatic' and old['status']=='pending':
                 continue  # Freeze legacy AUTO intents; do not finalize, retry or discard.
             if (old['status']=='superseded' and old.get('error')=='原本の版が変更。新しい対象で再確認してください'

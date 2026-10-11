@@ -1,0 +1,87 @@
+name: Unified receipt write bridge checks
+
+on:
+  pull_request:
+    branches: [codex/unified-receipt-readonly]
+
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kakeibo-unified-write-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-ocr-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAKEIBO_OCR_MODEL_DIR: /tmp/kakeibo-ocr-models
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify pinned public models and offline pixel processing
+        run: |
+          pip install -r requirements.txt -r requirements-local-ocr.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr
+          python -m app.receipt_local_ocr prepare
+          python - <<'PY'
+          import socket
+          from PIL import Image, ImageDraw, ImageFont
+          from app.receipt_local_ocr import read_tokens
+          def deny(*args, **kwargs):
+              raise AssertionError('OCR runtime must be offline')
+          socket.socket.connect = deny
+          socket.create_connection = deny
+          assert read_tokens(Image.new('RGB', (300, 200), 'white')) == []
+          sample = Image.new('RGB', (400, 80), 'white')
+          ImageDraw.Draw(sample).text((16, 16), 'LOCAL OCR 1234', font=ImageFont.load_default(size=32), fill='black')
+          assert read_tokens(sample)  # Normal receipt/privacy OCR, not Medical authority.
+          PY
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: general
+            selection: not payroll and not medical
+          - suite: sensitive-synthetic
+            selection: payroll or medical
+    # Both jobs receive only synthetic fixtures and no production/AI Secrets.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: |
+          pip install -r requirements-test.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+      - name: Run isolated synthetic suite
+        env:
+          TEST_SELECTION: ${{ matrix.selection }}
+        run: python -m pytest -q --tb=short -k "$TEST_SELECTION"
+      - name: Check final cache run selection without credentials
+        run: node --test .github/scripts/verify-state-cache-runs.test.cjs
+      - name: Check category checkbox submission without credentials
+        run: node --test apps-script/category-submit/Code.test.cjs
+      - name: Check manual entry capture without credentials
+        run: node --test apps-script/manual-entry/Code.test.cjs
+      - name: Compile and check whitespace
+        run: |
+          python -m compileall -q app tests
+          git diff --check
