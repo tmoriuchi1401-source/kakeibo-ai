@@ -147,4 +147,4 @@ def test_workflow_has_same_lock_main_gate_and_only_sheet_credentials():
     assert "github.ref == 'refs/heads/main'" in job["if"]
     assert set(job["env"]) == {"GITHUB_SHA", "KAKEIBO_PRODUCTION_ENABLED", "KAKEIBO_VALIDATED_MAIN_SHA",
                                "SPREADSHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON"}
-    assert job["steps"][-1]["run"].startswith("python -m app.category_navigation_maintenance ")
+    assert 'python -m app.category_navigation_maintenance --mode "$NAVIGATION_MODE"' in job["steps"][-1]["run"]
