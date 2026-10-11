@@ -362,11 +362,10 @@ class ExplicitUnitPostingPort(NativePort):
 
 
 class ExistingAuthorityPort(NativePort):
-    """Metadata-only native service in the existing authenticated host.
+    """Retired financial-shaped metadata adapter; deliberately fail closed.
 
-    Services are injected from the pinned/deployed authority container; missing
-    services are unavailable, never replaced with local bools or new grants.
-    Native state/CAS and native readback stay inside that existing service.
+    Use ExistingReviewPort with purpose-specific native evidence/signature.
+    Kept as a rejecting compatibility boundary, never as a second authority.
     """
     def __init__(self, action, service, native_request_reader, native_readback, inspection_reader):
         super().__init__(inspection_reader)
@@ -374,19 +373,11 @@ class ExistingAuthorityPort(NativePort):
             raise StateError('unified_authority_route_invalid')
         self.action,self.service,self.request_reader,self.verify=action,service,native_request_reader,native_readback
 
+    def inspect(self, case, action):
+        raise StateError('unified_purpose_route_required')
+
     def execute(self, request):
-        self.recovery_binding(request)
-        native=self.request_reader(request.request_id)  # trusted server record
-        if self.action=='link_existing':
-            return self.service.confirm(request.request_id,selected_decision=native['selected_decision'],
-                                        method='POST',explicit_post=True)
-        if self.action=='confirm_grouping':return self.service.review(native['request'],intent_digest=native['intent_digest'])
-        if self.action=='confirm_page_kind':
-            return self.service.confirm(native['expected'],native['selections'],request_id=request.request_id,
-                                        intent_digest=native['intent_digest'])
-        # Existing authenticated page gate: kind alone does not authorize AI.
-        return self.service.confirm(request.request_id,**native['confirmation_arguments'])
+        raise StateError('unified_purpose_route_required')
 
     def readback(self, request):
-        self.recovery_binding(request)
-        return self.verify(request) is True
+        raise StateError('unified_purpose_route_required')

@@ -94,6 +94,10 @@ class OperationRequest:
     expected_state_revision: int
     operation_identity: str
 
+    @property
+    def purpose(self):
+        return 'ACCOUNTING_POST'
+
     @classmethod
     def parse(cls, value):
         try:
@@ -145,6 +149,13 @@ class ConditionalRequests:
     def __init__(self, io, store_id):
         self.io, self.store_id = io, store_id
 
+    @staticmethod
+    def parse_request(value):
+        if 'purpose' in value:
+            from .unified_receipt_purposes import PurposeRequest
+            return PurposeRequest.parse(value)
+        return OperationRequest.parse(value)
+
     def read(self):
         raw,tag = self.io.read_versioned()
         if type(raw) is not bytes or len(raw)>MAX_BYTES or not strong_etag(tag):
@@ -163,7 +174,7 @@ class ConditionalRequests:
                 raise ValueError()
             request_ids=set()
             for key,op in value['operations'].items():
-                request=OperationRequest.parse(op['request'])
+                request=self.parse_request(op['request'])
                 if (key!=request.operation_identity or set(op)!={'request','fingerprint','state','events'}
                         or op['fingerprint']!=request.fingerprint() or op['state'] not in STATES
                         or not isinstance(op['events'],list) or not op['events']
@@ -205,6 +216,7 @@ class UnifiedWriteBridge:
         self.adapters=adapters or {};self.clock=clock
 
     def _inspection(self, case, action):
+        if action != 'post':raise StateError('unified_purpose_route_required')
         if prohibited(case):raise StateError('unified_case_write_forbidden')
         port=self.adapters.get((case.kind,action))
         if port is None:raise StateError('unified_native_route_unavailable')
@@ -252,6 +264,7 @@ class UnifiedWriteBridge:
         if entry not in {'unified','legacy'}:raise StateError('unified_entry_invalid')
         if not self.config.enabled or prohibited(case):raise StateError('unified_case_write_forbidden')
         request=OperationRequest.parse(payload)
+        if request.requested_action != 'post':raise StateError('unified_purpose_route_required')
         if self.requests is None or self.config.request_store_id!=self.requests.store_id:
             raise StateError('unified_shared_request_store_missing')
         before,raw,tag=self.requests.read()
@@ -261,6 +274,9 @@ class UnifiedWriteBridge:
                   'source_version','stable_page_identity','receipt_unit_id','receipt_index')},
                   'case_id':case.case_id,'current_snapshot_digest':digest(current_snapshot(case))}
         if any(getattr(request,k)!=v for k,v in expected.items()):raise StateError('unified_request_snapshot_changed')
+        # Cross-purpose canonical IDs cannot bypass this check via replay.
+        if any(op['request']['request_id']==request.request_id and key!=request.operation_identity
+               for key,op in before['operations'].items()):raise StateError('unified_request_id_conflict')
         existing=before['operations'].get(request.operation_identity)
         if existing:
             if existing['fingerprint']!=request.fingerprint():raise StateError('unified_operation_conflict')
@@ -280,8 +296,9 @@ class UnifiedWriteBridge:
         # A Unit cannot get a second financial operation under another native
         # request ID/purpose. Complete/unknown operations never free this fence.
         for old in before['operations'].values():
-            other=OperationRequest.parse(old['request'])
-            if other.receipt_unit_id==request.receipt_unit_id and other.requested_action in FINANCIAL:
+            other=self.requests.parse_request(old['request'])
+            if (isinstance(other,OperationRequest) and other.receipt_unit_id==request.receipt_unit_id
+                    and other.requested_action in FINANCIAL):
                 raise StateError('unified_unit_already_owned')
         after=deepcopy(before);after['revision']+=1
         after['operations'][request.operation_identity]=dict(request=asdict(request),fingerprint=request.fingerprint(),

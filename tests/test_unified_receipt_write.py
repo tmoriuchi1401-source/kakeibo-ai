@@ -113,11 +113,12 @@ def test_clean_coordinator_receipt_shapes_native_exact_readback(name,kind,pages,
 
 @pytest.mark.parametrize('kind',['receipt_reconciliation','medical'])
 def test_resolved_existing_is_link_only(kind):
-    c=active('link',kind=kind);p=FakeNative(c)
-    p.e['permissions']['posting']='link_only';p.e['duplicate_check']['status']='resolved_existing'
-    b,p,io=bridge(c,p,'link_existing');r=payload(b,c,'link_existing')
-    assert b.submit(c,r)['state']=='complete'
-    assert b.submit(c,r,entry='legacy')['accounting_writes']==0
+    from unified_purpose_fixtures import existing_review_fixture
+    f=existing_review_fixture('link_existing');r=f.prepare()
+    assert f.boundary.submit(r,{})['state']=='complete'
+    assert f.boundary.submit(r,{},entry='legacy')['accounting_writes']==0
+    assert f.accounting_appends==0 and f.repo.get_current(f.ident)['status']=='reconciled_existing'
+    assert f.ident['receipt_unit_id']==''  # Native page-local contract, no fake Unit.
 
 
 @pytest.mark.parametrize('change',['snapshot','version','hash','page','unit','index','purpose'])
@@ -562,16 +563,10 @@ def test_registered_pdf_real_snapshot_gate_authority_and_materializer(index,coun
 
 @pytest.mark.parametrize('action',['confirm_grouping','confirm_page_kind','confirm_privacy','link_existing'])
 def test_native_authority_route_arguments_and_idempotent_dispatch(action):
-    c=active('authority',kind='receipt_reconciliation' if action=='link_existing' else 'normal');fake=FakeNative(c)
-    if action=='link_existing':fake.e['permissions']['posting']='link_only';fake.e['duplicate_check']['status']='resolved_existing'
-    class Service:
-        calls=[]
-        def confirm(self,*a,**kw):self.calls.append(('confirm',a,kw))
-        def review(self,*a,**kw):self.calls.append(('review',a,kw))
-    s=Service();native=dict(selected_decision='same_existing',request={'fake':'native'},intent_digest='b'*64,
-                         expected={'fake':'page'},selections={'fake':'normal'},confirmation_arguments={'explicit_post':True})
-    port=ExistingAuthorityPort(action,s,lambda _:deepcopy(native),lambda _:len(s.calls)==1,lambda *_:fake.inspect(c,action))
-    b,_,io=bridge(c,port,action);r=payload(b,c,action)
-    assert b.submit(c,r)['state']=='complete' and len(s.calls)==1
-    assert b.submit(c,r,entry='legacy')['replay'] and len(s.calls)==1
-    assert fake.ai_calls==fake.moves==0
+    from unified_purpose_fixtures import existing_review_fixture
+    f=existing_review_fixture(action);r=f.prepare()
+    expected=f.observe(f.case_id,f.purpose,action,f.rid).native_arguments
+    assert f.boundary.submit(r,{})['state']=='complete' and f.native_calls==1
+    assert f.saved_arguments==[expected]
+    assert f.boundary.submit(r,{},entry='legacy')['replay'] and f.native_calls==1
+    assert f.accounting_appends==f.ai_sends==f.source_moves==0

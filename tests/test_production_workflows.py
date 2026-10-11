@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 
 import yaml
 
@@ -25,7 +26,11 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
             assert workflow["permissions"] == {"contents": "read"}
             assert workflow["env"] == {"UNIFIED_RECEIPT_WRITE_ENABLED": "false"}
             assert "secrets." not in source and "vars." not in source and "environment:" not in source
-            assert workflow["jobs"] == workflows()["synthetic-tests.yml"]["jobs"]
+            expected = deepcopy(workflows()["synthetic-tests.yml"]["jobs"])
+            # The purpose contracts load the unchanged, hash-pinned historical
+            # validators. Only credential-free checkout history is added.
+            expected["test"]["steps"][0]["with"]["fetch-depth"] = "0"
+            assert workflow["jobs"] == expected
             continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue

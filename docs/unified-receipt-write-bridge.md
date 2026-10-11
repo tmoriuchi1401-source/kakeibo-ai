@@ -1,5 +1,11 @@
 # Unified receipt write bridge (draft, default OFF)
 
+Purpose separation supersedes the former financial-shaped metadata dispatch.
+See [purpose boundaries](unified-receipt-purpose-boundaries.md). Only explicit
+ACCOUNTING_POST enters this financial bridge; metadata uses ExistingReviewPort
+and purpose-specific evidence without financial placeholders. Host connection
+remains unperformed.
+
 Depends on read-only PR #123 at `1db04aca633531871b3519e9eed8f7b76712f0e5`.
 This PR is stacked on `codex/unified-receipt-readonly`; review its delta against
 that branch. It does not request a merge to main, deployment or real canary.
