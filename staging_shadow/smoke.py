@@ -25,7 +25,7 @@ from .memory_cas import LastUpdateOption, FailedPrecondition
 from .serve import Quiet
 
 
-def authenticated_fixture():
+def authenticated_fixture(config=None):
     # Existing Google verifier still checks RSA signature/issuer/audience/nonce/
     # owner. Only certificate/code-exchange IO is memory-only, never an HTTP route.
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -37,7 +37,7 @@ def authenticated_fixture():
         return SimpleNamespace(status=200, data=json.dumps({'synthetic-staging-key':public}).encode())
     now = [__import__('time').time()]
     identity = GoogleIdentityVerifier(CLIENT, OWNER, request=certificates, clock=lambda:now[0])
-    app, rt = create_application(Config('https://staging.invalid'), identity=identity, clock=lambda:now[0])
+    app, rt = create_application(config or Config('https://staging.invalid'), identity=identity, clock=lambda:now[0])
     rid = rt.seed(); gateway = rt.gateway(rid); ticket = gateway.begin(rid)
     rt.tickets.save(ticket, int(now[0])+600)
     def exchange(code, verifier):
@@ -65,7 +65,7 @@ def authenticated_fixture():
 
 
 def main():
-    Config.read(os.environ)
+    config = Config.read(os.environ)
     if Path('/sys/class/net').exists():
         assert sorted(p.name for p in Path('/sys/class/net').iterdir())==['lo'], 'runtime network not isolated'
         routes=Path('/proc/net/route').read_text().splitlines()[1:]
@@ -73,14 +73,17 @@ def main():
     install_network_guard()
     expected_blocked=0
     for probe in (lambda:socket.create_connection(('203.0.113.1',443),timeout=1),
-                  lambda:socket.getaddrinfo('external.example.test',443)):
+                  lambda:socket.getaddrinfo('external.example.test',443),
+                  lambda:socket.create_connection(('169.254.169.254',80),timeout=1),
+                  lambda:socket.create_connection(('0.0.0.0',443),timeout=1)):
         try: probe()
         except OSError: expected_blocked+=1
         else: raise AssertionError('runtime egress succeeded')
-    app,rt,ticket,login,clock = authenticated_fixture()
+    app,rt,ticket,login,clock = authenticated_fixture(config)
     secret_markers=(ticket.cookie,ticket.pkce_verifier,ticket.state,'synthetic-code',rt.key.decode())
     logs=io.StringIO(); handler=logging.StreamHandler(logs); app.logger.addHandler(handler)
-    server=make_server('127.0.0.1',0,app,request_handler=Quiet)
+    server=make_server(config.bind_host,0,app,request_handler=Quiet)
+    assert server.socket.getsockname()[0] == config.bind_host
     thread=Thread(target=server.serve_forever,daemon=True);thread.start()
     base='http://127.0.0.1:'+str(server.server_port)
     cookie=web.COOKIE+'='+ticket.cookie+'; '+web.LOGIN_COOKIE+'='+login
@@ -128,7 +131,7 @@ def main():
         import importlib.util
         assert importlib.util.find_spec('google.cloud') is None
         assert importlib.util.find_spec('googleapiclient') is None
-        print(json.dumps(dict(http_requests=count,case_count=3,authenticated_list_detail=True,
+        print(json.dumps(dict(execution_mode=config.mode,bind_host=config.bind_host,http_requests=count,case_count=3,authenticated_list_detail=True,
             GET_prepare_memory_writes=0,accounting_write=0,authority_write=0,AI_send=0,source_move=0,
             external_connection_successes=0,expected_negative_egress_probes=expected_blocked,
             native_signature_state_CAS_logout_TTL=True,secret_response_log_matches=0,cloud_credentials_required=False)))

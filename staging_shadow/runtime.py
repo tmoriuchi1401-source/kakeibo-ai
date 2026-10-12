@@ -42,7 +42,7 @@ def install_network_guard():
     if getattr(socket, '_staging_guard', False): return
     connect, connect_ex, sendto, lookup = socket.socket.connect, socket.socket.connect_ex, socket.socket.sendto, socket.getaddrinfo
     def local(sock, address):
-        if sock.family == socket.AF_UNIX: return
+        if sock.family == getattr(socket, 'AF_UNIX', None): return
         try: valid = ipaddress.ip_address(address[0]).is_loopback
         except (ValueError, TypeError, IndexError): valid = False
         if not valid: raise OSError('staging_egress_denied')
@@ -50,6 +50,9 @@ def install_network_guard():
     def guarded_ex(sock, address): local(sock, address); return connect_ex(sock, address)
     def guarded_sendto(sock, data, *args): local(sock, args[-1]); return sendto(sock, data, *args)
     def guarded_lookup(host, *args, **kwargs):
+        # Werkzeug resolves the numeric wildcard before bind. This is a local
+        # numeric address, not DNS or an outbound grant: connect still rejects it.
+        if host == '0.0.0.0': return lookup(host, *args, **kwargs)
         try: valid = ipaddress.ip_address(host).is_loopback
         except (ValueError, TypeError): valid = False
         if not valid: raise OSError('staging_dns_denied')

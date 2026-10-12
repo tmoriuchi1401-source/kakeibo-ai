@@ -1,7 +1,8 @@
-"""Loopback-only CI server, no access/error payload logging."""
+"""Explicit CI/Cloud Run binding; unchanged isolated application and logging."""
 import os
 from werkzeug.serving import make_server, WSGIRequestHandler
 from .runtime import make_application
+from .config import Config
 
 
 class Quiet(WSGIRequestHandler):
@@ -9,8 +10,9 @@ class Quiet(WSGIRequestHandler):
 
 
 def main():
+    config = Config.read(os.environ)  # Validate before application or socket creation.
     app = make_application()
-    server = make_server('127.0.0.1', int(os.environ.get('PORT', '8080')), app, request_handler=Quiet)
+    server = make_server(config.bind_host, config.port, app, request_handler=Quiet)
     try: server.serve_forever()
     finally: server.server_close()
 

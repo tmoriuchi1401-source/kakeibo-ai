@@ -2,6 +2,8 @@
 import ast
 from pathlib import Path
 import re
+import subprocess
+import sys
 
 from staging_shadow.prepare_context import derive_storage
 from staging_shadow.memory_cas import Database, LastUpdateOption, FailedPrecondition
@@ -70,3 +72,64 @@ def test_staging_build_has_no_auth_push_or_published_port():
     assert "'--network=none'" in text and "'--read-only'" in text
     assert "'--require-hashes'" in text and "'--platform=linux/amd64'" in text
     assert not any(s in text for s in ('gcloud','--publish','docker login','docker push','build-push-action'))
+
+
+def cloud_env(**extra):
+    return dict(UNIFIED_STAGING_ENABLED='true',UNIFIED_STAGING_MODE='cloud-run',
+        HGA_ORIGIN='https://synthetic-cloud-run.example.test',PORT='8787',**extra)
+
+
+def test_binding_is_loopback_by_default_and_cloud_is_explicit():
+    config=Config.read({'UNIFIED_STAGING_ENABLED':'true'})
+    assert (config.mode,config.bind_host,config.port)==('ci','127.0.0.1',8080)
+    config=Config.read(cloud_env(K_SERVICE='synthetic-service',K_REVISION='synthetic-revision'))
+    assert (config.mode,config.bind_host,config.port,config.ttl)==('cloud-run','0.0.0.0',8787,600)
+
+
+@pytest.mark.parametrize('mode',['','cloud','production','CI'])
+def test_unknown_mode_fails_closed(mode):
+    with pytest.raises(ValueError):Config.read({'UNIFIED_STAGING_ENABLED':'true','UNIFIED_STAGING_MODE':mode})
+
+
+@pytest.mark.parametrize('name',['K_SERVICE','K_REVISION','K_CONFIGURATION'])
+def test_cloud_marker_cannot_implicitly_enable_wildcard(name):
+    with pytest.raises(ValueError):Config.read({'UNIFIED_STAGING_ENABLED':'true',name:'synthetic'})
+
+
+@pytest.mark.parametrize('missing',['HGA_ORIGIN','PORT'])
+def test_cloud_mode_requires_explicit_origin_and_port(missing):
+    env=cloud_env();del env[missing]
+    with pytest.raises(ValueError):Config.read(env)
+
+
+@pytest.mark.parametrize('port',['','0','80','65536','8080x',' 8080','+8080','８０８０'])
+def test_invalid_cloud_port_is_rejected_before_bind(port):
+    env=cloud_env();env['PORT']=port
+    with pytest.raises(ValueError):Config.read(env)
+
+
+def test_cloud_mode_rejects_placeholder_origin_and_connection_settings():
+    env=cloud_env();env['HGA_ORIGIN']='https://staging.invalid'
+    with pytest.raises(ValueError):Config.read(env)
+    for name in ('GOOGLE_APPLICATION_CREDENTIALS','HGA_REAL_PAGE_CONFIG_PATH','HTTPS_PROXY','UNIFIED_STAGING_UNSAFE'):
+        with pytest.raises(ValueError):Config.read(cloud_env(**{name:''}))
+
+
+def test_wildcard_bind_resolution_does_not_grant_outbound_or_metadata_access():
+    # Execute the actual guard in an isolated process, preserving pytest's sockets.
+    tree=ast.parse((ROOT/'staging_shadow/runtime.py').read_text(encoding='utf-8'))
+    function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='install_network_guard')
+    code='import socket,ipaddress\n'+ast.unparse(function)+'''\n
+install_network_guard()
+assert socket.getaddrinfo('0.0.0.0',8787)[0][4][0]=='0.0.0.0'
+for host in ('0.0.0.0','169.254.169.254','203.0.113.1'):
+    for method in ('connect','connect_ex'):
+        with socket.socket() as s:
+            try:getattr(s,method)((host,443))
+            except OSError as e:assert str(e)=='staging_egress_denied'
+            else:raise AssertionError('outbound allowed')
+try:socket.getaddrinfo('external.example.test',443)
+except OSError as e:assert str(e)=='staging_dns_denied'
+else:raise AssertionError('external DNS allowed')
+'''
+    subprocess.run([sys.executable,'-c',code],check=True,capture_output=True,text=True,timeout=10)

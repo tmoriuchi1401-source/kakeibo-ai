@@ -52,7 +52,16 @@ python -m staging_shadow.ci_build
 The local image is not pushed. CI removes its own test container. Context/wheels
 remain in the disposable runner workspace and are not uploaded as artifacts.
 Cloud IAM/WIF/SA/delegation/registry/secret-name inventory remains a separate,
-uncompleted gate. This image listens on loopback for CI and is not a ready-to-
-deploy Cloud Run service. Any Cloud-compatible binding, IAM/egress arrangement,
+uncompleted gate. This image defaults to loopback for CI. Explicit
+`UNIFIED_STAGING_MODE=cloud-run` requires an exact HTTPS `HGA_ORIGIN` and valid
+`PORT`, and binds `0.0.0.0:$PORT`. Cloud markers in implicit CI mode, invalid
+modes/ports and production settings fail before application/socket creation.
+This is not a ready-to-deploy Cloud Run service: IAM/egress arrangement,
 synthetic authenticated operator bootstrap and source revision require separate
 review, testing, inventory and deployment approval.
+
+Both modes are tested with Docker `--network=none`, no published port, and the
+same signed synthetic auth/HTTP safety checks. Numeric wildcard resolution for
+binding grants no outbound connection: wildcard, public IP, metadata IP and
+external DNS probes remain blocked. See `CLOUD_RUN_PREPARATION.md` for unresolved
+Cloud inventory and deployment gates.
