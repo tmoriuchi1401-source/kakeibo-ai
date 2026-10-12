@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import os
+import re
 from threading import Thread
 import unittest
 from urllib.parse import urlsplit, parse_qsl, quote
@@ -249,4 +251,249 @@ class ShadowVisualCheck(unittest.TestCase):
             print('GET/render/resize writes=0; accounting=0; AI=0; move=0; production authority=0; screenshots=4')
 
 
-if __name__=='__main__': unittest.main(verbosity=2)
+def socket_process_owners(client_port, proxy_port, pid_file):
+    """Read-only socket inode attribution, restricted to this Chrome subtree."""
+    try:
+        root_pid = int(pid_file.read_text())
+    except (OSError, ValueError):
+        return []
+    inodes = set()
+    for table in ('tcp', 'tcp6'):
+        try:
+            for row in Path('/proc/net/'+table).read_text().splitlines()[1:]:
+                cells = row.split()
+                if int(cells[1].split(':')[-1], 16) == client_port and int(cells[2].split(':')[-1], 16) == proxy_port:
+                    inodes.add(cells[9])
+        except OSError:
+            pass
+    processes = {}
+    for entry in Path('/proc').iterdir():
+        if entry.name.isdigit():
+            try:
+                fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+                processes[int(entry.name)] = (int(fields[1]), os.readlink(entry/'exe'))
+            except OSError:
+                pass
+    descendants = {root_pid}
+    while True:
+        found = {pid for pid, (parent, _) in processes.items() if parent in descendants}
+        if found <= descendants:
+            break
+        descendants |= found
+    owners = []
+    for pid in descendants:
+        try:
+            for fd in Path('/proc/'+str(pid)+'/fd').iterdir():
+                try:
+                    link = os.readlink(fd)
+                except OSError:
+                    continue
+                if link.startswith('socket:[') and link[8:-1] in inodes:
+                    args = Path('/proc/'+str(pid)+'/cmdline').read_bytes().decode('utf-8', 'replace').split('\0')
+                    role = [a for a in args if a.startswith(('--type=', '--utility-sub-type='))]
+                    owners.append(dict(pid=pid, parent_pid=processes[pid][0], exe=processes[pid][1], role=role,
+                                       socket_inode=link[8:-1]))
+        except OSError:
+            pass
+    return owners
+
+
+def extract_phase_netlog(raw_file, proxy_records):
+    """No params dictionaries, headers, bodies or raw bytes leave this function."""
+    try:
+        raw = json.loads(raw_file.read_text('utf-8'))
+    finally:
+        raw_file.unlink(missing_ok=True)
+    names = {value: key for key, value in raw['constants']['logEventTypes'].items()}
+    source_names = {value: key for key, value in raw['constants']['logSourceType'].items()}
+    hosts = {r['hostname'] for r in proxy_records}
+    def dependencies(value):
+        found = []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == 'source_dependency' and isinstance(item, dict):
+                    found.append(dict(id=item.get('id'), type=source_names.get(item.get('type'), 'unknown')))
+                else:
+                    found.extend(dependencies(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(dependencies(item))
+        return found
+    projected, selected = [], set()
+    for event in raw['events']:
+        params = event.get('params', {})
+        source = event['source']
+        urls = [safe_url(params[key]) for key in ('url', 'original_url') if isinstance(params.get(key), str)]
+        item = dict(event_type=names.get(event['type'], 'unknown'), source_type=source_names.get(source['type'], 'unknown'),
+                    source_id=source['id'], source_dependency=dependencies(params), timestamp=event['time'],
+                    urls=urls, error_code=params.get('net_error') if isinstance(params.get('net_error'), int) else None)
+        if any(url['hostname'] in hosts for url in urls):
+            selected.add(source['id'])
+        projected.append(item)
+    # Dependency-connected events only; params are never copied wholesale.
+    while True:
+        related = set(selected)
+        for item in projected:
+            deps = {d['id'] for d in item['source_dependency']}
+            if item['source_id'] in selected or deps & selected:
+                related.add(item['source_id']);related |= deps
+        if related == selected:
+            break
+        selected = related
+    return dict(capture_mode='Default', raw_deleted=not raw_file.exists(),
+                events=[item for item in projected if item['source_id'] in selected])
+
+
+def chromium_source_map(binary, urls):
+    """Inspect official source at the binary tag/revision, never execute it."""
+    import base64
+    from urllib.request import build_opener, ProxyHandler
+    product = binary['product']
+    version = re.search(r'\d+\.\d+\.\d+\.\d+', product).group()
+    ref = 'refs/tags/'+version
+    opener = build_opener(ProxyHandler({}))
+    cache = {}
+    def source(path):
+        if path not in cache:
+            address = 'https://chromium.googlesource.com/chromium/src/+/'+ref+'/'+path
+            try:
+                with opener.open(address+'?format=TEXT', timeout=10) as response:
+                    assert urlsplit(response.geturl()).hostname == 'chromium.googlesource.com'
+                    cache[path] = (base64.b64decode(response.read()).decode('utf-8'), address)
+            except Exception:
+                cache[path] = ('', address)
+        return cache[path]
+    candidates = {
+        '/ListAccounts': [('google_apis/gaia/gaia_urls.cc', 'ListAccounts', 'GaiaUrls::ListAccountsURLWithSource'),
+                          ('components/signin/internal/identity_manager/gaia_cookie_manager_service.cc', 'ListAccounts', 'GaiaCookieManagerService')],
+        '/async/folae': [('components/omnibox/browser/aim_eligibility_service.cc', '/async/folae', 'AimEligibilityService::StartServerEligibilityRequest'),
+                        ('chrome/browser/autocomplete/aim_eligibility_service.cc', '/async/folae', 'AimEligibilityService')],
+        '/ohttp_gateway/hpke_public_keys/v1/sbc_prod': [('components/safe_browsing/core/common/features.cc', '/ohttp_gateway/hpke_public_keys/v1/sbc_prod', 'kHashPrefixRealTimeLookupsKeyFetchUrl')],
+        '/service/update2/json': [('components/component_updater/component_updater_url_constants.cc', '/service/update2/json', 'kUpdaterJSONDefaultUrl'),
+                                 ('chrome/updater/constants.cc', '/service/update2/json', 'kUpdaterJSONDefaultUrl')],
+    }
+    mapping = []
+    for url in sorted(urls):
+        path = urlsplit(url).path
+        evidence = []
+        for file, literal, symbol in candidates.get(path, []):
+            text, address = source(file)
+            if literal in text and symbol in text:
+                evidence.append(dict(source_path=file, symbol=symbol, source_url=address,
+                                     literal_line=next(i for i, line in enumerate(text.splitlines(), 1) if literal in line),
+                                     meaning='source definition/caller evidence; not a captured runtime initiator'))
+        mapping.append(dict(url=url, classification='source_file_and_symbol_confirmed' if evidence else 'unmapped', evidence=evidence))
+    return dict(binary_product=product, source_ref=ref, mapping=mapping)
+
+
+def process_phase_diagnostics(suite):
+    assert sys.platform == 'linux', 'Linux process diagnostics required'
+    redaction_self_test()
+    chrome = next((shutil.which(n) for n in ('google-chrome','google-chrome-stable','chromium','chromium-browser') if shutil.which(n)), None)
+    node = shutil.which('node');assert chrome and node, 'existing browser missing; do not install'
+    check = subprocess.run([node, str(ROOT/'tests/shadow_visual_browser.cjs'), '--redaction-self-test'], capture_output=True, timeout=20)
+    assert check.returncode == 0, 'redaction self-test failed'
+    output = ROOT/'artifacts/shadow-process';output.mkdir(parents=True, exist_ok=False)
+    phases, binaries, logs, cleanup = [], [], [], []
+    seconds = 8
+    def persist():
+        comparison = {}
+        for label in 'ABCD':
+            runs = [p for p in phases if p['phase']==label]
+            if len(runs)==2:
+                sets = [{(r['hostname'],r['port'],r['path']) for r in p['records'] if r['layer']=='proxy' and r['in_observation_window']} for p in runs]
+                comparison[label] = dict(common_destinations=sorted(sets[0]&sets[1]),first_only=sorted(sets[0]-sets[1]),second_only=sorted(sets[1]-sets[0]),
+                                         counts=[p['proxy_external'] for p in runs])
+        for name, value in [('phase-records.json',dict(suite=suite,observation_seconds=seconds,phases=phases,repeat_comparison=comparison)),
+                            ('process-binaries.json',binaries),('netlog-summary.json',logs),('cleanup-confirmation.json',cleanup)]:
+            (output/name).write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
+    for phase in 'ABCD':
+        for repeat in (1, 2):
+            records = []
+            with tempfile.TemporaryDirectory(prefix='shadow-phase-'+phase+'-') as temporary, pytest.MonkeyPatch.context() as patch:
+                folder = Path(temporary);profile = folder/'profile';profile.mkdir()
+                pid_file = folder/'browser.pid';result_file = folder/'phase-result.json';raw_file = folder/'netlog.json'
+                server = None;host = None;violations = []
+                if phase == 'D':
+                    host = HostRig(patch);assert host.login().status_code == 303
+                    add_native_unit_cards(host)
+                    before = deepcopy(host.db.data),deepcopy(host.db.versions),host.db.writes,host.f.io.raw,host.f.io.writes,host.f.state_io.raw,host.f.state_io.writes,deepcopy(host.snapshot)
+                    def deny_write(*_args, **_kwargs):
+                        violations.append('write/display attempted');raise AssertionError('read-only boundary')
+                    patch.setattr(Document,'create',deny_write);patch.setattr(Document,'update',deny_write)
+                    patch.setattr(host.f.io,'replace_versioned',deny_write);patch.setattr(host.f.state_io,'replace_versioned',deny_write)
+                    patch.setattr(host.f.grouping,'display',deny_write);patch.setattr(host.f.port,'submit_native',deny_write)
+                    from google.cloud import firestore
+                    from googleapiclient import discovery
+                    patch.setattr(firestore,'Client',deny_write);patch.setattr(discovery,'build',deny_write)
+                    tls, spki = synthetic_tls(folder)
+                    server = make_server('127.0.0.1',0,host.app,ssl_context=tls,request_handler=QuietHandler)
+                    Thread(target=server.serve_forever,daemon=True).start()
+                    base = 'https://127.0.0.1:'+str(server.server_port)
+                    cookies = [dict(name=n,value=host.client.get_cookie(n,domain=DOMAIN).value,url=base,path='/',secure=True,httpOnly=True,sameSite='Lax') for n in (host.web.COOKIE,host.web.LOGIN_COOKIE)]
+                else:
+                    base = 'https://127.0.0.1:1';cookies = [];_, spki = synthetic_tls(folder)
+                class Proxy(BaseHTTPRequestHandler):
+                    def deny(self):
+                        stamp = int(time.time()*1000)
+                        url = safe_url('https://'+self.path if self.command == 'CONNECT' else self.path)
+                        if self.command == 'CONNECT': url['path'] = 'unknown'
+                        records.append(dict(sequence=len(records)+1,layer='proxy',time_ms=stamp,method=self.command,**url,
+                            resource_type='unknown',initiator_type='unknown',document_url='unknown',redirect_from='unknown',
+                            initiator_stack=[],frame_url='unknown',allowed=False,
+                            socket_owners=socket_process_owners(self.client_address[1],self.server.server_port,pid_file)))
+                        self.send_error(403)
+                    do_CONNECT=do_GET=do_POST=deny
+                    def log_message(self,*_args): pass
+                proxy = ThreadingHTTPServer(('127.0.0.1',0),Proxy);thread = Thread(target=proxy.serve_forever,daemon=True);thread.start()
+                started = int(time.time()*1000);deadline = started+seconds*1000
+                result = dict(records=[],milestones=[],tracked_pids=[],remaining_running_pids=[],phase_error=False)
+                code = 0
+                try:
+                    if phase == 'A':time.sleep(seconds)
+                    else:
+                        config = dict(phase=phase,chrome=chrome,profile=str(profile),netlog=str(raw_file),pid_file=str(pid_file),
+                            result_file=str(result_file),proxy='http://127.0.0.1:'+str(proxy.server_port),base=base,spki=spki,
+                            cookies=cookies,detail_id='isolated-native-units-2',deadline_ms=deadline)
+                        execution = subprocess.run([node,str(ROOT/'tests/shadow_visual_browser.cjs')],input=json.dumps(config),text=True,capture_output=True,timeout=40)
+                        code = execution.returncode
+                        if result_file.exists():result=json.loads(result_file.read_text('utf-8'))
+                finally:
+                    proxy.shutdown();proxy.server_close();thread.join(timeout=5)
+                    if server:server.shutdown();server.server_close()
+                if phase != 'A' and raw_file.exists():logs.append(dict(phase=phase,repeat=repeat,**extract_phase_netlog(raw_file,records)))
+                cleanup.append(dict(phase=phase,repeat=repeat,raw_netlog_deleted=not raw_file.exists(),
+                    remaining_running_pids=result['remaining_running_pids']))
+                if result.get('binary'):binaries.append(dict(phase=phase,repeat=repeat,**result['binary']))
+                combined = result['records']+records;combined.sort(key=lambda r:r['time_ms'])
+                for index,r in enumerate(combined,1):r['sequence']=index;r['in_observation_window']=started<=r['time_ms']<=deadline
+                measured = dict(phase=phase,repeat=repeat,proxy_monitor_started_ms=started,observation_deadline_ms=deadline,
+                    milestones=result['milestones'],records=combined,
+                    proxy_external=sum(r['layer']=='proxy' and r['in_observation_window'] for r in combined),
+                    proxy_cleanup_external=sum(r['layer']=='proxy' and not r['in_observation_window'] for r in combined),
+                    page_external=sum(r['layer']=='page-fetch' and not r['allowed'] for r in combined),
+                    cdp_external=sum(r['layer']=='cdp-network' and not r['allowed'] for r in combined),
+                    first_request_ms=min((r['time_ms'] for r in combined),default=None),phase_error=result['phase_error'] or code!=0)
+                if host:
+                    after = deepcopy(host.db.data),deepcopy(host.db.versions),host.db.writes,host.f.io.raw,host.f.io.writes,host.f.state_io.raw,host.f.state_io.writes,deepcopy(host.snapshot)
+                    measured['write_check']=dict(state_unchanged=before==after,write_spy_calls=len(violations),accounting=host.f.accounting_appends,
+                        ai=host.f.ai_sends,source_move=host.f.source_moves,production_authority=0)
+                phases.append(measured);persist()
+                print('PHASE '+json.dumps({k:measured[k] for k in ('phase','repeat','proxy_external','proxy_cleanup_external','page_external','cdp_external','phase_error')}),flush=True)
+                assert not measured['phase_error'] and not result['remaining_running_pids'], 'phase setup or process cleanup failed'
+                if host:assert before==after and not violations and (host.f.accounting_appends,host.f.ai_sends,host.f.source_moves)==(0,0,0),'write detected'
+                if phase=='A':assert not records,'Phase A external request: Chrome-external process; stop'
+    urls={u['url'] for log in logs for e in log['events'] for u in e['urls'] if u['hostname'] in {r['hostname'] for p in phases for r in p['records'] if r['layer']=='proxy'}}
+    mapping=chromium_source_map(binaries[0],urls) if binaries else dict(mapping=[])
+    (output/'source-correspondence.json').write_text(json.dumps(mapping,ensure_ascii=False,indent=2),encoding='utf-8')
+    # Intentionally fail after all authorized diagnostics are persisted. No
+    # diagnostic result is promoted to successful visual verification.
+    assert not any(p['proxy_external'] or p['proxy_cleanup_external'] or p['page_external'] or p['cdp_external'] for p in phases), 'external requests remain; diagnosis saved, stop'
+
+
+if __name__=='__main__':
+    if '--process-phases' in sys.argv:
+        suite=sys.argv[sys.argv.index('--suite')+1]
+        assert suite in {'general','sensitive-synthetic'}
+        process_phase_diagnostics(suite)
+    else:unittest.main(verbosity=2)

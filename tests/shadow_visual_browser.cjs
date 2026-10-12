@@ -1,6 +1,6 @@
 // Installed Chrome through its standard CDP pipe; Node built-ins only.
 const fs=require('node:fs');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const assert=require('node:assert/strict');
 const path=require('node:path');
 function safeUrl(raw){
@@ -21,13 +21,145 @@ function redactionSelfTest(){
   for(const secret of ['private-user','private-pass','private-token','private-signature','private-fragment'])assert(!text.includes(secret),'URL redaction failed');
   assert.equal(sample.url,'https://example.test:8443/font.css?token=<redacted>&signature=<redacted>');
   assert(!JSON.stringify(safeUrl('data:text/plain,private-data')).includes('private-data'));
+  const argv=JSON.stringify(safeArguments(['/bin/chrome','--auth=private-token','--ignore-certificate-errors-spki-list=private-spki','--user-data-dir=/tmp/synthetic-profile']));
+  assert(!argv.includes('private-token')&&!argv.includes('private-spki'),'argument redaction failed');
 }
 if(require.main===module){
   if(process.argv.includes('--redaction-self-test')){redactionSelfTest();console.log('Node URL redaction self-test PASSED');}
   else{
     let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',s=>input+=s);
-    process.stdin.on('end',()=>main(JSON.parse(input)).catch(()=>{console.log('visual verification failed; no secrets logged');process.exitCode=1;}));
+    process.stdin.on('end',()=>{const c=JSON.parse(input);(c.phase?processPhase(c):main(c)).catch(()=>{console.log('diagnostic or visual verification failed; no secrets logged');process.exitCode=1;});});
   }
+}
+
+function browserArguments(c){
+  const args=['--headless=new','--remote-debugging-pipe','--user-data-dir='+c.profile,
+    '--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync',
+    '--no-first-run','--no-default-browser-check','--disable-domain-reliability','--metrics-recording-only',
+    '--disable-client-side-phishing-detection','--safebrowsing-disable-auto-update',
+    '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,NetworkTimeServiceQuerying',
+    '--proxy-server='+c.proxy,'--proxy-bypass-list=127.0.0.1',
+    '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+    '--ignore-certificate-errors-spki-list='+c.spki,'--log-net-log='+c.netlog];
+  // No added switches. Default NetLog capture mode remains Default.
+  // B has no positional URL and no explicit context/page creation.
+  if(c.phase!=='B')args.push('about:blank');
+  return args;
+}
+
+function procInfo(pid){
+  const stat=fs.readFileSync('/proc/'+pid+'/stat','utf8');
+  const fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');
+  return {pid,parent_pid:Number(fields[1]),group:Number(fields[2]),state:fields[0],exe:fs.readlinkSync('/proc/'+pid+'/exe')};
+}
+function safeArguments(args){
+  const plain=new Set(['--headless','--disable-features','--proxy-bypass-list','--host-resolver-rules']);
+  return args.map((arg,i)=>{
+    if(i===0)return arg;
+    if(arg==='about:blank')return arg;
+    if(!arg.startsWith('--'))return '<redacted>';
+    const split=arg.indexOf('=');if(split<0)return arg;
+    const key=arg.slice(0,split),value=arg.slice(split+1);
+    if(['--user-data-dir','--log-net-log'].includes(key))return key+'='+value;
+    if(key==='--proxy-server')return key+'='+safeUrl(value).url;
+    return key+'='+(plain.has(key)?value:'<redacted>');
+  });
+}
+async function processPhase(c){
+  redactionSelfTest();
+  const records=[],milestones=[],tracked=new Set();let binary,session;
+  const mark=event=>milestones.push({event,time_ms:Date.now()});
+  mark('browser_spawn');
+  const browser=spawn(c.chrome,browserArguments(c),{detached:true,stdio:['ignore','ignore','pipe','pipe','pipe']});
+  fs.writeFileSync(c.pid_file,String(browser.pid));
+  browser.stderr.on('data',()=>{});
+  let sequence=0,buffer='';const pending=new Map();
+  const call=(method,params={},sid=session)=>new Promise((resolve,reject)=>{
+    const id=++sequence,timer=setTimeout(()=>{pending.delete(id);reject(new Error('phase CDP timeout'));},15000);
+    pending.set(id,{resolve:x=>{clearTimeout(timer);resolve(x);},reject:e=>{clearTimeout(timer);reject(e);}});
+    browser.stdio[3].write(JSON.stringify({id,method,params,...(sid?{sessionId:sid}:{})})+'\0');
+  });
+  let status;
+  const frames=new Map(),requests=new Map();
+  const stack=s=>s?[...(s.callFrames||[]).map(f=>({script_url:safeUrl(f.url).url,line:f.lineNumber,column:f.columnNumber})),...stack(s.parent)]:[];
+  const record=(layer,p,original)=>{
+    const url=safeUrl(p.request.url),init=original?.initiator;
+    records.push({sequence:records.length+1,layer,time_ms:Date.now(),method:p.request.method,...url,
+      resource_type:p.type||p.resourceType||'unknown',document_url:safeUrl(original?.documentURL).url,
+      redirect_from:safeUrl(original?.redirectResponse?.url).url,initiator_type:init?.type||'unknown',
+      initiator_stack:stack(init?.stack),frame_url:safeUrl(frames.get(p.frameId)).url,
+      allowed:['data','blob'].includes(url.scheme)||new URL(p.request.url).origin===c.base});
+  };
+  browser.stdio[4].on('data',data=>{
+    buffer+=data.toString();let end;
+    while((end=buffer.indexOf('\0'))>=0){
+      const raw=buffer.slice(0,end);buffer=buffer.slice(end+1);if(!raw)continue;const m=JSON.parse(raw);
+      if(m.id){const p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(new Error('phase CDP rejected')):p.resolve(m.result);}continue;}
+      if(m.method==='Page.frameNavigated')frames.set(m.params.frame.id,m.params.frame.url);
+      if(m.method==='Network.requestWillBeSent'){requests.set(m.params.requestId,m.params);record('cdp-network',m.params,m.params);}
+      if(m.method==='Network.responseReceived'&&m.params.type==='Document')status=m.params.response.status;
+      if(m.method==='Fetch.requestPaused'){
+        record('page-fetch',m.params,requests.get(m.params.networkId));
+        const u=new URL(m.params.request.url),ok=['data:','blob:'].includes(u.protocol)||u.origin===c.base;
+        call(ok?'Fetch.continueRequest':'Fetch.failRequest',{requestId:m.params.requestId,...(ok?{}:{errorReason:'BlockedByClient'})}).catch(()=>{});
+      }
+    }
+  });
+  browser.on('exit',()=>{for(const p of pending.values())p.reject(new Error('phase browser exited'));});
+  const collect=()=>{
+    for(const name of fs.readdirSync('/proc'))if(/^\d+$/.test(name)){
+      try{const info=procInfo(Number(name));if(info.group===browser.pid)tracked.add(info.pid);}catch{}
+    }
+  };
+  let phaseError=false;
+  try{
+    const version=await call('Browser.getVersion',{},null);
+    const info=procInfo(browser.pid),parent=procInfo(info.parent_pid);
+    const rawArgs=fs.readFileSync('/proc/'+browser.pid+'/cmdline').toString().split('\0').filter(Boolean);
+    const ownVersion=spawnSync(info.exe,['--version'],{encoding:'utf8',timeout:10000});
+    assert.equal(ownVersion.status,0,'binary version query failed');
+    assert(/\d+\.\d+\.\d+\.\d+/.test(ownVersion.stdout),'binary version missing');
+    binary={...info,parent:{pid:parent.pid,exe:parent.exe},version:ownVersion.stdout.trim(),product:version.product,
+      revision:version.revision,effective_arguments:safeArguments(rawArgs),user_data_dir:c.profile};
+    const targets=await call('Target.getTargets',{},null);
+    binary.implicit_startup_targets=targets.targetInfos.map(t=>({type:t.type,url:safeUrl(t.url).url,is_about_blank:t.url==='about:blank'}));
+    mark('binary_verified');collect();
+    if(c.phase!=='B'){
+      mark('context_create_start');const context=await call('Target.createBrowserContext',{},null);mark('context_created');
+      mark('page_create_start');const target=await call('Target.createTarget',{url:'about:blank',browserContextId:context.browserContextId},null);mark('page_created');
+      session=(await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null)).sessionId;
+      await call('Page.enable');await call('Network.enable');await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]});
+      if(c.phase==='D'){
+        const navigate=async(url,expected)=>{
+          status=undefined;mark('GET_start');await call('Page.navigate',{url});
+          for(let i=0;i<100&&status===undefined;i++)await new Promise(r=>setTimeout(r,20));
+          assert.equal(status,expected,'existing authentication response changed');mark('GET_response');
+        };
+        await navigate(c.base+'/isolated-shadow/receipts',403);
+        await call('Network.setCookies',{cookies:c.cookies});
+        await navigate(c.base+'/isolated-shadow/receipts',200);
+        await navigate(c.base+'/isolated-shadow/receipts/cases/'+c.detail_id,200);
+      }
+    }
+    assert(Date.now()<c.deadline_ms,'phase initialization exceeded fixed observation window');
+    while(Date.now()<c.deadline_ms){collect();await new Promise(r=>setTimeout(r,Math.min(200,c.deadline_ms-Date.now())));}
+    mark('observation_end');
+  }catch{phaseError=true;mark('phase_error');}
+  finally{
+    collect();mark('browser_close_start');try{await call('Browser.close',{},null);}catch{}
+    for(let i=0;i<30;i++){
+      const living=[...tracked].filter(pid=>{try{return procInfo(pid).state!=='Z';}catch{return false;}});
+      if(!living.length)break;await new Promise(r=>setTimeout(r,100));
+    }
+    const living=[...tracked].filter(pid=>{try{return procInfo(pid).state!=='Z';}catch{return false;}});
+    if(living.length){phaseError=true;try{process.kill(-browser.pid,'SIGTERM');}catch{}}
+    mark('process_cleanup_checked');
+    const remaining=[...tracked].filter(pid=>{try{return procInfo(pid).state!=='Z';}catch{return false;}});
+    fs.writeFileSync(c.result_file,JSON.stringify({phase:c.phase,binary,records,milestones,
+      tracked_pids:[...tracked],remaining_running_pids:remaining,phase_error:phaseError,
+      capture_mode:'Default (no capture-mode switch; Chromium default)',explicit_context_created:c.phase!=='B'},null,2));
+  }
+  assert(!phaseError,'phase setup/cleanup failed');
 }
 
 async function main(c){
@@ -42,14 +174,7 @@ async function main(c){
       redirect_from:safeUrl(p.redirectResponse?.url).url,initiator_type:init?.type||'unknown',
       initiator_stack:stackFrames(init?.stack),frame_url:safeUrl(frame?.url).url,allowed:allowed(p.request.url)});
   };
-  const browser=spawn(c.chrome,['--headless=new','--remote-debugging-pipe','--user-data-dir='+c.profile,
-    '--disable-background-networking','--disable-component-update','--disable-default-apps','--disable-sync',
-    '--no-first-run','--no-default-browser-check','--disable-domain-reliability','--metrics-recording-only',
-    '--disable-client-side-phishing-detection','--safebrowsing-disable-auto-update',
-    '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,NetworkTimeServiceQuerying',
-    '--proxy-server='+c.proxy,'--proxy-bypass-list=127.0.0.1',
-    '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
-    '--ignore-certificate-errors-spki-list='+c.spki,'--log-net-log='+c.netlog,'about:blank'],
+  const browser=spawn(c.chrome,browserArguments(c),
     {stdio:['ignore','ignore','pipe','pipe','pipe']});
   // Chrome's sandbox and normal origin/cookie security stay enabled.
   browser.stderr.on('data',()=>{});

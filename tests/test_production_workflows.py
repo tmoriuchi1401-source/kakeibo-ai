@@ -39,23 +39,21 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
                 ),
             })
             expected["test"]["steps"].insert(4, {
-                "name": "Render isolated shadow PC and 390px evidence",
-                "run": "python tests/shadow_visual_check.py",
+                "name": "Diagnose isolated Chrome process phases",
+                "run": 'python tests/shadow_visual_check.py --process-phases --suite "${{ matrix.suite }}"',
             })
             expected["test"]["steps"].insert(5, {
-                "name": "Upload redacted shadow diagnostics and screenshots only",
+                "name": "Upload redacted Chrome phase diagnostics only",
                 "if": "${{ always() }}",
                 "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
                 "with": {
-                    "name": "shadow-receipts-visual-${{ matrix.suite }}",
+                    "name": "shadow-chrome-phases-${{ matrix.suite }}",
                     "path": (
-                        "artifacts/shadow-visual/*.png\n"
-                        "artifacts/shadow-visual/network-records.json\n"
-                        "artifacts/shadow-visual/network-summary.json\n"
-                        "artifacts/shadow-visual/font-inventory.json\n"
-                        "artifacts/shadow-visual/computed-fonts.json\n"
-                        "artifacts/shadow-visual/viewport-metrics.json\n"
-                        "artifacts/shadow-visual/safety-counts.json\n"
+                        "artifacts/shadow-process/phase-records.json\n"
+                        "artifacts/shadow-process/process-binaries.json\n"
+                        "artifacts/shadow-process/netlog-summary.json\n"
+                        "artifacts/shadow-process/source-correspondence.json\n"
+                        "artifacts/shadow-process/cleanup-confirmation.json\n"
                     ),
                     "retention-days": "1",
                     "if-no-files-found": "error",
