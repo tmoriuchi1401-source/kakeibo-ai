@@ -39,21 +39,34 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
                 ),
             })
             expected["test"]["steps"].insert(4, {
-                "name": "Diagnose isolated Chrome process phases",
-                "run": 'python tests/shadow_visual_check.py --process-phases --suite "${{ matrix.suite }}"',
+                "name": "Verify blocked-egress synthetic shadow safety",
+                "run": (
+                    'for tool in unshare ip runuser sudo; do command -v "$tool" >/dev/null; done\n'
+                    'task_user=$(id -un)\n'
+                    'task_python=$(command -v python)\n'
+                    'task_netns=$(readlink /proc/self/ns/net)\n'
+                    "sudo unshare --net -- sh -eu -c '\n"
+                    '  ip link set lo up\n'
+                    '  exec runuser -u "$1" -- "$2" tests/shadow_visual_check.py --egress-safety --outer-netns "$3"\n'
+                    "' sh \"$task_user\" \"$task_python\" \"$task_netns\"\n"
+                ),
             })
             expected["test"]["steps"].insert(5, {
-                "name": "Upload redacted Chrome phase diagnostics only",
+                "name": "Upload synthetic blocked-egress evidence only",
                 "if": "${{ always() }}",
                 "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
                 "with": {
-                    "name": "shadow-chrome-phases-${{ matrix.suite }}",
+                    "name": "shadow-blocked-egress-${{ matrix.suite }}",
                     "path": (
-                        "artifacts/shadow-process/phase-records.json\n"
-                        "artifacts/shadow-process/process-binaries.json\n"
-                        "artifacts/shadow-process/netlog-summary.json\n"
-                        "artifacts/shadow-process/source-correspondence.json\n"
-                        "artifacts/shadow-process/cleanup-confirmation.json\n"
+                        "artifacts/shadow-visual/*.png\n"
+                        "artifacts/shadow-visual/network-records.json\n"
+                        "artifacts/shadow-visual/network-summary.json\n"
+                        "artifacts/shadow-visual/font-inventory.json\n"
+                        "artifacts/shadow-visual/computed-fonts.json\n"
+                        "artifacts/shadow-visual/viewport-metrics.json\n"
+                        "artifacts/shadow-visual/safety-counts.json\n"
+                        "artifacts/shadow-visual/browser-privacy.json\n"
+                        "artifacts/shadow-visual/egress-safety.json\n"
                     ),
                     "retention-days": "1",
                     "if-no-files-found": "error",

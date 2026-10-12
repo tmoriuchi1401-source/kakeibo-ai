@@ -23,7 +23,9 @@ function redactionSelfTest(){
   assert(!JSON.stringify(safeUrl('data:text/plain,private-data')).includes('private-data'));
   const argv=JSON.stringify(safeArguments(['/bin/chrome','--auth=private-token','--ignore-certificate-errors-spki-list=private-spki','--user-data-dir=/tmp/synthetic-profile']));
   assert(!argv.includes('private-token')&&!argv.includes('private-spki'),'argument redaction failed');
+  assert.equal(secretMatches({query:'private-canary'},['private-canary']),1);
 }
+function secretMatches(value,secrets){const text=JSON.stringify(value);return secrets.filter(s=>s&&text.includes(s)).length;}
 if(require.main===module){
   if(process.argv.includes('--redaction-self-test')){redactionSelfTest();console.log('Node URL redaction self-test PASSED');}
   else{
@@ -165,10 +167,12 @@ async function processPhase(c){
 async function main(c){
   redactionSelfTest();
   const records=[],metrics=[],fonts=[],frames=new Map(),initiators=new Map();
+  const privacy={external_canary_matches:0,cookie_scope_checked:false,browser_network_namespace:'not checked'};
   const stackFrames=stack=>stack?[...(stack.callFrames||[]).map(f=>({script_url:safeUrl(f.url).url,line:f.lineNumber,column:f.columnNumber})),...stackFrames(stack.parent)]:[];
   const allowed=raw=>{try{const u=new URL(raw);return ['data:','blob:'].includes(u.protocol)||u.origin===c.base;}catch{return false;}};
   const record=(layer,p,init)=>{
     const u=safeUrl(p.request.url),frame=frames.get(p.frameId);
+    if(c.egress_safety&&!allowed(p.request.url))privacy.external_canary_matches+=secretMatches(p.request,c.private_canaries);
     records.push({sequence:records.length+1,layer,time_ms:Date.now(),method:p.request.method,...u,
       resource_type:p.type||p.resourceType||'unknown',document_url:safeUrl(p.documentURL).url,
       redirect_from:safeUrl(p.redirectResponse?.url).url,initiator_type:init?.type||'unknown',
@@ -286,11 +290,24 @@ async function main(c){
   };
   try{
     await call('Browser.getVersion',{},null);
+    if(c.egress_safety){
+      privacy.browser_network_namespace=fs.readlinkSync('/proc/'+browser.pid+'/ns/net');
+      assert.equal(privacy.browser_network_namespace,c.egress_namespace,'browser escaped isolated network namespace');
+    }
     const target=await call('Target.createTarget',{url:'about:blank'},null);
     session=(await call('Target.attachToTarget',{targetId:target.targetId,flatten:true},null)).sessionId;
     await call('Page.enable');await call('Network.enable');await call('DOM.enable');await call('CSS.enable');await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]});
     await resize(1440,1000);await navigate(c.base+'/isolated-shadow/receipts');assert.equal(documentStatus,403,'browser must authenticate');
     await call('Network.setCookies',{cookies:c.cookies});await navigate(c.base+'/isolated-shadow/receipts');assert.equal(documentStatus,200,'existing authenticated session required');
+    if(c.egress_safety){
+      const stored=await call('Network.getCookies',{urls:[c.base+'/']});
+      for(const expected of c.cookies){
+        const cookie=stored.cookies.find(value=>value.name===expected.name);
+        assert(cookie&&cookie.value===expected.value&&cookie.domain==='127.0.0.1'&&cookie.secure&&cookie.httpOnly,'authentication cookie scope changed');
+      }
+      privacy.cookie_scope_checked=true;
+      assert(await evaluate('document.body.innerText.includes('+JSON.stringify(c.business_canary)+')'),'synthetic business canary missing from rendered page');
+    }
     const values=(await measure()).values;
     for(const [w,h,name] of [[1440,1000,'list-pc-1440.png'],[390,844,'list-mobile-390.png']]){
       await resize(w,h);await fontDiagnostic(w,'list');const m=await measure();await screenshot(name,w,h);verify(m,c.cases,w);assert.deepEqual(m.values,values,'existing unsent readonly values retained');
@@ -307,6 +324,7 @@ async function main(c){
     fs.writeFileSync(path.join(c.output,'network-records.json'),JSON.stringify({observer:'page-fetch is existing Fetch interception, not Playwright; initiator only copied from matching CDP event',records},null,2));
     fs.writeFileSync(path.join(c.output,'computed-fonts.json'),JSON.stringify(fonts,null,2));
     fs.writeFileSync(path.join(c.output,'viewport-metrics.json'),JSON.stringify(metrics,null,2));
+    if(c.egress_safety)fs.writeFileSync(path.join(c.output,'browser-privacy.json'),JSON.stringify(privacy,null,2));
   }
   // Preserve the rejection, but first persist only the redacted diagnostics.
   assert.equal(network.length,0,'localhost network boundary');

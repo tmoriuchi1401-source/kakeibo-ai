@@ -76,19 +76,31 @@ jobs:
         run: |
           python -m pytest --collect-only -q tests/test_unified_receipt_shadow_host.py
           python -m pytest -vv tests/test_unified_receipt_shadow_host.py
-      - name: Diagnose isolated Chrome process phases
-        run: python tests/shadow_visual_check.py --process-phases --suite "${{ matrix.suite }}"
-      - name: Upload redacted Chrome phase diagnostics only
+      - name: Verify blocked-egress synthetic shadow safety
+        run: |
+          for tool in unshare ip runuser sudo; do command -v "$tool" >/dev/null; done
+          task_user=$(id -un)
+          task_python=$(command -v python)
+          task_netns=$(readlink /proc/self/ns/net)
+          sudo unshare --net -- sh -eu -c '
+            ip link set lo up
+            exec runuser -u "$1" -- "$2" tests/shadow_visual_check.py --egress-safety --outer-netns "$3"
+          ' sh "$task_user" "$task_python" "$task_netns"
+      - name: Upload synthetic blocked-egress evidence only
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: shadow-chrome-phases-${{ matrix.suite }}
+          name: shadow-blocked-egress-${{ matrix.suite }}
           path: |
-            artifacts/shadow-process/phase-records.json
-            artifacts/shadow-process/process-binaries.json
-            artifacts/shadow-process/netlog-summary.json
-            artifacts/shadow-process/source-correspondence.json
-            artifacts/shadow-process/cleanup-confirmation.json
+            artifacts/shadow-visual/*.png
+            artifacts/shadow-visual/network-records.json
+            artifacts/shadow-visual/network-summary.json
+            artifacts/shadow-visual/font-inventory.json
+            artifacts/shadow-visual/computed-fonts.json
+            artifacts/shadow-visual/viewport-metrics.json
+            artifacts/shadow-visual/safety-counts.json
+            artifacts/shadow-visual/browser-privacy.json
+            artifacts/shadow-visual/egress-safety.json
           retention-days: 1
           if-no-files-found: error
           include-hidden-files: false

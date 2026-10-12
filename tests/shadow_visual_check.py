@@ -17,6 +17,8 @@ import tempfile
 import time
 import os
 import re
+import socket
+import errno
 from threading import Thread
 import unittest
 from urllib.parse import urlsplit, parse_qsl, quote
@@ -82,6 +84,33 @@ def font_inventory():
                 noto_package_status=families(['dpkg-query', '-W', '-f=${Package} ${Version} ${Status}\n', 'fonts-noto-cjk', 'fonts-noto-core']))
 
 
+def isolated_network_evidence(outer_namespace):
+    """Fail closed: a separate Linux namespace with loopback and no egress."""
+    current = os.readlink('/proc/self/ns/net')
+    assert current != outer_namespace, 'network namespace was not isolated'
+    def ip(*args):
+        result = subprocess.run(['ip','-j',*args],text=True,capture_output=True,check=True,timeout=10)
+        return json.loads(result.stdout)
+    links=ip('link','show')
+    assert len(links)==1 and links[0]['ifname']=='lo' and 'UP' in links[0]['flags'], 'non-loopback interface or disabled localhost'
+    routes4=ip('-4','route','show','table','all');routes6=ip('-6','route','show','table','all')
+    assert all(r.get('dev')=='lo' for r in routes4+routes6), 'non-loopback route exists'
+    assert not any(r.get('dst')=='default' for r in routes4+routes6), 'default route exists'
+    probes=[]
+    for family,kind,address in [(socket.AF_INET,socket.SOCK_STREAM,('198.51.100.1',443)),
+                                (socket.AF_INET,socket.SOCK_DGRAM,('203.0.113.1',443)),
+                                (socket.AF_INET6,socket.SOCK_STREAM,('2001:db8::1',443))]:
+        with socket.socket(family,kind) as client:
+            client.settimeout(2)
+            try:client.connect(address)
+            except OSError as error:
+                assert error.errno==errno.ENETUNREACH, 'egress probe did not fail with no-route'
+                probes.append(dict(protocol='UDP' if kind==socket.SOCK_DGRAM else 'TCP',ipv6=family==socket.AF_INET6,errno=error.errno))
+            else:raise AssertionError('external connection unexpectedly possible')
+    return dict(network_namespace=current,outer_namespace=outer_namespace,loopback_only=True,default_routes=0,
+                external_interfaces=0,egress_probes=probes,probe_payload_bytes=0)
+
+
 def synthetic_tls(folder):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'isolated-localhost')])
@@ -103,6 +132,8 @@ def synthetic_tls(folder):
 class ShadowVisualCheck(unittest.TestCase):
     def test_pc_390_list_detail_and_no_writes(self):
         self.assertEqual(sys.platform,'linux','existing Linux renderer required; no install fallback')
+        egress_safety=getattr(self,'egress_safety',False)
+        network_proof=isolated_network_evidence(self.outer_namespace) if egress_safety else None
         chrome = next((shutil.which(name) for name in ('google-chrome','google-chrome-stable','chromium','chromium-browser') if shutil.which(name)),None)
         node = shutil.which('node')
         self.assertTrue(chrome and node,'existing browser/Node missing; do not install')
@@ -115,8 +146,14 @@ class ShadowVisualCheck(unittest.TestCase):
         (output/'font-inventory.json').write_text(json.dumps(font_inventory(), ensure_ascii=False, indent=2), encoding='utf-8')
         violations = []
         proxy_records = []
+        private_canaries=[];privacy=dict(proxy_canary_matches=0,proxy_forwarded_connections=0)
         class DenyProxy(BaseHTTPRequestHandler):
             def deny(self):
+                if egress_safety:
+                    # Examine in memory only. No header, body or canary value
+                    # is copied to diagnostics. CONNECT is never forwarded.
+                    transient=self.path+'\n'+str(self.headers)
+                    privacy['proxy_canary_matches']+=sum(bool(s and s in transient) for s in private_canaries)
                 url = safe_url('https://'+self.path if self.command == 'CONNECT' else self.path)
                 if self.command == 'CONNECT':
                     # CONNECT reveals an authority, not a requested resource path.
@@ -136,6 +173,13 @@ class ShadowVisualCheck(unittest.TestCase):
             add_native_unit_cards(h)
             selected = ['isolated-native-units-1','isolated-native-units-2','isolated-legacy-hold',h.f.case_id]
             h.snapshot = [deepcopy(next(c for c in h.snapshot if c['case_id']==cid)) for cid in selected]
+            if egress_safety:
+                import secrets
+                business_canary='SYNTHETIC_PRIVATE_RECEIPT_'+secrets.token_hex(12)
+                h.snapshot[-1]['display']['source_name']+=' '+business_canary
+                h.snapshot[-1]['display']['unsent_inputs'][0]['value']+=' '+business_canary
+                private_canaries.extend([business_canary,h.ticket.csrf,h.ticket.nonce,h.ticket.pkce_verifier,h.ticket.state])
+                private_canaries.extend(h.client.get_cookie(n,domain=DOMAIN).value for n in (h.web.COOKIE,h.web.LOGIN_COOKIE))
             expected = [dict(case_id=c['case_id'],**c['display']) for c in h.snapshot]
             self.assertEqual([c['unit_count'] for c in expected],[1,2,0,0])
             unit_ids = [u['unit_id'] for c in expected for u in c['units']]
@@ -163,6 +207,9 @@ class ShadowVisualCheck(unittest.TestCase):
             config = dict(chrome=chrome,profile=str(folder/'profile'),netlog=str(folder/'netlog.json'),spki=spki,
                 proxy='http://127.0.0.1:'+str(proxy.server_port),base=base,output=str(output),cookies=cookies,
                 cases=expected,detail_id='isolated-native-units-2')
+            if egress_safety:
+                config.update(egress_safety=True,egress_namespace=network_proof['network_namespace'],
+                              private_canaries=private_canaries,business_canary=business_canary)
             try:
                 result = subprocess.run([node,str(ROOT/'tests/shadow_visual_browser.cjs')],input=json.dumps(config),
                     text=True,capture_output=True,timeout=120)
@@ -178,12 +225,15 @@ class ShadowVisualCheck(unittest.TestCase):
             finally:
                 netlog_file.unlink(missing_ok=True)
             netlog_url_violations = []
+            external_url_canary_matches=0
             def inspect(value):
+                nonlocal external_url_canary_matches
                 if isinstance(value,dict):
                     for k,v in value.items():
                         if k in {'url','original_url'} and isinstance(v,str):
                             parsed=urlsplit(v)
                             if parsed.scheme in {'http','https','ws','wss'} and (parsed.scheme+'://'+parsed.netloc) != base:
+                                if egress_safety:external_url_canary_matches+=sum(bool(s and s in v) for s in private_canaries)
                                 violations.append('browser netlog contains non-localhost URL')
                                 netlog_url_violations.append(safe_url(v))
                         inspect(v)
@@ -244,7 +294,17 @@ class ShadowVisualCheck(unittest.TestCase):
                     self.assertGreaterEqual(image.height,844 if 'mobile' in path.name else 1000)
             self.assertEqual({p.name for p in output.iterdir()},
                 {'list-pc-1440.png','list-mobile-390.png','detail-pc-1440.png','detail-mobile-390.png',
-                 'network-records.json','network-summary.json','font-inventory.json','computed-fonts.json','viewport-metrics.json','safety-counts.json'})
+                 'network-records.json','network-summary.json','font-inventory.json','computed-fonts.json','viewport-metrics.json','safety-counts.json'}
+                | ({'browser-privacy.json'} if egress_safety else set()))
+            if egress_safety:
+                browser_privacy=json.loads((output/'browser-privacy.json').read_text('utf-8'))
+                proof=dict(network=network_proof,**privacy,external_url_canary_matches=external_url_canary_matches,
+                    browser_privacy=browser_privacy,raw_netlog_deleted=summary['raw_netlog_deleted'],
+                    rendered_viewports=4,state_and_inputs_unchanged=after==before,legacy_stop_conditions_unchanged=True)
+                (output/'egress-safety.json').write_text(json.dumps(proof,indent=2),encoding='utf-8')
+                assert not privacy['proxy_canary_matches'] and not external_url_canary_matches and not browser_privacy['external_canary_matches'], 'private canary appeared in external request evidence'
+                assert browser_privacy['cookie_scope_checked'] and network_proof['external_interfaces']==0 and summary['raw_netlog_deleted'], 'isolation or privacy evidence incomplete'
+                print('BLOCKED EGRESS SAFETY EVIDENCE PASSED; existing external-request stop remains active',flush=True)
             self.assertEqual(summary['page_level_external'],0,'page external request attempted')
             self.assertEqual(summary['cdp_external'],0,'CDP external request attempted')
             self.assertEqual(violations,[],'network or write boundary violated')
@@ -492,7 +552,11 @@ def process_phase_diagnostics(suite):
 
 
 if __name__=='__main__':
-    if '--process-phases' in sys.argv:
+    if '--egress-safety' in sys.argv:
+        test=ShadowVisualCheck('test_pc_390_list_detail_and_no_writes')
+        test.egress_safety=True;test.outer_namespace=sys.argv[sys.argv.index('--outer-netns')+1]
+        test.test_pc_390_list_detail_and_no_writes()
+    elif '--process-phases' in sys.argv:
         suite=sys.argv[sys.argv.index('--suite')+1]
         assert suite in {'general','sensitive-synthetic'}
         process_phase_diagnostics(suite)
