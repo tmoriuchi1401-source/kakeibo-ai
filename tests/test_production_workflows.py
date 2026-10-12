@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 
 import yaml
 
@@ -17,6 +18,76 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "unified-receipt-write-checks.yml":
+            # A stacked, credential-free CI entry is not a production entry.
+            # Assert the complete boundary before exempting its PR mutex.
+            source = (ROOT / ".github/workflows" / name).read_text("utf-8")
+            assert workflow["on"] == {"pull_request": {"branches": ["codex/unified-receipt-readonly"]}}
+            assert workflow["permissions"] == {"contents": "read"}
+            assert workflow["env"] == {"UNIFIED_RECEIPT_WRITE_ENABLED": "false"}
+            assert "secrets." not in source and "vars." not in source and "environment:" not in source
+            expected = deepcopy(workflows()["synthetic-tests.yml"]["jobs"])
+            # The purpose contracts load the unchanged, hash-pinned historical
+            # validators. Fix the exact checkout and host evidence delta;
+            # every other job, step and command must remain identical.
+            expected["test"]["steps"][0]["with"]["fetch-depth"] = "0"
+            expected["test"]["steps"].insert(3, {
+                "name": "Collect and execute isolated shadow host-level evidence",
+                "run": (
+                    "python -m pytest --collect-only -q tests/test_unified_receipt_shadow_host.py\n"
+                    "python -m pytest -vv tests/test_unified_receipt_shadow_host.py\n"
+                ),
+            })
+            expected["test"]["steps"].insert(4, {
+                "name": "Verify blocked-egress synthetic shadow safety",
+                "run": (
+                    'for tool in unshare ip runuser sudo; do command -v "$tool" >/dev/null; done\n'
+                    'task_user=$(id -un)\n'
+                    'task_python=$(command -v python)\n'
+                    'task_netns=$(readlink /proc/self/ns/net)\n'
+                    "sudo unshare --net -- sh -eu -c '\n"
+                    '  ip link set lo up\n'
+                    '  exec runuser -u "$1" -- "$2" tests/shadow_visual_check.py --egress-safety --outer-netns "$3"\n'
+                    "' sh \"$task_user\" \"$task_python\" \"$task_netns\"\n"
+                ),
+            })
+            expected["test"]["steps"].insert(5, {
+                "name": "Upload synthetic blocked-egress evidence only",
+                "if": "${{ always() }}",
+                "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+                "with": {
+                    "name": "shadow-blocked-egress-${{ matrix.suite }}",
+                    "path": (
+                        "artifacts/shadow-visual/*.png\n"
+                        "artifacts/shadow-visual/network-records.json\n"
+                        "artifacts/shadow-visual/network-summary.json\n"
+                        "artifacts/shadow-visual/font-inventory.json\n"
+                        "artifacts/shadow-visual/computed-fonts.json\n"
+                        "artifacts/shadow-visual/viewport-metrics.json\n"
+                        "artifacts/shadow-visual/safety-counts.json\n"
+                        "artifacts/shadow-visual/browser-privacy.json\n"
+                        "artifacts/shadow-visual/egress-safety.json\n"
+                    ),
+                    "retention-days": "1",
+                    "if-no-files-found": "error",
+                    "include-hidden-files": "false",
+                },
+            })
+            expected["staging-local-build"] = {
+                "runs-on": "ubuntu-24.04",
+                "timeout-minutes": "15",
+                "steps": [
+                    {"uses": "actions/checkout@v4", "with": {
+                        "ref": "${{ github.event.pull_request.head.sha }}",
+                        "fetch-depth": "0", "persist-credentials": "false"}},
+                    {"uses": "actions/setup-python@v5", "with": {"python-version": "3.12"}},
+                    {"name": "Verify exact staging source and runner-local Docker", "run": (
+                        'test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"\n'
+                        'python -m staging_shadow.ci_build\n')},
+                ],
+            }
+            assert workflow["jobs"] == expected
+            continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue
         assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }}</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f7;color:#172c38;font:17px/1.65 system-ui,sans-serif;overflow-wrap:anywhere}
+main{max-width:1040px;margin:auto;padding:26px 20px}h1{font-size:26px;margin:0 0 12px}h2{font-size:20px;margin:0}
+.notice{border-left:5px solid #4c6472;padding:12px 16px;background:white}.case{border:2px solid #466176;border-radius:14px;margin:30px 0 42px;overflow:hidden;background:white;box-shadow:0 3px 8px #172c3810}
+.case header{background:#e1edf4;border-bottom:2px solid #466176;padding:18px}.case .body{padding:20px}.status{display:inline-block;border:1px solid #466176;border-radius:6px;padding:3px 10px;margin:8px 0;background:#fff;font-weight:bold}
+.hold{background:#fff3de}.complete{background:#e3f3e9}.facts{display:grid;grid-template-columns:135px minmax(0,1fr);gap:8px 16px;margin:0 0 18px}.facts dt{font-weight:bold}.facts dd{margin:0;min-width:0}
+.unit{border:1px solid #69818f;border-left:5px solid #69818f;margin:18px 0;padding:16px;border-radius:8px;background:#f8fafb}.unit h3{margin:0;font-size:18px}.repeat{border-bottom:1px solid #aaa;padding-bottom:8px;font-weight:bold}
+textarea{width:100%;min-height:70px;resize:vertical;font:inherit;padding:10px;background:#fff;border:1px solid #69818f}.end{border-top:2px dashed #466176;padding:10px 18px;font-weight:bold;background:#f3f6f8}
+a{color:#125879;text-underline-offset:3px}.action{border-top:1px solid #a9bbc7;margin-top:18px;padding-top:15px}.error{border:2px solid #914521;padding:18px;background:#fff0e6}
+@media(max-width:600px){main{padding:18px 12px}h1{font-size:23px}.case header,.case .body{padding:14px}.facts{display:block}.facts dt{margin-top:10px}.unit{padding:12px}.case{margin:24px 0 34px}}
+</style></head>
+<body><main><h1>{{ title }}</h1>
+<p class="notice">隔離環境の確認画面です。会計記帳・AI送信・原本移動は実行しません。</p>
+{% if message %}<p class="error" role="alert">{{ message }}</p>{% endif %}
+{% for case in cases %}
+{% set d=case.display %}{% set held=case.disposition=='LEGACY_UNMAPPED_HOLD' or case.state in ['held','partial_unknown'] %}
+<article class="case" aria-labelledby="case-{{ loop.index }}">
+<header><h2 id="case-{{ loop.index }}">案件 {{ case.case_id }}</h2>
+<div class="status {{ 'hold' if held else 'complete' if case.state=='complete' else '' }}">{{ '⏸ 旧案件・対応確認保留' if case.disposition=='LEGACY_UNMAPPED_HOLD' else '⏸ 保留・再確認' if held else '✓ 完了' if case.state=='complete' else '○ 確認可能' }}</div>
+<p>原本：{{ d.get('source_name',d.get('原本','未表示')) }}<br>対象ページ：{{ d.get('page_range','未確定') }} · Unit数：{{ d.get('unit_count',0) }}</p>
+</header><div class="body">
+<dl class="facts"><dt>原本 → ページ</dt><dd>{{ d.get('page_range','未確定') }}</dd><dt>現在状態</dt><dd>{{ d.get('state_label',case.state) }}</dd><dt>必要な確認操作</dt><dd>{{ d.get('next_action',d.get('次にすること','現在の状態を確認')) }}</dd></dl>
+{% if case.disposition=='LEGACY_UNMAPPED_HOLD' %}<p>旧確認と新Receipt Unitの対応を証明できないため自動処理不可。操作は無効です。</p>{% endif %}
+{% for unit in d.get('units',[]) %}<section class="unit"><p class="repeat">案件 {{ case.case_id }} ／ {{ d.get('page_range','未確定') }}</p><h3>レシート {{ unit.receipt_index }} · {{ unit.page_range }}</h3><p>Unit ID：{{ unit.unit_id }}</p><p>{{ unit.state_label }} — {{ unit.next_action }}</p></section>{% endfor %}
+{% for draft in d.get('unsent_inputs',[]) %}<label>未送信入力（保持・読取り専用）：{{ draft.label }}<textarea readonly aria-label="{{ draft.label }}">{{ draft.value }}</textarea></label>{% endfor %}
+<div class="action"><p>この画面は読取り専用です。操作要求は本人認証・CSRFを検証した専用POSTで確認します。</p>
+{% if not detail %}<a href="{{ url_for('unified_receipt_isolated_shadow.detail',case_id=case.case_id) }}">案件 {{ case.case_id }} の詳細を開く</a>{% else %}<a href="{{ url_for('unified_receipt_isolated_shadow.list') }}">案件一覧へ戻る</a>{% endif %}</div>
+</div><footer class="end">ここまで：案件 {{ case.case_id }}</footer></article>
+{% endfor %}<a href="/logout">本人確認を終了（ログアウト）</a></main></body></html>
