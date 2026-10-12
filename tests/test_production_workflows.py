@@ -73,6 +73,19 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
                     "include-hidden-files": "false",
                 },
             })
+            expected["staging-local-build"] = {
+                "runs-on": "ubuntu-24.04",
+                "timeout-minutes": "15",
+                "steps": [
+                    {"uses": "actions/checkout@v4", "with": {
+                        "ref": "${{ github.event.pull_request.head.sha }}",
+                        "fetch-depth": "0", "persist-credentials": "false"}},
+                    {"uses": "actions/setup-python@v5", "with": {"python-version": "3.12"}},
+                    {"name": "Verify exact staging source and runner-local Docker", "run": (
+                        'test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"\n'
+                        'python -m staging_shadow.ci_build\n')},
+                ],
+            }
             assert workflow["jobs"] == expected
             continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
