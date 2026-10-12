@@ -78,12 +78,19 @@ jobs:
           python -m pytest -vv tests/test_unified_receipt_shadow_host.py
       - name: Render isolated shadow PC and 390px evidence
         run: python tests/shadow_visual_check.py
-      - name: Upload isolated shadow screenshots only
+      - name: Upload redacted shadow diagnostics and screenshots only
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: shadow-receipts-visual-${{ matrix.suite }}
-          path: artifacts/shadow-visual/*.png
+          path: |
+            artifacts/shadow-visual/*.png
+            artifacts/shadow-visual/network-records.json
+            artifacts/shadow-visual/network-summary.json
+            artifacts/shadow-visual/font-inventory.json
+            artifacts/shadow-visual/computed-fonts.json
+            artifacts/shadow-visual/viewport-metrics.json
+            artifacts/shadow-visual/safety-counts.json
           retention-days: 1
           if-no-files-found: error
           include-hidden-files: false

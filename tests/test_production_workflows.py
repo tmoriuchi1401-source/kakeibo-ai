@@ -43,12 +43,20 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
                 "run": "python tests/shadow_visual_check.py",
             })
             expected["test"]["steps"].insert(5, {
-                "name": "Upload isolated shadow screenshots only",
+                "name": "Upload redacted shadow diagnostics and screenshots only",
                 "if": "${{ always() }}",
                 "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
                 "with": {
                     "name": "shadow-receipts-visual-${{ matrix.suite }}",
-                    "path": "artifacts/shadow-visual/*.png",
+                    "path": (
+                        "artifacts/shadow-visual/*.png\n"
+                        "artifacts/shadow-visual/network-records.json\n"
+                        "artifacts/shadow-visual/network-summary.json\n"
+                        "artifacts/shadow-visual/font-inventory.json\n"
+                        "artifacts/shadow-visual/computed-fonts.json\n"
+                        "artifacts/shadow-visual/viewport-metrics.json\n"
+                        "artifacts/shadow-visual/safety-counts.json\n"
+                    ),
                     "retention-days": "1",
                     "if-no-files-found": "error",
                     "include-hidden-files": "false",
