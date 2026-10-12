@@ -72,6 +72,10 @@ jobs:
           pip install -r requirements-test.txt
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+      - name: Collect and execute isolated shadow host-level evidence
+        run: |
+          python -m pytest --collect-only -q tests/test_unified_receipt_shadow_host.py
+          python -m pytest -vv tests/test_unified_receipt_shadow_host.py
       - name: Run isolated synthetic suite
         env:
           TEST_SELECTION: ${{ matrix.selection }}

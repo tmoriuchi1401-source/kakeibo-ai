@@ -28,8 +28,16 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
             assert "secrets." not in source and "vars." not in source and "environment:" not in source
             expected = deepcopy(workflows()["synthetic-tests.yml"]["jobs"])
             # The purpose contracts load the unchanged, hash-pinned historical
-            # validators. Only credential-free checkout history is added.
+            # validators. Fix the exact checkout and host evidence delta;
+            # every other job, step and command must remain identical.
             expected["test"]["steps"][0]["with"]["fetch-depth"] = "0"
+            expected["test"]["steps"].insert(3, {
+                "name": "Collect and execute isolated shadow host-level evidence",
+                "run": (
+                    "python -m pytest --collect-only -q tests/test_unified_receipt_shadow_host.py\n"
+                    "python -m pytest -vv tests/test_unified_receipt_shadow_host.py\n"
+                ),
+            })
             assert workflow["jobs"] == expected
             continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
