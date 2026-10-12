@@ -38,6 +38,22 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
                     "python -m pytest -vv tests/test_unified_receipt_shadow_host.py\n"
                 ),
             })
+            expected["test"]["steps"].insert(4, {
+                "name": "Render isolated shadow PC and 390px evidence",
+                "run": "python tests/shadow_visual_check.py",
+            })
+            expected["test"]["steps"].insert(5, {
+                "name": "Upload isolated shadow screenshots only",
+                "if": "${{ always() }}",
+                "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+                "with": {
+                    "name": "shadow-receipts-visual-${{ matrix.suite }}",
+                    "path": "artifacts/shadow-visual/*.png",
+                    "retention-days": "1",
+                    "if-no-files-found": "error",
+                    "include-hidden-files": "false",
+                },
+            })
             assert workflow["jobs"] == expected
             continue
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:

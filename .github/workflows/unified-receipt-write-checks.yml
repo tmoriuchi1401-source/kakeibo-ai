@@ -76,6 +76,17 @@ jobs:
         run: |
           python -m pytest --collect-only -q tests/test_unified_receipt_shadow_host.py
           python -m pytest -vv tests/test_unified_receipt_shadow_host.py
+      - name: Render isolated shadow PC and 390px evidence
+        run: python tests/shadow_visual_check.py
+      - name: Upload isolated shadow screenshots only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shadow-receipts-visual-${{ matrix.suite }}
+          path: artifacts/shadow-visual/*.png
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: false
       - name: Run isolated synthetic suite
         env:
           TEST_SELECTION: ${{ matrix.selection }}
