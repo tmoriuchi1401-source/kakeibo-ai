@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-readonly-host-checks.yml":
+            assert_iphone_readonly_workflow(workflow)
+            continue
         if name == "iphone-sheet-adapter-checks.yml":
             assert_iphone_adapter_workflow(workflow)
             continue
@@ -166,6 +169,35 @@ def assert_iphone_adapter_workflow(workflow):
 
 def test_iphone_adapter_workflow_has_exact_credential_free_ci_scope():
     assert_iphone_adapter_workflow(workflows()['iphone-sheet-adapter-checks.yml'])
+
+
+def assert_iphone_readonly_workflow(workflow):
+    # Reuse the already exact-checked credential-free CI structure. Only this
+    # explicitly enumerated test delta is exempt from production entry guards.
+    expected = deepcopy(workflows()['iphone-sheet-adapter-checks.yml'])
+    assert_iphone_adapter_workflow(expected)
+    expected['name'] = 'iPhone Phase 5A synthetic readonly host'
+    expected['on'] = {'pull_request': {'branches':['codex/iphone-raw-draft-adapter']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-readonly-${{ github.ref }}'
+    job = expected['jobs'].pop('adapter-contracts')
+    expected['jobs']['readonly-host'] = job
+    job['steps'][3] = {'name':'Collect and execute authenticated read-only host contracts', 'run':
+        'python -m pytest --collect-only -q tests/test_iphone_readonly_host.py\n'
+        'python -m pytest -vv tests/test_iphone_readonly_host.py\n'}
+    job['steps'][4] = {'name':'Reuse Phase 4B and native safety boundaries', 'run':
+        'python -m pytest -q tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py '
+        'tests/test_iphone_native_dry_run.py tests/test_iphone_review_drafts.py tests/test_iphone_review_preview.py '
+        'tests/test_unified_receipt_review.py tests/test_unified_receipt_eligibility.py tests/test_unified_receipt_write.py '
+        'tests/test_unified_receipt_purposes.py tests/test_unified_receipt_shadow_host.py tests/test_production_workflows.py'}
+    job['steps'][5]['run'] = (
+        'python -m compileall -q app/iphone_readonly_host.py tests/iphone_readonly_fixtures.py '
+        'tests/test_iphone_readonly_host.py tests/iphone_readonly_visual.py\n'
+        'git diff --check\n')
+    assert workflow == expected
+
+
+def test_iphone_readonly_workflow_is_exact_credential_free_ci():
+    assert_iphone_readonly_workflow(workflows()['iphone-readonly-host-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>保存済み下書き・合成確認</title>
+<style>
+*{box-sizing:border-box}body{font:16px/1.65 system-ui,"Yu Gothic",sans-serif;margin:0;background:#f4f6f8;color:#172936}
+main{max-width:1050px;margin:auto;padding:20px}h1{font-size:1.5rem}h2{font-size:1.15rem;margin-top:0}
+.notice,article{background:white;border:1px solid #b8cbd3;border-radius:8px;padding:16px;margin:16px 0}
+a{color:#005c84;display:inline-block;min-height:44px;padding:8px 0}p,dd,code{overflow-wrap:anywhere}
+dl{display:grid;grid-template-columns:minmax(110px,1fr) 3fr;gap:8px}dt{font-weight:600}dd{margin:0;white-space:pre-wrap}
+.hold{border-left:6px solid #945b08}.tag{color:#5b420d;font-weight:600}.items{overflow-x:auto}table{border-collapse:collapse;width:100%}td,th{padding:8px;text-align:left;border-bottom:1px solid #ced8dd}
+@media(max-width:500px){main{padding:12px}dl{display:block}dd{margin-bottom:12px}h1{font-size:1.3rem}}
+</style>
+<main><h1>保存済み下書き・合成確認</h1>
+<p class="notice">完全合成データの読み取り専用画面です。Sheets「確認」1タブの入力は保存時点のものです。現在の原本との一致や本人の確定を意味しません。確定・記帳操作はありません。</p>
+{% if message %}<p role="alert">{{ message }}</p>{% endif %}
+{% if detail %}<a href="{{ url_for('iphone_saved_readonly.listing') }}">下書き一覧へ戻る</a>{% endif %}
+{% for case in cases %}{% set d=case.display %}
+<article class="{{ 'hold' if d.held else '' }}" data-case-id="{{ case.case_id }}">
+<h2>{{ case.case_id }} · {{ d.kind }}</h2><p>{{ case.purpose }} · {{ '保留・表示のみ' if d.held else '保存済み下書き' }}</p>
+{% if case.disposition %}<p class="tag">{{ case.disposition }}</p>{% endif %}
+{% if d.manual_only %}<p>医療：完全手入力。外部AI送信禁止。</p>{% endif %}
+{% if case.purpose == 'STRUCTURE_REVIEW' %}<p>PDFの構造確認用です。会計記帳の許可はありません。</p>{% endif %}
+{% if d.original_url %}<a href="{{ d.original_url }}" rel="noreferrer noopener">合成原本リンク（架空ID）</a>{% endif %}
+{% if not detail %}<br><a href="{{ url_for('iphone_saved_readonly.detail',case_id=case.case_id) }}">保存済み詳細を表示</a>
+{% else %}<dl>{% for f in d.inputs %}<dt>{{ f.label }}</dt><dd>{{ f.value }}</dd>{% endfor %}</dl>
+{% if d['items'] %}<h3>一般の明細別snapshot</h3><p>各明細のカテゴリを保持しています。シートのカテゴリを一括適用しません。</p><div class="items"><table><thead><tr><th>明細</th><th>金額</th><th>カテゴリ</th></tr></thead><tbody>{% for item in d['items'] %}<tr><td>{{ item.name }}</td><td>{{ item.amount }}</td><td>{{ item.category }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+<details><summary>保存時点の対応情報</summary><p>canonical案件：{{ d.native_case_id }}</p><p>原本identity：{{ d.source_identity }}</p><p>page / Unit：{{ d.native_identity }}</p><p>入力snapshot：{{ d.input_digest }}</p><p>native snapshot：{{ d.native_digest }}</p></details>
+{% endif %}</article>{% endfor %}
+</main></html>
