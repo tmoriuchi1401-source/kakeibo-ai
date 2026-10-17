@@ -84,7 +84,7 @@ Phase 5AのSavedDraftRepositoryへexact PersistentJournal型だけを追加。�
 
 検証対象：8案件一覧/詳細、G103・H301保留、一般/医療/PDFのpurpose、既存Google認証・owner/session/600秒TTL/Origin、旧journal移行、別instance保存後のstale表示停止、GET中のread/write競合、既存native validator dry-run。
 
-ローカルで新規97件（永続CAS・移行・復旧、版観測、明細、統合host）と、Phase 5Aまでの既存598件＋新CI境界1件＝599件、**合計696件が成功**した（39.37秒、skip/xfailなし）。compileall・diff checkも成功。専用 `iphone-phase5b1-checks.yml` はUbuntu 24.04/Python 3.12、contents:read、資格情報/Secrets/Variables/environment/デプロイなし、write flag false。新規node IDをcollectし全件をverbose実行し、既存安全回帰を別stepで実行する。remote CIの確定結果とcommitはDraft PR本文へ記録する。
+ローカルで新規98件（永続CAS・移行・復旧、版観測、明細、統合host）と、Phase 5Aまでの既存598件＋新CI境界1件＝599件、**合計697件が成功**した（38.02秒、skip/xfailなし）。compileall・diff checkも成功。専用 `iphone-phase5b1-checks.yml` はUbuntu 24.04/Python 3.12、contents:read、資格情報/Secrets/Variables/environment/デプロイなし、write flag false。新規node IDをcollectし全件をverbose実行し、既存安全回帰を別stepで実行する。remote CIの確定結果とcommitはDraft PR本文へ記録する。
 
 テストはsocket接続を拒否し、Firestore Client/Sheets/Drive/live OAuthを使わない。認証bootstrapの合成memory更新とGET副作用は分離。GET前後の認証DB・ciphertext・旧journal一致、およびwrite/native観測/authority更新/会計append/原本move/AI送信0をassertする。CAS更新はfake documentだけ。
 

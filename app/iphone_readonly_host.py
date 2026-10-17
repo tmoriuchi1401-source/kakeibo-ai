@@ -19,6 +19,7 @@ from .iphone_native_dry_run import (KINDS, VersionBinding, bind_case,
                                     check_version_binding)
 from .iphone_review_drafts import check_row
 from .iphone_review_preview import check_native_case
+from .pdf_review_fields import original_uri
 from .iphone_sheet_reader import CASE_IDS, HELD, raw_value, validate_snapshot
 from .unified_receipt_eligibility import current_snapshot
 from .unified_receipt_purposes import PurposeBoundary
@@ -124,7 +125,9 @@ class SavedDraftRepository:
                 items = m['item_snapshot']
                 if draft['kind'] == '一般':
                     if (not isinstance(items, dict) or digest(items) != m['item_digest']
-                            or items['rows'] != case.fields or not items['items']):
+                            or items['rows'] != case.fields or not items['items']
+                            or len({i['item_id'] for i in items['items']}) != len(items['items'])
+                            or items['original_link'] != original_uri(case.identity['source_file_id'], case.identity['page_number'])):
                         deny('item_snapshot_changed')
                     identity = items['identity']; native = case.identity
                     if any(identity[k] != native[k] for k in (

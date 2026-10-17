@@ -72,7 +72,7 @@ def test_other_instance_update_stops_saved_snapshot_display_and_keeps_old_inputs
     assert r._state()[0]['history'][0]['batch']['snapshot_digest'] == batch.snapshot_digest
 
 
-@pytest.mark.parametrize('attack', ['observation', 'item_snapshot', 'item_marker', 'purpose'])
+@pytest.mark.parametrize('attack', ['observation', 'item_snapshot', 'item_marker', 'purpose', 'item_link'])
 def test_pinned_saved_evidence_mismatch_fails_closed(monkeypatch, tmp_path, attack):
     h, r, doc, _, _, view, _ = rig(monkeypatch, tmp_path)
     assert h.login().status_code == 303
@@ -82,8 +82,21 @@ def test_pinned_saved_evidence_mismatch_fails_closed(monkeypatch, tmp_path, atta
     elif attack == 'item_marker':
         m['item_draft']['entries'][0]['marker'] = 'item:wrong'
         m['item_draft_digest'] = digest(m['item_draft'])
+    elif attack == 'item_link':
+        m['item_snapshot']['original_link'] = 'javascript:alert(1)'
+        m['item_digest'] = digest(m['item_snapshot'])
+        m['item_draft']['native_snapshot'] = deepcopy(m['item_snapshot'])
+        m['item_draft']['snapshot_digest'] = m['item_digest']
+        for entry in m['item_draft']['entries']: entry['original_link'] = m['item_snapshot']['original_link']
+        m['item_draft_digest'] = digest(m['item_draft'])
     else: m['source_observation']['purpose'] = 'STRUCTURE_REVIEW'
     view.path.write_text(json.dumps(bundle)); view.bundle_digest = digest(bundle)
+    # Bypass outer digest/details fences ONLY in this negative test so the
+    # independent source/purpose/item guards receive adversarial evidence.
+    state, _, _ = r._state()
+    state['details'] = {cid:{k:m[k] for k in ('source_observation', 'item_draft') if k in m}
+                        for cid,m in bundle['mappings'].items()}
+    doc.payload = r.transport.encode(state)
     for path in PATHS: assert h.get(PREFIX+path).status_code == 409
     assert doc.writes == 0
 
