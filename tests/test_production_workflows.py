@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-sheet-adapter-checks.yml":
+            assert_iphone_adapter_workflow(workflow)
+            continue
         if name == "iphone-review-contract-checks.yml":
             assert_iphone_contract_workflow(workflow)
             continue
@@ -131,6 +134,38 @@ def assert_iphone_contract_workflow(workflow):
 
 def test_iphone_contract_workflow_is_exact_offline_ci():
     assert_iphone_contract_workflow(workflows()['iphone-review-contract-checks.yml'])
+
+
+def assert_iphone_adapter_workflow(workflow):
+    assert workflow == {
+        'name':'iPhone Sheets adapter offline checks',
+        'on':{'pull_request':{'branches':['codex/iphone-one-tab-safety']}},
+        'permissions':{'contents':'read'},
+        'env':{'UNIFIED_RECEIPT_WRITE_ENABLED':'false'},
+        'concurrency':{'group':'kakeibo-iphone-adapter-${{ github.ref }}','cancel-in-progress':'true'},
+        'jobs':{'adapter-contracts':{
+            'runs-on':'ubuntu-24.04','timeout-minutes':'15','steps':[
+                {'uses':'actions/checkout@v4','with':{'ref':'${{ github.event.pull_request.head.sha }}',
+                    'fetch-depth':'0','persist-credentials':'false'}},
+                {'uses':'actions/setup-python@v5','with':{'python-version':'3.12'}},
+                {'name':'Install synthetic test dependencies','run':'pip install -r requirements-test.txt'},
+                {'name':'Collect and run raw reader, persistent CAS and native dry-run','run':
+                    'python -m pytest --collect-only -q tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_native_dry_run.py\n'
+                    'python -m pytest -vv tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_native_dry_run.py\n'},
+                {'name':'Reuse existing safety boundaries','run':
+                    'python -m pytest -q tests/test_iphone_review_drafts.py tests/test_iphone_review_preview.py '
+                    'tests/test_unified_receipt_review.py tests/test_unified_receipt_eligibility.py tests/test_unified_receipt_write.py '
+                    'tests/test_unified_receipt_purposes.py tests/test_unified_receipt_shadow_host.py tests/test_production_workflows.py'},
+                {'name':'Compile and check whitespace','run':
+                    'python -m compileall -q app/iphone_sheet_reader.py app/iphone_draft_journal.py app/iphone_native_dry_run.py '
+                    'tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_native_dry_run.py\n'
+                    'git diff --check\n'},
+            ]}},
+    }
+
+
+def test_iphone_adapter_workflow_has_exact_credential_free_ci_scope():
+    assert_iphone_adapter_workflow(workflows()['iphone-sheet-adapter-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
