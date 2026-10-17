@@ -62,8 +62,14 @@ class ExpenseViewPipeline:
             result=ProjectionRefresh(store,reader).refresh(self.db.categories())
             from .daily_runtime import refresh_daily
             result.update(refresh_daily(self.db,store))
-            return {**result,"refreshed":True,"projection_sheet_requests":reader.metrics.requests,
+            # The daily home and category UI still read 支出一覧. A projection
+            # refresh alone does not update that user-facing sheet.
+            result.update(self._refresh_sheet())
+            return {**result,"projection_sheet_requests":reader.metrics.requests,
                     "projection_sheet_cells":reader.metrics.returned_cells}
+        return self._refresh_sheet()
+
+    def _refresh_sheet(self)->dict:
         expenses=active_expenses(self.db.get("支出明細!A2:M"))
         self.db.ensure_sheet("支出一覧",HEADERS["支出一覧"])
         meta=self.db.svc.spreadsheets().get(spreadsheetId=self.db.sid,fields='sheets(properties)').execute(num_retries=0)
