@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-phase5b1-checks.yml":
+            assert_iphone_phase5b1_workflow(workflow)
+            continue
         if name == "iphone-readonly-host-checks.yml":
             assert_iphone_readonly_workflow(workflow)
             continue
@@ -198,6 +201,32 @@ def assert_iphone_readonly_workflow(workflow):
 
 def test_iphone_readonly_workflow_is_exact_credential_free_ci():
     assert_iphone_readonly_workflow(workflows()['iphone-readonly-host-checks.yml'])
+
+
+def assert_iphone_phase5b1_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-readonly-host-checks.yml'])
+    assert_iphone_readonly_workflow(expected)
+    expected['name'] = 'iPhone Phase 5B-1 synthetic foundations'
+    expected['on'] = {'pull_request': {'branches':['codex/phase5a-synthetic-readonly']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-phase5b1-${{ github.ref }}'
+    job = expected['jobs'].pop('readonly-host')
+    expected['jobs']['foundations'] = job
+    files = ('tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py '
+             'tests/test_iphone_item_drafts.py tests/test_iphone_phase5b1_host.py')
+    job['steps'][3] = {'name':'Collect and execute Phase 5B-1 contracts', 'run':
+        'python -m pytest --collect-only -q '+files+'\npython -m pytest -vv '+files+'\n'}
+    job['steps'][4]['name'] = 'Reuse Phase 5A and native safety boundaries'
+    job['steps'][4]['run'] = job['steps'][4]['run'].replace('python -m pytest -q ',
+        'python -m pytest -q tests/test_iphone_readonly_host.py ', 1)
+    job['steps'][5]['run'] = (
+        'python -m compileall -q app/iphone_persistent_drafts.py app/iphone_source_observation.py '
+        'app/iphone_item_drafts.py app/iphone_readonly_host.py tests/iphone_persistent_fixtures.py '+files+'\n'
+        'git diff --check\n')
+    assert workflow == expected
+
+
+def test_iphone_phase5b1_workflow_is_exact_credential_free_ci():
+    assert_iphone_phase5b1_workflow(workflows()['iphone-phase5b1-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
