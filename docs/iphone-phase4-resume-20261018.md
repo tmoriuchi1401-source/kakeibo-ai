@@ -1,5 +1,9 @@
 # Phase 4A～4B 再開検証（2026-10-18）
 
+> 以下は保護取得承認待ちだった時点の履歴。その後、保護設定の完全退避と4行目削除に成功し、
+> 実Sheetsの削除・sort negative testと元配置への復帰を完了した。
+> 現在の状態は[Phase 4A実Sheets復旧結果](iphone-phase4a-live-recovery-results.md)を参照。
+
 対象はDraft #128と既存のPhase 4専用合成ブックだけ。main統合、本番接続、実POST、Cloud、
 会計write、原本移動、AI送信、実authority更新は行わない。
 
