@@ -16,6 +16,7 @@ import uuid
 from .drive_run_state import StateError
 from .pdf_intake_registry import strong_etag
 from .unified_receipt_review import digest
+from .iphone_sheet_reader import CASE_IDS, CASE_KINDS, HELD, raw_value, source_identity
 
 SCHEMA = 'iphone-private-draft-journal-v1'
 MAX_BYTES = 2_000_000
@@ -80,6 +81,8 @@ class LocalJournal:
                     or not isinstance(value['requests'], dict) or len(value['requests']) > MAX_REQUESTS
                     or value['revision'] != len(value['requests'])):
                 fail('corrupt_or_foreign')
+            if (value['revision'] == 0) != (value['batch'] is None):
+                fail('corrupt_or_foreign')
             if value['batch'] is not None:
                 check_batch(value['batch'], self.binding)
             for rid, receipt in value['requests'].items():
@@ -87,6 +90,12 @@ class LocalJournal:
                         or type(receipt['revision']) is not int or not 1 <= receipt['revision'] <= value['revision']
                         or any(not isinstance(receipt[k], str) or len(receipt[k]) != 64
                                for k in ('fingerprint', 'batch_digest'))):
+                    fail('corrupt_or_foreign')
+            if {r['revision'] for r in value['requests'].values()} != set(range(1, value['revision']+1)):
+                fail('corrupt_or_foreign')
+            if value['batch'] is not None:
+                latest = next(r for r in value['requests'].values() if r['revision'] == value['revision'])
+                if latest['batch_digest'] != digest(value['batch']):
                     fail('corrupt_or_foreign')
             encoded(value)
         except (KeyError, TypeError, ValueError):
@@ -156,7 +165,8 @@ class LocalJournal:
             if old:
                 if old['fingerprint'] != fingerprint:
                     fail('replay_payload_changed')
-                return dict(status='draft_saved', replay=True, receipt=deepcopy(old), current_tag=tag,
+                return dict(status='draft_saved', replay=True, is_current=before['batch'] == value,
+                            receipt=deepcopy(old), current_tag=tag,
                             authorized=False, operation_targets=[])
             if tag != expected_tag:
                 fail('cas_conflict')
@@ -172,7 +182,7 @@ class LocalJournal:
             actual, actual_tag = self.read_versioned()
             if actual != after:
                 fail('save_outcome_unknown')
-            return dict(status='draft_saved', replay=False, receipt=receipt, current_tag=actual_tag,
+            return dict(status='draft_saved', replay=False, is_current=True, receipt=receipt, current_tag=actual_tag,
                         authorized=False, operation_targets=[])
 
     def recover(self, request_id, batch, expected_tag):
@@ -195,12 +205,39 @@ def check_batch(value, binding):
             fail('batch_invalid')
         for key, draft in value['drafts'].items():
             if (draft['authorized'] is not False or draft['operation_targets'] != []
+                    or len(draft['cells']) != 17
+                    or raw_value(draft['cells'][0]) != draft['case_id']
+                    or raw_value(draft['cells'][1]) != draft['kind']
+                    or CASE_KINDS.get(draft['case_id']) != draft['kind']
+                    or draft['case_id'] in HELD and draft['held'] is not True
                     or digest(dict(case_id=draft['case_id'], kind=draft['kind'], identity=draft['identity'])) != key
                     or digest(draft['cells']) != draft['input_snapshot_digest']):
                 fail('batch_invalid')
+            identity = draft['identity']
+            if draft['case_id'] == 'SYN-H301':
+                if identity is not None or raw_value(draft['cells'][15]) or raw_value(draft['cells'][16]):
+                    fail('batch_invalid')
+            elif (source_identity(identity) != identity
+                  or (raw_value(draft['cells'][15]), raw_value(draft['cells'][16])) != (identity['sha256'], identity['source_id'])):
+                fail('batch_invalid')
+        if {d['case_id'] for d in value['drafts'].values()} != CASE_IDS:
+            fail('batch_invalid')
         encoded(value)
     except (KeyError, TypeError, ValueError):
         fail('batch_invalid')
+
+
+def save_current(reader, journal, expected_snapshot_digest, expected_tag, request_id):
+    """Explicit local draft save only, after a fresh GET-only capture.
+
+    The caller's expected Sheet snapshot detects stale client drafts; journal
+    CAS detects another local save. Neither is an accounting/POST permission,
+    nor does this promise an atomic transaction with concurrent Sheet edits.
+    """
+    batch = reader.read()
+    if batch.snapshot_digest != expected_snapshot_digest:
+        fail('stale_sheet_snapshot')
+    return journal.save(batch, expected_tag, request_id)
 
 
 def quarantine(directory, snapshot, reason):

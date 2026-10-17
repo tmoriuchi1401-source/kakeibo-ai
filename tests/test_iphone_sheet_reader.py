@@ -8,7 +8,7 @@ import pytest
 from app.drive_run_state import StateError
 from app.iphone_sheet_reader import (CASE_IDS, INPUT_COLUMNS, HELD, GET_FIELDS,
     GoogleRawTransport, RawReader, issue_contract, validate_snapshot, raw_value,
-    dry_run, regeneration_preview)
+    dry_run, regeneration_preview, original_formula)
 from app.unified_receipt_review import digest
 
 
@@ -31,7 +31,7 @@ def fixture():
             source = dict(case_id=cid, source_id='fictitious-'+cid, sha256=digest(['fictitious-bytes', cid]),
                           source_version='fictitious-rev-1', version_scheme='drive_revision_id')
             sources.append(source)
-            cells[2] = {'userEnteredValue': {'formulaValue': '=HYPERLINK("https://example.invalid/'+cid+'","原本")'}}
+            cells[2] = {'userEnteredValue': {'formulaValue': original_formula(cid, source, kind)}}
             cells[15:17] = [text(source['sha256']), text(source['source_id'])]
         else:
             cells[2] = {}; cells[15:17] = [{}, {}]
@@ -157,7 +157,7 @@ def test_transport_uses_existing_client_get_only_and_bounded_raw_field_mask():
         def get(self, **kwargs):
             calls.append(kwargs); return SimpleNamespace(execute=lambda: deepcopy(raw))
     assert GoogleRawTransport(Service(), contract).read() == raw
-    assert calls == [dict(spreadsheetId='fictitious-book',ranges=["'確認'!A1:Z12"],fields=GET_FIELDS)]
+    assert calls == [dict(spreadsheetId='fictitious-book',ranges=["'確認'!A1:Z1000"],fields=GET_FIELDS)]
     assert 'effectiveValue' not in GET_FIELDS and 'protectedRanges' in GET_FIELDS
 
 
@@ -166,3 +166,32 @@ def test_unavailable_native_context_holds_all_cases_and_never_executes():
     result = dry_run(batch, {})
     assert [v['validation']['status'] for v in result.values()].count('held') == 2
     assert all(v['operation_targets'] == [] and v['authorized'] is False for v in result.values())
+
+
+@pytest.mark.parametrize('location', ['between_cases','tail_at_500','tail_at_1000'])
+def test_idless_inherited_original_formula_is_rejected_at_any_grid_row(location):
+    raw, contract, sources = setup(); rows = raw['sheets'][0]['data'][0]['rowData']
+    extra = {'values':[{}, {}, deepcopy(rows[3]['values'][2])]}
+    if location == 'between_cases': rows.insert(3, extra)
+    else:
+        target = 499 if location == 'tail_at_500' else 999
+        rows.extend({'values':[]} for _ in range(target-len(rows)))
+        rows.append(extra)
+    with pytest.raises(StateError): validate_snapshot(contract, raw, sources)
+
+
+@pytest.mark.parametrize('attack',['foreign_link','same_id_wrong_kind','literal_not_formula','source_injection'])
+def test_contract_issuer_generates_original_link_from_independent_canonical_ids(attack):
+    raw, sources = fixture(); cells = raw['sheets'][0]['data'][0]['rowData'][1]['values']
+    if attack == 'foreign_link': cells[2] = deepcopy(raw['sheets'][0]['data'][0]['rowData'][2]['values'][2])
+    elif attack == 'same_id_wrong_kind': cells[1] = text('医療')
+    elif attack == 'literal_not_formula': cells[2] = text('https://example.invalid')
+    else: sources[0]['source_id'] = 'injection"&1'
+    with pytest.raises(StateError): issue_contract(raw, sources)
+
+
+@pytest.mark.parametrize('rows,columns',[(100000,26),(1000,27),(8,26)])
+def test_transport_never_expands_its_scope_to_an_unbounded_or_foreign_grid(rows,columns):
+    _, contract, _ = setup(); contract['properties']['gridProperties'].update(rowCount=rows,columnCount=columns)
+    with pytest.raises(StateError, match='coverage'):
+        GoogleRawTransport(None, contract).read()

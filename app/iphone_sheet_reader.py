@@ -6,6 +6,7 @@ Sheet notes, hidden cells and successful reads never establish authority.
 from copy import deepcopy
 from dataclasses import dataclass
 import math
+import re
 
 from .drive_run_state import StateError
 from .unified_receipt_review import digest
@@ -18,6 +19,8 @@ INPUT_COLUMNS = {'一般': (3, 4, 5, 6, 7, 12),
 HELD = {'SYN-G103', 'SYN-H301'}
 CASE_IDS = {'SYN-G101', 'SYN-G102', 'SYN-G103', 'SYN-H301',
             'SYN-M101', 'SYN-M102', 'SYN-P201', 'SYN-P202'}
+CASE_KINDS = {cid: ('保留' if cid == 'SYN-H301' else
+                   {'G': '一般', 'M': '医療', 'P': 'PDF'}[cid[4]]) for cid in CASE_IDS}
 
 
 def deny(reason):
@@ -76,9 +79,19 @@ def source_identity(source):
     keys = ('source_id', 'sha256', 'source_version', 'version_scheme')
     if (not isinstance(source, dict) or any(not isinstance(source.get(k), str) or not source[k] for k in keys)
             or source['version_scheme'] != 'drive_revision_id'
+            or re.fullmatch(r'[A-Za-z0-9_-]{1,150}', source['source_id']) is None
             or len(source['sha256']) != 64 or any(c not in '0123456789abcdef' for c in source['sha256'])):
         deny('source_attestation_invalid')
     return {k: source[k] for k in keys}
+
+
+def original_formula(case_id, identity, kind):
+    """Generate from manager-owned identity, never an inherited link cell."""
+    identity = source_identity(identity)
+    if CASE_KINDS.get(case_id) != kind or kind == '保留':
+        deny('canonical_original_scope_invalid')
+    label = case_id + ('.pdf' if kind == 'PDF' else '.png')
+    return '=HYPERLINK("https://drive.google.com/file/d/' + identity['source_id'] + '/view?usp=drivesdk","' + label + '")'
 
 
 def issue_contract(trusted_snapshot, attested_sources):
@@ -98,7 +111,7 @@ def issue_contract(trusted_snapshot, attested_sources):
     cases = {}; opened = []
     for n, cells in enumerate(rows[1:], 1):
         cid, kind = raw_value(cells[0]), raw_value(cells[1])
-        if cid in cases or kind not in INPUT_COLUMNS:
+        if cid in cases or CASE_KINDS.get(cid) != kind:
             deny('baseline_case_invalid')
         held = cid in HELD or raw_value(cells[3]) == '保留'
         editable = () if held else INPUT_COLUMNS[kind]
@@ -110,6 +123,8 @@ def issue_contract(trusted_snapshot, attested_sources):
             identity = sources.get(cid)
             if not identity or (raw_value(cells[15]), raw_value(cells[16])) != (identity['sha256'], identity['source_id']):
                 deny('baseline_source_mismatch')
+            if cells[2].get('userEnteredValue') != {'formulaValue': original_formula(cid, identity, kind)}:
+                deny('canonical_original_formula_mismatch')
         for c in editable:
             opened.append(dict(sheetId=sid, startRowIndex=n, endRowIndex=n+1, startColumnIndex=c, endColumnIndex=c+1))
         cases[cid] = dict(row_index=n, kind=kind, held=held, identity=identity,
@@ -152,6 +167,9 @@ def validate_snapshot(contract, snapshot, observed_sources):
     drafts = {}
     for cid, expected in contract['cases'].items():
         cells = rows[expected['row_index']]
+        if expected['identity'] and cells[2].get('userEnteredValue') != {
+                'formulaValue': original_formula(cid, expected['identity'], expected['kind'])}:
+            deny('canonical_original_formula_mismatch')
         for c, (current, original) in enumerate(zip(cells, expected['cells'])):
             if c not in expected['editable'] and current != original:
                 deny('immutable_or_held_cell_changed')
@@ -179,10 +197,15 @@ class GoogleRawTransport:
         self.service, self.contract = service, deepcopy(contract)
 
     def read(self):
-        # Extra bounded sentinel columns/rows detect additions; full grid shape
-        # is checked independently. No whole-grid scan or mutable endpoint.
+        # This fixture's entire finite grid is below 30k cells. Include its
+        # empty tail so an ID-less inherited formula or stray draft at row 500
+        # cannot disappear outside a small sentinel window. Never expand to an
+        # arbitrary large production grid.
+        grid = self.contract['properties']['gridProperties']
+        if grid['columnCount'] != 26 or not 9 <= grid['rowCount'] <= 1153:
+            deny('raw_read_coverage_invalid')
         return self.service.spreadsheets().get(
-            spreadsheetId=self.contract['workbook_id'], ranges=["'確認'!A1:Z12"],
+            spreadsheetId=self.contract['workbook_id'], ranges=["'確認'!A1:Z" + str(grid['rowCount'])],
             fields=GET_FIELDS).execute()
 
 
