@@ -13,10 +13,13 @@ from flask import Blueprint, Response, render_template, request
 
 from .drive_run_state import StateError
 from .iphone_draft_journal import LocalJournal, MAX_BYTES
+from .iphone_persistent_drafts import PersistentJournal
+from .iphone_source_observation import SourceObservation, verify_saved
 from .iphone_native_dry_run import (KINDS, VersionBinding, bind_case,
                                     check_version_binding)
 from .iphone_review_drafts import check_row
 from .iphone_review_preview import check_native_case
+from .pdf_review_fields import original_uri
 from .iphone_sheet_reader import CASE_IDS, HELD, raw_value, validate_snapshot
 from .unified_receipt_eligibility import current_snapshot
 from .unified_receipt_purposes import PurposeBoundary
@@ -35,15 +38,17 @@ def deny(reason):
 
 
 class SavedDraftRepository:
-    """Bounded local reads, existing journal validation, pure saved projection.
+    """Bounded saved reads, existing journal validation, pure saved projection.
 
     bundle_digest is trusted configuration, not a browser/Sheet parameter.
     A newly saved batch needs a new reviewed bundle before it can be displayed.
     Missing, stale or damaged state is never repaired or initialized on GET.
     """
     def __init__(self, journal, bundle_path, bundle_digest, owner):
-        if type(journal) is not LocalJournal:
+        if type(journal) not in {LocalJournal, PersistentJournal}:
             deny('local_journal_required')
+        if type(journal) is PersistentJournal and journal.scope['owner'] != owner:
+            deny('case_owner_mismatch')
         self.journal, self.path = journal, Path(bundle_path)
         self.bundle_digest, self.owner = bundle_digest, owner
 
@@ -64,6 +69,14 @@ class SavedDraftRepository:
             if before['batch'] != asdict(batch):
                 deny('stale_saved_snapshot')
             mappings = bundle['mappings']
+            if type(self.journal) is PersistentJournal and self.journal.scope['owner'] != self.owner:
+                deny('case_owner_mismatch')
+            if type(self.journal) is PersistentJournal:
+                details, detail_tag = self.journal.read_details()
+                expected_details = {cid:{k:m[k] for k in ('source_observation', 'item_draft') if k in m}
+                                    for cid,m in mappings.items()}
+                if detail_tag != tag or details != expected_details:
+                    deny('stale_saved_snapshot')
             if set(mappings) != CASE_IDS:
                 deny('mapping_set_changed')
             result, native_ids = [], set()
@@ -94,6 +107,12 @@ class SavedDraftRepository:
                     check_native_case(canonical, case, m['native_digest'])
                     check_version_binding(VersionBinding(**m['version_binding']),
                                           draft['identity'], canonical['identity'])
+                    if type(self.journal) is PersistentJournal:
+                        observation = SourceObservation(**m['source_observation'])
+                        verify_saved(observation, draft['identity'], canonical['identity'],
+                                     purpose, draft['input_snapshot_digest'])
+                        if asdict(observation.binding()) != m['version_binding']:
+                            deny('identity_or_snapshot_changed')
                     # Held G103 keeps its actual identity, but cannot be bound
                     # to an executable native operation by bind_case().
                     if cid == 'SYN-G103':
@@ -106,13 +125,28 @@ class SavedDraftRepository:
                 items = m['item_snapshot']
                 if draft['kind'] == '一般':
                     if (not isinstance(items, dict) or digest(items) != m['item_digest']
-                            or items['rows'] != case.fields or not items['items']):
+                            or items['rows'] != case.fields or not items['items']
+                            or len({i['item_id'] for i in items['items']}) != len(items['items'])
+                            or items['original_link'] != original_uri(case.identity['source_file_id'], case.identity['page_number'])):
                         deny('item_snapshot_changed')
                     identity = items['identity']; native = case.identity
                     if any(identity[k] != native[k] for k in (
                             'source_file_id', 'source_content_hash', 'stable_page_identity',
                             'receipt_unit_id', 'receipt_index')):
                         deny('item_identity_changed')
+                    if type(self.journal) is PersistentJournal:
+                        # Exact saved item contract is display evidence only;
+                        # native validation occurs offline, never on GET.
+                        item_draft = m['item_draft']
+                        if (item_draft['snapshot_digest'] != digest(items)
+                                or item_draft['native_snapshot'] != items
+                                or digest(item_draft) != m['item_draft_digest']
+                                or [e['old'] for e in item_draft['entries']] != items['items']
+                                or any(e['identity'] != items['identity'] or e['token'] != items['token']
+                                       or e['marker'] != 'item:'+e['item_id']
+                                       or e['item_id'] != e['old']['item_id']
+                                       or e['original_link'] != items['original_link'] for e in item_draft['entries'])):
+                            deny('item_snapshot_changed')
                 elif items is not None or m['item_digest'] is not None:
                     deny('item_purpose_mismatch')
                 held = cid in HELD or bool(m['canonical'] and m['canonical']['hold'])
@@ -130,10 +164,11 @@ class SavedDraftRepository:
                                            {3, 4, 5, 6, 7, 8, 12} if draft['kind'] == '医療' else
                                            {3, 4, 5, 6, 7, 12})],
                         items=deepcopy(items['items']) if items else [],
+                        item_entries=deepcopy(m['item_draft']['entries']) if items and type(self.journal) is PersistentJournal else [],
                         manual_only=draft['kind'] == '医療',
                         accounting_allowed=False, authorized=False), operation_targets=[]))
-            # Atomic local reads do not make a cross-file transaction. Detect
-            # observed journal races and otherwise display the pinned old view.
+            # Atomic journal reads do not make a transaction with the bundle.
+            # Detect observed races; otherwise display the pinned old view.
             if self.journal.read_versioned()[1] != tag:
                 deny('concurrent_saved_snapshot')
             return result

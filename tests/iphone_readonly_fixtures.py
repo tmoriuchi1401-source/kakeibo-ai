@@ -23,7 +23,7 @@ from unified_purpose_fixtures import OWNER
 from unified_shadow_fixtures import HostRig
 
 
-def saved_bundle():
+def saved_bundle(*, coobserved=False):
     raw, sources = fixture(); mappings = {}
     rows = raw['sheets'][0]['data'][0]['rowData']
     for row in rows[1:]:
@@ -47,6 +47,12 @@ def saved_bundle():
         else:
             native_kind = {'一般': 'general_receipt_item_review', '医療': 'medical', 'PDF': 'grouping'}[kind]
             case = clean(alias, kind=native_kind, pages=[1, 2] if kind == 'PDF' else [1])
+            if coobserved:
+                from hashlib import sha256
+                from app.pdf_page_identity import page_identity
+                case.identity['source_content_hash'] = sha256(('synthetic-bytes:'+alias).encode()).hexdigest()
+                case.identity['page_identities'] = [page_identity(case.identity['source_content_hash'], p, max(case.pages)) for p in case.pages]
+                case.identity['stable_page_identity'] = case.identity['page_identities'][0]
             case.fields += [['payment', '支払方法', '現金'], ['memo', 'メモ', alias + ' native途中メモ']]
             if alias == 'SYN-G103':
                 case.authority_status = 'held'
@@ -82,6 +88,24 @@ def saved_bundle():
             native_digest=native_digest, canonical=canonical, purpose=purpose, version_binding=version,
             sheet_binding=None if alias in HELD else asdict(bind_case(alias, canonical, native_digest)),
             input_digest=digest(cells), item_snapshot=items, item_digest=digest(items) if items else None)
+        if coobserved and alias != 'SYN-H301':
+            from app.iphone_source_observation import observe
+            from types import SimpleNamespace
+            i = case.identity
+            frame = dict(**observed, drive_numeric_version='17', purpose=purpose, source_kind='pdf',
+                pages=[dict(number=p, count=max(case.pages), identity=identity) for p,identity in zip(case.pages,i['page_identities'])],
+                receipt_unit_id=i['receipt_unit_id'], receipt_index=i['receipt_index'])
+            reader = SimpleNamespace(read_frame=lambda:deepcopy(frame),
+                read_revision_bytes=lambda *args:('synthetic-bytes:'+alias).encode())
+            mappings[alias]['source_observation'] = asdict(observe(reader, source, canonical['identity'],
+                purpose=purpose, input_snapshot=digest(cells), clock=lambda:1792278000))
+            if items:
+                mappings[alias]['item_draft'] = dict(schema='iphone-item-draft-v1',
+                    snapshot_digest=digest(items), native_snapshot=deepcopy(items),
+                    entries=[dict(item_id=e['item_id'], marker='item:'+e['item_id'],
+                        identity=deepcopy(items['identity']), token=items['token'], original_link=items['original_link'],
+                        old=deepcopy(e), proposed=deepcopy(e), state='unentered', note='') for e in items['items']])
+                mappings[alias]['item_draft_digest'] = digest(mappings[alias]['item_draft'])
     contract = issue_contract(raw, sources)
     bundle = dict(schema='iphone-saved-display-v1', contract=contract, raw_snapshot=raw,
                   sources={s['source_id']:s for s in sources}, mappings=mappings)
