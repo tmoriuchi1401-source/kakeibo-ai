@@ -89,7 +89,11 @@ class ReceiptConfirmation:
                 raise StateError('confirmation_store_invalid')
 
     @property
-    def items(self): return self.store.value.get("confirmation_items",{})
+    def items(self):
+        # PDF page confirmations have their own source/page verifier and UI
+        # adapter. Whole-file intake must neither render nor execute them.
+        return {k:v for k,v in self.store.value.get("confirmation_items",{}).items()
+                if not v.get('source',{}).get('pdf_page')}
 
     def save_item(self, key, item):
         value=deepcopy(self.store.value)
