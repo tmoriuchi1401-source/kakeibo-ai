@@ -12,11 +12,12 @@ Before planning or changing the receipt-review, medical manual-entry, PDF page/g
 
 This guidance is scoped to receipt/PDF review and its UI/deployment. Other KakeiboAI subsystems keep their own requirements. If the referenced spec is missing, ask for it; do not substitute guesses.
 
-## Confirmed iPhone UI contract (2026-10-15)
+## Confirmed iPhone UI contract (2026-10-17)
 
 - **Always read `docs/iphone-receipt-review-mvp-spec.md`, including section 10 (「iPhone UI確定仕様」), before resuming any receipt/PDF review development.** It is the persistent source of the user-approved UI decisions.
-- Keep the four purpose tabs: 「一覧」「一般」「医療」「PDF」. Preserve the approved medical-based widths, font/wrap settings, draft values, validations, source links and holds. Do not add one tab per case.
-- Navigate within the workbook using the bottom sheet tabs. Do not restore internal full-URL links that open Safari. Drive original links are intentionally external and must remain distinct.
+- Keep one 「確認」 tab integrating general, medical, PDF and held cases: one row per case, fields in columns, horizontal scrolling allowed, case ID column and header frozen. The old four-tab layout is historical testing only; its two-column widths are not the adopted layout.
+- Preserve original links, draft values, intermediate notes, validations and holds. Device acceptance includes search, original round trips, held-case display, input retention and reduced zoom retained after app restart. Do not restore internal full-URL navigation that opens Safari.
 - Any future change to the confirmed UI needs a stated reason and impact scope, including input preservation and validation, and **explicit user approval before implementation**.
-- User device acceptance covers the basic synthetic Sheets UI only. Production posting, authenticated confirmation for the two users, dynamic multi-case rendering, real-data confirmation/canary and merging PR #123/#124 remain unimplemented/unapproved. Do not describe them as complete or infer authorization from UI acceptance.
-- Do not resume Cloud work, edit the validation workbook or production Sheets, or change financial/authority/writer code as part of a documentation-only task. Keep both PRs Draft and do not merge main.
+- User device acceptance covers the synthetic one-tab UI only. Production connection, authenticated/authorized confirmation and sorting safety remain incomplete. Sheet editing or changing status must never by itself execute posting. Never use row numbers as durable identity; independently validate case ID, source ID/hash/version, kind/purpose and input snapshot downstream.
+- Keep H301 LEGACY_UNMAPPED_HOLD display-only and G103 held with existing inputs. Sorting/insertion/deletion/regeneration/concurrency must not transfer inputs to another case. Cell protections are not a safety boundary; owners can bypass them.
+- Do not resume Cloud work or edit production or approved validation workbooks. New Drive resources require advance approval. PR #123/#124 stay Draft and unmerged. The Phase 1 Markdown-only PR may merge after clean diff/CI under the 2026-10-17 user instruction; Phase 2–3 processing changes stay on an independent branch and require separate approval for main merge or activation. No real posting, source move, AI sending or real authority update.
