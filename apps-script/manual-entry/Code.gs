@@ -1,5 +1,5 @@
-/** Private owner-only web app. Configure MANUAL_SPREADSHEET_ID and MANUAL_GITHUB_TOKEN
- * in Script Properties, then run installManualEntry once before deployment. */
+/** Owner backend. Legacy UI remains owner-only; authenticated household requests
+ * arrive through doPost. See docs/manual-entry.md before deployment. */
 const MANUAL_SHEET = '_手入力受付';
 const MANUAL_REPO = 'tmoriuchi1401-source/kakeibo-ai';
 const MANUAL_WORKFLOW = 'manual-entry.yml';
@@ -16,6 +16,7 @@ function manualToken_() {
   return token;
 }
 function installManualEntry() {
+  manualOwner_();
   const ss = manualSpreadsheet_();
   if (!ss.getSheetByName('カテゴリ') || !ss.getSheetByName('支出明細')) throw new Error('家計簿の接続先を確認してください');
   const response = UrlFetchApp.fetch('https://api.github.com/repos/' + MANUAL_REPO + '/actions/workflows/' + MANUAL_WORKFLOW,
@@ -28,11 +29,15 @@ function installManualEntry() {
   sheet.hideSheet();
 }
 function doGet() {
-  // Deployment must be "execute as me" and "only myself". Never make it public.
+  manualOwner_();
   manualSpreadsheet_();
   return HtmlService.createHtmlOutputFromFile('Index').setTitle('家計簿 手入力');
 }
 function manualBootstrap() {
+  manualOwner_();
+  return manualBootstrap_();
+}
+function manualBootstrap_() {
   const rows = manualSpreadsheet_().getSheetByName('カテゴリ').getRange('A2:B').getDisplayValues();
   const seen = new Set();
   const categories = rows.filter(row => row[0] && row[1] && !seen.has(JSON.stringify(row)) && seen.add(JSON.stringify(row)));
@@ -70,6 +75,9 @@ function manualValidate_(input,ss) {
   return {date:date,amount:amount,merchant:merchant,major:major,minor:minor,note:note,payment:'現金'};
 }
 function manualSubmit(input) {
+  return manualSubmit_(input, manualOwner_());
+}
+function manualSubmit_(input, actor) {
   const lock=LockService.getScriptLock();lock.waitLock(30000);
   try {
     const ss=manualSpreadsheet_(), sheet=ss.getSheetByName(MANUAL_SHEET);
@@ -78,7 +86,11 @@ function manualSubmit(input) {
     const prior=manualRow_(sheet,id);
     if (prior) return {id:id,state:String(prior.values[1])}; // Same click/retry is idempotent.
     const payload=manualValidate_(input,ss);
-    sheet.appendRow([id,'dispatching',JSON.stringify(payload),new Date().toISOString(),'','']);
+    const createdAt=new Date().toISOString();
+    payload.entered_by=actor;
+    payload.created_at=createdAt;
+    payload.manual_entry_id=id;
+    sheet.appendRow([id,'dispatching',JSON.stringify(payload),createdAt,'','']);
     SpreadsheetApp.flush();
     const sent=manualDispatch_(id);
     if (sent===false) sheet.getRange(sheet.getLastRow(),2).setValue('dispatch_failed');
@@ -86,6 +98,9 @@ function manualSubmit(input) {
   } finally {lock.releaseLock();}
 }
 function manualCancel(targetId,cancelId) {
+  return manualCancel_(targetId,cancelId,manualOwner_());
+}
+function manualCancel_(targetId,cancelId,actor) {
   const lock=LockService.getScriptLock();lock.waitLock(30000);
   try {
     const sheet=manualSpreadsheet_().getSheetByName(MANUAL_SHEET);
@@ -96,7 +111,9 @@ function manualCancel(targetId,cancelId) {
     const target=manualRow_(sheet,String(targetId));
     if (!target || JSON.parse(target.values[2]).target) throw new Error('取消対象を確認してください');
     if (target.values[1]==='cancelled') return {id:cancelId,state:'cancelled'};
-    sheet.appendRow([cancelId,'dispatching',JSON.stringify({target:targetId}),new Date().toISOString(),'','']);
+    const createdAt=new Date().toISOString();
+    sheet.appendRow([cancelId,'dispatching',JSON.stringify({target:targetId,entered_by:actor,
+      created_at:createdAt,manual_entry_id:cancelId}),createdAt,'','']);
     SpreadsheetApp.flush();
     const sent=manualDispatch_(cancelId);
     if (sent===false) sheet.getRange(sheet.getLastRow(),2).setValue('dispatch_failed');
@@ -104,7 +121,67 @@ function manualCancel(targetId,cancelId) {
   } finally {lock.releaseLock();}
 }
 function manualStatus(id) {
+  manualOwner_();
+  return manualStatus_(id);
+}
+function manualStatus_(id) {
   const sheet=manualSpreadsheet_().getSheetByName(MANUAL_SHEET);
   const row=manualRow_(sheet,String(id));
   return row?{state:String(row.values[1]),message:String(row.values[5]||'')}:{state:'unknown'};
+}
+
+function manualOwner_() {
+  const owner='tmoriuchi1401@gmail.com';
+  if (Session.getActiveUser().getEmail().toLowerCase()!==owner ||
+      Session.getEffectiveUser().getEmail().toLowerCase()!==owner) {
+    throw new Error('この操作は管理者のみ利用できます');
+  }
+  return owner;
+}
+
+function manualHouseholdActor_(token) {
+  const properties=PropertiesService.getScriptProperties();
+  const audience=properties.getProperty('MANUAL_IDENTITY_AUDIENCE');
+  const allowed=JSON.parse(properties.getProperty('MANUAL_HOUSEHOLD_EMAILS') || '[]');
+  if (!audience || !Array.isArray(allowed) || allowed.length!==2 ||
+      typeof token!=='string' || token.length<20 || token.length>8192) throw new Error('本人確認が必要です');
+  let claims;
+  try {
+    const response=UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token='+encodeURIComponent(token),
+      {muteHttpExceptions:true,followRedirects:false});
+    if (response.getResponseCode()!==200) throw new Error();
+    claims=JSON.parse(response.getContentText());
+  } catch (_) { throw new Error('本人確認できませんでした'); }
+  const now=Math.floor(Date.now()/1000);
+  if (claims.aud!==audience || !['accounts.google.com','https://accounts.google.com'].includes(claims.iss) ||
+      typeof claims.sub!=='string' || !/^\d{1,255}$/.test(claims.sub) ||
+      !Number.isFinite(Number(claims.exp)) || Number(claims.exp)<=now ||
+      !Number.isFinite(Number(claims.iat)) || Number(claims.iat)>now+60 ||
+      ![true,'true'].includes(claims.email_verified) || typeof claims.email!=='string') {
+    throw new Error('本人確認できませんでした');
+  }
+  const email=claims.email.toLowerCase();
+  if (!allowed.every(value=>typeof value==='string') || !allowed.includes(email)) throw new Error('この家計簿へのアクセス権がありません');
+  return email;
+}
+
+function doPost(e) {
+  let result;
+  try {
+    if (!e || !e.postData || e.postData.type!=='application/json' ||
+        typeof e.postData.contents!=='string' || e.postData.contents.length>16384) throw new Error();
+    const request=JSON.parse(e.postData.contents);
+    const actor=manualHouseholdActor_(request.identityToken);
+    switch(request.action) {
+      case 'bootstrap': result=manualBootstrap_(); break;
+      case 'submit': result=manualSubmit_(request.input,actor); break;
+      case 'cancel': result=manualCancel_(request.targetId,request.cancelId,actor); break;
+      case 'status': result=manualStatus_(request.id); break;
+      default: throw new Error();
+    }
+    return ContentService.createTextOutput(JSON.stringify({ok:true,result:result})).setMimeType(ContentService.MimeType.JSON);
+  } catch (_) {
+    // Never serialize identity tokens, Google errors, stack traces or credentials.
+    return ContentService.createTextOutput(JSON.stringify({ok:false,error:'本人確認または入力内容を確認してください'})).setMimeType(ContentService.MimeType.JSON);
+  }
 }

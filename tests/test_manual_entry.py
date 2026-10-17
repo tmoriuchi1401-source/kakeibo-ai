@@ -94,3 +94,22 @@ def test_invalid_category_is_rejected_before_claim_or_ledger_write():
         execute(db, FIRST)
     assert db.queue[1][1] == 'error'
     assert db.ledger == []
+
+
+def test_verified_identity_metadata_keeps_legacy_worker_and_replay_compatible():
+    db = FakeDB()
+    db.add(payload={'date': '2026-09-24', 'amount': 1, 'merchant': 'canary',
+                    'major': 'その他', 'minor': '未分類', 'note': '', 'payment': '現金',
+                    'entered_by': 'wife@example.test', 'created_at': '2026-09-24T01:02:03Z',
+                    'manual_entry_id': FIRST})
+    assert execute(db, FIRST) == {'manual_posted': 1}
+    assert execute(db, FIRST) == {'manual_ignored': 1}
+    assert len(db.ledger) == 1
+    assert db.ledger[0][0] == expense_id(FIRST)
+    assert db.ledger[0][4] == 1
+    assert 'wife@example.test' not in str(db.ledger)
+    assert json.loads(db.queue[1][2])['entered_by'] == 'wife@example.test'
+    db.add(CANCEL, {'target': FIRST, 'entered_by': 'owner@example.test',
+                    'created_at': '2026-09-24T01:03:03Z', 'manual_entry_id': CANCEL})
+    assert execute(db, CANCEL) == {'manual_cancelled': 1}
+    assert len(db.ledger) == 1 and db.ledger[0][12] == 'void'
