@@ -73,7 +73,26 @@ PDF構造合格は会計許可にしない。一般の単一カテゴリを複�
 専用Linux CIを追加：PR baseは`codex/iphone-one-tab-safety`だけ、contents:read、
 write enabled=false、秘密情報・environment・Cloud・artifact uploadなし。
 既存purpose/owner/session/CSRF/duplicate/replay/revision/read-back/hold契約も回帰実行する。
-CI結果は実行後に追記する。
+Linux CIは[run 39070053295](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39070053295)で成功した。
+検証した処理コードcommitは`9928576fbe2533f55042dae96da5b0004583b0ab`。
+
+| Linux CIの範囲 | 件数 | 結果 |
+|---|---:|---|
+| raw reader | 56 | PASS |
+| 永続journal/CAS | 29 | PASS |
+| 一般・医療・PDF native dry-run | 29 | PASS |
+| 新規adapter合計 | 114 | PASS |
+| 既存iPhone/purpose/認証/replay等の安全回帰 | 417 | PASS |
+| 合計 | 531 | PASS |
+
+compileallとwhitespaceもPASS。Windowsで失敗した既存pinned PDF fixtureはLinuxで成功した。
+pin・医療privacy・native authorityの条件は変更していない。
+実サービスの会計write・原本移動・AI送信・実authority更新は0。
+合成fixture内のnative初期状態は本番データや本番認証情報を使用していない。
+
+原本7件のDrive revisionも今回read-onlyで再確認し、前回bytes/hash照合時と全件一致。
+今回原本bytesの再ダウンロードはしていない。以前の7件のhash照合結果は
+[2026-10-17の記録](iphone-phase4-resumption-results.md)を参照。
 
 ## 残作業・承認
 
@@ -81,6 +100,12 @@ CI結果は実行後に追記する。
 削除後の8案件・40入力slot（G103保留6を含む）・7原本・注記・規則・保護・表範囲を照合し、
 独立baselineから構造変更negative testを行う。予測できた補完は検出・拒否・承認範囲での復旧を
 試験し、同じ既知現象だけで開発を無期限停止しない。
+
+**今回、削除・sort・復旧後の40入力slot完全照合は未実施。** 保護設定の完全退避を
+飛ばして削除することは、ユーザー指定の復旧条件に反するため行わない。
+Google Sheets設定変更、新しいDrive資源、既存承認済みブックの変更も0。
+保護取得の同一タイトルprobeについて追加承認が必要という自動レビュー拒否が唯一の復旧ブロッカー。
+これはGoogleへの実操作でのデータ消失や新たな案件混同を検出したという意味ではない。
 
 通常操作は検索のまま。ownerの直接編集・sortを完全禁止できるとは扱わない。
 本番接続の前には、実ホストのcanonical native reader・版対応・追加ユーザー認可・明示POST・
