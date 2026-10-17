@@ -93,12 +93,15 @@ function installCategorySubmit() {
 }
 
 function categorySubmitEdited(e) {
+  // Keep the independently deployed PDF grouping hook intact.
+  if (typeof pdfGroupingEdited === 'function') pdfGroupingEdited(e);
+  if (typeof categoryConfirmationEdited === 'function' && categoryConfirmationEdited(e)) return;
   if (!e || !e.range || e.range.getSheet().getName() !== CATEGORY_UI ||
       e.range.getA1Notation() !== 'B1' || e.value !== 'TRUE') return;
   submitCategoryInput();
 }
 
-function submitCategoryInput() {
+function submitCategoryInput(panelDecision) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return;
   try {
@@ -116,7 +119,9 @@ function submitCategoryInput() {
       sheet.getRange('C1').setValue('初回設定が必要です');
       return;
     }
-    let rows = sheet.getRange(6,1,sheet.getLastRow()-5,12).getDisplayValues();
+    let rows = panelDecision && typeof panelDecision.prepare === 'function'
+      ? panelDecision.prepare()
+      : sheet.getRange(6,1,sheet.getLastRow()-5,12).getDisplayValues();
     while (rows.length && rows[rows.length-1].every(v => v === '')) rows.pop();
     if (!rows.length || rows.length > 10000) throw new Error('受付できる行数を超えています。');
     const markers = ['■ 1. カテゴリを選ぶ・今後の自動分類','■ 2. 過去分の固定プレビュー','■ 3. 固定プレビューを確認して反映'];
@@ -134,6 +139,7 @@ function submitCategoryInput() {
     // JSON begins with '[' so source text cannot become a spreadsheet formula.
     queue.getRange(4,1,rows.length,1).setValues(rows.map(r => [JSON.stringify(r)]));
     queue.getRange('A2:J2').setValues([[requestId,'dispatching',submitted,'','','受付処理中','',rows.length,digest,'1']]);
+    if (panelDecision && typeof panelDecision.accepted === 'function') panelDecision.accepted(requestId);
     sheet.getRange('B1').setValue(true);
     sheet.getRange('C1').setValue('受付中');
     sheet.getRange('B2').setValue('入力を保存しました。実行を依頼しています。');
@@ -189,6 +195,7 @@ function categoryCheckActive() {
     const queue = ss.getSheetByName(CATEGORY_QUEUE);
     if (!queue) return;
     const row = queue.getRange('A2:J2').getValues()[0];
+    if (typeof ccSync_ === 'function') ccSync_(ss);
     if (!CATEGORY_BUSY.includes(String(row[1]))) return;
     const sheet = ss.getSheetByName(CATEGORY_UI);
     if (!row[6]) {
