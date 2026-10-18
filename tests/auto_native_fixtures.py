@@ -22,7 +22,7 @@ from app.receipt_plan.planning import check_duplicates
 from app.bank_income import INCOME_SHEET,INCOME_HEADERS
 from app.sheets import HEADERS
 from staging_shadow.auto_native_evidence import (NativeEvidenceJournal,SyntheticAutoEvidenceAdapter,SCHEMA,LEDGER_SCHEMA,
-    ledger_view,request)
+    ledger_view,request,observation_token)
 from staging_shadow.native_accounting_sandbox import NativeAccountingSandbox,NativeInvocation
 from staging_shadow.accounting_recovery_model import SnapshotDB
 from accounting_ownership_fixtures import Port,SourcePort,NativePort
@@ -85,6 +85,7 @@ class Harness:
         baseline={t:[deepcopy(HEADERS[t])] for t in ('レシート','支出明細','取込データ')};baseline[INCOME_SHEET]=[INCOME_HEADERS]
         self.baseline=[deepcopy(baseline),deepcopy(baseline)]
         self.ledger_io.raw=encoded(dict(schema=LEDGER_SCHEMA,generation=0,complete=True,snapshot=self.baseline))
+        self.before_observation=observation_token(*self.ledger_io.read_versioned())
         self.pending=Pending(self);catalog={}
         for entry in ENTRIES:
             whole=entry in {'normal_auto','buyback_income','legacy_confirmation','future_one_tab'}
@@ -134,7 +135,8 @@ class Harness:
     def candidate(self,e,k):
         golden=deepcopy(self.golden[e]);o=self.frozen[e]
         return dict(schema=SCHEMA,synthetic_only=True,ownership=o,kind=e,inputs=golden['inputs'],input_digest=digest(golden['inputs']),
-            plan=golden['plan'],plan_digest=digest(golden['plan']),before=deepcopy(self.baseline),before_digest=digest(self.baseline),binding=self.bindings(e,k))
+            plan=golden['plan'],plan_digest=digest(golden['plan']),before=deepcopy(self.baseline),before_digest=digest(self.baseline),
+            before_observation=self.before_observation,binding=self.bindings(e,k))
 
     def preflight(self,e,k,o):
         if e in {'normal_auto','buyback_income'}:

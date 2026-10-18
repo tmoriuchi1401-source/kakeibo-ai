@@ -305,6 +305,19 @@ def test_completed_native_evidence_does_not_override_a_mismatched_shared_state(h
     assert result['classification']=='UNKNOWN' and result['review']['shared_state']=='accepted'
 
 
+@pytest.mark.parametrize('point',[None,'before_writer_start_evidence'])
+def test_identical_ledger_values_with_changed_strong_version_do_not_prove_execution_result(h,point):
+    nid=str(uuid4())
+    if point:
+        h.fault=lambda p:(_ for _ in ()).throw(Crash()) if p==point else None
+        with pytest.raises(Crash):h.call(native_id=nid)
+        assert h.adapter.report(nid)['classification']=='NOT_EXECUTED'
+    else:
+        h.call(native_id=nid);assert h.adapter.report(nid)['classification']=='COMPLETE'
+    raw,tag=h.ledger_io.read_versioned();h.ledger_io.replace_versioned(raw,tag,raw)
+    assert h.adapter.report(nid)['classification']=='UNKNOWN'
+
+
 @pytest.mark.parametrize('kind',['normal_auto','buyback_income'])
 @pytest.mark.parametrize('same_id',[True,False])
 def test_sixteen_independent_native_journals_and_adapters_share_the_same_backends(h,kind,same_id):

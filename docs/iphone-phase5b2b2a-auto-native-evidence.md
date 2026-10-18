@@ -19,13 +19,13 @@ root: `schema=synthetic-auto-native-evidence-v1, revision, operations`。keyは�
 | request.ownership | owner、案件、canonical source ID、bytes SHA-256、Drive revision/numeric version、独立native version、確定partition、scope=whole/unit=None、既存native operation、native input snapshot、authority revision、観測digest |
 | request.kind/inputs/input_digest | 通常支出または買取、全parsed値・全明細・カテゴリmaster等のserver固定入力。既存native parsed snapshotと、全入力digestを区別 |
 | request.plan/plan_digest | 全操作順、全ledger ID/期待行、金額・分類・commit marker。caller/browserからの計画生成はしない |
-| request.before/before_digest | 会計3表と収入表の全value/formula、schema/extentを固定した保存前snapshot |
+| request.before/before_digest/before_observation | 会計3表と収入表の全value/formula、schema/extentを固定した保存前snapshotとstrong ETag/raw digest |
 | request.native_request_id/shared_request_id/expected_revision | 別のnamespaceの明示IDとexpected共有revision。IDを自動発行・代入・retryしない |
 | fingerprint | 全requestのcanonical digest。同ID異内容、同原本別IDの再所有を拒否 |
 | shared_claim | 同じoperationの共有request ID/fingerprint、accepted revision、観測strong ETag |
 | validation | 既存preflightのdigest、authority revision、synthetic_preflight_only、native_authority=False。実grantを作らない |
 | writer_start | sequence=1、全request/共有claim/plan binding。保存＋read-back前は合成probeにも進めない |
-| completion | 全ledger read-back digest、request/plan/marker digest、合成COMPLETE分類 |
+| completion | 全ledger read-back digest/strong ETag/raw digest、request/plan/marker digest、合成COMPLETE分類 |
 | phase/events | 明示遷移と監査用の順序。状態名だけでは結果を認定しない |
 
 全原本を仮のPDF Unitへ置換しない。source ID、receipt/import/expense/income IDを既存recordから再生成・書換えしない。fixtureは新規の完全合成初期データだけ。Goldenの既存ID規約を検査するが、実データ移行機能はない。
@@ -62,6 +62,8 @@ phase: recordなし（未claim）→claimed→writer_ready→writer_started→co
 | UNKNOWN | claim/証跡欠落、開始済みでledger不在、全反映でも完了記録前、版変更・観測不足・weak ETag・binding/状態不一致・照合中の競合等 |
 
 read-backでは3保存先のbytes/strong ETagとtrusted bindingを前後readし、一つでも変化したらUNKNOWN。別保存先の一貫した分散snapshot/耐久性を実証したわけではない。全ledger反映後でもnative completeがなければ自動補完しない。完了/未実行でもretry_allowed=False、native_authority=False、accounting_permission=False。UNKNOWN/PARTIALはfence/pendingを保持して論理隔離し、人間向けの原本・全入力・plan・before/観測ledger・pending/marker報告だけを生成する。報告はowner/session read認証・HTML escape、write/復旧ボタンなし。
+
+保存前/完了時のledger観測strong ETagとraw digestも固定する。値が同一に戻っていても版が進んでいれば、元の未実行/完了証拠を再利用せずUNKNOWN。開始マーカー保存の前後にも保存前観測tokenを照合する。
 
 ## 検証の範囲
 

@@ -50,7 +50,7 @@ def request(value):
     try:
         v=deepcopy(value)
         if set(v)!={'schema','synthetic_only','native_request_id','shared_request_id','expected_revision',
-                    'ownership','kind','inputs','input_digest','plan','plan_digest','before','before_digest','binding'}:
+                    'ownership','kind','inputs','input_digest','plan','plan_digest','before','before_digest','before_observation','binding'}:
             raise ValueError()
         o=parse_ownership(v['ownership'])
         if (v['schema']!=SCHEMA or v['synthetic_only'] is not True or o.scope!='whole' or o.unit is not None
@@ -62,6 +62,8 @@ def request(value):
                 or digest(v['plan'])!=v['plan_digest'] or digest(v['before'])!=v['before_digest']
                 or not isinstance(v['binding'],dict)):
             raise ValueError()
+        token=v['before_observation']
+        if set(token)!={'tag','raw_digest'} or not strong_etag(token['tag']) or not hashed(token['raw_digest']):raise ValueError()
         operations=v['plan']['operations'];sid=o.source['source_id']
         expected_tables=['レシート',INCOME_SHEET if v['kind']=='buyback_income' else '支出明細','取込データ']
         if [x['table'] for x in operations]!=expected_tables:raise ValueError()
@@ -102,6 +104,9 @@ def ledger_view(io):
         validate_snapshot(v['snapshot'])
         return v['snapshot'],raw,tag
     except (ValueError,KeyError,TypeError):fail('ledger_observation_unknown')
+
+
+def observation_token(raw,tag):return dict(tag=tag,raw_digest=digest(raw.hex()))
 
 
 def validate_snapshot(snapshot):
@@ -167,11 +172,14 @@ class NativeEvidenceJournal(ConditionalRequests):
                 if r['phase'] in {'claimed','writer_ready'} and (r['writer_start'] is not None or r['completion'] is not None):raise ValueError()
                 if r['phase'] in {'writer_started','complete','partial'} and r['writer_start']!=self.marker(req,r['shared_claim']):raise ValueError()
                 if r['phase']=='complete' and (not isinstance(r['completion'],dict) or
-                    set(r['completion'])!={'request_fingerprint','ledger_digest','plan_digest','writer_start_digest','classification'}
+                    set(r['completion'])!={'request_fingerprint','ledger_digest','ledger_observation','plan_digest','writer_start_digest','classification'}
                     or r['completion']['request_fingerprint']!=r['fingerprint'] or r['completion']['plan_digest']!=req['plan_digest']
                     or r['completion']['classification']!='COMPLETE'
                     or r['completion']['writer_start_digest']!=digest(r['writer_start'])
-                    or not hashed(r['completion']['ledger_digest'])):raise ValueError()
+                    or not hashed(r['completion']['ledger_digest'])
+                    or set(r['completion']['ledger_observation'])!={'tag','raw_digest'}
+                    or not strong_etag(r['completion']['ledger_observation']['tag'])
+                    or not hashed(r['completion']['ledger_observation']['raw_digest'])):raise ValueError()
             return v,raw,tag
         except (ValueError,TypeError,KeyError,AttributeError):fail('journal_quarantined')
 
@@ -258,6 +266,8 @@ class SyntheticAutoEvidenceAdapter:
         if point=='before_shared_claim':self.point(point)
         elif point=='after_shared_claim':
             self.point(point);self.point('before_native_evidence')
+            snapshot,lraw,ltag=ledger_view(self.ledger_io)
+            if snapshot!=req['before'] or observation_token(lraw,ltag)!=req['before_observation']:fail('before_snapshot_changed')
             state,_,tag=self.shared.read();shared=state['operations'][observation.operation_identity]
             if shared['state']!='accepted' or shared['request']['request_id']!=req['shared_request_id']:fail('shared_claim_required')
             self.journal.claim(req,shared,tag);self.point('after_native_evidence')
@@ -278,13 +288,17 @@ class SyntheticAutoEvidenceAdapter:
         self.point('before_writer_start_evidence')
         r=self.journal.read()[0]['operations'][op]
         outer=self.shared.read()[0]['operations'].get(op)
+        initial,lraw,ltag=ledger_view(self.ledger_io)
         if (not outer or outer['state']!='executing' or outer['fingerprint']!=r['shared_claim']['fingerprint']
-                or self.binding_reader(entry,key)!=req['binding'] or ledger_view(self.ledger_io)[0]!=req['before']):fail('changed_before_start_marker')
+                or self.binding_reader(entry,key)!=req['binding'] or initial!=req['before']
+                or observation_token(lraw,ltag)!=req['before_observation']):fail('changed_before_start_marker')
         self.journal.move(req,'writer_started')  # Persist + exact read-back BEFORE counter.
         self.point('after_writer_start_evidence')
         fresh=self.shared.read()[0]['operations'].get(op)
+        initial,lraw,ltag=ledger_view(self.ledger_io)
         if (not fresh or fresh['state']!='executing' or fresh['fingerprint']!=r['shared_claim']['fingerprint']
-                or self.binding_reader(entry,key)!=req['binding'] or ledger_view(self.ledger_io)[0]!=req['before']):fail('changed_after_start_marker')
+                or self.binding_reader(entry,key)!=req['binding'] or initial!=req['before']
+                or observation_token(lraw,ltag)!=req['before_observation']):fail('changed_after_start_marker')
         # This is the only writer surrogate. It has no append or external callback.
         self.probe_calls.append(op)
         try:
@@ -295,6 +309,7 @@ class SyntheticAutoEvidenceAdapter:
             if self.binding_reader(entry,key)!=req['binding']:fail('binding_changed_before_completion')
             if (lraw,ltag)!=ledger_view(self.ledger_io)[1:]:fail('ledger_changed_before_completion')
             self.journal.move(req,'complete',dict(request_fingerprint=digest(req),ledger_digest=digest(snapshot),
+                ledger_observation=observation_token(lraw,ltag),
                 plan_digest=req['plan_digest'],writer_start_digest=digest(NativeEvidenceJournal.marker(req,
                     self.journal.read()[0]['operations'][op]['shared_claim'])),classification='COMPLETE'))
             self.point('after_native_complete')
@@ -337,9 +352,11 @@ class SyntheticAutoEvidenceAdapter:
                 return dict(result,reason='changed_during_readback')
             if status=='partial':return dict(result,classification='PARTIAL',reason='partial_or_conflicting_ledger')
             if (r['phase']=='complete' and status=='complete' and r['completion']['ledger_digest']==digest(observed)
+                    and r['completion']['ledger_observation']==observation_token(lraw,ltag)
                     and outer['state'] in {'executing','awaiting_readback','partial_unknown','complete'}):
                 return dict(result,classification='COMPLETE',quarantined=False,reason='synthetic_completion_evidence_only')
             if (r['phase'] in {'claimed','writer_ready'} and r['writer_start'] is None and status=='not_written'
+                    and req['before_observation']==observation_token(lraw,ltag)
                     and outer['state'] in {'accepted','executing','partial_unknown'}):
                 return dict(result,classification='NOT_EXECUTED',quarantined=False,reason='durable_zero_start_and_exact_baseline')
             return dict(result,reason='outcome_not_proven')
