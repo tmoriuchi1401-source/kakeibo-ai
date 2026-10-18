@@ -12,6 +12,7 @@ dl{display:grid;grid-template-columns:minmax(110px,1fr) 3fr;gap:8px}dt{font-weig
 </style>
 <main><h1>保存済み下書き・合成確認</h1>
 <p class="notice">完全合成データの読み取り専用画面です。Sheets「確認」1タブの入力は保存時点のものです。現在の原本との一致や本人の確定を意味しません。確定・記帳操作はありません。</p>
+{% if synthetic_confirmation_enabled %}<p class="notice">この画面はSheets取込時点の保存値です。ホストで編集した最新の下書きと受付結果は、案件詳細の「本人再確認・必要な明細編集」から確認してください。</p>{% endif %}
 {% if message %}<p role="alert">{{ message }}</p>{% endif %}
 {% if detail %}<a href="{{ url_for('iphone_saved_readonly.listing') }}">下書き一覧へ戻る</a>{% endif %}
 {% for case in cases %}{% set d=case.display %}
@@ -23,6 +24,7 @@ dl{display:grid;grid-template-columns:minmax(110px,1fr) 3fr;gap:8px}dt{font-weig
 {% if d.original_url %}<a href="{{ d.original_url }}" rel="noreferrer noopener">合成原本リンク（架空ID）</a>{% endif %}
 {% if not detail %}<br><a href="{{ url_for('iphone_saved_readonly.detail',case_id=case.case_id) }}">保存済み詳細を表示</a>
 {% else %}<dl>{% for f in d.inputs %}<dt>{{ f.label }}</dt><dd>{{ f.value }}</dd>{% endfor %}</dl>
+{% if synthetic_confirmation_enabled and not d.held %}<a href="{{ url_for('iphone_confirmation.detail',cid=case.case_id) }}">本人再確認・必要な明細編集へ（合成受付のみ）</a>{% endif %}
 {% if d['items'] %}<h3>一般の明細別snapshot</h3><p>各明細のカテゴリを保持しています。シートのカテゴリを一括適用しません。</p><div class="items"><table><thead><tr><th>明細</th><th>金額</th><th>カテゴリ</th></tr></thead><tbody>{% for item in d['items'] %}<tr><td>{{ item.name }}</td><td>{{ item.amount }}</td><td>{{ item.category }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 {% if d.item_entries %}<h3>明細ごとの保存済み下書き</h3><p>未入力・入力済み・保留・対象外を区別して保持します。本人による原本と全明細の再確認が必要です。</p><div class="items"><table><thead><tr><th>原本・明細</th><th>旧値</th><th>提案値</th><th>入力状態・メモ</th></tr></thead><tbody>{% for e in d.item_entries %}<tr><td><a href="{{ e.original_link }}" rel="noreferrer noopener">原本 p{{ e.identity.page_number }} / 明細{{ e.old.item_index }}</a><br>{{ e.old.name }}</td><td>{{ e.old.amount }}円<br>{{ e.old.category }}</td><td>{{ e.proposed.name }} / {{ e.proposed.amount }}円<br>{{ e.proposed.category }}</td><td>{{ {'unentered':'未入力','entered':'入力済み','held':'保留','not_applicable':'対象外'}[e.state] }}<br>{{ e.note }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 <details><summary>保存時点の対応情報</summary><p>canonical案件：{{ d.native_case_id }}</p><p>原本identity：{{ d.source_identity }}</p><p>page / Unit：{{ d.native_identity }}</p><p>入力snapshot：{{ d.input_digest }}</p><p>native snapshot：{{ d.native_digest }}</p></details>

@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-phase5b2a-checks.yml":
+            assert_iphone_phase5b2a_workflow(workflow)
+            continue
         if name == "iphone-phase5b1-checks.yml":
             assert_iphone_phase5b1_workflow(workflow)
             continue
@@ -227,6 +230,41 @@ def assert_iphone_phase5b1_workflow(workflow):
 
 def test_iphone_phase5b1_workflow_is_exact_credential_free_ci():
     assert_iphone_phase5b1_workflow(workflows()['iphone-phase5b1-checks.yml'])
+
+
+def assert_iphone_phase5b2a_workflow(workflow):
+    expected=deepcopy(workflows()['iphone-phase5b1-checks.yml'])
+    assert_iphone_phase5b1_workflow(expected)
+    expected['name']='iPhone Phase 5B-2A synthetic owner acknowledgement'
+    expected['on']={'pull_request':{'branches':['codex/phase5b1-draft-foundation']}}
+    expected['concurrency']['group']='kakeibo-iphone-phase5b2a-${{ github.ref }}'
+    job=expected['jobs'].pop('foundations');expected['jobs']['acknowledgement']=job
+    job['steps'][3]={'name':'Collect and execute synthetic acknowledgement contracts','run':
+        'python -m pytest --collect-only -q tests/test_iphone_confirmation.py\n'
+        'python -m pytest -vv tests/test_iphone_confirmation.py\n'}
+    job['steps'][4]['name']='Reuse Phase 5B-1 and native safety boundaries'
+    prefix=('python -m pytest -q tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py '
+            'tests/test_iphone_item_drafts.py tests/test_iphone_phase5b1_host.py ')
+    job['steps'][4]['run']=job['steps'][4]['run'].replace('python -m pytest -q ',prefix,1)
+    job['steps'][5]['run']=(
+        'python -m compileall -q app/iphone_confirmation.py app/iphone_confirmation_host.py app/iphone_persistent_drafts.py '
+        'tests/iphone_confirmation_fixtures.py tests/iphone_confirmation_visual.py tests/test_iphone_confirmation.py\n'
+        'git diff --check\n')
+    job['steps'][5:5]=[
+        {'uses':'actions/setup-node@v4','with':{'node-version':'22'}},
+        {'name':'Install isolated browser test dependencies','run':
+            'npm install --no-save --prefix "$RUNNER_TEMP/phase5b2a-browser" playwright@1.62.1\n'
+            'PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/phase5b2a-browsers" "$RUNNER_TEMP/phase5b2a-browser/node_modules/.bin/playwright" install --with-deps chromium\n'
+            'sudo apt-get install -y fonts-noto-cjk\n'},
+        {'name':'Verify PC and 390px synthetic interactions without live network','run':
+            'python tests/iphone_confirmation_visual.py --output .private/phase5b2a-visual\n'
+            'PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/phase5b2a-browsers" KAKEIBO_PLAYWRIGHT="$RUNNER_TEMP/phase5b2a-browser/node_modules/playwright" node tests/iphone_confirmation_browser.cjs .private/phase5b2a-visual\n'},
+    ]
+    assert workflow==expected
+
+
+def test_iphone_phase5b2a_workflow_is_exact_credential_free_ci():
+    assert_iphone_phase5b2a_workflow(workflows()['iphone-phase5b2a-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
