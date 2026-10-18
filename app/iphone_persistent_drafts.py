@@ -106,7 +106,9 @@ class PersistentJournal(LocalJournal):
     def _state(self):
         value, raw, tag = self.transport.read()
         try:
-            if (set(value) != {'legacy', 'history', 'details', 'detail_history', 'health', 'migration'} or value['health'] != 'active'
+            required = {'legacy', 'history', 'details', 'detail_history', 'health', 'migration'}
+            if (set(value) not in (required, required | {'confirmation'}) or value['health'] != 'active'
+                    or 'confirmation' in value and not isinstance(value['confirmation'], dict)
                     or not isinstance(value['history'], list) or len(value['history']) > MAX_REQUESTS
                     or not isinstance(value['details'], dict) or not isinstance(value['detail_history'], list)
                     or len(value['detail_history']) != len(value['history'])
@@ -139,7 +141,7 @@ class PersistentJournal(LocalJournal):
         value, _, tag = self._state()
         return deepcopy(value['details']), tag
 
-    def _request(self, batch, expected_tag, request_id, details):
+    def _request(self, batch, expected_tag, request_id, details, confirmation=None):
         value = asdict(batch)
         check_batch(value, self.binding)
         try:
@@ -151,7 +153,12 @@ class PersistentJournal(LocalJournal):
             fail('strong_cas_required')
         if not isinstance(details, dict):
             fail('details_invalid')
-        return value, digest(dict(batch=value, expected_tag=expected_tag, details=details))
+        payload = dict(batch=value, expected_tag=expected_tag, details=details)
+        if confirmation is not None:
+            if not isinstance(confirmation, dict):
+                fail('confirmation_invalid')
+            payload['confirmation'] = confirmation
+        return value, digest(payload)
 
     @staticmethod
     def _matches(before, receipt, fingerprint, request_id, value, expected_tag, details):
@@ -164,27 +171,28 @@ class PersistentJournal(LocalJournal):
         return (request_id in initial['requests'] and details == initial_details
                 and receipt['fingerprint'] == digest(dict(batch=value, expected_tag=expected_tag)))
 
-    def recover(self, request_id, batch, expected_tag, *, details=None):
+    def recover(self, request_id, batch, expected_tag, *, details=None, confirmation=None):
         before, _, tag = self._state()
         details = before['details'] if details is None else details
-        value, fingerprint = self._request(batch, expected_tag, request_id, details)
+        value, fingerprint = self._request(batch, expected_tag, request_id, details, confirmation)
         receipt = before['legacy']['requests'].get(request_id)
         if not receipt or not self._matches(before, receipt, fingerprint, request_id, value, expected_tag, details):
             fail('recovery_unresolved')
         return dict(status='draft_save_observed', receipt=deepcopy(receipt), current_tag=tag,
-                    is_current=before['legacy']['batch'] == value and before['details'] == details,
+                    is_current=before['legacy']['batch'] == value and before['details'] == details
+                               and (confirmation is None or before.get('confirmation') == confirmation),
                     authorized=False, operation_targets=[])
 
-    def save(self, batch, expected_tag, request_id, *, details=None):
+    def save(self, batch, expected_tag, request_id, *, details=None, confirmation=None):
         before, raw, tag = self._state()
         details = before['details'] if details is None else deepcopy(details)
-        value, fingerprint = self._request(batch, expected_tag, request_id, details)
+        value, fingerprint = self._request(batch, expected_tag, request_id, details, confirmation)
         state = before['legacy']
         receipt = state['requests'].get(request_id)
         if receipt:
             if not self._matches(before, receipt, fingerprint, request_id, value, expected_tag, details):
                 fail('replay_payload_changed')
-            return self.recover(request_id, batch, expected_tag, details=details)
+            return self.recover(request_id, batch, expected_tag, details=details, confirmation=confirmation)
         if tag != expected_tag:
             fail('cas_conflict')
         # The batch validator is the existing eight-case contract; persistent
@@ -198,6 +206,8 @@ class PersistentJournal(LocalJournal):
         after['history'].append(deepcopy(state))
         after['detail_history'].append(deepcopy(before['details']))
         after['details'] = details
+        if confirmation is not None:
+            after['confirmation'] = deepcopy(confirmation)
         updated = after['legacy']
         updated['revision'] += 1
         updated['batch'] = value

@@ -23,7 +23,7 @@ from unified_purpose_fixtures import OWNER
 from unified_shadow_fixtures import HostRig
 
 
-def saved_bundle(*, coobserved=False):
+def saved_bundle(*, coobserved=False, native_contexts=None):
     raw, sources = fixture(); mappings = {}
     rows = raw['sheets'][0]['data'][0]['rowData']
     for row in rows[1:]:
@@ -47,13 +47,16 @@ def saved_bundle(*, coobserved=False):
         else:
             native_kind = {'一般': 'general_receipt_item_review', '医療': 'medical', 'PDF': 'grouping'}[kind]
             case = clean(alias, kind=native_kind, pages=[1, 2] if kind == 'PDF' else [1])
-            if coobserved:
+            if native_contexts:
+                case = deepcopy(native_contexts[alias]['context'].case)
+            elif coobserved:
                 from hashlib import sha256
                 from app.pdf_page_identity import page_identity
                 case.identity['source_content_hash'] = sha256(('synthetic-bytes:'+alias).encode()).hexdigest()
                 case.identity['page_identities'] = [page_identity(case.identity['source_content_hash'], p, max(case.pages)) for p in case.pages]
                 case.identity['stable_page_identity'] = case.identity['page_identities'][0]
-            case.fields += [['payment', '支払方法', '現金'], ['memo', 'メモ', alias + ' native途中メモ']]
+            if not native_contexts:
+                case.fields += [['payment', '支払方法', '現金'], ['memo', 'メモ', alias + ' native途中メモ']]
             if alias == 'SYN-G103':
                 case.authority_status = 'held'
             if kind == 'PDF':
@@ -69,12 +72,21 @@ def saved_bundle(*, coobserved=False):
                 view = dict(identity=deepcopy(case.identity), token=digest([alias, 'native-token']),
                             rows=[[k, k, fields[k]] for k in ('date', 'amount', 'merchant', 'payment', 'memo', 'action')])
                 items = snapshot(view, fields)
+                if native_contexts:
+                    items = deepcopy(native_contexts[alias]['context'].saved_items)
                 case.fields = deepcopy(items['rows'])
             canonical = from_case(case, {'一般':'normal', '医療':'medical', 'PDF':'grouping'}[kind])
             if kind == 'PDF':
                 canonical['inputs'] = {k: (v if k in {'partition', 'memo'} else '')
                                        for k,v in canonical['inputs'].items()}
             canonical['hold'] = 'held' if alias in HELD else ''
+            if native_contexts:
+                canonical = deepcopy(native_contexts[alias]['context'].canonical)
+                canonical['hold'] = 'held' if alias in HELD else ''
+                for f,col in dict(date=4,merchant=5,amount=6,category=7,payment=8,memo=12).items():
+                    if kind != 'PDF':
+                        v = canonical['inputs'][f]
+                        cells[col]['userEnteredValue'] = {'numberValue' if type(v) is int else 'stringValue':v}
             purpose = canonical['purpose']
             source = next(s for s in sources if s['case_id'] == alias)
             source.update(source_id=case.source_id, sha256=case.identity['source_content_hash'])
@@ -96,7 +108,7 @@ def saved_bundle(*, coobserved=False):
                 pages=[dict(number=p, count=max(case.pages), identity=identity) for p,identity in zip(case.pages,i['page_identities'])],
                 receipt_unit_id=i['receipt_unit_id'], receipt_index=i['receipt_index'])
             reader = SimpleNamespace(read_frame=lambda:deepcopy(frame),
-                read_revision_bytes=lambda *args:('synthetic-bytes:'+alias).encode())
+                read_revision_bytes=lambda *args:native_contexts[alias]['raw'] if native_contexts else ('synthetic-bytes:'+alias).encode())
             mappings[alias]['source_observation'] = asdict(observe(reader, source, canonical['identity'],
                 purpose=purpose, input_snapshot=digest(cells), clock=lambda:1792278000))
             if items:
