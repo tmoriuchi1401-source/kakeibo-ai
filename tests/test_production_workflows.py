@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-accounting-recovery-checks.yml":
+            assert_accounting_recovery_workflow(workflow)
+            continue
         if name == "iphone-accounting-gate-checks.yml":
             assert_accounting_gate_workflow(workflow)
             continue
@@ -323,6 +326,28 @@ def assert_accounting_gate_workflow(workflow):
 
 def test_accounting_gate_workflow_is_exact_credential_free_ci():
     assert_accounting_gate_workflow(workflows()['iphone-accounting-gate-checks.yml'])
+
+
+def assert_accounting_recovery_workflow(workflow):
+    expected=deepcopy(workflows()['iphone-accounting-gate-checks.yml'])
+    assert_accounting_gate_workflow(expected)
+    expected['name']='iPhone synthetic accounting recovery checkpoints'
+    expected['on']['pull_request']['branches']=['codex/phase5b2b1-ownership-enforced-gate']
+    expected['concurrency']['group']='kakeibo-iphone-accounting-recovery-${{ github.ref }}'
+    job=expected['jobs'].pop('ownership-and-gates');expected['jobs']['recovery-checkpoints']=job
+    job['steps'][3]={'name':'Collect and execute synthetic recovery checkpoints','run':
+        'python -m pytest --collect-only -q tests/test_accounting_recovery.py\n'
+        'python -m pytest -vv tests/test_accounting_recovery.py\n'}
+    job['steps'][4]['run']+=' tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py'
+    job['steps'][5]['run']=(
+        'python -m compileall -q app/iphone_accounting_gate.py staging_shadow/accounting_recovery_model.py '
+        'tests/accounting_recovery_fixtures.py tests/test_accounting_recovery.py\n'
+        'git diff --check\n')
+    assert workflow==expected
+
+
+def test_accounting_recovery_workflow_is_exact_credential_free_ci():
+    assert_accounting_recovery_workflow(workflows()['iphone-accounting-recovery-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
