@@ -85,7 +85,7 @@ class _GuardedProbe:
 
 class SyntheticAccountingGate:
     def __init__(self, requests, reader, auth, preflight, probe, *, enabled=False,
-                 isolated_synthetic=False, clock):
+                 isolated_synthetic=False, clock, checkpoint=None):
         if (enabled is not True or isolated_synthetic is not True
                 or type(requests) is not ConditionalRequests or not requests.synthetic_accounting
                 or getattr(requests.io, 'synthetic_memory_only', False) is not True
@@ -94,8 +94,15 @@ class SyntheticAccountingGate:
             raise StateError('synthetic_accounting_gate_disabled')
         self.requests, self.reader, self.auth = requests, reader, auth
         self.preflight, self.clock = preflight, clock
+        self.checkpoint = checkpoint
         self._lease = ContextVar('synthetic_accounting_probe_lease', default=None)
         self._probe = _GuardedProbe(self, probe)
+
+    def _checkpoint(self, point, entry, key, observation):
+        # Only this explicitly isolated, memory-only gate has fault injection.
+        # The callback cannot supply a lease or bypass any native preflight.
+        if self.checkpoint is not None:
+            self.checkpoint(point, entry, key, observation)
 
     def _native(self, entry, key, observation):
         checked = self.preflight(entry, key, observation)
@@ -117,6 +124,7 @@ class SyntheticAccountingGate:
             raise StateError('synthetic_accounting_owner_mismatch')
         self.auth._post(context, ACCOUNTING_POST, request_id, observation.input_snapshot, expected_revision)
         checked = self._native(entry, key, observation)
+        self._checkpoint('before_shared_claim', entry, key, observation)
         request = AccountingProbeRequest.parse(dict(schema=SCHEMA, synthetic_only=True, owner=self.auth.owner,
             request_id=request_id, expected_state_revision=expected_revision,
             operation_identity=observation.operation_identity, ownership=observation.value(),
@@ -145,6 +153,7 @@ class SyntheticAccountingGate:
         after['operations'][request.operation_identity] = dict(request=asdict(request),
             fingerprint=request.fingerprint(), state='accepted', events=[dict(state='accepted', at=self.clock())])
         self.requests.replace(before, raw, tag, after)  # Existing strong CAS + exact read-back, no retry.
+        self._checkpoint('after_shared_claim', entry, key, observation)
         self.requests.transition(request, 'executing', self.clock())
         lease = _Lease(request, observation, checked, entry, key, object())
         token = self._lease.set(lease)
@@ -153,6 +162,7 @@ class SyntheticAccountingGate:
             self._boundary(lease)
             self.requests.transition(request, 'awaiting_readback', self.clock())
             self.requests.transition(request, 'complete', self.clock())
+            self._checkpoint('after_shared_update', entry, key, observation)
             return self._result('complete')
         except Exception:
             latest, _, _ = self.requests.read()
@@ -169,6 +179,7 @@ class SyntheticAccountingGate:
         current = self.reader.observe(lease.entry, lease.key)
         if current != lease.observation or self._native(lease.entry, lease.key, current) != lease.preflight:
             raise StateError('synthetic_accounting_changed_before_boundary')
+        self._checkpoint('after_native_validation', lease.entry, lease.key, current)
         current_store, _, _ = self.requests.read()
         op = current_store['operations'].get(lease.request.operation_identity)
         if not op or op['state'] != 'executing' or op['fingerprint'] != lease.request.fingerprint():
