@@ -21,6 +21,33 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
         if name == "iphone-auto-native-evidence-checks.yml":
             assert_auto_native_evidence_workflow(workflow)
             continue
+        if name == "iphone-synthetic-native-writer-checks.yml":
+            source = (ROOT / ".github/workflows" / name).read_text("utf-8")
+            assert workflow["on"] == {"pull_request": {"branches": ["codex/phase5b2b2a-auto-native-evidence"]}}
+            assert workflow["permissions"] == {"contents": "read"}
+            assert workflow["env"] == {"UNIFIED_RECEIPT_WRITE_ENABLED": "false"}
+            assert workflow["concurrency"] == {
+                "group": "kakeibo-iphone-synthetic-native-writer-${{ github.ref }}",
+                "cancel-in-progress": "true",
+            }
+            assert "secrets." not in source and "vars." not in source and "environment:" not in source
+            assert workflow["jobs"] == {"synthetic-writer": {
+                "runs-on": "ubuntu-24.04", "timeout-minutes": "30", "steps": [
+                    {"uses": "actions/checkout@v4", "with": {
+                        "ref": "${{ github.event.pull_request.head.sha }}", "fetch-depth": "0",
+                        "persist-credentials": "false"}},
+                    {"uses": "actions/setup-python@v5", "with": {"python-version": "3.12"}},
+                    {"name": "Install synthetic test dependencies", "run": "pip install -r requirements-test.txt"},
+                    {"name": "Collect and execute native evidence and existing writer tests", "run": (
+                        "python -m pytest --collect-only -q tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py\n"
+                        "python -m pytest -vv tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py\n")},
+                    {"name": "Reuse existing safety and native-writer regressions", "run": (
+                        "python -m pytest -q tests/test_iphone_confirmation.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_phase5b1_host.py tests/test_iphone_readonly_host.py tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_native_dry_run.py tests/test_iphone_review_drafts.py tests/test_iphone_review_preview.py tests/test_unified_receipt_review.py tests/test_unified_receipt_eligibility.py tests/test_unified_receipt_write.py tests/test_unified_receipt_purposes.py tests/test_unified_receipt_shadow_host.py tests/test_production_workflows.py tests/test_native_ingress_safety_stop.py tests/test_p14_plan_only.py tests/test_receipt_unit_plan.py tests/test_receipt_unit_posting.py tests/test_p14_posting.py tests/test_receipt_pipeline.py tests/test_receipt_confirmation.py tests/test_pdf_intake_runner.py tests/test_receipt_privacy_gate.py tests/test_receipt_text_extraction.py tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py tests/test_accounting_recovery.py")},
+                    {"name": "Compile and check whitespace", "run": (
+                        "python -m compileall -q staging_shadow/auto_native_evidence.py staging_shadow/synthetic_auto_writer.py tests/auto_native_fixtures.py tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py\n"
+                        "git diff --check\n")},
+                ]}}
+            continue
         if name == "iphone-accounting-recovery-checks.yml":
             assert_accounting_recovery_workflow(workflow)
             continue
