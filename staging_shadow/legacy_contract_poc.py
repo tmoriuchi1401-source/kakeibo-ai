@@ -19,6 +19,7 @@ from app.unified_receipt_native import confirmation_operation_identity
 from app.unified_receipt_purposes import ACCOUNTING_POST, PurposeBoundary
 from app.unified_receipt_review import digest
 from app.unified_receipt_write import ConditionalRequests, MAX_BYTES, prohibited
+from app.receipt_confirmation_contract import load, encoded, memory_only, snapshot, planned_after, validate_candidate
 
 SCHEMA = 'synthetic-legacy-native-contract-v1'
 FIXTURE = 'synthetic-contract-fixture-not-issued-authority'
@@ -27,102 +28,6 @@ PHASES = {'claimed', 'writer_started', 'complete_fixture'}
 
 def fail(code):
     raise StateError('legacy_contract_' + code)
-
-
-def load(raw):
-    def unique(pairs):
-        value = {}
-        for k, v in pairs:
-            if k in value:
-                raise ValueError('duplicate')
-            value[k] = v
-        return value
-    if type(raw) is not bytes or len(raw) > MAX_BYTES:
-        fail('invalid_bytes')
-    return json.loads(raw, object_pairs_hook=unique)
-
-
-def encoded(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
-
-
-def memory_only(io):
-    if getattr(io, 'synthetic_memory_only', False) is not True:
-        fail('memory_required')
-
-
-def snapshot(value):
-    if (type(value) is not list or len(value) != 2 or type(value[0]) is not dict
-            or set(value[0]) != set(value[1]) or not {'レシート', '支出明細', '取込データ'} <= set(value[0])):
-        fail('ledger_incomplete')
-    for part in value:
-        for rows in part.values():
-            if type(rows) is not list or any(type(r) is not list or not r for r in rows):
-                fail('ledger_incomplete')
-            ids = [str(r[0]) for r in rows]
-            if len(ids) != len(set(ids)):
-                fail('ledger_duplicate')
-    for title in value[0]:
-        if [r[0] for r in value[0][title]] != [r[0] for r in value[1][title]]:
-            fail('ledger_projection_identity')
-    return deepcopy(value)
-
-
-def planned_after(before, plan):
-    result = snapshot(before)
-    keys = set()
-    for title, wanted in plan:
-        if title not in {'レシート', '支出明細', '取込データ'} or (title, wanted[0]) in keys:
-            fail('plan_invalid')
-        keys.add((title, wanted[0]))
-        for part in result:
-            indices = [i for i, r in enumerate(part[title]) if r[0] == wanted[0]]
-            if indices:
-                part[title][indices[0]] = deepcopy(wanted)
-            else:
-                part[title].append(deepcopy(wanted))
-    return result
-
-
-def validate_candidate(c):
-    try:
-        if set(c) != {'mode', 'kind', 'case_id', 'review_id', 'operation', 'request_id', 'shared_request_id',
-                      'owner', 'source', 'inputs', 'plan', 'before', 'authority', 'ownership', 'fingerprint'}:
-            raise ValueError()
-        if c['mode'] != FIXTURE or c['kind'] not in {'normal', 'medical'}:
-            raise ValueError()
-        for key in ('request_id', 'shared_request_id'):
-            if str(UUID(c[key])) != c[key]:
-                raise ValueError()
-        source_valid(c['source'])
-        if c['operation'] != confirmation_operation_identity({'source': dict(
-                source_id=c['source']['source_id'], sha256=c['source']['sha256'],
-                version=c['source']['native_source_version'])}):
-            raise ValueError()
-        a = c['authority']
-        if (set(a) != {'mode', 'actor', 'owner', 'purpose', 'request_id', 'input_fingerprint', 'revision',
-                      'issued_at', 'expires_at', 'revoked', 'authenticated_action_digest', 'scope_digest'}
-                or a['mode'] != FIXTURE or a['actor'] != a['owner'] or a['owner'] != c['owner']
-                or a['purpose'] != ACCOUNTING_POST or a['request_id'] != c['request_id']
-                or a['input_fingerprint'] != digest(c['inputs']) or a['scope_digest'] != digest([
-                    c['operation'], c['source'], c['plan'], c['before']])
-                or type(a['revision']) is not int or a['revision'] < 1
-                or type(a['issued_at']) is not int or a['expires_at'] - a['issued_at'] != 600
-                or a['revoked'] is not False or len(a['authenticated_action_digest']) != 64):
-            raise ValueError()
-        o = c['ownership']
-        if parse_ownership(o).scope != 'whole':
-            raise ValueError()
-        if (o['operation_identity'] != c['operation'] or o['source'] != c['source']
-                or o['owner'] != c['owner'] or o['input_snapshot'] != digest(c['inputs'])
-                or o['authority_revision'] != a['revision']):
-            raise ValueError()
-        if c['fingerprint'] != digest({k: v for k, v in c.items() if k != 'fingerprint'}):
-            raise ValueError()
-        planned_after(c['before'], c['plan'])
-        return deepcopy(c)
-    except (KeyError, TypeError, ValueError, AttributeError):
-        fail('candidate_invalid')
 
 
 def freeze_candidate(service, port, case, source, authority, ownership, before, native_id, shared_id):

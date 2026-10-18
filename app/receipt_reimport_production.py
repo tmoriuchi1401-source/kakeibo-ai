@@ -63,6 +63,13 @@ def validate_store(value, expected_digest, spreadsheet_id):
 
 
 class ReimportStore:
+    @classmethod
+    def isolated_v2(cls, io, expected_digest, spreadsheet_id, *, enabled=False, isolated_synthetic=False):
+        """Explicit memory-only v2 facade. Default v1 construction is unchanged."""
+        from .receipt_confirmation_contract import IsolatedReimportStore
+        return IsolatedReimportStore(io, expected_digest, spreadsheet_id,
+            enabled=enabled, isolated_synthetic=isolated_synthetic)
+
     def __init__(self, transport, expected_digest, spreadsheet_id):
         self.transport=transport
         self.expected_digest=expected_digest
