@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-accounting-gate-checks.yml":
+            assert_accounting_gate_workflow(workflow)
+            continue
         if name == "iphone-phase5b2b1-checks.yml":
             assert_iphone_phase5b2b1_workflow(workflow)
             continue
@@ -291,6 +294,35 @@ def assert_iphone_phase5b2b1_workflow(workflow):
 
 def test_iphone_phase5b2b1_workflow_is_exact_credential_free_ci():
     assert_iphone_phase5b2b1_workflow(workflows()['iphone-phase5b2b1-checks.yml'])
+
+
+def assert_accounting_gate_workflow(workflow):
+    expected=deepcopy(workflows()['iphone-phase5b2b1-checks.yml'])
+    assert_iphone_phase5b2b1_workflow(expected)
+    expected['name']='iPhone synthetic accounting ownership and enforced gates'
+    expected['on']['pull_request']['branches']=['codex/phase5b2b1-shared-native-claims']
+    expected['concurrency']['group']='kakeibo-iphone-accounting-gate-${{ github.ref }}'
+    job=expected['jobs'].pop('safety-stop');expected['jobs']['ownership-and-gates']=job
+    job['timeout-minutes']='25'
+    job['steps'][3]={'name':'Collect and execute ownership and enforced gate contracts','run':
+        'python -m pytest --collect-only -q tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py\n'
+        'python -m pytest -vv tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py\n'}
+    job['steps'][4]['name']='Reuse existing safety regressions and native validators'
+    job['steps'][4]['run']+=(
+        ' tests/test_native_ingress_safety_stop.py tests/test_p14_plan_only.py tests/test_receipt_unit_plan.py '
+        'tests/test_receipt_unit_posting.py tests/test_p14_posting.py tests/test_receipt_pipeline.py '
+        'tests/test_receipt_confirmation.py tests/test_pdf_intake_runner.py tests/test_receipt_privacy_gate.py tests/test_receipt_text_extraction.py')
+    job['steps'][5]['run']=(
+        'python -m compileall -q app/iphone_accounting_ownership.py app/iphone_accounting_gate.py '
+        'staging_shadow/accounting_native_preflight.py staging_shadow/native_accounting_sandbox.py '
+        'tests/accounting_ownership_fixtures.py tests/accounting_gate_fixtures.py '
+        'tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py\n'
+        'git diff --check\n')
+    assert workflow==expected
+
+
+def test_accounting_gate_workflow_is_exact_credential_free_ci():
+    assert_accounting_gate_workflow(workflows()['iphone-accounting-gate-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
