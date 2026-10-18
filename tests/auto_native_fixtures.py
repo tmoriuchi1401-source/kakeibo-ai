@@ -64,8 +64,10 @@ class Pending:
 
 
 class Harness:
-    def __init__(self,sandbox=None):
+    def __init__(self,sandbox=None,*,connect_existing_writer=False):
         self.golden=deepcopy(GOLDEN);self.adapter=None;self.mode='complete';self.fault=None
+        self.connect_existing_writer=connect_existing_writer
+        self.writer_runs=[]
         self.known_classification=None
         self.instances=[]
         self.text=ContextVar('synthetic_auto_text',default='')
@@ -85,6 +87,10 @@ class Harness:
         baseline={t:[deepcopy(HEADERS[t])] for t in ('レシート','支出明細','取込データ')};baseline[INCOME_SHEET]=[INCOME_HEADERS]
         self.baseline=[deepcopy(baseline),deepcopy(baseline)]
         self.ledger_io.raw=encoded(dict(schema=LEDGER_SCHEMA,generation=0,complete=True,snapshot=self.baseline))
+        if self.connect_existing_writer:
+            from staging_shadow.synthetic_auto_writer import SyntheticReceiptWriter
+            self.writer=SyntheticReceiptWriter(self.ledger_io)
+        else:self.writer=None
         self.before_observation=observation_token(*self.ledger_io.read_versioned())
         self.pending=Pending(self);catalog={}
         for entry in ENTRIES:
@@ -158,7 +164,12 @@ class Harness:
 
     def _rebuild(self):
         old=self.adapter
-        self.adapter=SyntheticAutoEvidenceAdapter(self.journal,self.shared,self.auth,self.candidate,self.bindings,self.ledger_io,enabled=True)
+        if self.connect_existing_writer:
+            if self.writer is not None:self.writer_runs.append(self.writer)
+            from staging_shadow.synthetic_auto_writer import SyntheticReceiptWriter
+            self.writer=SyntheticReceiptWriter(self.ledger_io)
+        self.adapter=SyntheticAutoEvidenceAdapter(self.journal,self.shared,self.auth,self.candidate,self.bindings,self.ledger_io,
+            enabled=True,writer=self.writer)
         self.instances=[self.adapter]
         if old:self.adapter.probe_calls=old.probe_calls;self.adapter.boundary_calls=old.boundary_calls
         self.adapter.fault=self.on_point
@@ -179,8 +190,9 @@ class Harness:
         value['generation']+=1;self.ledger_io.replace_versioned(raw,tag,encoded(value))
 
     def on_point(self,p):
-        if p=='after_probe' and self.mode!='no_ledger':self.project(True)
-        if p=='after_all_ledger' and self.mode=='complete':self.project(False)
+        if not self.connect_existing_writer:
+            if p=='after_probe' and self.mode!='no_ledger':self.project(True)
+            if p=='after_all_ledger' and self.mode=='complete':self.project(False)
         if self.fault:self.fault(p)
 
     def call(self,e='normal_auto',native_id=None,shared_id=None,revision=None,context=None,gate=None):

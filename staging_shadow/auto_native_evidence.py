@@ -1,7 +1,8 @@
-"""Synthetic-only whole-source execution journal. No native writer/authority API.
+"""Synthetic-only whole-source execution journal and dispatch boundary.
 
 Shared claim, this journal and ledger observations are THREE independent stores.
 ConditionalRequests.replace supplies the existing CAS and exact read-back engine.
+Any writer dispatch is optional and accepts only the adjacent synthetic-only adapter.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -226,15 +227,25 @@ class NativeEvidenceJournal(ConditionalRequests):
 class SyntheticAutoEvidenceAdapter:
     """Callback adapter for the already isolated SyntheticAccountingGate.
 
-    Only a non-effect counter is built in. No arbitrary writer callback exists.
-    Ledger observations are read-only; TEST faults may project them independently.
+    The default remains an inert non-effect counter. The optional connection is
+    restricted to SyntheticReceiptWriter and cannot receive production clients.
     """
-    def __init__(self,journal,shared,auth,candidate_reader,binding_reader,ledger_io,*,enabled=False):
+    def __init__(self,journal,shared,auth,candidate_reader,binding_reader,ledger_io,*,enabled=False,writer=None):
         if (enabled is not True or type(journal) is not NativeEvidenceJournal
                 or type(shared) is not ConditionalRequests or not shared.synthetic_accounting
                 or any(getattr(io,'synthetic_memory_only',False) is not True for io in (shared.io,ledger_io))):fail('adapter_disabled')
         self.journal,self.shared,self.auth=journal,shared,auth
         self.candidate_reader,self.binding_reader,self.ledger_io=candidate_reader,binding_reader,ledger_io
+        # This optional connection accepts only the dedicated synthetic
+        # materializer adapter. Production writer/client objects are rejected.
+        if writer is not None:
+            from .synthetic_auto_writer import SyntheticReceiptWriter
+            if type(writer) is not SyntheticReceiptWriter or writer.io is not ledger_io:
+                fail('writer_not_synthetic_scoped')
+            self._writer_capability=object()
+            writer._bind_gate(self,self._writer_capability)
+        else:self._writer_capability=None
+        self.writer=writer
         self._attempt=ContextVar('synthetic_auto_attempt',default=None)
         self._ready=ContextVar('synthetic_auto_ready',default=None)
         self.fault=None;self.read_hook=None;self.probe_calls=[];self.boundary_calls=[]
@@ -299,10 +310,16 @@ class SyntheticAutoEvidenceAdapter:
         if (not fresh or fresh['state']!='executing' or fresh['fingerprint']!=r['shared_claim']['fingerprint']
                 or self.binding_reader(entry,key)!=req['binding'] or initial!=req['before']
                 or observation_token(lraw,ltag)!=req['before_observation']):fail('changed_after_start_marker')
-        # This is the only writer surrogate. It has no append or external callback.
+        # There is no writer callback unless this adapter was constructed with
+        # the explicit synthetic-only DB boundary. The default stays inert.
         self.probe_calls.append(op)
         try:
-            self.point('after_probe');self.point('after_partial_ledger');self.point('after_all_ledger')
+            if self.writer is None:
+                self.point('after_probe');self.point('after_partial_ledger');self.point('after_all_ledger')
+            else:
+                marker=self.journal.read()[0]['operations'][op]['writer_start']
+                self.writer.execute(req,capability=self._writer_capability,marker=marker)
+                self.point('after_probe');self.point('after_partial_ledger');self.point('after_all_ledger')
             self.point('before_completion_evidence')
             snapshot,lraw,ltag=ledger_view(self.ledger_io)
             if ledger_outcome(req,snapshot)!='complete':fail('complete_readback_required')
