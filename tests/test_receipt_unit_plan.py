@@ -13,8 +13,8 @@ from app.drive_run_state import StateError
 
 CONTEXT='synthetic-private-unit-context'
 
-def unit_fixture(page_number=4,index=1):
-    old,_,_=fixture();source=SourceRef(source_file_id='synthetic-plan-source',source_content_hash='b'*64,page_count=14)
+def unit_fixture(page_number=4,index=1,*,source_hash='b'*64,actor_owner=OWNER):
+    old,_,_=fixture(source_hash=source_hash,actor_owner=actor_owner);source=SourceRef(source_file_id='synthetic-plan-source',source_content_hash=source_hash,page_count=14)
     page=PageUnit(source=source,page_number=page_number,stable_page_identity=stable_page(source,page_number),
         automatic_classification='sensitive_unknown',automatic_reason='privacy_unresolved',observation_complete=True,
         extraction_status='extracted',observation_render_hash='c'*64,review_identity='d'*64,authority_revision=2)
@@ -42,15 +42,15 @@ def unit_fixture(page_number=4,index=1):
         by_id[f[5:]]['amount'] if f.startswith('item:') else current[f] if f in items.FIELDS or f in {'action','structure_confirmation'} else value]
         for f,label,value in view['rows']]
     snapshot=dict(identity=view['identity'],token=view['token'],rows=rows,items=current['items'],original_link='')
-    bound=proof.binding(record,snapshot,RID);verified=proof.ConfirmedItems(RID,record['digest'],digest(snapshot),digest(current),digest(ident),OWNER,1791526595,digest([bound,OWNER,1791526595]))
+    bound=proof.binding(record,snapshot,RID);verified=proof.ConfirmedItems(RID,record['digest'],digest(snapshot),digest(current),digest(ident),actor_owner,1791526595,digest([bound,actor_owner,1791526595]))
     validation=items.evaluate(record,current,CATS,confirmation=verified)
     journal=dict(schema='receipt-item-confirmations-v1',scope='f'*64,requests={RID:dict(binding=bound,proof=asdict(verified),snapshot=snapshot,
         plan=dict(input=current,validation=validation),status='validated_not_written')},generation=1)
     return record,snapshot,journal
 
 class Readers(BaseReaders):
-    def __init__(self,page=4,index=1):
-        super().__init__();self.record,self.snapshot,self.journal=unit_fixture(page,index)
+    def __init__(self,page=4,index=1,*,source_hash='b'*64,actor_owner=OWNER):
+        super().__init__(source_hash=source_hash,actor_owner=actor_owner);self.record,self.snapshot,self.journal=unit_fixture(page,index,source_hash=source_hash,actor_owner=actor_owner)
 
 @pytest.mark.parametrize('page,count,total',[(4,3,800),(10,5,1250)])
 def test_dynamic_budget_plan_replay_and_no_live_writer(monkeypatch,page,count,total):

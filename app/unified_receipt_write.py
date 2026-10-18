@@ -146,11 +146,14 @@ class ConditionalRequests:
     Host must supply the SAME private store for both request entry points.
     No files are created or state seeded by the coordinator.
     """
-    def __init__(self, io, store_id):
+    def __init__(self, io, store_id, *, synthetic_accounting=False):
         self.io, self.store_id = io, store_id
+        self.synthetic_accounting = synthetic_accounting is True
 
-    @staticmethod
-    def parse_request(value):
+    def parse_request(self, value):
+        if self.synthetic_accounting and isinstance(value,dict) and value.get('schema') == 'synthetic-accounting-probe-v1':
+            from .iphone_accounting_gate import AccountingProbeRequest
+            return AccountingProbeRequest.parse(value)
         if 'purpose' in value:
             from .unified_receipt_purposes import PurposeRequest
             return PurposeRequest.parse(value)
@@ -240,6 +243,8 @@ class UnifiedWriteBridge:
         # Default OFF is checked before touching a client, adapter or store.
         if not self.config.enabled or prohibited(case):
             return dict(state='not_received',label=LABELS['not_received'],operation_targets=[])
+        if self.requests is not None and getattr(self.requests,'synthetic_accounting',False) is True:
+            raise StateError('unified_synthetic_accounting_gate_required')
         if action not in ACTIONS:raise StateError('unified_action_invalid')
         if self.requests is None or self.config.request_store_id!=self.requests.store_id:
             raise StateError('unified_shared_request_store_missing')
@@ -263,6 +268,8 @@ class UnifiedWriteBridge:
     def submit(self, case, payload, *, entry='unified'):
         if entry not in {'unified','legacy'}:raise StateError('unified_entry_invalid')
         if not self.config.enabled or prohibited(case):raise StateError('unified_case_write_forbidden')
+        if self.requests is not None and getattr(self.requests,'synthetic_accounting',False) is True:
+            raise StateError('unified_synthetic_accounting_gate_required')
         request=OperationRequest.parse(payload)
         if request.requested_action != 'post':raise StateError('unified_purpose_route_required')
         if self.requests is None or self.config.request_store_id!=self.requests.store_id:
@@ -322,6 +329,8 @@ class UnifiedWriteBridge:
 
     def recover_readback(self, case, payload):
         """Explicit recovery never calls native execute/append or issues authority."""
+        if self.requests is not None and getattr(self.requests,'synthetic_accounting',False) is True:
+            raise StateError('unified_synthetic_accounting_gate_required')
         request=OperationRequest.parse(payload)
         if (prohibited(case,recovery=True) or not self.config.allows(case,request.expected_state_revision)
                 or self.requests is None or self.requests.store_id!=self.config.request_store_id):

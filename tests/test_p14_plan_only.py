@@ -16,8 +16,8 @@ OWNER='a'*64
 CATS=[('食費','食品'),('日用品','消耗品')]
 
 
-def fixture():
-    source=SourceRef(source_file_id='synthetic-plan-source',source_content_hash='b'*64,page_count=14)
+def fixture(*, source_hash='b'*64, actor_owner=OWNER):
+    source=SourceRef(source_file_id='synthetic-plan-source',source_content_hash=source_hash,page_count=14)
     page=PageUnit(source=source,page_number=14,stable_page_identity=stable_page(source,14),automatic_classification='sensitive_unknown',automatic_reason='privacy_unresolved',observation_complete=True,extraction_status='extracted',observation_render_hash='c'*64,review_identity='d'*64,authority_revision=2)
     page=page.model_copy(update={'review_identity':review_identity(page)})
     ident={**binding_fields(page),'processing_status':'observed','receipt_unit_id':'page-receipt-v1:'+'e'*64,'segmentation_digest':'f'*64,'receipt_index':1,'bbox':dict(left=0.,top=0.,right=1.,bottom=1.)}
@@ -39,15 +39,15 @@ def fixture():
     rows=[[f,by_id[f[5:]]['name'] if f.startswith('item:') else l,by_id[f[5:]]['amount'] if f.startswith('item:') else current[f] if f in items.FIELDS or f in {'action','structure_confirmation'} else v] for f,l,v in view['rows']]
     snapshot=dict(identity=view['identity'],token=view['token'],rows=rows,items=current['items'],original_link='')
     bound=proof.binding(record,snapshot,RID)
-    verified=proof.ConfirmedItems(RID,record['digest'],digest(snapshot),digest(current),digest(ident),OWNER,1791526595,digest([bound,OWNER,1791526595]))
+    verified=proof.ConfirmedItems(RID,record['digest'],digest(snapshot),digest(current),digest(ident),actor_owner,1791526595,digest([bound,actor_owner,1791526595]))
     validation=items.evaluate(record,current,CATS,confirmation=verified)
     journal=dict(schema='receipt-item-confirmations-v1',scope='f'*64,requests={RID:dict(binding=bound,proof=asdict(verified),snapshot=snapshot,plan=dict(input=current,validation=validation),status='validated_not_written')},generation=1)
     return record,snapshot,journal
 
 
 class Readers:
-    def __init__(self):
-        self.record,self.snapshot,self.journal=fixture();self.owner_actor_id=OWNER;self.config={'scope':'f'*64,'journal_file':'journal','drive':{'authority_file':'hga'}}
+    def __init__(self, *, source_hash='b'*64, actor_owner=OWNER):
+        self.record,self.snapshot,self.journal=fixture(source_hash=source_hash,actor_owner=actor_owner);self.owner_actor_id=actor_owner;self.config={'scope':'f'*64,'journal_file':'journal','drive':{'authority_file':'hga'}}
         self.private=SimpleNamespace(read=lambda _: (json.dumps(self.journal).encode(),'"journal1"'))
         self.drive=SimpleNamespace(begin_request=lambda:None,end_request=lambda:None,read=lambda _:(b'{"authority":1}','"hga1"'))
         self.tables={t:[HEADERS[t]] for t in r.TABLES}
