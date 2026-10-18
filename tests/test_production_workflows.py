@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-phase5b2b1-checks.yml":
+            assert_iphone_phase5b2b1_workflow(workflow)
+            continue
         if name == "iphone-phase5b2a-checks.yml":
             assert_iphone_phase5b2a_workflow(workflow)
             continue
@@ -265,6 +268,29 @@ def assert_iphone_phase5b2a_workflow(workflow):
 
 def test_iphone_phase5b2a_workflow_is_exact_credential_free_ci():
     assert_iphone_phase5b2a_workflow(workflows()['iphone-phase5b2a-checks.yml'])
+
+
+def assert_iphone_phase5b2b1_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-phase5b2a-checks.yml'])
+    assert_iphone_phase5b2a_workflow(expected)
+    expected['name'] = 'iPhone Phase 5B-2B-1 native ingress safety stop'
+    expected['on']['pull_request']['branches'] = ['codex/phase5b2a-synthetic-confirmation']
+    expected['concurrency']['group'] = 'kakeibo-iphone-phase5b2b1-${{ github.ref }}'
+    job = expected['jobs'].pop('acknowledgement'); expected['jobs']['safety-stop'] = job
+    job['steps'][3] = {'name': 'Collect and execute safety-stop evidence', 'run':
+        'python -m pytest --collect-only -q tests/test_native_ingress_safety_stop.py\n'
+        'python -m pytest -vv tests/test_native_ingress_safety_stop.py\n'}
+    job['steps'][4]['name'] = 'Reuse existing authentication validator writer and draft safety regressions'
+    job['steps'][4]['run'] = job['steps'][4]['run'].replace(
+        'python -m pytest -q ', 'python -m pytest -q tests/test_iphone_confirmation.py ', 1)
+    job['steps'][5:] = [{'name': 'Compile and check whitespace', 'run':
+        'python -m compileall -q tests/test_native_ingress_safety_stop.py\n'
+        'git diff --check\n'}]
+    assert workflow == expected
+
+
+def test_iphone_phase5b2b1_workflow_is_exact_credential_free_ci():
+    assert_iphone_phase5b2b1_workflow(workflows()['iphone-phase5b2b1-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():

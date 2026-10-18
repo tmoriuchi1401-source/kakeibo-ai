@@ -1,0 +1,41 @@
+name: iPhone Phase 5B-2B-1 native ingress safety stop
+
+on:
+  pull_request:
+    branches: [codex/phase5b2a-synthetic-confirmation]
+
+permissions:
+  contents: read
+
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+
+concurrency:
+  group: kakeibo-iphone-phase5b2b1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  safety-stop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install synthetic test dependencies
+        run: pip install -r requirements-test.txt
+      - name: Collect and execute safety-stop evidence
+        run: |
+          python -m pytest --collect-only -q tests/test_native_ingress_safety_stop.py
+          python -m pytest -vv tests/test_native_ingress_safety_stop.py
+      - name: Reuse existing authentication validator writer and draft safety regressions
+        run: python -m pytest -q tests/test_iphone_confirmation.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_phase5b1_host.py tests/test_iphone_readonly_host.py tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_native_dry_run.py tests/test_iphone_review_drafts.py tests/test_iphone_review_preview.py tests/test_unified_receipt_review.py tests/test_unified_receipt_eligibility.py tests/test_unified_receipt_write.py tests/test_unified_receipt_purposes.py tests/test_unified_receipt_shadow_host.py tests/test_production_workflows.py
+      - name: Compile and check whitespace
+        run: |
+          python -m compileall -q tests/test_native_ingress_safety_stop.py
+          git diff --check
