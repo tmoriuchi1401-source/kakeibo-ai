@@ -59,8 +59,33 @@ def test_legacy_contract_poc_ci_is_exactly_isolated():
     assert_legacy_contract_poc_workflow(workflows()['iphone-legacy-contract-poc-checks.yml'])
 
 
+def assert_native_receipt_v2_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-legacy-contract-poc-checks.yml'])
+    assert_legacy_contract_poc_workflow(expected)
+    expected['name'] = 'iPhone isolated native receipt v2'
+    expected['on'] = {'pull_request': {'branches': ['codex/phase5b2b2c1-native-contract-poc']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-native-v2-${{ github.ref }}'
+    steps = expected['jobs']['synthetic-writer']['steps']
+    steps.insert(3, {'name': 'Collect and execute isolated native v2', 'run': (
+        'python -m pytest --collect-only -q tests/test_receipt_confirmation_contract.py\n'
+        'python -m pytest -vv tests/test_receipt_confirmation_contract.py\n')})
+    steps[-2]['run'] += ' tests/test_receipt_reimport_production.py'
+    steps[-1]['run'] = steps[-1]['run'].replace('tests/test_legacy_contract_poc.py\n',
+        'tests/test_legacy_contract_poc.py app/receipt_confirmation_contract.py app/receipt_reimport_production.py tests/test_receipt_confirmation_contract.py\n')
+    assert workflow == expected
+    source = (ROOT / '.github/workflows/iphone-native-receipt-v2-checks.yml').read_text('utf-8')
+    assert all(x not in source for x in ('secrets.', 'vars.', 'environment:'))
+
+
+def test_native_receipt_v2_ci_is_exactly_isolated():
+    assert_native_receipt_v2_workflow(workflows()['iphone-native-receipt-v2-checks.yml'])
+
+
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-native-receipt-v2-checks.yml":
+            assert_native_receipt_v2_workflow(workflow)
+            continue
         if name == "iphone-legacy-contract-poc-checks.yml":
             assert_legacy_contract_poc_workflow(workflow)
             continue

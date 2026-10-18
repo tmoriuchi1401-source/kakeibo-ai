@@ -33,6 +33,12 @@ PATHS = {
     'future_one_tab': 'future_accounting.request',
 }
 DENIED = (
+    'receipt_reimport_production.ReimportStore.isolated_v2',
+    'receipt_confirmation_contract.IsolatedConfirmationContract.accept_fixture',
+    'receipt_confirmation_contract.IsolatedConfirmationContract.consume',
+    'receipt_confirmation_contract.IsolatedConfirmationContract.start',
+    'receipt_confirmation_contract.IsolatedConfirmationContract.complete_fixture',
+    'receipt_confirmation_contract.IsolatedReimportStore._commit',
     'receipt_pipeline.ReceiptPipeline._materialize_result',
     'receipt_confirmation.ReceiptConfirmation._write_accounting_plan',
     'pdf_intake_runner.PageIntake._post',
