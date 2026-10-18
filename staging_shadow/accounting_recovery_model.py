@@ -207,7 +207,15 @@ class EvidenceModel:
                 EvidenceModel._project_rows(expected,partial=False)
                 return 'complete' if expected['ledger']==r['ledger'] else 'partial_or_unknown'
             return 'not_written' if r['ledger']==r['before'] else 'partial_or_unknown'
-        if profile == 'unsupported_auto': return 'unsupported'
+        if profile == 'unsupported_auto':
+            # Coverage of the observed plan, NOT native completion/intent proof.
+            # Include buyback income and the import commit marker, not just the
+            # receipt or three expense tables. Missing native evidence remains
+            # UNKNOWN even when every projected value is present.
+            if r['ledger']==r['before']:return 'not_written'
+            expected=deepcopy(r);expected['ledger']=deepcopy(r['before'])
+            EvidenceModel._project_rows(expected,partial=False)
+            return 'complete' if expected['ledger']==r['ledger'] else 'partial_or_unknown'
         return exact_readback(db,r['expected'],digest(ledger_snapshot(SnapshotDB(r['before']))))
 
     def report(self, request_id, context=None):
@@ -252,9 +260,9 @@ class EvidenceModel:
             if ((raw,tag)!=self.requests.read()[1:] or (eraw,etag)!=self.read()[1:]
                     or current!=self.binding_reader(r['entry'],r['key'])):
                 return dict(result,reason='changed_during_readback')
-            if r['profile']=='unsupported_auto': return dict(result,reason='native_durable_claim_unavailable')
             if ledger=='partial_or_unknown':
                 return dict(result,classification='PARTIAL',reason='partial_or_conflicting_ledger')
+            if r['profile']=='unsupported_auto': return dict(result,reason='native_durable_claim_unavailable')
             if outer['state']=='complete' and (r['native_state']!=complete or ledger!='complete'):
                 return dict(result,reason='shared_native_ledger_mismatch')
             if (ledger=='complete' and r['native_state']==complete and r['writer_starts']==1 and r['validated']

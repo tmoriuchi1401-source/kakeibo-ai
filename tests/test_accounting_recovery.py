@@ -85,7 +85,8 @@ def test_all_ingresses_all_failure_points_are_fenced_after_restart(h,entry,point
             if candidate==source and not independent:
                 with pytest.raises(StateError):h.call(other,rid=str(uuid4()))
         assert starts(h)==count and len(h.boundary_calls)==boundary_count
-        if entry in {'normal_auto','buyback_income'}:assert report['classification']=='UNKNOWN'
+        if entry in {'normal_auto','buyback_income'}:
+            assert report['classification']==('PARTIAL' if point=='after_partial_ledger' else 'UNKNOWN')
         elif point in {'after_shared_claim','after_native_validation','before_native_claim','after_native_claim','before_writer_start'}:
             assert report['classification']=='NOT_EXECUTED',report
         elif point=='after_writer_start':assert report['classification']=='UNKNOWN'

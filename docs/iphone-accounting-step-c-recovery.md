@@ -10,7 +10,7 @@
 
 | 入口 | 元のnative契約 | 投影とread-back |
 |---|---|---|
-| 通常自動取込、買取収入 | `receipt_pipeline.ReceiptPipeline.process_bytes/_materialize_result`。import ID確認とcommit markerがあり、同等の永続native claim/完了journalはない | native状態は常に`unsupported`。writer直前spy・部分ledger観測の障害試験は可能だが、COMPLETE/NOT_EXECUTEDのnative証明を捏造しない。**常にUNKNOWN** |
+| 通常自動取込、買取収入 | `receipt_pipeline.ReceiptPipeline.process_bytes/_materialize_result`。import ID確認とcommit markerがあり、同等の永続native claim/完了journalはない | native状態は常に`unsupported`。収入・import commit markerを含む全planの部分反映はPARTIALとして隔離。COMPLETE/NOT_EXECUTEDのnative証明は**UNKNOWN**に留める |
 | 旧一般／医療完全手入力 | `ReceiptConfirmation.apply_confirmations/_write_accounting_plan` のwaiting → pending → applied。失敗時pending、再呼出しは完全read-backのみ | 同じ状態名。`ReceiptConfirmation._complete`と既存`same_row`をdetached read viewで使用。全対象行と無関係行の保護も検査 |
 | PDF auto/manual | `PageIntake._post/recover`：intentなし → claimed → complete/imported。partial/unknownはclaimed保持 | 同じintent状態。既存 `pdf_intake_runner.exact_readback` とvalue/formula snapshotを使用。`recover(apply=True)`は呼ばない |
 | grouped Unit | hash固定native `pdf_unit_processing.DriveUnitProcessingStore.reserve/verify_pending/complete`、既存 `GroupedUnitPort.readback` | absent → pending → applied。既存exact_readbackを使用。実reserve/completeは呼ばない |
