@@ -28,7 +28,7 @@ async function main(){
     await page.goto(origin+'/'+view.file);await page.waitForLoadState('networkidle');
     const measured=await page.evaluate(()=>({width:innerWidth,documentWidth:document.documentElement.scrollWidth,
       title:document.querySelector('h1')?.innerText,forms:document.querySelectorAll('form').length,
-      minControlHeight:Math.min(...[...document.querySelectorAll('input:not([type=checkbox]),select,textarea,button,a')].map(e=>e.getBoundingClientRect()).filter(r=>r.width&&r.height).map(r=>r.height)),
+      minControlHeight:Math.min(...[...document.querySelectorAll('input:not([type=checkbox]),label:has(input[type=checkbox]),select,textarea,button,a')].map(e=>e.getBoundingClientRect()).filter(r=>r.width&&r.height).map(r=>r.height)),
       externalLinks:[...document.querySelectorAll('a[href^="https:"]')].map(e=>({target:e.target,rel:e.rel}))}));
     assert(measured.documentWidth<=width,`${view.name}: viewport overflow`);
     assert(measured.minControlHeight>=44,`${view.name}: small target`);
