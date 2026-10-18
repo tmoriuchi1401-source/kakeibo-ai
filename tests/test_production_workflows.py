@@ -18,6 +18,9 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-auto-native-evidence-checks.yml":
+            assert_auto_native_evidence_workflow(workflow)
+            continue
         if name == "iphone-accounting-recovery-checks.yml":
             assert_accounting_recovery_workflow(workflow)
             continue
@@ -348,6 +351,28 @@ def assert_accounting_recovery_workflow(workflow):
 
 def test_accounting_recovery_workflow_is_exact_credential_free_ci():
     assert_accounting_recovery_workflow(workflows()['iphone-accounting-recovery-checks.yml'])
+
+
+def assert_auto_native_evidence_workflow(workflow):
+    expected=deepcopy(workflows()['iphone-accounting-recovery-checks.yml'])
+    assert_accounting_recovery_workflow(expected)
+    expected['name']='iPhone synthetic auto native execution evidence'
+    expected['on']['pull_request']['branches']=['codex/phase5b2b1-step-c-recovery']
+    expected['concurrency']['group']='kakeibo-iphone-auto-native-evidence-${{ github.ref }}'
+    job=expected['jobs'].pop('recovery-checkpoints');expected['jobs']['auto-native-evidence']=job
+    job['steps'][3]={'name':'Collect and execute synthetic auto native evidence','run':
+        'python -m pytest --collect-only -q tests/test_auto_native_evidence.py\n'
+        'python -m pytest -vv tests/test_auto_native_evidence.py\n'}
+    job['steps'][4]['run']+=' tests/test_accounting_recovery.py'
+    job['steps'][5]['run']=(
+        'python -m compileall -q staging_shadow/auto_native_evidence.py tests/auto_native_fixtures.py '
+        'tests/test_auto_native_evidence.py\n'
+        'git diff --check\n')
+    assert workflow==expected
+
+
+def test_auto_native_evidence_workflow_is_exact_credential_free_ci():
+    assert_auto_native_evidence_workflow(workflows()['iphone-auto-native-evidence-checks.yml'])
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
