@@ -37,8 +37,33 @@ def test_legacy_confirmation_stop_ci_is_exactly_isolated():
     assert_legacy_confirmation_stop_workflow(workflows()['iphone-legacy-confirmation-stop-checks.yml'])
 
 
+def assert_legacy_contract_poc_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-legacy-confirmation-stop-checks.yml'])
+    assert_legacy_confirmation_stop_workflow(expected)
+    expected['name'] = 'iPhone legacy native contract PoC'
+    expected['on'] = {'pull_request': {'branches': ['codex/phase5b2b2c-legacy-confirmation']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-legacy-contract-poc-${{ github.ref }}'
+    steps = expected['jobs']['synthetic-writer']['steps']
+    steps.insert(3, {'name': 'Collect and execute contract PoC', 'run': (
+        'python -m pytest --collect-only -q tests/test_legacy_contract_poc.py\n'
+        'python -m pytest -vv tests/test_legacy_contract_poc.py\n')})
+    steps[-1]['run'] = steps[-1]['run'].replace(
+        'tests/test_legacy_confirmation_connection_stop.py\n',
+        'tests/test_legacy_confirmation_connection_stop.py staging_shadow/legacy_contract_poc.py tests/test_legacy_contract_poc.py\n')
+    assert workflow == expected
+    source = (ROOT / '.github/workflows/iphone-legacy-contract-poc-checks.yml').read_text('utf-8')
+    assert all(x not in source for x in ('secrets.', 'vars.', 'environment:'))
+
+
+def test_legacy_contract_poc_ci_is_exactly_isolated():
+    assert_legacy_contract_poc_workflow(workflows()['iphone-legacy-contract-poc-checks.yml'])
+
+
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-legacy-contract-poc-checks.yml":
+            assert_legacy_contract_poc_workflow(workflow)
+            continue
         if name == "iphone-legacy-confirmation-stop-checks.yml":
             assert_legacy_confirmation_stop_workflow(workflow)
             continue
