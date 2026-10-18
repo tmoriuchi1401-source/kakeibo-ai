@@ -16,8 +16,32 @@ def workflows():
             for path in (ROOT / ".github/workflows").glob("*.yml")}
 
 
+def assert_legacy_confirmation_stop_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-synthetic-native-writer-checks.yml'])
+    expected['name'] = 'iPhone legacy confirmation connection stop'
+    expected['on'] = {'pull_request': {'branches': ['codex/phase5b2b2b2b-synthetic-writer']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-legacy-confirmation-stop-${{ github.ref }}'
+    steps = expected['jobs']['synthetic-writer']['steps']
+    steps.insert(3, {'name': 'Collect and execute legacy stopping evidence', 'run': (
+        'python -m pytest --collect-only -q tests/test_legacy_confirmation_connection_stop.py\n'
+        'python -m pytest -vv tests/test_legacy_confirmation_connection_stop.py\n')})
+    steps[-1]['run'] = steps[-1]['run'].replace(
+        'tests/test_synthetic_existing_writer.py\n',
+        'tests/test_synthetic_existing_writer.py tests/test_legacy_confirmation_connection_stop.py\n')
+    assert workflow == expected
+    source = (ROOT / '.github/workflows/iphone-legacy-confirmation-stop-checks.yml').read_text('utf-8')
+    assert all(x not in source for x in ('secrets.', 'vars.', 'environment:'))
+
+
+def test_legacy_confirmation_stop_ci_is_exactly_isolated():
+    assert_legacy_confirmation_stop_workflow(workflows()['iphone-legacy-confirmation-stop-checks.yml'])
+
+
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == "iphone-legacy-confirmation-stop-checks.yml":
+            assert_legacy_confirmation_stop_workflow(workflow)
+            continue
         if name == "iphone-auto-native-evidence-checks.yml":
             assert_auto_native_evidence_workflow(workflow)
             continue
