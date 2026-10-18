@@ -11,7 +11,8 @@ import json
 from uuid import UUID
 
 from app.drive_run_state import StateError
-from app.iphone_accounting_ownership import parse_ownership, hashed
+from app.iphone_accounting_ownership import parse_ownership, hashed, relation
+from app.iphone_accounting_gate import AccountingProbeRequest
 from app.pdf_intake_registry import strong_etag
 from app.pdf_intake_runner import exact_readback, ledger_snapshot
 from app.unified_receipt_review import digest
@@ -182,9 +183,15 @@ class NativeEvidenceJournal(ConditionalRequests):
     def claim(self,req,shared,tag):
         req=request(req);before,raw,etag=self.read();after=deepcopy(before)
         op=req['ownership']['operation_identity']
+        outer=AccountingProbeRequest.parse(shared['request'])
+        if (shared['state']!='accepted' or shared['fingerprint']!=outer.fingerprint()
+                or outer.operation_identity!=op or outer.ownership!=req['ownership']
+                or outer.request_id!=req['shared_request_id'] or outer.expected_state_revision!=req['expected_revision']):
+            fail('shared_claim_binding_invalid')
         for old in before['operations'].values():
             if (old['request']['native_request_id']==req['native_request_id']
                     or old['request']['shared_request_id']==req['shared_request_id']):fail('request_id_already_used')
+            if relation(old['request']['ownership'],req['ownership'])!='independent':fail('operation_scope_already_owned')
         if op in before['operations']:fail('operation_already_claimed')
         after['operations'][op]=dict(request=req,fingerprint=digest(req),phase='claimed',
             shared_claim=dict(operation_identity=op,request_id=req['shared_request_id'],fingerprint=shared['fingerprint'],
@@ -318,6 +325,7 @@ class SyntheticAutoEvidenceAdapter:
                 before=req['before'],observed=observed,native_phase=r['phase'],writer_start=r['writer_start'],
                 shared_claim=r['shared_claim'],completion=r['completion'])
             outer=shared['operations'].get(o.operation_identity)
+            result['review']['shared_state']=outer['state'] if outer else 'missing'
             if (binding!=req['binding'] or not outer or outer['fingerprint']!=r['shared_claim']['fingerprint']
                     or outer['request']['request_id']!=req['shared_request_id'] or outer['request']['ownership']!=req['ownership']
                     or outer['request']['native_preflight_digest']!=r['validation']['preflight_digest']):return dict(result,reason='binding_mismatch')

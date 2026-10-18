@@ -275,6 +275,36 @@ def test_sticky_sensitive_source_provenance_blocks_the_new_journal(h,classificat
     assert not h.financial.writes and not h.native_io.writes and not h.adapter.probe_calls
 
 
+@pytest.mark.parametrize('field',['drive_revision_id','native_source_version'])
+def test_native_journal_also_preserves_source_fence_across_versioned_operation_ids(h,field):
+    from app.unified_receipt_native import confirmation_operation_identity
+    from app.iphone_accounting_gate import AccountingProbeRequest
+    h.call();r=next(iter(h.journal.read()[0]['operations'].values()))
+    req=deepcopy(r['request']);req['native_request_id']=str(uuid4());req['shared_request_id']=str(uuid4())
+    source=req['ownership']['source'];source[field]='changed-same-bytes'
+    req['ownership']['partition']['source']=deepcopy(source)
+    req['ownership']['operation_identity']=confirmation_operation_identity({'source':dict(source_id=source['source_id'],
+        sha256=source['sha256'],version=source['native_source_version'])})
+    # A hypothetical new shared claim still cannot override the independent
+    # native journal's retained whole-source ownership. No grant is dispatched.
+    shared=deepcopy(next(iter(h.shared.read()[0]['operations'].values())))
+    shared['state']='accepted';shared['request'].update(request_id=req['shared_request_id'],ownership=req['ownership'],
+        operation_identity=req['ownership']['operation_identity'])
+    shared['fingerprint']=AccountingProbeRequest.parse(shared['request']).fingerprint()
+    before=h.native_io.read_versioned()
+    with pytest.raises(StateError):h.journal.claim(req,shared,'"hypothetical-read-tag"')
+    assert before==h.native_io.read_versioned() and len(h.adapter.probe_calls)==1
+
+
+def test_completed_native_evidence_does_not_override_a_mismatched_shared_state(h):
+    nid=str(uuid4());h.call(native_id=nid)
+    raw,tag=h.financial.read_versioned();value=json.loads(raw)
+    op=next(iter(value['operations'].values()));op['state']='accepted';op['events'][-1]['state']='accepted'
+    h.financial.replace_versioned(raw,tag,encoded(value))
+    result=h.adapter.report(nid)
+    assert result['classification']=='UNKNOWN' and result['review']['shared_state']=='accepted'
+
+
 @pytest.mark.parametrize('kind',['normal_auto','buyback_income'])
 @pytest.mark.parametrize('same_id',[True,False])
 def test_sixteen_independent_native_journals_and_adapters_share_the_same_backends(h,kind,same_id):

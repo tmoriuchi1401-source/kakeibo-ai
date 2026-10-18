@@ -34,6 +34,8 @@ root: `schema=synthetic-auto-native-evidence-v1, revision, operations`。keyは�
 
 全入口・全インスタンスが、同じ金融ConditionalRequests backend、同じnative journal backend、同じledger観測backendとownership readerを参照する。**3保存先は相互に独立**し、単一トランザクションではない。native証跡とledgerを同じatomic imageへ同梱して成功扱いしない。
 
+native repository自身も、共有claimの完全なrequest/fingerprint/bindingと、全保存済みnative ownershipの関係を検査する。同hashでDrive/native版だけが変わったoperationもUNKNOWNとして拒否し、金融store側の一覧だけを所有証拠と仮定しない。
+
 1. 既存owner/session/POST境界、trusted ownership、元のprivacy/通常validator/取引種別/duplicate/買取検証。
 2. 共有CAS accepted＋完全read-back。ここでcrashしnative証跡がなければUNKNOWN。共有fenceは残す。
 3. native journal claim＋完全read-back。全入力/plan/before/共有claimのbindingを固定。
