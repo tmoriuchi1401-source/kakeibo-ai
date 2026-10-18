@@ -1,0 +1,199 @@
+{
+  "normal_auto": {
+    "inputs": {
+      "parsed": {
+        "merchant": "完全合成店",
+        "transaction_kind": "purchase",
+        "date": "2026-10-07",
+        "total": 730,
+        "payment_method": "現金",
+        "items": [
+          {
+            "name": "牛乳",
+            "quantity": 1.0,
+            "amount": 250,
+            "major_category": "食費",
+            "minor_category": "食品",
+            "note": "",
+            "confidence": 0.99
+          },
+          {
+            "name": "パン",
+            "quantity": 1.0,
+            "amount": 480,
+            "major_category": "食費",
+            "minor_category": "食品",
+            "note": "",
+            "confidence": 0.99
+          }
+        ],
+        "note": ""
+      },
+      "categories": [
+        [
+          "食費",
+          "食品"
+        ]
+      ]
+    },
+    "plan": {
+      "operations": [
+        {
+          "table": "レシート",
+          "rows": [
+            [
+              "R-synthetic-auto-native-source",
+              "2026-10-07",
+              "完全合成店",
+              730,
+              "現金",
+              "",
+              "解析済",
+              "2026-10-11 12:00:00",
+              ""
+            ]
+          ]
+        },
+        {
+          "table": "支出明細",
+          "rows": [
+            [
+              "R-synthetic-auto-native-source-01",
+              "2026-10-07",
+              "完全合成店",
+              "牛乳",
+              250,
+              "食費",
+              "食品",
+              "現金",
+              "receipt",
+              "R-synthetic-auto-native-source",
+              "receipt:synthetic-auto-native-source",
+              "",
+              "active"
+            ],
+            [
+              "R-synthetic-auto-native-source-02",
+              "2026-10-07",
+              "完全合成店",
+              "パン",
+              480,
+              "食費",
+              "食品",
+              "現金",
+              "receipt",
+              "R-synthetic-auto-native-source",
+              "receipt:synthetic-auto-native-source",
+              "",
+              "active"
+            ]
+          ]
+        },
+        {
+          "table": "取込データ",
+          "rows": [
+            [
+              "receipt:synthetic-auto-native-source",
+              "2026-10-11 12:00:00",
+              "receipt",
+              "synthetic-auto-native-source",
+              "2026-10-07",
+              "完全合成店",
+              730,
+              "現金",
+              "解析済",
+              "",
+              "9b96a345d458b1ec6b89388af8eda3c30573e14e00329be6b71a252b87d59209",
+              ""
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "buyback_income": {
+    "inputs": {
+      "parsed": {
+        "merchant": "完全合成店",
+        "transaction_kind": "buyback",
+        "date": "2026-10-07",
+        "total": 155,
+        "payment_method": "現金",
+        "items": [
+          {
+            "name": "合成買取品",
+            "quantity": 1.0,
+            "amount": 155,
+            "major_category": "食費",
+            "minor_category": "食品",
+            "note": "",
+            "confidence": 0.99
+          }
+        ],
+        "note": ""
+      },
+      "categories": [
+        [
+          "食費",
+          "食品"
+        ]
+      ]
+    },
+    "plan": {
+      "operations": [
+        {
+          "table": "レシート",
+          "rows": [
+            [
+              "R-synthetic-auto-native-source",
+              "2026-10-07",
+              "完全合成店",
+              155,
+              "現金",
+              "",
+              "解析済",
+              "2026-10-11 12:00:00",
+              ""
+            ]
+          ]
+        },
+        {
+          "table": "収入明細",
+          "rows": [
+            [
+              "I-96d2ca9b594ee5c66810fe71",
+              "2026-10-07",
+              155,
+              "その他確認済収入",
+              "完全合成店",
+              "",
+              "receipt:synthetic-auto-native-source",
+              "receipt_buyback",
+              "receipt_explicit_buyback",
+              "bf591c74f89b47f94df580dc9e88d1306b864e47128a03a59c30cac2adc4ff39"
+            ]
+          ]
+        },
+        {
+          "table": "取込データ",
+          "rows": [
+            [
+              "receipt:synthetic-auto-native-source",
+              "2026-10-11 12:00:00",
+              "receipt",
+              "synthetic-auto-native-source",
+              "2026-10-07",
+              "完全合成店",
+              155,
+              "現金",
+              "解析済",
+              "",
+              "bf591c74f89b47f94df580dc9e88d1306b864e47128a03a59c30cac2adc4ff39",
+              ""
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}
