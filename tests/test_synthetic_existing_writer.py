@@ -284,4 +284,3 @@ def test_existing_unrelated_rows_and_formulas_are_preserved(h, kind):
             row for op in h.journal.read()[0]['operations'].values()
             for item in op['request']['plan']['operations'] if item['table'] == title
             for row in item['rows']]
-
