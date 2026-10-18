@@ -28,6 +28,8 @@ def h(foundation):
         {id(x):x for route in s.router.routes.values() for x in (route.source,route.partition,route.native,s.ledger,s.pending)}.values()]
     harness=Harness(s,plans)
     yield harness
+    from collections import Counter
+    assert all(n<=1 for n in Counter(op for _,_,op in harness.boundary_calls).values())
     harness.close()
     for port,frame in ports:port.frame=frame;port.on_read=None
     s.after_preflight=None
@@ -57,7 +59,8 @@ def test_all_ingresses_all_failure_points_are_fenced_after_restart(h,entry,point
             raise TimeoutError(mode)
     h.model.fault=fail
     with pytest.raises((Crash,StateError,TimeoutError)):h.call(entry,rid=rid,revision=0)
-    count=starts(h);assert count<=1
+    count=starts(h);boundary_count=len(h.boundary_calls)
+    assert count<=1 and boundary_count<=1
     h.restart()
     stored=h.requests.read()[0]
     before=(h.server.read_versioned(),h.evidence.read_versioned(),h.s.snapshot_native())
@@ -81,7 +84,7 @@ def test_all_ingresses_all_failure_points_are_fenced_after_restart(h,entry,point
             except StateError:independent=False
             if candidate==source and not independent:
                 with pytest.raises(StateError):h.call(other,rid=str(uuid4()))
-        assert starts(h)==count
+        assert starts(h)==count and len(h.boundary_calls)==boundary_count
         if entry in {'normal_auto','buyback_income'}:assert report['classification']=='UNKNOWN'
         elif point in {'after_shared_claim','after_native_validation','before_native_claim','after_native_claim','before_writer_start'}:
             assert report['classification']=='NOT_EXECUTED',report

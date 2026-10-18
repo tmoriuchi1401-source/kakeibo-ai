@@ -97,6 +97,7 @@ class PendingOverlay:
 class Harness:
     def __init__(self,s,plans):
         self.s=s;self.base_pending=s.pending
+        self.boundary_calls=[]
         self.server=Memory();self.server.synthetic_memory_only=True
         self.requests=ConditionalRequests(self.server,'synthetic-shared-financial-claims',synthetic_accounting=True)
         self.evidence=Memory();self.evidence.synthetic_memory_only=True
@@ -112,8 +113,12 @@ class Harness:
 
     def new_gate(self):
         return SyntheticAccountingGate(ConditionalRequests(self.server,self.requests.store_id,synthetic_accounting=True),
-            self.s.router,self.s.auth,self.s.preflight,self.model.observe_boundary,enabled=True,isolated_synthetic=True,
+            self.s.router,self.s.auth,self.s.preflight,self.observe_boundary,enabled=True,isolated_synthetic=True,
             clock=lambda:NOW,checkpoint=self.model.checkpoint)
+
+    def observe_boundary(self,entry,key,op):
+        self.boundary_calls.append((entry,key,op))
+        return self.model.observe_boundary(entry,key,op)
 
     def bindings(self,entry,key):
         route=self.s.router.routes[entry,key]

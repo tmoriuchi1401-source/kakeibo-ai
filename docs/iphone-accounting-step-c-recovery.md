@@ -63,6 +63,8 @@ crashは`BaseException`で通常のException後始末を迂回する。再起動
 
 最大16個の別ConditionalRequests/gateが同じbackendへ競合する。future aliasと全legacy、auto/旧確認、全原本/Unit、PDF相互、canary/明示Unitを区別して試験する。fixtureの原本が別の場合を「同一原本の競合」と偽らない。同原本・同Unitは1回、確定済み別Unitはnative pending前の独立claimを許す。旧pending/不明/完了所有が観測される場合は別Unitも保守的に停止する。元のnative state/会計行/writer回数は測定前後不変。
 
+全シナリオの後始末でも、guarded probeへの到達回数をoperationごとに集計して最大1回を検査する。writer開始前に失敗した到達も含め、writer開始回数だけでは隠れる二重許可を検出する。
+
 専用Ubuntu 24.04/Python 3.12 CIは正確なPR head、contents:read、資格情報/Secrets/vars/environmentなし、write flag false。新規node IDのcollect/PASSEDを照合し、#133までの1,300件の安全回帰と新CI境界を実行する。確定件数・run URL・commitは新Draft PR本文に記録する。
 
 Step Cはこの合成モデルでの障害・照合検証。未解決はauto/buybackの永続native claim/実行開始証跡、実nativeレコードと共有claimの原子的な結合、native完了/history/authority消費の実接続、live source/ledger/pending reader、実backendの耐久性・IAM/鍵/保持/復旧/監査、実OAuth/iPhone。これらを合成成功で解消済みとしない。
