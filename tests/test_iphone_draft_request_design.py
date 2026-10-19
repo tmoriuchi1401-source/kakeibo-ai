@@ -197,9 +197,11 @@ def test_existing_native_extra_expense_row_is_not_silently_deleted(monkeypatch):
 
 
 def test_runtime_schema_pin_and_old_validators_are_unchanged():
-    assert subprocess.check_output(['git', 'diff', '--name-only', PARENT, '--', 'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True) == ''
-    assert not (ROOT/'app/receipt_confirmation_draft_request.py').exists()
-    assert not (ROOT/'staging_shadow/receipt_draft_contract.py').exists()
+    changes = subprocess.check_output(['git', 'diff', '--name-status', PARENT, '--', 'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
+    allowed = {'A\tapp/receipt_confirmation_draft_request.py', 'A\tstaging_shadow/receipt_draft_contract.py'}
+    assert set(changes) <= allowed  # Later, separately authorized isolated runtime.
+    for path in ('app/receipt_confirmation_contract.py', 'staging_shadow/synthetic_legacy_writer.py'):
+        assert subprocess.check_output(['git', 'diff', PARENT, '--', path], cwd=ROOT, text=True) == ''
 
 
 def test_design_workflow_boundary():

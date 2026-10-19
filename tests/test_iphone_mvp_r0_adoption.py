@@ -172,7 +172,13 @@ def test_acknowledgement_stays_nonfinancial_and_separate_from_native(monkeypatch
 def test_no_runtime_auth_bundle_or_existing_workflow_changed_since_141():
     names = subprocess.check_output(['git', 'diff', '--name-only', START, '--',
         'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
-    assert names == []
+    # The next user-approved isolation adds only these modules. The old code,
+    # auth bundle and every pre-existing runtime remain byte-for-byte pinned.
+    allowed = {'app/receipt_confirmation_draft_request.py', 'staging_shadow/receipt_draft_contract.py'}
+    assert set(names) <= allowed
+    status = subprocess.check_output(['git', 'diff', '--name-status', START, '--',
+        'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
+    assert all(line.startswith('A\t') for line in status)
     baseline = json.loads((ROOT / 'docs/iphone-mvp-r0-pr-baseline.json').read_text('utf8'))
     assert baseline['start'] == START
     assert len(baseline['pull_requests']) == 19

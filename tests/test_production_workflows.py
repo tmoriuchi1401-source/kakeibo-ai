@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-draft-runtime-checks.yml':
+            from test_receipt_draft_runtime import test_runtime_workflow_is_isolated
+            test_runtime_workflow_is_isolated()
+            continue
         if name == 'iphone-draft-request-design-checks.yml':
             from test_iphone_draft_request_design import test_design_workflow_boundary
             test_design_workflow_boundary()
