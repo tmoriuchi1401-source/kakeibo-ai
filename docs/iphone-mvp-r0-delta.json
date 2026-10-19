@@ -1,0 +1,1246 @@
+{
+  "main": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+  "draft_start": "bcf8f2ce7b791a1a65b8e06d1b3d0e3c83de77dc",
+  "main_only_commits": 0,
+  "draft_only_commits": 42,
+  "inherited_files": 136,
+  "inherited_insertions": 23208,
+  "inherited_deletions": 12,
+  "unchanged_pins": {
+    "baseline_commit": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+    "patch_sha256": "28bed62cc1c2f02ec516c292dfc289974580ae19f79d28c465ffe6496d5538a6",
+    "baseline_file_count": 40,
+    "changed_file_count": 12,
+    "added_file_count": 6,
+    "repository_files": {
+      "app/pdf_intake_authority.py": "e6de1256c5a5c5f53ed24649cc53999dabb1e32ac1e28d1c1e878563030a5b3e",
+      "app/pdf_intake_registry.py": "fbcd72ba649c3f3732be64b05ce79371299dafd8201215b58d2dcde42830c978"
+    }
+  },
+  "files": [
+    {
+      "path": ".github/workflows/iphone-accounting-gate-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "81f4baae7ff743c50f054f739d07be56b48273cf",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-accounting-recovery-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "f991fdeb26d1a459207eb12d11c5979ddf41ef22",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-auto-native-evidence-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "bc6d50eb8a964b1ba192ee67ea22d690e4decfdb",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-legacy-confirmation-stop-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "177e4aac8641a34dc586369a0ca6dae800576a38",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-legacy-contract-poc-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "32739aded02e8e5cb49fc3e69adfd17744369cfe",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-native-receipt-v2-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "41448f387a84034cddfa3849a8b503c0eb238b89",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-pdf-native-readonly-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ce8789f001045ef8a8848590ac2ac17b5f3b5c38",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-phase5b1-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "385dcfbf65268fd93b5cd998af25032603f573c9",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-phase5b2a-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "234846b5d512254e91342ed8a55fca5b6b91adb8",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-phase5b2b1-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "fdc1ca2ca0857e0316a0845a93ca1c91014efd09",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-readonly-host-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1b4273c0d513d1db2f1d8dc87564a597b6a7ee87",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-review-contract-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "90109962c925199841c88113c1fb15b390fd3f25",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-sheet-adapter-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "93b96a29ea826d027194df830e630a156f4c51b0",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-synthetic-legacy-writer-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "b2a4c131d0a2bbfedba6c0c8be7cab58f34612f0",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/iphone-synthetic-native-writer-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "653810892f951fa212d056358bd310061610cbd8",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": ".github/workflows/unified-receipt-write-checks.yml",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "b060f9db6093889ccc05655c1c531552edd34ca9",
+      "classification": "synthetic_ci",
+      "adoption": "reuse_ci",
+      "production_change": "Retain credential-free CI; do not enable or replace production workflows."
+    },
+    {
+      "path": "app/iphone_accounting_gate.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "00ac4fa302b307201892ec5ef8e35d0bc2269baf",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_accounting_ownership.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3e8d72c5ffa4c5c547d581aee33c19d0ff2cdefb",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_confirmation.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "7e6eb07bd6041f297fdb83dc149e2eeb45eb9926",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_confirmation_host.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "6d2b49a97334ed41e73c28d003eda1c191bf1d8e",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_draft_journal.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "0aa4a3b0f3f43b8ade7d92b65ec592684b76e02d",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_item_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "c8ff4784505f4ca8199e43ff7cb04818f8bc889b",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_native_dry_run.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "d479399c195ef60df556fa8de723dc3b6cee3426",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_persistent_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "e2df1737e30698ed3d2e582ce223d627ff1b93f3",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_readonly_host.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2ea73ea748f3f54bea1afd4c932ce001d3b65afc",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_review_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "620e199280e2cb7eebfe293958ddc17c18c5135a",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_review_preview.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a20133dcb2092e3f7c0c75c766fcb12e75fe127d",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_sheet_reader.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "aae3a8c3b59024ac3129b03d670f0ccd2b350ca0",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/iphone_source_observation.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "c580ffbd575b50a96632386e4106e033c491d310",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/receipt_confirmation.py",
+      "status": "M",
+      "main_blob": "ec11ea9f23d01a40bfc5b03cb383c9fb941d50d9",
+      "draft_blob": "787106beae6bad5b7240befd1f1d2fb32dee9179",
+      "classification": "opt_in_native_hook",
+      "adoption": "mvp_candidate",
+      "production_change": "Production default remains v1; mandatory gate and explicit native migration are R2/R3."
+    },
+    {
+      "path": "app/receipt_confirmation_contract.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "37b06ff7980af12836b5a758993ee024a24e15b5",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/receipt_reimport_production.py",
+      "status": "M",
+      "main_blob": "9daaf02f8fdcd1e5082d2a33b6ef80a8aeee8e15",
+      "draft_blob": "879824e162ad92f06c6fd3e2d6875e6f96e768d6",
+      "classification": "opt_in_native_hook",
+      "adoption": "mvp_candidate",
+      "production_change": "Production default remains v1; mandatory gate and explicit native migration are R2/R3."
+    },
+    {
+      "path": "app/unified_receipt_controller.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "e17d5188a3ad582e30f695e370deceb6ebaf84c9",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_eligibility.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "0c92df2752ad1f32f680c14ea575e8e9dd2c73b2",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_native.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "599b0b09d2d538ef9a60189d8fa4da1844bde5e6",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_preview.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "02a89455ca2bf82dd3a77eb5ff76a0fe53e45788",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_purposes.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "6be684647a03ed6fb53af06dc14f9e3145b1d478",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_review.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "4142e22cc96b80965fc0f2e6112a539995e8db1e",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_shadow.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "51ede2c1e2fba0addedeb48c10cd9dda52f58dde",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_receipt_write.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "b0eb839b33024ae975d40f82aefbb949acbd7c08",
+      "classification": "opt_in_contract",
+      "adoption": "mvp_candidate",
+      "production_change": "Reuse only reviewed functions; saved draft -> immutable native snapshot transfer is blocked in R0."
+    },
+    {
+      "path": "app/unified_shadow_templates/iphone_confirmation.html",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "94795d79ebf4b5482db74c5bb046eb5a9c029b00",
+      "classification": "synthetic_ui",
+      "adoption": "reference",
+      "production_change": "Browser test views are not a replacement for the adopted Sheets one-tab UI."
+    },
+    {
+      "path": "app/unified_shadow_templates/iphone_confirmation.js",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a20cdeb17000278a47a8031fc8b0659dce43f824",
+      "classification": "synthetic_ui",
+      "adoption": "reference",
+      "production_change": "Browser test views are not a replacement for the adopted Sheets one-tab UI."
+    },
+    {
+      "path": "app/unified_shadow_templates/iphone_readonly.html",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ce4a4d5fcf147a62df231477dda5a7367429d436",
+      "classification": "synthetic_ui",
+      "adoption": "reference",
+      "production_change": "Browser test views are not a replacement for the adopted Sheets one-tab UI."
+    },
+    {
+      "path": "app/unified_shadow_templates/unified_shadow/page.html",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "43d71e92252d8b874e9783f521b0c26ee0f38ba6",
+      "classification": "synthetic_ui",
+      "adoption": "reference",
+      "production_change": "Browser test views are not a replacement for the adopted Sheets one-tab UI."
+    },
+    {
+      "path": "docs/iphone-accounting-ownership-enforced-gates.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "5bfde4203bb45b34ff7ead46251e4764b442f356",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-accounting-step-c-recovery.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "d13483a975f43a1d72eea7141c0bc82d4489d423",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-one-tab-existing-processing-connection.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1085ecab1df468deab37020b0125a850e875bd54",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-one-tab-phase-1-3-results.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "5626dc84b10b6e57a9a8766811606acab2e4db24",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-one-tab-sorting-safety.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "cdf603394783d8317035e9f30681601c79d479e2",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase4-resume-20261018.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ef93f9c83955d128cc076d71f01bd6b5b47e7057",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase4-resumption-results.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "0f809ede4ba94471a9be65dc21856972fc2cd95d",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase4-stopped-preflight.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "08267a73307273d7f4693741474bfa681cacc958",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase4a-live-recovery-results.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ce1f2c6ab37dab2307b0835680643397ebefcdf4",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5a-readonly-results.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "e3d6f2f0329f2635da55bfbbbdf5696a5d6860eb",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b1-foundation-results.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "32b3027f6b9ee04547f5d2a72e107943e5f604a3",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2a-synthetic-acknowledgement.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "f4fd8369667d014218a8c3ec4b0e37acaacdb680",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b1-native-ingress-safety-stop.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ddaca4cddfb8007e1c0cbdb9503e90652d5a521d",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2a-auto-native-evidence.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "6a1c0b6ec4f7698468207aefa389ee97b149392c",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2b2b-synthetic-writer-connection.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ae1d37ec31afd25229de9abd6a8b6259245697f2",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2c-legacy-confirmation-stop.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "8aead3817409f745e550d879501fb83c13a2f16d",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2c1-native-contract-design.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "297cb305384d2ad1031a7d2ff2333f16928544a4",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2c2-isolated-native-v2.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ba53aef24b9eee401c9245e76ef1041894cd5a3f",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2c3-synthetic-legacy-writer.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "eaf698f6d14eec9ca3821bf61abab22702290220",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-phase5b2b2d1-pdf-native-design.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ea3081c73cbb3527a9b093516c85cde463dd5c6e",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/iphone-practical-mvp-roadmap.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "68f8b81701e4d1526b3d2c5669f36437efdf2b09",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/unified-receipt-purpose-boundaries.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "772e3650e8a0d3c0e4cd6d72b682788a7c8192b5",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/unified-receipt-review.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "507014d57a82ad2eeaa5c825c611e9631c60c9fd",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "docs/unified-receipt-write-bridge.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "d9aaa4fedb773797db61eeb6d2a3b751ea6af16f",
+      "classification": "documentation",
+      "adoption": "reference",
+      "production_change": "Separate historical/live/synthetic evidence; do not adopt historical Cloud or UI proposals."
+    },
+    {
+      "path": "requirements-test.txt",
+      "status": "M",
+      "main_blob": "966868c7ab5ffbc49905c5a7fb8c431076f8a970",
+      "draft_blob": "9e80dbc8fb0ee18dbc1cc1d3d6d404086d05773b",
+      "classification": "test_dependencies",
+      "adoption": "reuse_ci",
+      "production_change": "Test dependency resolution; not production deployment."
+    },
+    {
+      "path": "staging_shadow/CLOUD_RUN_PREPARATION.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1a40662be2f78fe5120557dc5569db56378d8bc2",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/Dockerfile",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a5bd4b6c2dde5b2817c4e674daaab71724af8c7a",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/README.md",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a8216adb4770f69582f0eda673325cb0cd9089dd",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/__init__.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "7225746435339a9c53d66e63d35ace87d72b1c67",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/accounting_native_preflight.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "f189d97074021702a27e121d1f567e45b9e1b757",
+      "classification": "synthetic_runtime",
+      "adoption": "mvp_candidate",
+      "production_change": "Memory-only composition; live mandatory gate/backend and credentials remain R2/R3."
+    },
+    {
+      "path": "staging_shadow/accounting_recovery_model.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1e1722c9181aa99e98b7b04e38957f3c15b05ddf",
+      "classification": "synthetic_runtime",
+      "adoption": "mvp_candidate",
+      "production_change": "Memory-only composition; live mandatory gate/backend and credentials remain R2/R3."
+    },
+    {
+      "path": "staging_shadow/auto_native_evidence.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "880a5dde05fb5857a06b83ab2c5d4c4e29ed0249",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/ci_build.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1e106c9c0ab825be40b3a96f7af44b962c463a03",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/config.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "185e92c31428d554097ebe71a1f7dd198ded1595",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/legacy_contract_poc.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "4b6cc82e1f4533b3ee8498aee611c8f0099a904d",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/memory_cas.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "05030b115bbad99bc6f67fbdb8f22ac77db6fb4d",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/native_accounting_sandbox.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "cfa4378fdc165616d5ce2ce244473c226d4f4d00",
+      "classification": "synthetic_runtime",
+      "adoption": "mvp_candidate",
+      "production_change": "Memory-only composition; live mandatory gate/backend and credentials remain R2/R3."
+    },
+    {
+      "path": "staging_shadow/prepare_context.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "dbba01e5e643e38fd7e8bb49a31279445e385d08",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/requirements.lock",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "9cf8e413dd620d0bd3a44597a3a9e86a619ab022",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/runtime.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a6c3607f6b013c73d187db4b36e29f7bbc53bb76",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/serve.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "9a1c4564fbd95f349a74b33bffb683555f9f6a4c",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/smoke.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "0e530dfdfa1addd6b5a08b50c63ad186befebf1d",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/synthetic_auto_writer.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "b9f4aaf13a4ef980a72e0701be9aa7c1143a32fa",
+      "classification": "synthetic_runtime",
+      "adoption": "defer_activation",
+      "production_change": "Do not deploy staging/Cloud packaging or adopt auto/buyback as the explicit-confirmation authority."
+    },
+    {
+      "path": "staging_shadow/synthetic_legacy_writer.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "452b85786ebc4a76ccf708ef4c20c3c6af47f2a5",
+      "classification": "synthetic_runtime",
+      "adoption": "mvp_candidate",
+      "production_change": "Memory-only composition; live mandatory gate/backend and credentials remain R2/R3."
+    },
+    {
+      "path": "tests/accounting_gate_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2a4bafb6a495f4cb66b08f5e5b14f58eadb4444f",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/accounting_ownership_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "cbfd3b9a5c6e9b6f9f310a06cc4dd25ba9c15b8e",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/accounting_recovery_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "72135e45cd44c70acadd2e1ee93138d6fbeed39f",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/auto_native_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ddbd424292dbc483473e633b644859448a5c5381",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/fixtures/synthetic_auto_native.json",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "30b3f3b75e22cceb307221e3c83db7aa8132962a",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_confirmation_browser.cjs",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "e2cb7645b978c0997fa8482f9b2f89cb820b64d1",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_confirmation_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2a4166395bbe9b474639f46a374c89b23930867c",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_confirmation_visual.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "83581ed9589f0405c71a63b8b24556ccc0bccfc4",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_persistent_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "8cb2d28f76b8e9ce0b1dec559f035c16a2460451",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_readonly_browser.cjs",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2e3bf7993b59a99eb3fc505e5805e14dbe2a15c0",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_readonly_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "6113e0f20b29d0100f65cbe67ee606ca0ec63f90",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/iphone_readonly_visual.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "90bbfefaf26d65adf9073817938b97daef7b2398",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/shadow_visual_browser.cjs",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "16a2b3d7bca5feb1d965118ef97977c5c776f847",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/shadow_visual_check.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1a55b786b0e0d6bf878cff4ab629f07d9eb0b277",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_accounting_enforced_gate.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1b890a06e2599ddf05de0cf58ea6cc0f4d9bff48",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_accounting_ownership.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "8dd71b9adf0abcee386253e3bc3842df007de41b",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_accounting_recovery.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "09a277dc536ba2108e1e403660b946ea2d579b5e",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_auto_native_evidence.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "4a4d46855878b0f5354c080ad3c7672fbfb3bf1e",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_confirmation.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "501459ac0f42d37bd125ff25cebc18f8364b0e6f",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_draft_journal.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "26a2f19ca2d059ba7244e64b2c4f08570ae8b889",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_item_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3d0ac98095afd0e334db1f4ac0fac41a5cd1c773",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_native_dry_run.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a917a3ef4154cf1dbbb9a1f7b1e561e8d4ff8f07",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_persistent_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "f32b232cf55c2f53e89fdccd834adb176952591e",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_phase5b1_host.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3b65d2014ef1ba6b3e7a3c015b7ab93272954a79",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_readonly_host.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "e8587d4d31e1ddaa6681dccc83ad3a30e1e57726",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_review_drafts.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "248293ed84900058010996285b8fb97871fd3524",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_review_preview.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "81acf8b632c5f93b57106abea15ccfed057da20c",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_sheet_reader.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "d6e86d1cdb7280f6bb9e8f1261b1d1f0997f863c",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_iphone_source_observation.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "c0bec9e4902b48753cf9570bdc4aaec8507faa03",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_legacy_confirmation_connection_stop.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "cbd6a57942d03d8ca02e079f14ba41ce9f4d4bea",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_legacy_contract_poc.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "0429fc89c9c4b46b23db7403f3e902677a9df66a",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_native_ingress_safety_stop.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2cee40900e0417fd4b99c6ae7aefdc6f36e679ed",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_p14_plan_only.py",
+      "status": "M",
+      "main_blob": "95cbb55602d135996652951fe8afd1fec4b84f92",
+      "draft_blob": "812433b418d924458b9544698b0df7278ce23dd8",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_pdf_native_readonly_inventory.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "233b54a36190f81ec7779eb8c56a45972b3884f6",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_production_workflows.py",
+      "status": "M",
+      "main_blob": "599b110dffc2349478e107259503c288e35ed223",
+      "draft_blob": "889401c88743fef5e2130ea68cf3747318012a17",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_receipt_confirmation_contract.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "00670716e2a234f0f2f02021f6f5b88e0b406983",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_receipt_unit_plan.py",
+      "status": "M",
+      "main_blob": "6a6a4980bf7703a0083974948c747887bf4ed849",
+      "draft_blob": "f8821af3a790fa69f37a3462e7a0f6e6d380697e",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_shadow_offline_policy.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "ae23eac0e58727615a9ba5613a1081d07077687a",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_staging_shadow_packaging.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "2ab76d5ebde21093b55692dd91026e1dcc4c8de1",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_synthetic_existing_writer.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3dc029ed4b91815d2083207415ec5fcd34291b8f",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_synthetic_legacy_writer.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "899034bae606968c148a666564eb6d25a864d1ef",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_unified_receipt_eligibility.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "a6eeb04f8337ba1cbc8722d8cb0a0712783f26aa",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_unified_receipt_purposes.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "493187ad0fbb0f7cacd4934c3d43bffa8d54a620",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_unified_receipt_review.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "9ae034c04c8381cf8295d67a20569e1b53005f7b",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_unified_receipt_shadow_host.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3fcfa9c563958e6fcf0661d3d8972ac6017a035d",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/test_unified_receipt_write.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "93b71a02fd4aa29d60c959cb189b5d6342953b69",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/unified_purpose_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "1605313ca22543b4e522a3f7e5235ad52138a460",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    },
+    {
+      "path": "tests/unified_shadow_fixtures.py",
+      "status": "A",
+      "main_blob": null,
+      "draft_blob": "3571fc6e35a546820251c9ec462ad4a6eaffded8",
+      "classification": "synthetic_test",
+      "adoption": "reuse_regression",
+      "production_change": "Synthetic evidence only; never proof of production or device acceptance."
+    }
+  ]
+}
