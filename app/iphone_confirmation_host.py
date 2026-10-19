@@ -16,7 +16,7 @@ BLUEPRINT = 'iphone_confirmation'
 
 
 def make_isolated_confirmation_application(make_application, runtime_factory, service, *,
-                                          config=ShadowConfig(), cookies=None):
+                                          config=ShadowConfig(), cookies=None, one_tab=None):
     # OFF constructs ONLY the unchanged application. No implicit environment
     # switches, startup observations, document seeding or production routes.
     if config.enabled is not True:
@@ -83,6 +83,8 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
 
     @bp.get('')
     def listing():
+        if one_tab is not None:
+            return render_template('iphone_one_tab.html', rows=one_tab.read(gate), result=None)
         cards, _, _, _ = service.read()
         return render_template('iphone_confirmation.html', mode='list', cards=cards.values(), message='', cid='', draft=None)
 
@@ -133,6 +135,39 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
     @bp.get('/ui.js')
     def javascript():
         return Response((Path(__file__).parent/'unified_shadow_templates/iphone_confirmation.js').read_text(encoding='utf8'), mimetype='application/javascript')
+
+    if one_tab is not None:
+        from staging_shadow.iphone_confirmation_ui import OneTabConfirmation
+        if type(one_tab) is not OneTabConfirmation or one_tab.owner != service.owner:
+            deny('isolation_required')
+
+        @bp.get('/r1/<cid>/<action>')
+        def r1_proof(cid, action):
+            proof, claims = one_tab.proof(cid, action, gate)
+            return jsonify(proof=proof, claims=claims, csrf=auth()[1].csrf)
+
+        @bp.post('/r1/request')
+        def r1_post():
+            if request.mimetype != 'application/json' or request.content_length is None or request.content_length > 800000:
+                deny('request_invalid')
+            value = json.loads(request.get_data(), object_pairs_hook=unique)
+            return jsonify(one_tab.post(value, gate))
+
+        @bp.get('/r1/results/<rid>')
+        def r1_result(rid):
+            return render_template('iphone_one_tab.html', rows=[], result=one_tab.inspect(rid, gate))
+
+        @bp.get('/r1/original/<cid>')
+        def r1_original(cid):
+            if cid not in one_tab.cases:
+                deny('held_or_unmapped')
+            c = one_tab.cases[cid]
+            # Offline fixture representation only. No Drive fetch or observation.
+            return Response('合成原本 / '+cid+' / '+c.source_id, mimetype='text/plain')
+
+        @bp.get('/r1/ui.js')
+        def r1_javascript():
+            return Response((Path(__file__).parent/'unified_shadow_templates/iphone_one_tab.js').read_text(encoding='utf8'), mimetype='application/javascript')
 
     if BLUEPRINT in app.blueprints or any(r.rule.startswith(PREFIX) for r in app.url_map.iter_rules()):
         deny('route_collision')

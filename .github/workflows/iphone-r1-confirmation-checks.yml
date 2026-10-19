@@ -1,0 +1,57 @@
+name: iPhone R1 one-tab owner confirmation synthetic
+'on':
+  pull_request:
+    branches:
+    - codex/iphone-v3-guarded-writer
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-iphone-r1-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-v3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install existing test dependencies
+      run: pip install -r requirements-test.txt
+    - name: Install browser test dependency
+      run: pip install playwright==1.64.0
+    - name: Install disposable Chromium
+      run: python -m playwright install --with-deps chromium
+    - name: Owner UI integration
+      run: python -m pytest -vv tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
+    - name: Collect v3 writer integration tests
+      run: python -m pytest --collect-only -q tests/test_synthetic_draft_writer.py
+    - name: Execute v3 writer integration tests
+      run: python -m pytest -vv tests/test_synthetic_draft_writer.py
+    - name: Preserve R0 design and isolated runtime evidence
+      run: python -m pytest -q tests/test_iphone_mvp_r0_adoption.py tests/test_iphone_draft_request_design.py tests/test_receipt_draft_runtime.py
+    - name: Existing native and safety regressions (not R1 integration)
+      run: python -m pytest -q tests/test_synthetic_legacy_writer.py tests/test_receipt_confirmation_contract.py tests/test_legacy_contract_poc.py
+        tests/test_legacy_confirmation_connection_stop.py tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py
+        tests/test_iphone_confirmation.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py
+        tests/test_iphone_phase5b1_host.py tests/test_iphone_readonly_host.py tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py
+        tests/test_iphone_native_dry_run.py tests/test_iphone_review_drafts.py tests/test_iphone_review_preview.py tests/test_unified_receipt_review.py
+        tests/test_unified_receipt_eligibility.py tests/test_unified_receipt_write.py tests/test_unified_receipt_purposes.py
+        tests/test_unified_receipt_shadow_host.py tests/test_production_workflows.py tests/test_native_ingress_safety_stop.py
+        tests/test_p14_plan_only.py tests/test_receipt_unit_plan.py tests/test_receipt_unit_posting.py tests/test_p14_posting.py
+        tests/test_receipt_pipeline.py tests/test_receipt_confirmation.py tests/test_pdf_intake_runner.py tests/test_receipt_privacy_gate.py
+        tests/test_receipt_text_extraction.py tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py tests/test_accounting_recovery.py
+        tests/test_receipt_reimport_production.py tests/test_pdf_native_readonly_inventory.py tests/test_shared_session_bundle.py
+    - name: Compile and whitespace
+      run: 'python -m compileall -q staging_shadow/receipt_draft_contract.py staging_shadow/synthetic_draft_writer.py tests/test_synthetic_draft_writer.py
+
+        git diff --check
+
+        '
