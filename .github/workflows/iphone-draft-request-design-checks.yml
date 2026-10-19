@@ -1,0 +1,43 @@
+name: iPhone draft request v2 readonly design
+
+on:
+  pull_request:
+    branches: [codex/iphone-mvp-r0-r1-synthetic]
+
+permissions:
+  contents: read
+
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+
+concurrency:
+  group: kakeibo-iphone-draft-design-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  design-readonly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing test dependencies
+        run: pip install -r requirements-test.txt
+      - name: Collect and execute readonly design examples
+        run: |
+          python -m pytest --collect-only -q tests/test_iphone_draft_request_design.py
+          python -m pytest -vv tests/test_iphone_draft_request_design.py
+      - name: Preserve R0 native rejection evidence without host acknowledgement
+        run: python -m pytest -q tests/test_iphone_mvp_r0_adoption.py -k 'not phase131 and not acknowledgement and not ci'
+      - name: Pure and readonly regressions only
+        run: python -m pytest -q tests/test_iphone_review_drafts.py tests/test_pdf_native_readonly_inventory.py tests/test_shared_session_bundle.py tests/test_production_workflows.py -k 'not memory_cas_model'
+      - name: Compile and whitespace
+        run: |
+          python -m compileall -q tests/iphone_draft_request_design_examples.py tests/test_iphone_draft_request_design.py
+          git diff --check
