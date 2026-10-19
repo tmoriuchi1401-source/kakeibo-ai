@@ -178,6 +178,7 @@ def test_no_runtime_auth_bundle_or_existing_workflow_changed_since_141():
         'staging_shadow/synthetic_draft_writer.py',
         'app/iphone_item_drafts.py', 'app/iphone_confirmation_host.py',
         'app/unified_shadow_templates/iphone_one_tab.html', 'app/unified_shadow_templates/iphone_one_tab.js',
+        'app/unified_shadow_templates/iphone_one_tab_original.html',
         'staging_shadow/iphone_confirmation_ui.py'}  # User-authorized isolated R1 UI.
     assert set(names) <= allowed
     status = subprocess.check_output(['git', 'diff', '--name-status', START, '--',

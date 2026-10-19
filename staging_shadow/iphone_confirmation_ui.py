@@ -107,7 +107,8 @@ class OneTabConfirmation:
             rows.append(dict(case_id=cid, kind=c.kind, draft=d, tag=tag, baseline=baseline,
                 source=deepcopy(c.source),
                 held=False, reason='', result=self.inspect(latest[-1]['request_id'], gate) if latest else None))
-        rows.extend(dict(case_id=cid, held=True, reason=value['reason'], inputs=value.get('inputs', []), kind='held')
+        rows.extend(dict(case_id=cid, held=True, reason=value['reason'], inputs=value.get('inputs', []),
+                         kind=value.get('kind', 'held'), source_id=value.get('source_id', ''))
                     for cid,value in self.held.items())
         return rows
 

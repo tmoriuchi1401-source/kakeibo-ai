@@ -30,7 +30,9 @@ jobs:
     - name: Install disposable Chromium
       run: python -m playwright install --with-deps chromium
     - name: Owner UI integration
-      run: python -m pytest -vv tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
+      run: |
+        python -m pytest --collect-only -q tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
+        python -m pytest -vv tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
     - uses: actions/upload-artifact@v4
       if: always()
       with:
@@ -56,7 +58,7 @@ jobs:
         tests/test_receipt_text_extraction.py tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py tests/test_accounting_recovery.py
         tests/test_receipt_reimport_production.py tests/test_pdf_native_readonly_inventory.py tests/test_shared_session_bundle.py
     - name: Compile and whitespace
-      run: 'python -m compileall -q staging_shadow/receipt_draft_contract.py staging_shadow/synthetic_draft_writer.py tests/test_synthetic_draft_writer.py
+      run: 'python -m compileall -q staging_shadow/receipt_draft_contract.py staging_shadow/synthetic_draft_writer.py tests/test_synthetic_draft_writer.py staging_shadow/iphone_confirmation_ui.py app/iphone_confirmation_host.py app/iphone_item_drafts.py tests/iphone_r1_fixtures.py tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
 
         git diff --check
 

@@ -37,7 +37,10 @@ def test_real_events_full_flow_and_sticky_identity(monkeypatch,tmp_path,width,ci
         expect(row.locator('td').first).to_have_text(cid)
         with page.expect_popup() as opened:
             row.get_by_text('合成原本を確認',exact=True).click()
-        original=opened.value;original.wait_for_load_state();assert cid in original.locator('body').inner_text();original.close()
+        original=opened.value;original.wait_for_load_state();assert cid in original.locator('body').inner_text()
+        expect(original.locator('img')).to_be_visible()
+        assert original.locator('img').evaluate('i=>i.complete&&i.naturalWidth===620')
+        original.close()
         fields=r.native[cid].rig.f.fields
         for name,value in fields.items():
             loc=row.locator(f'[data-field="{name}"]')
@@ -67,6 +70,7 @@ def test_real_events_full_flow_and_sticky_identity(monkeypatch,tmp_path,width,ci
         # Scroll far right and verify the ID is still within the viewport.
         row.locator('[data-action=post]').scroll_into_view_if_needed()
         box=row.locator('td').first.bounding_box();assert 0<=box['x']<width and box['width']>=120
+        expect(row.locator('td strong').first).to_be_in_viewport()
         shot=Path('.private/r1-browser');shot.mkdir(parents=True,exist_ok=True)
         page.screenshot(path=str(shot/f'{width}-{cid}-compare.png'))
         # Two actual DOM click events while the first POST is in flight.

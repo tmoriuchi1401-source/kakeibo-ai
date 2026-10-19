@@ -6,7 +6,8 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
   const initial=JSON.parse(row.querySelector('.row-context').textContent);
   const result=row.querySelector('.result'), state=row.querySelector('.save-state'), review=row.querySelector('.review');
   const recovery=row.querySelector('.recovery');
-  let dirty=false, pending=false, blocked=false, proof=null;
+  let dirty=false, pending=false, blocked=row.dataset.financialStopped==='true', proof=null;
+  if(blocked)for(const button of row.querySelectorAll('button'))button.disabled=true;
   const base='/isolated-synthetic/iphone-confirmation';
   const number=v=>/^-?\d+$/.test(v)?Number(v):v;
   function value() {
@@ -20,14 +21,16 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
   function buttons() {for(const b of row.querySelectorAll('button'))b.disabled=pending||blocked;}
   async function obtain(action) {
     const r=await fetch(`${base}/r1/${initial.case_id}/${action}`,{credentials:'same-origin'});
-    const data=await r.json();if(!r.ok)throw new Error(data.message);return data;
+    let data;try{data=await r.json();}catch{throw new Error('本人確認または通信状態を確認してください。入力を保持しています。');}
+    if(!r.ok)throw new Error(data.message);return data;
   }
   async function send(p, v, confirmed) {
     recovery.href=`${base}/r1/results/${p.claims.request_id}`;recovery.hidden=false;
     const response=await fetch(`${base}/r1/request`,{method:'POST',credentials:'same-origin',redirect:'error',
       headers:{'Content-Type':'application/json','Origin':location.origin,'X-CSRF-Token':p.csrf},
       body:JSON.stringify({proof:p.proof,value:v,confirmed})});
-    const data=await response.json();if(!response.ok) {if(response.status>=500)blocked=true;throw new Error(data.message);}
+    let data;try{data=await response.json();}catch{blocked=true;throw new Error('UNKNOWN：応答を確認できません。再確定せず結果を照会してください。');}
+    if(!response.ok) {if(response.status>=500)blocked=true;throw new Error(data.message);}
     return data;
   }
   row.addEventListener('click',async e=>{
@@ -57,6 +60,7 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
         const post=document.createElement('button');post.textContent='この内容で記帳';post.dataset.action='post';post.disabled=true;
         ack.addEventListener('change',()=>post.disabled=!ack.checked||pending||blocked);
         review.append(heading,compare,label,post);review.hidden=false;
+        review.closest('td').scrollIntoView({block:'nearest',inline:'end'});
         row.querySelector('.source-hash').textContent=snapshot.source.sha256;
         result.textContent='確定前の再確認が必要';
       } else if(action==='post') {

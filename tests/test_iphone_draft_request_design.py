@@ -202,6 +202,7 @@ def test_runtime_schema_pin_and_old_validators_are_unchanged():
         'A\tstaging_shadow/synthetic_draft_writer.py',
         'M\tapp/iphone_item_drafts.py', 'M\tapp/iphone_confirmation_host.py',
         'A\tapp/unified_shadow_templates/iphone_one_tab.html', 'A\tapp/unified_shadow_templates/iphone_one_tab.js',
+        'A\tapp/unified_shadow_templates/iphone_one_tab_original.html',
         'A\tstaging_shadow/iphone_confirmation_ui.py'}  # User-authorized isolated R1 UI.
     assert set(changes) <= allowed  # Later, separately authorized isolated runtime.
     for path in ('app/receipt_confirmation_contract.py', 'staging_shadow/synthetic_legacy_writer.py'):

@@ -86,3 +86,10 @@ def test_ci_is_isolated():
     assert w['env']=={'UNIFIED_RECEIPT_WRITE_ENABLED':'false'}
     assert not any(x in text for x in ('secrets.','vars.','environment:','workflow_dispatch','schedule:'))
     assert all(j['runs-on']=='ubuntu-24.04' for j in w['jobs'].values())
+    assert set(w['jobs'])=={'synthetic-v3'}
+    job=w['jobs']['synthetic-v3'];assert job['timeout-minutes']==30
+    assert job['steps'][0]=={'uses':'actions/checkout@v4','with':{
+        'ref':'${{ github.event.pull_request.head.sha }}','fetch-depth':0,'persist-credentials':False}}
+    assert [s['uses'] for s in job['steps'] if 'uses' in s]==[
+        'actions/checkout@v4','actions/setup-python@v5','actions/upload-artifact@v4']
+    assert all('uses' in s or s['run'].split()[0] in {'pip','python'} for s in job['steps'])

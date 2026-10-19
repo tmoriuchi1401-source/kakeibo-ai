@@ -68,7 +68,19 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
             message='この案件は保留・表示専用です。入力を保持し、保留理由を確認してください。'
         elif 'source_UNKNOWN' in code or 'structure_observation_UNKNOWN' in code:
             message='原本の版対応や構造候補を確認できません。入力を保持し、古い確認を再利用せず保存内容を確認してください。'
-        if request.method == 'POST':
+        if request.path.startswith(PREFIX+'/r1/'):
+            if status == 503 or 'UNKNOWN' in code:
+                status=503
+                message='UNKNOWN：結果不明・要照合。監査・照合待ちです。入力を保持し、再確定せず同じ要求の結果を確認してください。'
+            elif status in {403,410}:
+                message='競合または期限切れによる拒否。入力を保持し、本人確認・権限・送信元を確認してください。'
+            elif 'held' in code:
+                message='保留：この案件は金融確定できません。保存入力と保留理由を確認してください。'
+            elif any(s in code for s in ('reconfirm','normalization','changed','draft_v2')):
+                message='確定前の再確認が必要です。入力を保持し、原本・保存下書き・カテゴリ・台帳の現在値を確認してください。'
+            else:
+                message='競合または期限切れによる拒否。入力を保持し、現在の保存内容を確認してください。'
+        if request.method == 'POST' or request.endpoint == BLUEPRINT+'.r1_proof':
             return jsonify(error=code, message=message, input_preserved=True), status
         return Response(render_template('iphone_confirmation.html', mode='error', message=message, cards=[], cid='', draft=None), status=status)
 
@@ -146,7 +158,9 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
         # Production paths, factory sources and auth cookies remain unchanged.
         def r1_privacy_last(response):
             if request.path == PREFIX or request.path.startswith(PREFIX+'/r1/'):
-                return privacy(response)
+                response=privacy(response)
+                response.headers['Content-Security-Policy'] += "; img-src 'self'"
+                return response
             return response
         app.after_request_funcs.setdefault(None, []).insert(0, r1_privacy_last)
 
@@ -171,11 +185,26 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
 
         @bp.get('/r1/original/<cid>')
         def r1_original(cid):
+            if cid in one_tab.cases:
+                sid=one_tab.cases[cid].source_id
+                return render_template('iphone_one_tab_original.html',cid=cid,sid=sid)
+            elif cid in one_tab.held and one_tab.held[cid].get('source_id'):
+                sid=one_tab.held[cid]['source_id']
+            else:
+                deny('held_or_unmapped')
+            # Offline fixture representation only. No Drive fetch or observation.
+            return Response('合成原本 / '+cid+' / '+sid, mimetype='text/plain')
+
+        @bp.get('/r1/source/<cid>')
+        def r1_source(cid):
+            from hashlib import sha256
             if cid not in one_tab.cases:
                 deny('held_or_unmapped')
-            c = one_tab.cases[cid]
-            # Offline fixture representation only. No Drive fetch or observation.
-            return Response('合成原本 / '+cid+' / '+c.source_id, mimetype='text/plain')
+            c=one_tab.cases[cid]
+            raw=c.readers.source_bytes.revision_bytes(c.source_id,c.source['drive_revision_id'])
+            if type(raw) is not bytes or sha256(raw).hexdigest()!=c.source['sha256']:
+                deny('source_UNKNOWN')
+            return Response(raw,mimetype='image/png')
 
         @bp.get('/r1/ui.js')
         def r1_javascript():

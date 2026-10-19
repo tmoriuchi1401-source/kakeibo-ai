@@ -1,6 +1,8 @@
 """New integrated entrance; old #131 fixture and v3 writer fixture stay intact."""
 from copy import deepcopy
 from types import SimpleNamespace
+from hashlib import sha256
+from io import BytesIO
 
 from cryptography.fernet import Fernet
 
@@ -25,12 +27,20 @@ class Rig:
             # Provision distinct originals before taking any baseline. #145's
             # two alternative fixtures otherwise deliberately use the SAME ID.
             import iphone_draft_request_design_examples as design
+            import draft_runtime_fixtures as runtime
+            from PIL import Image, ImageDraw, ImageFont
+            image=Image.new('RGB',(620,480),'white');draw=ImageDraw.Draw(image)
+            content=('SYNTHETIC RECEIPT\n2026-01-03\nSynthetic edited shop\nSynthetic corrected 1   80 JPY\nSynthetic corrected 2   40 JPY\nTOTAL 120 JPY\nSynthetic card' if kind=='normal' else
+                'SYNTHETIC MANUAL RECEIPT\n2026-01-03\nSynthetic manual clinic\nACTUAL PAYMENT 135 JPY\nSynthetic card')
+            draw.multiline_text((24,24),content,fill='black',font=ImageFont.load_default(size=24),spacing=16)
+            out=BytesIO();image.save(out,format='PNG');source_bytes=out.getvalue()
             original_fixture=design.native_fixture
             def provision(k):
                 service,store,db,metadata,key=original_fixture(k)
                 old=service.items[key]['source']['source_id'];new=old+'-'+k
+                old_hash=service.items[key]['source']['sha256'];new_hash=sha256(source_bytes).hexdigest()
                 def renamed(v):
-                    if isinstance(v,str):return v.replace(old,new)
+                    if isinstance(v,str):return v.replace(old,new).replace(old_hash,new_hash)
                     if isinstance(v,list):return [renamed(x) for x in v]
                     if isinstance(v,dict):return {renamed(a):renamed(b) for a,b in v.items()}
                     return v
@@ -41,6 +51,7 @@ class Rig:
                 return service,store,db,metadata,newkey
             with monkeypatch.context() as provisioning:
                 provisioning.setattr(design,'native_fixture',provision)
+                provisioning.setattr(runtime,'RAW',source_bytes)
                 h = harness(kind, monkeypatch)
             # Host identity is the real existing synthetic Google actor.
             d = load(h.ports['draft'].read_versioned()[0])
@@ -51,7 +62,7 @@ class Rig:
             set_value(h.ports['draft'],d)
             def ownership(inputs, plan, h=h):
                 source=inputs['source_binding']['source']
-                h.own=reader_for('legacy_confirmation',source,RAW,[],dict(namespace='receipt_confirmation',scope='whole',
+                h.own=reader_for('legacy_confirmation',source,h.ports['source_bytes'].raw,[],dict(namespace='receipt_confirmation',scope='whole',
                     unit_id=None,receipt_index=None,input_snapshot=digest(inputs),authority_revision=7,
                     ledger_targets=[r[0] for _,r in plan],case_id=h.f.case_id,owner=self.old.service.owner))
                 return h.own.reader.observe('legacy_confirmation','u1').value()
@@ -89,11 +100,15 @@ class Rig:
 
     def rebuild(self):
         held={cid:dict(reason=reason,inputs=[]) for cid,reason in {'SYN-G103':'既存入力とメモを保持',
+            'SYN-G102':'既存PDF Unit下書き・今回の画像金融対象外', 'SYN-M102':'旧部分下書き・今回の画像金融対象外',
             'SYN-H301':'LEGACY_UNMAPPED_HOLD', 'OLD-MEDICAL-P1':'対応不明の旧医療p1',
             'SYN-P201':'PDF構造確認のみ・金融接続対象外','SYN-P202':'PDF保留'}.items()}
         cards=self.old.service.read()[0]
         for cid,v in held.items():
-            if cid in cards:v['inputs']=deepcopy(cards[cid]['display']['inputs'])
+            if cid in cards:
+                display=cards[cid]['display'];v['inputs']=deepcopy(display['inputs'])
+                v['kind']={'一般':'normal','医療':'medical','PDF':'grouping','保留':'held'}[display['kind']]
+                v['source_id']=(display['source_identity'] or {}).get('source_id','')
         return OneTabConfirmation(self.native, held, self.key,
             owner=self.old.service.owner,clock=lambda:self.h.now,enabled=True,isolated_synthetic=True)
 
