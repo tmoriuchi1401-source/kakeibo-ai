@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-mvp-r0-checks.yml':
+            from test_iphone_mvp_r0_adoption import test_r0_ci_has_no_production_capabilities
+            test_r0_ci_has_no_production_capabilities()
+            continue
         if name == 'iphone-pdf-native-readonly-checks.yml':
             assert_pdf_native_readonly_workflow(workflow)
             continue
