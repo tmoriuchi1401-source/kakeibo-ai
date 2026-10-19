@@ -119,10 +119,18 @@ def test_expired_session_reauth_preserves_in_progress_input(monkeypatch,tmp_path
         page.route('**/*',bridge);page.goto(ORIGIN+PREFIX);page.locator('#search').fill(cid)
         row=page.locator('tbody tr:visible');row.locator('[data-field=memo]').fill('再認証中の入力を保持')
         r.h.now+=600;row.locator('[data-action=save_draft]').click()
-        expect(row.locator('.result')).not_to_be_empty()
+        expect(row.locator('.result')).to_contain_text('本人')
         expect(row.locator('[data-field=memo]')).to_have_value('再認証中の入力を保持')
         link=urlsplit(r.h.rt.seed());r.h.start_path=link.path+'?'+link.query
-        r.h.login()
+        from unified_shadow_fixtures import inputs, DOMAIN
+        response=r.h.get(r.h.start_path)
+        # Select the existing start form; the logout form has its own csrf.
+        html=response.get_data(as_text=True).split('<form method="post" action="/start">')[1].split('</form>')[0]
+        fields=inputs(r.h.app.response_class(html));fields['login']='reauth'
+        started=r.h.post_form('/start',fields)
+        assert started.status_code==303,started.get_data(as_text=True)
+        r.h.ticket=r.h.rt.tickets.load(r.h.client.get_cookie(r.h.web.COOKIE,domain=DOMAIN).value)
+        assert r.h.post_form('/oauth/callback',{'code':'synthetic-code','state':r.h.ticket.state},'https://accounts.google.com').status_code==303
         row.locator('[data-action=save_draft]').click()
         expect(row.locator('.save-state')).to_have_text('下書き保存済み')
         assert r.native[cid].readers.ledger.writes==0

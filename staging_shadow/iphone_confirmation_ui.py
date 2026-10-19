@@ -52,6 +52,10 @@ class OneTabConfirmation:
         self.cases, self.held, self.owner, self.clock = cases, deepcopy(held), owner, clock
         self.cipher = Fernet(key)
         self.lock = Lock()
+        if (len({id(c.shared.io) for c in cases.values()}) != 1
+                or len({id(c.readers.ledger) for c in cases.values()}) != 1
+                or len({c.source_id for c in cases.values()}) != len(cases)):
+            deny('shared_ownership_and_ledger_required')
         for cid, c in cases.items():
             if (cid in held or type(c.store) is not IsolatedDraftStore or c.kind not in {'normal', 'medical'}
                     or type(c.shared) is not ConditionalRequests or not c.shared.synthetic_accounting):
@@ -179,6 +183,10 @@ class OneTabConfirmation:
                 baseline = image_issue(c.store.value, c.kind, c.source_id)
                 master = load(c.readers.categories.read_versioned()[0])['pairs']
                 image_inspect(payload['value'], baseline, master, c.kind)
+                values, observations = c.readers.observe()
+                if (values[0] != d or observations[0] != token(raw, tag)
+                        or values[1]['source'] != c.source or values[2]['pairs'] != master):
+                    deny('save_source_or_draft_changed')
                 after = dict(d, revision=d['revision']+1, value=deepcopy(payload['value']), input_digest=digest(payload['value']))
                 DraftCAS(c.readers.draft).replace(d, raw, tag, after)
                 return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid)

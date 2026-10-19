@@ -52,9 +52,10 @@ def test_displayed_snapshot_and_identity_drift_rejected(monkeypatch,tmp_path,cid
     elif change=='session':r.h.client.set_cookie(r.h.web.COOKIE,'bad',domain='confirmation.example.test')
     elif change=='content':value['fields']['memo']='not displayed'
     before=r.frozen(cid)
+    writes=c.readers.ledger.writes
     response=r.post(p,value,change!='explicit',**headers)
     assert response.status_code in {403,409,410},response.get_data(as_text=True)
-    assert r.frozen(cid)==before and c.readers.ledger.writes==0
+    assert r.frozen(cid)==before and c.readers.ledger.writes==writes
 
 
 @pytest.mark.parametrize('cid',['SYN-G101','SYN-M101'])
