@@ -102,8 +102,38 @@ def test_synthetic_legacy_writer_ci_is_exactly_isolated():
     assert_synthetic_legacy_writer_workflow(workflows()['iphone-synthetic-legacy-writer-checks.yml'])
 
 
+def assert_pdf_native_readonly_workflow(workflow):
+    assert workflow == {
+        'name': 'iPhone PDF native readonly investigation',
+        'on': {'pull_request': {'branches': ['codex/phase5b2b2c3-synthetic-legacy-writer']}},
+        'permissions': {'contents': 'read'}, 'env': {'UNIFIED_RECEIPT_WRITE_ENABLED': 'false'},
+        'concurrency': {'group': 'kakeibo-iphone-pdf-readonly-${{ github.ref }}', 'cancel-in-progress': 'true'},
+        'jobs': {'pdf-readonly': {'runs-on': 'ubuntu-24.04', 'timeout-minutes': '10', 'steps': [
+            {'uses': 'actions/checkout@v4', 'with': {'ref': '${{ github.event.pull_request.head.sha }}',
+                'fetch-depth': '0', 'persist-credentials': 'false'}},
+            {'uses': 'actions/setup-python@v5', 'with': {'python-version': '3.12'}},
+            {'name': 'Install synthetic test dependencies', 'run': 'pip install -r requirements-test.txt'},
+            {'name': 'Collect and execute read-only PDF contract investigation', 'run':
+                'python -m pytest --collect-only -q tests/test_pdf_native_readonly_inventory.py\n'
+                'python -m pytest -vv tests/test_pdf_native_readonly_inventory.py\n'},
+            {'name': 'Reuse pure one-tab draft and workflow boundary regressions', 'run':
+                "python -m pytest -q tests/test_iphone_review_drafts.py tests/test_production_workflows.py -k 'not memory_cas_model'"},
+            {'name': 'Compile and check whitespace', 'run':
+                'python -m compileall -q tests/test_pdf_native_readonly_inventory.py tests/test_production_workflows.py\n'
+                'git diff --check\n'},
+        ]}},
+    }
+
+
+def test_pdf_native_readonly_ci_is_exactly_isolated():
+    assert_pdf_native_readonly_workflow(workflows()['iphone-pdf-native-readonly-checks.yml'])
+
+
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-pdf-native-readonly-checks.yml':
+            assert_pdf_native_readonly_workflow(workflow)
+            continue
         if name == 'iphone-synthetic-legacy-writer-checks.yml':
             assert_synthetic_legacy_writer_workflow(workflow)
             continue
