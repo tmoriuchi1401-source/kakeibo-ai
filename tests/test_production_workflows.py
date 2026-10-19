@@ -81,8 +81,32 @@ def test_native_receipt_v2_ci_is_exactly_isolated():
     assert_native_receipt_v2_workflow(workflows()['iphone-native-receipt-v2-checks.yml'])
 
 
+def assert_synthetic_legacy_writer_workflow(workflow):
+    expected = deepcopy(workflows()['iphone-native-receipt-v2-checks.yml'])
+    assert_native_receipt_v2_workflow(expected)
+    expected['name'] = 'iPhone synthetic legacy confirmation writer'
+    expected['on'] = {'pull_request': {'branches': ['codex/phase5b2b2c2-isolated-native-v2']}}
+    expected['concurrency']['group'] = 'kakeibo-iphone-legacy-writer-${{ github.ref }}'
+    steps = expected['jobs']['synthetic-writer']['steps']
+    steps.insert(3, {'name': 'Collect and execute guarded legacy writer', 'run': (
+        'python -m pytest --collect-only -q tests/test_synthetic_legacy_writer.py\n'
+        'python -m pytest -vv tests/test_synthetic_legacy_writer.py\n')})
+    steps[-1]['run'] = steps[-1]['run'].replace('tests/test_receipt_confirmation_contract.py\n',
+        'tests/test_receipt_confirmation_contract.py staging_shadow/synthetic_legacy_writer.py tests/test_synthetic_legacy_writer.py\n')
+    assert workflow == expected
+    source = (ROOT / '.github/workflows/iphone-synthetic-legacy-writer-checks.yml').read_text('utf-8')
+    assert all(x not in source for x in ('secrets.', 'vars.', 'environment:'))
+
+
+def test_synthetic_legacy_writer_ci_is_exactly_isolated():
+    assert_synthetic_legacy_writer_workflow(workflows()['iphone-synthetic-legacy-writer-checks.yml'])
+
+
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-synthetic-legacy-writer-checks.yml':
+            assert_synthetic_legacy_writer_workflow(workflow)
+            continue
         if name == "iphone-native-receipt-v2-checks.yml":
             assert_native_receipt_v2_workflow(workflow)
             continue
