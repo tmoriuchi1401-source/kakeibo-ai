@@ -57,9 +57,20 @@ def image_inspect(value, baseline, categories, kind):
             text(e['name']); text(e['note'], limit=8000); text(e['category'])
             if e['category'] and e['category'].split('｜') not in categories: fail()
         if kind == 'normal' and value['fields']['category'] != '': fail()
-        if kind == 'medical' and value['fields']['category'] and value['fields']['category'].split('｜') not in categories: fail()
+        if kind == 'medical' and value['fields']['category']:
+            from .receipt_confirmation import medical_categories
+            if tuple(value['fields']['category'].split('｜')) not in medical_categories(categories):fail()
+        if (kind == 'normal' and all(e['state']=='entered' for e in value['items'])
+                and all(value['fields'][k] != '' for k in ('date','merchant','amount'))):
+            from .models import ReceiptResult, ReceiptItem
+            from .receipt_validation import validate_receipt_result
+            f=value['fields']
+            parsed=ReceiptResult(date=f['date'],merchant=f['merchant'],total=f['amount'],payment_method=f['payment'],
+                items=[ReceiptItem(name=e['name'],amount=e['amount'],major_category=e['category'].split('｜')[0],
+                    minor_category=e['category'].split('｜')[1]) for e in value['items']])
+            if not validate_receipt_result(parsed,[tuple(p) for p in categories])[0]:fail()
         return deepcopy(value)
-    except (KeyError, TypeError, ValueError, AttributeError):
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError):
         fail()
 
 

@@ -82,6 +82,10 @@ class OneTabConfirmation:
         native = c.store.read()
         inputs, before, plan = prepare_inputs(native[0]['legacy'], c.kind, cid, self.owner,
             token(native[1], native[2]), c.prepared_at, c.readers)
+        fields, parsed = inputs['draft']['value']['fields'], inputs['proposed']['parsed']
+        if any(parsed[k] != fields[f] for k,f in (
+                ('date','date'), ('merchant','merchant'), ('total','amount'), ('payment_method','payment'))):
+            deny('normalization_requires_explicit_edit')
         ownership = c.ownership(inputs, plan)
         if c.store.read() != native:
             deny('reconfirm')
@@ -106,6 +110,11 @@ class OneTabConfirmation:
     def _requests(self, cid):
         return [r['request'] for r in self.cases[cid].store.read()[0]['operations'].values()
                 if isinstance(r, dict) and isinstance(r.get('request'), dict) and r['request']['case_id'] == cid]
+
+    @staticmethod
+    def _store(c):
+        return IsolatedDraftStore(c.store.io, c.store.expected_digest, c.store.spreadsheet_id,
+            parent_digest=c.store.parent_digest, enabled=True, isolated_synthetic=True)
 
     def _session(self, gate):
         _, ticket, record, actor = gate.current()
@@ -197,7 +206,7 @@ class OneTabConfirmation:
             if load(c.readers.authority.read_versioned()[0]) != authority:
                 deny('authority_UNKNOWN')
             validate_draft_request_v2(request, c.store.value, c.readers)
-            contract = IsolatedDraftContract(c.store, c.shared, boundary, c.readers, clock=self.clock,
+            contract = IsolatedDraftContract(self._store(c), c.shared, boundary, c.readers, clock=self.clock,
                 enabled=True, isolated_synthetic=True, fresh_process=True, checkpoint=getattr(c, 'checkpoint', None))
             writer = SyntheticDraftConfirmation(contract, enabled=True, isolated_synthetic=True, fresh_attempt=True,
                 checkpoint=getattr(c, 'checkpoint', None))
@@ -215,8 +224,7 @@ class OneTabConfirmation:
         for cid,c in self.cases.items():
             request = next((r for r in self._requests(cid) if r['request_id'] == rid), None)
             if request:
-                store = IsolatedDraftStore(c.store.io, c.store.expected_digest, c.store.spreadsheet_id,
-                    parent_digest=c.store.parent_digest, enabled=True, isolated_synthetic=True)
+                store = self._store(c)
                 boundary = PurposeBoundary(self.owner, gate.post, gate.read, lambda: [], enabled=True, clock=self.clock)
                 contract = IsolatedDraftContract(store, c.shared, boundary, c.readers, clock=self.clock,
                     enabled=True, isolated_synthetic=True)

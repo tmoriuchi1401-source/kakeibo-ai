@@ -48,7 +48,10 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
         const snapshot=proof.claims.snapshot;
         const heading=document.createElement('p');heading.textContent=`${initial.case_id} / ACCOUNTING_POST / この内容を合成記帳します`;
         const compare=document.createElement('pre');compare.className='compare';
-        compare.textContent='修正前\n'+JSON.stringify(snapshot.inputs.proposed.original_parsed,null,2)+'\n修正後（実際の記帳対象）\n'+JSON.stringify(snapshot.inputs.proposed.parsed,null,2)+'\n全入力・メモ\n'+JSON.stringify(proof.claims.draft.value,null,2);
+        const describe=p=>p?`日付：${p.date}\n店舗・施設：${p.merchant}\n合計：${p.total}円\n支払方法：${p.payment_method}\n`+
+          p.items.map(i=>`${i.name} / ${i.amount}円 / ${i.major_category}｜${i.minor_category}`).join('\n'):'未入力';
+        compare.textContent='修正前\n'+describe(snapshot.inputs.proposed.original_parsed)+'\n\n修正後（実際の記帳対象）\n'+describe(snapshot.inputs.proposed.parsed)+
+          '\n\n途中メモ：'+proof.claims.draft.value.fields.memo+'\n'+proof.claims.draft.value.items.map(i=>`${i.expense_id}：${i.note}`).join('\n');
         const label=document.createElement('label'), ack=document.createElement('input');ack.type='checkbox';ack.className='explicit';
         label.append(ack,document.createTextNode('案件・原本と修正後の全値を確認しました'));
         const post=document.createElement('button');post.textContent='この内容で記帳';post.dataset.action='post';post.disabled=true;

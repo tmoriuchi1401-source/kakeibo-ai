@@ -14,6 +14,20 @@ from staging_shadow.iphone_confirmation_ui import OneTabConfirmation
 from draft_runtime_fixtures import harness, NOW, set_value, RAW
 from accounting_gate_fixtures import reader_for
 from test_pdf_intake_authority import OWNER
+from test_synthetic_legacy_writer import no_external_connections
+
+
+@pytest.fixture(autouse=True)
+def audit_dispatch(monkeypatch):
+    from app.receipt_confirmation import ReceiptConfirmation
+    original=ReceiptConfirmation._write_accounting_plan
+    calls=[]
+    def audited(service,*args,**kwargs):
+        calls.append(1)
+        return original(service,*args,**kwargs)
+    monkeypatch.setattr(ReceiptConfirmation,'_write_accounting_plan',audited)
+    yield calls
+    assert len(calls)<=1
 
 
 class Gate:
@@ -83,3 +97,55 @@ def test_stop_classification_and_no_redispatch(monkeypatch,kind,point):
     before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]
     assert rebuild().post(payload,gate)['status']==result['status']
     assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+@pytest.mark.parametrize('backend,number',[('native',1),('native',2),('native',3),('native',4),
+    ('shared',1),('shared',2),('shared',3),('shared',4),('ledger',1),('ledger',2)])
+@pytest.mark.parametrize('fault',['412','lost'])
+def test_each_cas_response_loss_stops_without_followup_writes(monkeypatch,kind,backend,number,fault):
+    h,c,rebuild=ui_fixture(kind,monkeypatch);ui=rebuild();gate=Gate();proof,claims=ui.proof(h.f.case_id,'post',gate)
+    port={'native':h.native,'shared':h.shared.io,'ledger':h.readers.ledger}[backend]
+    original=port.replace_versioned;attempts=[]
+    def broken(*args):
+        attempts.append(1)
+        if len(attempts)==number:
+            if fault=='lost':original(*args);raise TimeoutError('synthetic lost response')
+            raise StateError('HTTP_412')
+        return original(*args)
+    monkeypatch.setattr(port,'replace_versioned',broken)
+    payload=dict(proof=proof,value=claims['draft']['value'],confirmed=True)
+    result=ui.post(payload,gate)
+    assert len(attempts)==number
+    assert result['status'] in {'UNKNOWN','PARTIAL','COMPLETE'}
+    before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]
+    # Old request may have no persisted qualification if its very first CAS
+    # failed. Inspection still never qualifies, repairs, or dispatches it.
+    rebuild().inspect(claims['request_id'],gate)
+    if ui._requests(h.f.case_id):rebuild().post(payload,gate)
+    assert len(attempts)==number
+    assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+def test_posted_snapshot_never_changes_when_draft_is_edited(monkeypatch,kind):
+    h,c,rebuild=ui_fixture(kind,monkeypatch);ui=rebuild();gate=Gate();proof,claims=ui.proof(h.f.case_id,'post',gate)
+    result=ui.post(dict(proof=proof,value=claims['draft']['value'],confirmed=True),gate)
+    assert result['status']=='COMPLETE'
+    request=deepcopy(ui._requests(h.f.case_id)[0])
+    d=load(h.readers.draft.read_versioned()[0]);d['value']['fields']['memo']='later draft'
+    d['revision']+=1;d['input_digest']=digest(d['value']);set_value(h.readers.draft,d)
+    saved=h.native.read_versioned(),h.readers.ledger.read_versioned(),h.shared.io.read_versioned()
+    observed=rebuild().inspect(claims['request_id'],gate)
+    assert observed['snapshot']==request['inputs']['draft']
+    assert ui._requests(h.f.case_id)==[request]
+    assert saved==(h.native.read_versioned(),h.readers.ledger.read_versioned(),h.shared.io.read_versioned())
+
+
+@pytest.mark.parametrize('field,value',[('date','2026/1/3'),('merchant',' Synthetic clinic ')])
+def test_medical_parser_normalization_requires_an_explicit_edit(monkeypatch,field,value):
+    h,c,rebuild=ui_fixture('medical',monkeypatch);ui=rebuild();gate=Gate()
+    d=load(h.readers.draft.read_versioned()[0]);d['value']['fields'][field]=value
+    d['revision']+=1;d['input_digest']=digest(d['value']);set_value(h.readers.draft,d)
+    with pytest.raises(StateError,match='normalization_requires_explicit_edit'):ui.proof(h.f.case_id,'post',gate)
+    assert h.readers.ledger.writes==0

@@ -159,6 +159,9 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
         def r1_post():
             if request.mimetype != 'application/json' or request.content_length is None or request.content_length > 800000:
                 deny('request_invalid')
+            # The original host accepts small auth forms. This synthetic-only
+            # endpoint carries the encrypted exact comparison snapshot.
+            request.max_content_length = 800000
             value = json.loads(request.get_data(), object_pairs_hook=unique)
             return jsonify(one_tab.post(value, gate))
 
