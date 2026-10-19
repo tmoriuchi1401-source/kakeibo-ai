@@ -18,6 +18,7 @@ from .receipt_reimport_production import digest as native_digest
 from .receipt_validation import validate_receipt_result
 from .unified_receipt_review import digest
 from .unified_receipt_write import OLD_P1_SOURCE, OLD_REFERENCES
+from .iphone_accounting_ownership import hashed
 
 SCHEMA = 'receipt-confirmation-draft-inputs-v2'
 FIELDS = ('date', 'merchant', 'amount', 'category', 'payment', 'memo')
@@ -88,6 +89,65 @@ def validate_shape(c):
     keys(i['proposed'], 'confirmed parsed lines original_parsed original_plan')
     keys(i['derivation'], 'prepared_at baseline_digest source_digest line_digest before_digest original_plan_digest plan_digest')
     text(i['derivation']['prepared_at'], required=True)
+    for field, value in i['derivation'].items():
+        if field != 'prepared_at' and not hashed(value): fail('digest')
+    for field in ('legacy_digest', 'candidate_digest'):
+        if not hashed(i['baseline'][field]): fail('digest')
+    d = i['draft']
+    keys(d['value'], 'fields items provenance')
+    keys(d['value']['fields'], 'date merchant amount category payment memo')
+    if (d['domain'] != 'DRAFT_ONLY' or d['owner'] != c['owner'] or d['case_id'] != c['case_id']
+            or d['input_digest'] != digest(d['value']) or d['value']['provenance'] != 'human-entered'): fail('draft')
+    integer(d['generation'], 1, 2**53-1); integer(d['revision'], 0, 2**53-1)
+    for field, value in d['value']['fields'].items():
+        if field == 'amount': integer(value, 1, 999999999999)
+        else: text(value, required=field in {'date', 'merchant'})
+    if type(d['value']['items']) is not list or len(d['value']['items']) > 100: fail('catalog')
+    for n, entry in enumerate(d['value']['items'], 1):
+        keys(entry, 'baseline_index expense_id name amount category state note')
+        integer(entry['baseline_index'], n, n); integer(entry['amount'], -999999999999, 999999999999)
+        for field in ('expense_id', 'name', 'category'): text(entry[field], required=True)
+        text(entry['note'], limit=8000)
+        if entry['state'] != 'entered': fail('line_state')
+    proposed = i['proposed']
+    if type(proposed['confirmed']) is not list or len(proposed['confirmed']) != 8: fail('confirmed')
+    integer(proposed['confirmed'][2], 1, 999999999999)
+    for n, value in enumerate(proposed['confirmed']):
+        if n != 2: text(value)
+    fields = d['value']['fields']
+    expected = [fields[k] for k in FIELDS[:5]] + [
+        '候補明細で確定' if c['kind'] == 'normal' else '医療費を確定', '', fields['memo']]
+    if encoded(proposed['confirmed']) != encoded(expected): fail('confirmed_draft')
+    if c['kind'] == 'medical' and d['value']['items']: fail('manual_only')
+    master = i['categories']
+    text(master['revision'], required=True)
+    if type(master['pairs']) is not list or not master['pairs'] or len(master['pairs']) > 1000: fail('master')
+    for pair in master['pairs']:
+        if type(pair) is not list or len(pair) != 2: fail('master')
+        for value in pair: text(value, required=True)
+    if type(proposed['lines']) is not list: fail('catalog')
+    for n, line in enumerate(proposed['lines'], 1):
+        keys(line, 'index expense_id baseline_item_digest'); integer(line['index'], n, n)
+        text(line['expense_id'], required=True)
+        if not hashed(line['baseline_item_digest']): fail('catalog_digest')
+    for parsed in (proposed['parsed'], proposed['original_parsed']):
+        if parsed is None:
+            if c['kind'] != 'medical' or parsed is proposed['parsed']: fail('parsed')
+            continue
+        keys(parsed, 'merchant transaction_kind date total payment_method items note')
+        if (type(parsed['items']) is not list or not 1 <= len(parsed['items']) <= 100
+                or type(parsed['total']) is not int
+                or any(type(parsed[k]) is not str for k in ('merchant', 'transaction_kind', 'date', 'payment_method', 'note'))): fail('parsed')
+        for item in parsed['items']:
+            keys(item, 'name quantity amount major_category minor_category note confidence')
+            if (type(item['amount']) is not int or any(type(item[k]) not in (int, float) for k in ('quantity', 'confidence'))):
+                fail('parsed_type')
+            if any(type(item[k]) is not str for k in ('name', 'major_category', 'minor_category', 'note')): fail('parsed_type')
+        # Strict field keys above prevent Pydantic's legacy extra-field ignoring.
+        ReceiptResult.model_validate(parsed)
+    sb = i['source_binding']
+    if (sb['source'] != c['source'] or sb['scope'] != 'whole' or sb['receipt_unit_id'] is not None
+            or sb['receipt_index'] is not None): fail('whole_source')
     old = i['baseline']['item']
     if (old['kind'] != c['kind'] or old['status'] != 'waiting' or old.get('require_reconfirm')
             or old.get('error') or old.get('decision_origin') == 'automatic'

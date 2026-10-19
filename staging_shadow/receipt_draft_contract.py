@@ -7,6 +7,7 @@ There is deliberately no live factory, migration, completion or retry API.
 from copy import deepcopy
 from dataclasses import asdict
 from functools import wraps
+from threading import Lock
 
 from app.drive_run_state import StateError
 from app.iphone_accounting_ownership import hashed, relation
@@ -165,13 +166,17 @@ class IsolatedDraftStore(IsolatedReimportStore):
 def mutation(method):
     @wraps(method)
     def guarded(self, *args, **kwargs):
-        if self.uncertain or self.store.uncertain or not self.fresh_process: fail('v3_UNKNOWN_read_only')
+        if not self._transition_lock.acquire(blocking=False): fail('v3_in_flight_read_only')
         try:
-            return method(self, *args, **kwargs)
-        except Exception:
-            self.uncertain = True  # No write to record uncertainty, no recovery API.
-            self._qualification_ticket = self._pending_ticket = self._start_ticket = None
-            raise
+            if self.uncertain or self.store.uncertain or not self.fresh_process: fail('v3_UNKNOWN_read_only')
+            try:
+                return method(self, *args, **kwargs)
+            except Exception:
+                self.uncertain = True  # No write to record uncertainty, no recovery API.
+                self._qualification_ticket = self._pending_ticket = self._start_ticket = None
+                raise
+        finally:
+            self._transition_lock.release()
     return guarded
 
 
@@ -185,6 +190,7 @@ class IsolatedDraftContract(IsolatedConfirmationContract):
         self.store, self.shared, self.auth, self.readers = store, shared, auth, readers
         self.clock, self.checkpoint, self.fresh_process = clock, checkpoint, fresh_process is True
         self.uncertain = False
+        self._transition_lock = Lock()
         self._native_observation = None
         self._qualification_ticket = self._pending_ticket = self._start_ticket = None
         self._claim_ticket = None

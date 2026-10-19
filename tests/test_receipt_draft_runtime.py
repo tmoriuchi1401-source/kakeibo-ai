@@ -483,7 +483,7 @@ def test_inheritance_cas_failure_never_resets_or_retries(fault, monkeypatch):
     assert io.read_versioned() == before and io.writes == writes
 
 
-@pytest.mark.parametrize('point', ['shared_before_read', 'shared_after_read', 'native_before_read'])
+@pytest.mark.parametrize('point', ['shared', 'native'])
 def test_consumption_refuses_stale_strong_observation(point, monkeypatch):
     h = harness('normal', monkeypatch); stage(h, 'consume'); writes = h.native.writes
     if point.startswith('shared'): h.shared.io.revision += 1
@@ -517,3 +517,32 @@ def test_medical_incomplete_baseline_is_not_prefilled(monkeypatch):
     assert inputs['baseline']['item']['inputs'] == ['']*8
     assert inputs['proposed']['original_plan'] is inputs['proposed']['original_parsed'] is None
     assert plan[1][1][4] == 135
+
+
+@pytest.mark.parametrize('where', ['raw_value', 'raw_field', 'raw_item', 'parsed', 'parsed_item', 'line'])
+def test_native_codec_rejects_nested_unknown_fields(where, monkeypatch):
+    from app.receipt_confirmation_draft_request import validate_shape
+    h = harness('normal', monkeypatch); i = h.c['inputs']
+    target = {'raw_value': i['draft']['value'], 'raw_field': i['draft']['value']['fields'],
+        'raw_item': i['draft']['value']['items'][0], 'parsed': i['proposed']['parsed'],
+        'parsed_item': i['proposed']['parsed']['items'][0], 'line': i['proposed']['lines'][0]}[where]
+    target['unknown'] = 'x'; i['draft']['input_digest'] = digest(i['draft']['value']); rebound(h)
+    with pytest.raises(StateError): validate_shape(h.c)
+
+
+@pytest.mark.parametrize('phase', ['accept', 'consume', 'start'])
+def test_double_tap_on_same_instance_does_not_lose_tickets(phase, monkeypatch):
+    from threading import Event
+    h = harness('normal', monkeypatch); stage(h, phase); entered, release = Event(), Event()
+    point = {'accept': 'before_qualification', 'consume': 'before_consume', 'start': 'before_start'}[phase]
+    def pause(p):
+        if p == point: entered.set(); assert release.wait(timeout=30)
+    h.contract.checkpoint = pause
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(run, h, phase); assert entered.wait(timeout=30)
+        writes = h.native.writes
+        with pytest.raises(StateError, match='in_flight_read_only'): run(h, phase)
+        assert h.native.writes == writes
+        release.set(); first.result(timeout=30)
+    assert not h.contract.uncertain and not h.store.uncertain
+    assert h.native.writes == writes+1
