@@ -7,8 +7,15 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
   const result=row.querySelector('.result'), state=row.querySelector('.save-state'), review=row.querySelector('.review');
   const recovery=row.querySelector('.recovery');
   let dirty=false, pending=false, blocked=row.dataset.financialStopped==='true', proof=null;
-  if(blocked)for(const button of row.querySelectorAll('button'))button.disabled=true;
   const base='/isolated-synthetic/iphone-confirmation';
+  // A transport failure may occur before the server receives anything. Retain
+  // only the attempted ID in this tab across reload; never treat it as authority.
+  const attemptKey='kakeibo-r1-attempt:'+initial.case_id;
+  try {
+    const attempted=sessionStorage.getItem(attemptKey);
+    if(attempted&&!blocked){blocked=true;result.textContent='UNKNOWN：結果不明・要照合。再確定せず同じ要求の結果を確認してください。';recovery.href=`${base}/r1/results/${encodeURIComponent(attempted)}`;recovery.hidden=false;}
+  } catch {blocked=true;result.textContent='確認状態を保持できません。入力を保持し、現在の結果を確認してください。';}
+  if(blocked)for(const button of row.querySelectorAll('button'))button.disabled=true;
   const number=v=>/^-?\d+$/.test(v)?Number(v):v;
   function value() {
     const v=structuredClone(initial.value);
@@ -26,11 +33,12 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
   }
   async function send(p, v, confirmed) {
     recovery.href=`${base}/r1/results/${p.claims.request_id}`;recovery.hidden=false;
+    if(confirmed){try{sessionStorage.setItem(attemptKey,p.claims.request_id);}catch{blocked=true;throw new Error('確認状態を保持できません。入力を保持しています。');}}
     const response=await fetch(`${base}/r1/request`,{method:'POST',credentials:'same-origin',redirect:'error',
       headers:{'Content-Type':'application/json','Origin':location.origin,'X-CSRF-Token':p.csrf},
       body:JSON.stringify({proof:p.proof,value:v,confirmed})});
     let data;try{data=await response.json();}catch{blocked=true;throw new Error('UNKNOWN：応答を確認できません。再確定せず結果を照会してください。');}
-    if(!response.ok) {if(response.status>=500)blocked=true;throw new Error(data.message);}
+    if(!response.ok) {if(response.status>=500)blocked=true;else if(confirmed)sessionStorage.removeItem(attemptKey);throw new Error(data.message);}
     return data;
   }
   row.addEventListener('click',async e=>{

@@ -39,6 +39,7 @@ class Gate:
 
 def ui_fixture(kind,monkeypatch):
     h=harness(kind,monkeypatch)
+    set_value(h.readers.authority,{})
     def ownership(inputs,plan):
         source=inputs['source_binding']['source']
         h.own=reader_for('legacy_confirmation',source,RAW,[],dict(namespace='receipt_confirmation',scope='whole',
@@ -167,3 +168,27 @@ def test_new_request_cannot_replace_completed_authority_evidence(monkeypatch,kin
         rebuild().post(dict(proof=newproof,value=newclaims['draft']['value'],confirmed=True),second)
     assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before
     assert rebuild().inspect(claims['request_id'],gate)['status']=='COMPLETE'
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+@pytest.mark.parametrize('point',['evidence_response_lost','before_qualification'])
+def test_unknown_before_native_qualification_remains_fenced_after_rebuild(monkeypatch,kind,point):
+    h,c,rebuild=ui_fixture(kind,monkeypatch);ui=rebuild();gate=Gate()
+    proof,claims=ui.proof(h.f.case_id,'post',gate)
+    payload=dict(proof=proof,value=claims['draft']['value'],confirmed=True)
+    if point=='evidence_response_lost':
+        original=h.readers.authority.replace_versioned
+        def lost(*args):original(*args);raise TimeoutError('synthetic evidence response loss')
+        monkeypatch.setattr(h.readers.authority,'replace_versioned',lost)
+        assert ui.post(payload,gate)['status']=='UNKNOWN'
+    else:
+        def stop(name):
+            if name==point:raise RuntimeError('synthetic stop before native CAS')
+        c.checkpoint=stop
+        assert ui.post(payload,gate)['status']=='UNKNOWN'
+    assert not ui._requests(h.f.case_id) and h.readers.ledger.writes==0
+    before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]
+    rebuilt=rebuild();assert rebuilt.read(gate)[0]['result']['status']=='UNKNOWN'
+    with pytest.raises(StateError,match='UNKNOWN'):rebuilt.proof(h.f.case_id,'post',gate)
+    with pytest.raises(StateError,match='UNKNOWN'):rebuilt.post(payload,gate)
+    assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before

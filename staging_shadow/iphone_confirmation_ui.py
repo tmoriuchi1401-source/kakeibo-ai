@@ -104,9 +104,14 @@ class OneTabConfirmation:
             d, _, tag = self._draft(cid)
             baseline = image_issue(c.store.value, c.kind, c.source_id)
             latest = self._requests(cid)
+            evidence = DraftCAS(c.readers.authority).read()[0]
+            result = self.inspect(latest[-1]['request_id'], gate) if latest else None
+            if not latest and evidence:
+                rid=evidence.get('request_id', 'unavailable') if type(evidence) is dict else 'unavailable'
+                result=self.inspect(rid, gate)
             rows.append(dict(case_id=cid, kind=c.kind, draft=d, tag=tag, baseline=baseline,
                 source=deepcopy(c.source),
-                held=False, reason='', result=self.inspect(latest[-1]['request_id'], gate) if latest else None))
+                held=False, reason='', result=result))
         rows.extend(dict(case_id=cid, held=True, reason=value['reason'], inputs=value.get('inputs', []),
                          kind=value.get('kind', 'held'), source_id=value.get('source_id', ''))
                     for cid,value in self.held.items())
@@ -136,6 +141,8 @@ class OneTabConfirmation:
             deny('purpose')
         session = self._session(gate)
         d, _, tag = self._draft(cid)
+        if action == 'post' and not self._requests(cid) and DraftCAS(self.cases[cid].readers.authority).read()[0]:
+            deny('attempt_UNKNOWN_read_only')
         snapshot = self._prepare(cid) if action == 'post' else None
         claims = dict(schema='synthetic-one-tab-proof-v1', case_id=cid, purpose='ACCOUNTING_POST',
             action=action, draft=d, tag=tag, snapshot=snapshot, **session)
@@ -215,15 +222,20 @@ class OneTabConfirmation:
             # Only synthetic evidence port; qualification is still the unchanged
             # v3 validator. A failed evidence CAS never reaches the writer.
             a, ar, at = DraftCAS(c.readers.authority).read()
-            c.readers.authority.replace_versioned(ar, at, encoded(authority))
-            if load(c.readers.authority.read_versioned()[0]) != authority:
-                deny('authority_UNKNOWN')
-            validate_draft_request_v2(request, c.store.value, c.readers)
-            contract = IsolatedDraftContract(self._store(c), c.shared, boundary, c.readers, clock=self.clock,
-                enabled=True, isolated_synthetic=True, fresh_process=True, checkpoint=getattr(c, 'checkpoint', None))
-            writer = SyntheticDraftConfirmation(contract, enabled=True, isolated_synthetic=True, fresh_attempt=True,
-                checkpoint=getattr(c, 'checkpoint', None))
+            if a:
+                # This existing port is the persistent synthetic attempt fence
+                # even if qualification never reached the native store. Never
+                # replace it after response loss or on a competing POST.
+                deny('attempt_UNKNOWN_read_only')
             try:
+                c.readers.authority.replace_versioned(ar, at, encoded(authority))
+                if load(c.readers.authority.read_versioned()[0]) != authority:
+                    deny('authority_UNKNOWN')
+                validate_draft_request_v2(request, c.store.value, c.readers)
+                contract = IsolatedDraftContract(self._store(c), c.shared, boundary, c.readers, clock=self.clock,
+                    enabled=True, isolated_synthetic=True, fresh_process=True, checkpoint=getattr(c, 'checkpoint', None))
+                writer = SyntheticDraftConfirmation(contract, enabled=True, isolated_synthetic=True, fresh_attempt=True,
+                    checkpoint=getattr(c, 'checkpoint', None))
                 writer.submit(request, expected_shared_revision=c.shared.read()[0]['revision'])
             except Exception:
                 # Read-only reconstruction classifies partial writes; no recovery.

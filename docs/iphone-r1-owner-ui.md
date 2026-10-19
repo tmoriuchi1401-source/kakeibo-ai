@@ -65,6 +65,8 @@ JSON上のtuple/list表現をcanonicalに揃える以外、入力値のtrim・�
 
 記帳済みrequest/snapshotはimmutable。後からdraftが更新されても書き換えない。現在draft/ledgerが変わった場合、既存の厳密inspectはUNKNOWNを返し得るが、結果画面は当時の保存snapshotを表示する。過去の全行一致だけを根拠に現在のCOMPLETEへ昇格しない。
 
+native qualification前に応答を失っても、既存の合成authority evidence portに残る試行を上書きしない。再構築時にnative requestがなくevidenceだけがある場合はUNKNOWNとして表示し、新しい比較proof/再確定を拒否する。POSTがserverへ届く前の通信断はserverが観測できないため、送信したタブはcase ID/request IDだけをsessionStorageに保持し、再読込み後も照合待ちにする。入力値・医療情報・proofは保存しない。このbrowser markerは表示制御のみで、認証や金融許可には使用しない。server側のCAS/native/evidence fenceが独立した安全境界である。
+
 ## 検証証拠と範囲
 
 最終headのCIリンク・確定件数・成否はPR #146の本文で報告する。試験を定義・開始しただけで合格としない。

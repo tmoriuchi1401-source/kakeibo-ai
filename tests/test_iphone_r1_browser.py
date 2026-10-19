@@ -164,3 +164,35 @@ def test_network_loss_blocks_double_tap_and_preserves_input(monkeypatch,tmp_path
         expect(row.locator('[data-action=save_draft]')).to_be_disabled()
         assert r.native['SYN-G101'].readers.ledger.writes==0
         browser.close()
+
+
+@pytest.mark.parametrize('cid',['SYN-G101','SYN-M101'])
+@pytest.mark.parametrize('width',[1365,390])
+@pytest.mark.parametrize('fault',['post_not_received','before_qualification'])
+def test_unknown_before_native_record_stays_readonly_after_page_reload(monkeypatch,tmp_path,cid,width,fault):
+    r=Rig(monkeypatch,tmp_path);r.h.login();r.save(cid);posts=[]
+    if fault=='before_qualification':
+        def stop(name):
+            if name=='before_qualification':raise RuntimeError('synthetic stop before native CAS')
+        r.native[cid].checkpoint=stop
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch();page=browser.new_page(viewport={'width':width,'height':844})
+        def bridge(route):
+            req=route.request;u=urlsplit(req.url);assert u.netloc=='confirmation.example.test'
+            if req.method=='POST':
+                posts.append(1)
+                if fault=='post_not_received':route.abort('connectionreset');return
+            res=r.h.client.open(u.path,method=req.method,data=req.post_data,base_url=ORIGIN,
+                headers={k:v for k,v in req.headers.items() if k in {'origin','x-csrf-token','content-type'}})
+            route.fulfill(status=res.status_code,headers=dict(res.headers),body=res.get_data())
+        page.route('**/*',bridge);page.goto(ORIGIN+PREFIX);page.locator('#search').fill(cid)
+        row=page.locator('tbody tr:visible');row.locator('[data-action=compare]').click()
+        row.locator('.explicit').check();row.locator('[data-action=post]').click()
+        expect(row.locator('.result')).to_contain_text('UNKNOWN')
+        page.reload();page.locator('#search').fill(cid);row=page.locator('tbody tr:visible')
+        expect(row.locator('.result')).to_contain_text('UNKNOWN')
+        expect(row.locator('[data-action=compare]')).to_be_disabled()
+        assert not r.ui._requests(cid) and r.native[cid].readers.ledger.writes==0
+        row.locator('.recovery').click();expect(page.locator('h2')).to_contain_text('UNKNOWN')
+        assert len(posts)==1
+        browser.close()

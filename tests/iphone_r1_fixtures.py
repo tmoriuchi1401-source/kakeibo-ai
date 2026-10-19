@@ -60,6 +60,9 @@ class Rig:
             if kind == 'medical': value['fields'] = {k:'' for k in value['fields']}
             d.update(value=value, input_digest=digest(value))
             set_value(h.ports['draft'],d)
+            # #145's harness prebuilds a fixture request. The UI starts before
+            # any explicit financial action, with an empty evidence port.
+            set_value(h.ports['authority'],{})
             def ownership(inputs, plan, h=h):
                 source=inputs['source_binding']['source']
                 h.own=reader_for('legacy_confirmation',source,h.ports['source_bytes'].raw,[],dict(namespace='receipt_confirmation',scope='whole',
