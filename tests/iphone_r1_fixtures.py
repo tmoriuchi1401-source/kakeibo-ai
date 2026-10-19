@@ -37,9 +37,18 @@ class Rig:
                 return h.own.reader.observe('legacy_confirmation','u1').value()
             self.native[h.f.case_id] = SimpleNamespace(store=h.store, shared=h.shared, readers=h.readers,
                 kind=kind, source_id=h.f.sid, prepared_at='2026-10-19 00:00:00', ownership=ownership,
-                authority_revision=7, review_id=h.f.key, rig=h)
+                source=deepcopy(h.c['source']), authority_revision=7, review_id=h.f.key, rig=h)
         self.key=Fernet.generate_key()
         self.ui=self.rebuild()
+        # Surface synthetic-only exception stacks in CI without exposing input.
+        original_post=self.ui.post
+        def audited_post(*args,**kwargs):
+            try:return original_post(*args,**kwargs)
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                raise
+        self.ui.post=audited_post
         self.h.app=make_isolated_confirmation_application(self.h.web.make_application,self.h.configured,self.old.service,
             config=ShadowConfig(True,'isolated_synthetic'),
             cookies={'login':self.h.web.LOGIN_COOKIE,'ticket':self.h.web.COOKIE},one_tab=self.ui)
@@ -47,9 +56,13 @@ class Rig:
         self.h.client=self.h.app.test_client()
 
     def rebuild(self):
-        return OneTabConfirmation(self.native, {'SYN-G103':'既存入力とメモを保持',
+        held={cid:dict(reason=reason,inputs=[]) for cid,reason in {'SYN-G103':'既存入力とメモを保持',
             'SYN-H301':'LEGACY_UNMAPPED_HOLD', 'OLD-MEDICAL-P1':'対応不明の旧医療p1',
-            'SYN-P201':'PDF構造確認のみ・金融接続対象外','SYN-P202':'PDF保留'}, self.key,
+            'SYN-P201':'PDF構造確認のみ・金融接続対象外','SYN-P202':'PDF保留'}.items()}
+        cards=self.old.service.read()[0]
+        for cid,v in held.items():
+            if cid in cards:v['inputs']=deepcopy(cards[cid]['display']['inputs'])
+        return OneTabConfirmation(self.native, held, self.key,
             owner=self.old.service.owner,clock=lambda:self.h.now,enabled=True,isolated_synthetic=True)
 
     def proof(self,cid,action):

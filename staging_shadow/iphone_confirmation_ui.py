@@ -66,6 +66,9 @@ class OneTabConfirmation:
             deny('held')
         c = self.cases[cid]
         d, raw, tag = DraftCAS(c.readers.draft).read()
+        source = load(c.readers.source.read_versioned()[0])['source']
+        if source != c.source:
+            deny('source_changed_reconfirm')
         if (set(d) != {'domain','owner','case_id','generation','revision','input_digest','value'}
                 or d['domain'] != 'DRAFT_ONLY' or d['owner'] != self.owner or d['case_id'] != cid
                 or d['input_digest'] != digest(d['value'])):
@@ -82,7 +85,9 @@ class OneTabConfirmation:
         ownership = c.ownership(inputs, plan)
         if c.store.read() != native:
             deny('reconfirm')
-        return dict(inputs=inputs, before=before, plan=plan, source=inputs['source_binding']['source'], ownership=ownership)
+        # JSON transport representation only; no field coercion/normalization.
+        return load(encoded(dict(inputs=inputs, before=before, plan=plan,
+                                 source=inputs['source_binding']['source'], ownership=ownership)))
 
     def read(self, gate):
         gate.read({})
@@ -92,8 +97,10 @@ class OneTabConfirmation:
             baseline = image_issue(c.store.value, c.kind, c.source_id)
             latest = self._requests(cid)
             rows.append(dict(case_id=cid, kind=c.kind, draft=d, tag=tag, baseline=baseline,
+                source=deepcopy(c.source),
                 held=False, reason='', result=self.inspect(latest[-1]['request_id'], gate) if latest else None))
-        rows.extend(dict(case_id=cid, held=True, reason=reason, kind='held') for cid,reason in self.held.items())
+        rows.extend(dict(case_id=cid, held=True, reason=value['reason'], inputs=value.get('inputs', []), kind='held')
+                    for cid,value in self.held.items())
         return rows
 
     def _requests(self, cid):
@@ -171,7 +178,7 @@ class OneTabConfirmation:
                 deny('reconfirm')
             # VerifiedPost is generated again for the EXACT native input, using
             # the existing host session/Origin/CSRF checks, never browser authority.
-            boundary = PurposeBoundary(self.owner, gate.post, gate.read, lambda: [], clock=self.clock)
+            boundary = PurposeBoundary(self.owner, gate.post, gate.read, lambda: [], enabled=True, clock=self.clock)
             p = gate.post({}, 'ACCOUNTING_POST', rid, digest(current['inputs']), 0)
             authority = dict(mode=FIXTURE, actor=self.owner, owner=self.owner, purpose='ACCOUNTING_POST',
                 request_id=rid, input_fingerprint=digest(current['inputs']), revision=c.authority_revision,
@@ -191,7 +198,7 @@ class OneTabConfirmation:
                 deny('authority_UNKNOWN')
             validate_draft_request_v2(request, c.store.value, c.readers)
             contract = IsolatedDraftContract(c.store, c.shared, boundary, c.readers, clock=self.clock,
-                enabled=True, isolated_synthetic=True, fresh_process=True)
+                enabled=True, isolated_synthetic=True, fresh_process=True, checkpoint=getattr(c, 'checkpoint', None))
             writer = SyntheticDraftConfirmation(contract, enabled=True, isolated_synthetic=True, fresh_attempt=True,
                 checkpoint=getattr(c, 'checkpoint', None))
             try:
@@ -210,7 +217,7 @@ class OneTabConfirmation:
             if request:
                 store = IsolatedDraftStore(c.store.io, c.store.expected_digest, c.store.spreadsheet_id,
                     parent_digest=c.store.parent_digest, enabled=True, isolated_synthetic=True)
-                boundary = PurposeBoundary(self.owner, gate.post, gate.read, lambda: [], clock=self.clock)
+                boundary = PurposeBoundary(self.owner, gate.post, gate.read, lambda: [], enabled=True, clock=self.clock)
                 contract = IsolatedDraftContract(store, c.shared, boundary, c.readers, clock=self.clock,
                     enabled=True, isolated_synthetic=True)
                 writer = SyntheticDraftConfirmation(contract, enabled=True, isolated_synthetic=True)

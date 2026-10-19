@@ -141,6 +141,15 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
         if type(one_tab) is not OneTabConfirmation or one_tab.owner != service.owner:
             deny('isolation_required')
 
+        # The pinned host applies its no-script production CSP AFTER blueprint
+        # hooks. Apply the isolated policy last, only on this synthetic surface.
+        # Production paths, factory sources and auth cookies remain unchanged.
+        def r1_privacy_last(response):
+            if request.path == PREFIX or request.path.startswith(PREFIX+'/r1/'):
+                return privacy(response)
+            return response
+        app.after_request_funcs.setdefault(None, []).insert(0, r1_privacy_last)
+
         @bp.get('/r1/<cid>/<action>')
         def r1_proof(cid, action):
             proof, claims = one_tab.proof(cid, action, gate)

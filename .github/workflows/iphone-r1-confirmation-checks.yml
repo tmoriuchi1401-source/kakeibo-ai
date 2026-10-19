@@ -30,7 +30,13 @@ jobs:
     - name: Install disposable Chromium
       run: python -m playwright install --with-deps chromium
     - name: Owner UI integration
-      run: python -m pytest -vv tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
+      run: python -m pytest -vv tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: r1-synthetic-browser-evidence
+        path: .private/r1-browser/
+        include-hidden-files: true
     - name: Collect v3 writer integration tests
       run: python -m pytest --collect-only -q tests/test_synthetic_draft_writer.py
     - name: Execute v3 writer integration tests
