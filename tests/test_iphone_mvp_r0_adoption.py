@@ -175,11 +175,16 @@ def test_no_runtime_auth_bundle_or_existing_workflow_changed_since_141():
     # The next user-approved isolation adds only these modules. The old code,
     # auth bundle and every pre-existing runtime remain byte-for-byte pinned.
     allowed = {'app/receipt_confirmation_draft_request.py', 'staging_shadow/receipt_draft_contract.py',
-        'staging_shadow/synthetic_draft_writer.py'}  # Separately approved v3-only composition.
+        'staging_shadow/synthetic_draft_writer.py',
+        'app/iphone_item_drafts.py', 'app/iphone_confirmation_host.py',
+        'app/unified_shadow_templates/iphone_one_tab.html', 'app/unified_shadow_templates/iphone_one_tab.js',
+        'app/unified_shadow_templates/iphone_one_tab_original.html',
+        'staging_shadow/iphone_confirmation_ui.py'}  # User-authorized isolated R1 UI.
     assert set(names) <= allowed
     status = subprocess.check_output(['git', 'diff', '--name-status', START, '--',
         'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
-    assert all(line.startswith('A\t') for line in status)
+    assert all(line.startswith('A\t') or line in {'M\tapp/iphone_item_drafts.py',
+        'M\tapp/iphone_confirmation_host.py'} for line in status)
     baseline = json.loads((ROOT / 'docs/iphone-mvp-r0-pr-baseline.json').read_text('utf8'))
     assert baseline['start'] == START
     assert len(baseline['pull_requests']) == 19

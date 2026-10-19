@@ -12,6 +12,68 @@ def fail():
     raise StateError('iphone_item_contract_changed')
 
 
+def image_issue(legacy, kind, source_id):
+    """Whole-image baseline; never constructs PDF Unit/index/partition identity."""
+    candidates = [i for i in legacy.get('confirmation_items', {}).values()
+                  if i['source']['source_id'] == source_id and i['kind'] == kind]
+    if (len(candidates) != 1 or candidates[0]['source']['mime_type'] not in {'image/png', 'image/jpeg'}
+            or candidates[0]['status'] != 'waiting' or candidates[0].get('error')
+            or candidates[0].get('require_reconfirm')):
+        fail()
+    old = candidates[0]
+    fields = dict(zip(('date','merchant','amount','category','payment'), old['inputs'][:5]))
+    fields['memo'] = old['inputs'][7]
+    entries = []
+    if kind == 'normal':
+        parsed = legacy['records'][source_id]['parsed']
+        fields.update(date=parsed['date'], merchant=parsed['merchant'], amount=parsed['total'],
+                      category='', payment=parsed['payment_method'])
+        for n,item in enumerate(parsed['items'], 1):
+            entries.append(dict(baseline_index=n, expense_id=f'R-{source_id}-{n:02d}', name=item['name'],
+                amount=item['amount'], category=item['major_category']+'｜'+item['minor_category'],
+                state='unentered', note=''))
+    elif kind != 'medical':
+        fail()
+    # Medical editor starts empty: old parsed/manual values are comparison only.
+    return dict(fields=fields, items=entries, provenance='human-entered')
+
+
+def image_inspect(value, baseline, categories, kind):
+    """Fixed catalog and exact values. Partial manual drafts can be retained."""
+    from .receipt_confirmation_draft_request import keys, text, integer
+    try:
+        keys(value, 'fields items provenance')
+        keys(value['fields'], 'date merchant amount category payment memo')
+        if value['provenance'] != 'human-entered': fail()
+        for k,v in value['fields'].items():
+            if k == 'amount':
+                if v != '': integer(v, 1, 999999999999)
+            else: text(v)
+        if type(value['items']) is not list or len(value['items']) != len(baseline['items']): fail()
+        for e,b in zip(value['items'], baseline['items']):
+            keys(e, 'baseline_index expense_id name amount category state note')
+            if any(e[k] != b[k] for k in ('baseline_index','expense_id')) or e['state'] not in STATES: fail()
+            integer(e['amount'], -999999999999, 999999999999)
+            text(e['name']); text(e['note'], limit=8000); text(e['category'])
+            if e['category'] and e['category'].split('｜') not in categories: fail()
+        if kind == 'normal' and value['fields']['category'] != '': fail()
+        if kind == 'medical' and value['fields']['category']:
+            from .receipt_confirmation import medical_categories
+            if tuple(value['fields']['category'].split('｜')) not in medical_categories(categories):fail()
+        if (kind == 'normal' and all(e['state']=='entered' for e in value['items'])
+                and all(value['fields'][k] != '' for k in ('date','merchant','amount'))):
+            from .models import ReceiptResult, ReceiptItem
+            from .receipt_validation import validate_receipt_result
+            f=value['fields']
+            parsed=ReceiptResult(date=f['date'],merchant=f['merchant'],total=f['amount'],payment_method=f['payment'],
+                items=[ReceiptItem(name=e['name'],amount=e['amount'],major_category=e['category'].split('｜')[0],
+                    minor_category=e['category'].split('｜')[1]) for e in value['items']])
+            if not validate_receipt_result(parsed,[tuple(p) for p in categories])[0]:fail()
+        return deepcopy(value)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+        fail()
+
+
 def issue(record, saved, categories):
     """Manager-owned native record/snapshot. Existing token/markers are retained."""
     validate(record)

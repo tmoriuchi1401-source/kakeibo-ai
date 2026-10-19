@@ -16,7 +16,7 @@ BLUEPRINT = 'iphone_confirmation'
 
 
 def make_isolated_confirmation_application(make_application, runtime_factory, service, *,
-                                          config=ShadowConfig(), cookies=None):
+                                          config=ShadowConfig(), cookies=None, one_tab=None):
     # OFF constructs ONLY the unchanged application. No implicit environment
     # switches, startup observations, document seeding or production routes.
     if config.enabled is not True:
@@ -68,7 +68,19 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
             message='この案件は保留・表示専用です。入力を保持し、保留理由を確認してください。'
         elif 'source_UNKNOWN' in code or 'structure_observation_UNKNOWN' in code:
             message='原本の版対応や構造候補を確認できません。入力を保持し、古い確認を再利用せず保存内容を確認してください。'
-        if request.method == 'POST':
+        if request.path.startswith(PREFIX+'/r1/'):
+            if status == 503 or 'UNKNOWN' in code:
+                status=503
+                message='UNKNOWN：結果不明・要照合。監査・照合待ちです。入力を保持し、再確定せず同じ要求の結果を確認してください。'
+            elif status in {403,410}:
+                message='競合または期限切れによる拒否。入力を保持し、本人確認・権限・送信元を確認してください。'
+            elif 'held' in code:
+                message='保留：この案件は金融確定できません。保存入力と保留理由を確認してください。'
+            elif any(s in code for s in ('reconfirm','normalization','changed','draft_v2')):
+                message='確定前の再確認が必要です。入力を保持し、原本・保存下書き・カテゴリ・台帳の現在値を確認してください。'
+            else:
+                message='競合または期限切れによる拒否。入力を保持し、現在の保存内容を確認してください。'
+        if request.method == 'POST' or request.endpoint == BLUEPRINT+'.r1_proof':
             return jsonify(error=code, message=message, input_preserved=True), status
         return Response(render_template('iphone_confirmation.html', mode='error', message=message, cards=[], cid='', draft=None), status=status)
 
@@ -83,6 +95,8 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
 
     @bp.get('')
     def listing():
+        if one_tab is not None:
+            return render_template('iphone_one_tab.html', rows=one_tab.read(gate), result=None)
         cards, _, _, _ = service.read()
         return render_template('iphone_confirmation.html', mode='list', cards=cards.values(), message='', cid='', draft=None)
 
@@ -133,6 +147,68 @@ def make_isolated_confirmation_application(make_application, runtime_factory, se
     @bp.get('/ui.js')
     def javascript():
         return Response((Path(__file__).parent/'unified_shadow_templates/iphone_confirmation.js').read_text(encoding='utf8'), mimetype='application/javascript')
+
+    if one_tab is not None:
+        from staging_shadow.iphone_confirmation_ui import OneTabConfirmation
+        if type(one_tab) is not OneTabConfirmation or one_tab.owner != service.owner:
+            deny('isolation_required')
+
+        # The pinned host applies its no-script production CSP AFTER blueprint
+        # hooks. Apply the isolated policy last, only on this synthetic surface.
+        # Production paths, factory sources and auth cookies remain unchanged.
+        def r1_privacy_last(response):
+            if request.path == PREFIX or request.path.startswith(PREFIX+'/r1/'):
+                response=privacy(response)
+                response.headers['Content-Security-Policy'] += "; img-src 'self'"
+                return response
+            return response
+        app.after_request_funcs.setdefault(None, []).insert(0, r1_privacy_last)
+
+        @bp.get('/r1/<cid>/<action>')
+        def r1_proof(cid, action):
+            proof, claims = one_tab.proof(cid, action, gate)
+            return jsonify(proof=proof, claims=claims, csrf=auth()[1].csrf)
+
+        @bp.post('/r1/request')
+        def r1_post():
+            if request.mimetype != 'application/json' or request.content_length is None or request.content_length > 800000:
+                deny('request_invalid')
+            # The original host accepts small auth forms. This synthetic-only
+            # endpoint carries the encrypted exact comparison snapshot.
+            request.max_content_length = 800000
+            value = json.loads(request.get_data(), object_pairs_hook=unique)
+            return jsonify(one_tab.post(value, gate))
+
+        @bp.get('/r1/results/<rid>')
+        def r1_result(rid):
+            return render_template('iphone_one_tab.html', rows=[], result=one_tab.inspect(rid, gate))
+
+        @bp.get('/r1/original/<cid>')
+        def r1_original(cid):
+            if cid in one_tab.cases:
+                sid=one_tab.cases[cid].source_id
+                return render_template('iphone_one_tab_original.html',cid=cid,sid=sid)
+            elif cid in one_tab.held and one_tab.held[cid].get('source_id'):
+                sid=one_tab.held[cid]['source_id']
+            else:
+                deny('held_or_unmapped')
+            # Offline fixture representation only. No Drive fetch or observation.
+            return Response('合成原本 / '+cid+' / '+sid, mimetype='text/plain')
+
+        @bp.get('/r1/source/<cid>')
+        def r1_source(cid):
+            from hashlib import sha256
+            if cid not in one_tab.cases:
+                deny('held_or_unmapped')
+            c=one_tab.cases[cid]
+            raw=c.readers.source_bytes.revision_bytes(c.source_id,c.source['drive_revision_id'])
+            if type(raw) is not bytes or sha256(raw).hexdigest()!=c.source['sha256']:
+                deny('source_UNKNOWN')
+            return Response(raw,mimetype='image/png')
+
+        @bp.get('/r1/ui.js')
+        def r1_javascript():
+            return Response((Path(__file__).parent/'unified_shadow_templates/iphone_one_tab.js').read_text(encoding='utf8'), mimetype='application/javascript')
 
     if BLUEPRINT in app.blueprints or any(r.rule.startswith(PREFIX) for r in app.url_map.iter_rules()):
         deny('route_collision')
