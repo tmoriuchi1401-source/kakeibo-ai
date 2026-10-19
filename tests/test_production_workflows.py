@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-v3-draft-writer-checks.yml':
+            from test_synthetic_draft_writer import test_v3_writer_ci_is_dedicated_and_has_no_production_capability
+            test_v3_writer_ci_is_dedicated_and_has_no_production_capability()
+            continue
         if name == 'iphone-draft-runtime-checks.yml':
             from test_receipt_draft_runtime import test_runtime_workflow_is_isolated
             test_runtime_workflow_is_isolated()
