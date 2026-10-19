@@ -546,3 +546,29 @@ def test_double_tap_on_same_instance_does_not_lose_tickets(phase, monkeypatch):
         release.set(); first.result(timeout=30)
     assert not h.contract.uncertain and not h.store.uncertain
     assert h.native.writes == writes+1
+
+
+@pytest.mark.parametrize('kind', ['normal', 'medical'])
+@pytest.mark.parametrize('state', ['accepted', 'partial_unknown'])
+def test_regular_automatic_import_ownership_blocks_draft_claim(kind, state, monkeypatch):
+    from uuid import uuid4
+    from accounting_gate_fixtures import reader_for
+    from draft_runtime_fixtures import RAW
+    from app.iphone_accounting_gate import AccountingProbeRequest, SCHEMA as PROBE_SCHEMA
+    h = harness(kind, monkeypatch); run(h, 'accept')
+    reader = reader_for('normal_auto', h.c['source'], RAW, [],
+        dict(namespace='receipt_confirmation', scope='whole', unit_id=None, receipt_index=None,
+            input_snapshot=digest('automatic-inputs'), authority_revision=1, ledger_targets=['R-automatic-other']))
+    own = reader.reader.observe('normal_auto', 'u1').value()
+    req = AccountingProbeRequest.parse(dict(schema=PROBE_SCHEMA, synthetic_only=True, owner=h.c['owner'],
+        request_id=str(uuid4()), expected_state_revision=0, operation_identity=own['operation_identity'],
+        ownership=own, native_preflight_digest=digest('automatic-native-preflight')))
+    v, raw, tag = h.shared.read(); after = deepcopy(v); after['revision'] += 1
+    events = [dict(state=s, at=NOW) for s in (['accepted'] if state == 'accepted' else ['accepted', 'executing', 'partial_unknown'])]
+    after['operations'][req.operation_identity] = dict(request=asdict(req), fingerprint=req.fingerprint(), state=state, events=events)
+    h.shared.replace(v, raw, tag, after); before = frozen(h)
+    with pytest.raises(StateError): shared_claim(h)
+    assert frozen(h) == before
+    assert h.store.read()[0]['operations'][h.c['operation']]['consume'] is None
+    with pytest.raises(StateError): run(h, 'consume')
+    assert frozen(h) == before
