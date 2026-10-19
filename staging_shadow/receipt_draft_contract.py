@@ -184,7 +184,8 @@ class IsolatedDraftContract(IsolatedConfirmationContract):
     def __init__(self, store, shared, auth, readers, *, clock, enabled=False, isolated_synthetic=False,
                  fresh_process=False, checkpoint=None):
         if (enabled is not True or isolated_synthetic is not True or type(store) is not IsolatedDraftStore
-                or type(shared) is not ConditionalRequests or type(auth) is not PurposeBoundary or type(readers) is not DraftReaders):
+                or type(shared) is not ConditionalRequests or not shared.synthetic_accounting
+                or type(auth) is not PurposeBoundary or type(readers) is not DraftReaders):
             fail('v3_isolation_required')
         memory_only(shared.io)
         self.store, self.shared, self.auth, self.readers = store, shared, auth, readers

@@ -572,3 +572,12 @@ def test_regular_automatic_import_ownership_blocks_draft_claim(kind, state, monk
     assert h.store.read()[0]['operations'][h.c['operation']]['consume'] is None
     with pytest.raises(StateError): run(h, 'consume')
     assert frozen(h) == before
+
+
+def test_shared_accounting_requires_explicit_opt_in(monkeypatch):
+    h = harness('normal', monkeypatch); h.shared.synthetic_accounting = False
+    before = frozen(h)
+    with pytest.raises(StateError, match='isolation_required'):
+        IsolatedDraftContract(h.store, h.shared, h.auth, h.readers, clock=lambda: NOW,
+            enabled=True, isolated_synthetic=True, fresh_process=True)
+    assert frozen(h) == before
