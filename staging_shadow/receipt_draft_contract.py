@@ -1,12 +1,15 @@
-"""Opt-in synthetic v3 facade, same ConditionalRequests CAS, no dispatch.
+"""Opt-in synthetic v3 facade, same ConditionalRequests CAS, closed dispatch.
 
 Inheritance is on the same memory backend, requires the caller's pinned v2
 digest, and retains every old operation byte-for-byte in canonical JSON.
-There is deliberately no live factory, migration, completion or retry API.
+There is no live factory, migration or retry API. Writer completion requires
+the explicit isolated composition and its live original-writer call frame.
 """
 from copy import deepcopy
+from contextvars import ContextVar
 from dataclasses import asdict
 from functools import wraps
+import inspect
 from threading import Lock
 
 from app.drive_run_state import StateError
@@ -34,8 +37,9 @@ def validate_operation(op, r):
     if set(r) != {'request', 'phase', 'qualification', 'claim', 'consume', 'pending', 'unstarted', 'start', 'completion'}:
         fail('v3_operation')
     c = validate_shape(r['request'])
-    if op != c['operation'] or r['phase'] not in {'qualified', 'pending', 'writer_started'} or r['completion'] is not None:
+    if op != c['operation'] or r['phase'] not in {'qualified', 'pending', 'writer_started', 'complete_fixture'}:
         fail('v3_phase')
+    if r['phase'] != 'complete_fixture' and r['completion'] is not None: fail('v3_completion')
     q = r['qualification']
     if set(q) != {'provider', 'attestation', 'at', 'before_observation'} or q['provider'] != PROVIDER:
         fail('v3_qualification')
@@ -68,6 +72,14 @@ def validate_operation(op, r):
             or s != dict(fingerprint=c['fingerprint'], claim_digest=digest(claim), consume_digest=digest(consumed),
                          pending_digest=digest(r['pending']), sequence=1, at=s['at'])
             or not consumed['at'] <= s['at'] < c['authority']['expires_at']): fail('v3_start')
+    if r['phase'] == 'complete_fixture':
+        done = r['completion']
+        if (type(done) is not dict or set(done) != {'mode', 'fingerprint', 'start_digest', 'pending_digest', 'snapshot_digest', 'observation', 'at'}
+                or done['mode'] != PROVIDER or done['fingerprint'] != c['fingerprint']
+                or done['start_digest'] != digest(s) or done['pending_digest'] != digest(r['pending'])
+                or done['snapshot_digest'] != digest(planned_after(c['before'], c['plan']))
+                or type(done['at']) is not int or done['at'] < s['at']): fail('v3_completion')
+        validate_token(done['observation'])
     return c
 
 
@@ -122,7 +134,8 @@ class IsolatedDraftStore(IsolatedReimportStore):
             ConditionalRequests.replace(self, before, raw, tag, after)
             value, actual, new_tag = self.read()
             if value != after or actual != encoded(after) or new_tag == tag: fail('v3_readback_UNKNOWN')
-            return token(actual, new_tag)
+            self._last_observation = token(actual, new_tag)
+            return self._last_observation
         except Exception:
             self.uncertain = True
             fail('v3_CAS_UNKNOWN_read_only')
@@ -156,7 +169,9 @@ class IsolatedDraftStore(IsolatedReimportStore):
             if old is None:
                 if r['phase'] != 'qualified': fail('v3_initial_phase')
             else:
-                if {'qualified': 'pending', 'pending': 'writer_started'}.get(old['phase']) != r['phase']: fail('v3_transition')
+                if {'qualified': 'pending', 'pending': 'writer_started', 'writer_started': 'complete_fixture'}.get(old['phase']) != r['phase']: fail('v3_transition')
+                if r['phase'] == 'complete_fixture' and inspect.currentframe().f_back.f_code is not IsolatedDraftContract.complete_fixture.__code__:
+                    fail('v3_writer_completion_context_required')
                 for field in set(old)-{'phase'}:
                     if old[field] is not None and old[field] != r[field]: fail('v3_evidence_immutable')
         if len(changed) != 1: fail('v3_exact_operation')
@@ -196,6 +211,9 @@ class IsolatedDraftContract(IsolatedConfirmationContract):
         self._qualification_ticket = self._pending_ticket = self._start_ticket = None
         self._claim_ticket = None
         self._shared_observation = None
+        self._writer_adapter = None
+        self._writer_context = ContextVar('synthetic_draft_writer_context', default=None)
+        self._dispatch_used = False
 
     def _begin(self, c, expected_revision):
         validate_shape(c)
@@ -299,10 +317,74 @@ class IsolatedDraftContract(IsolatedConfirmationContract):
     def start(self, c, context, *, expected_revision):
         # Reuse unchanged v2 start sequencing and shared-claim checks, with the
         # explicit v3 _begin/_fresh/store and new pending projection above.
-        return super().start(c, context, expected_revision=expected_revision)
+        result = super().start(c, context, expected_revision=expected_revision)
+        self._native_observation = self.store._last_observation
+        return result
 
-    def complete_fixture(self, *args, **kwargs): fail('v3_completion_disabled')
-    def dispatch(self, *args, **kwargs): fail('v3_writer_disabled')
+    def _bind_writer(self, adapter):
+        from .synthetic_draft_writer import SyntheticDraftConfirmation
+        if (type(adapter) is not SyntheticDraftConfirmation or adapter.contract is not self
+                or inspect.currentframe().f_back.f_code is not SyntheticDraftConfirmation.__init__.__code__
+                or self._writer_adapter is not None): fail('v3_writer_binding')
+        self._writer_adapter = adapter
+
+    def dispatch(self, c=None, *, composition=None):
+        if composition is None: fail('v3_writer_disabled')
+        from .synthetic_draft_writer import SyntheticDraftConfirmation
+        if (composition is None or composition is not self._writer_adapter or type(composition) is not SyntheticDraftConfirmation
+                or inspect.currentframe().f_back.f_code is not SyntheticDraftConfirmation.submit.__code__): fail('v3_writer_disabled')
+        if not self._transition_lock.acquire(blocking=False): fail('v3_in_flight_read_only')
+        context = None
+        try:
+            if (self.uncertain or self.store.uncertain or not self.fresh_process or self._dispatch_used
+                    or self._start_ticket != c['fingerprint']): fail('v3_writer_disabled')
+            v, raw, tag, _ = self._begin(c, self.store.read()[0]['revision'])
+            self._fresh(c, eligibility=True); self._auth(c, composition._context)
+            r = v['operations'][c['operation']]
+            ledger, observation = observe_ledger(self.readers.ledger)
+            if (r['phase'] != 'writer_started' or r['request'] != c or self._shared(c, executing=True) != r['claim']
+                    or ledger != c['before'] or observation != r['unstarted']['ledger']
+                    or self.store.read() != (v, raw, tag)): fail('v3_dispatch_evidence')
+            self._point('before_dispatch_lease')
+            self._start_ticket = None; self._dispatch_used = True
+            context = self._writer_context.set(composition)
+            return composition._dispatch_once(c)
+        except BaseException:
+            self.uncertain = True
+            raise
+        finally:
+            if context is not None: self._writer_context.reset(context)
+            self._transition_lock.release()
+
+    def complete_fixture(self, c=None, certificate=None, *, expected_revision=None, composition=None):
+        if composition is None: fail('v3_completion_disabled')
+        from .synthetic_draft_writer import SyntheticDraftConfirmation
+        if (composition is None or composition is not self._writer_adapter or type(composition) is not SyntheticDraftConfirmation
+                or self._writer_context.get() is not composition or not self._dispatch_used
+                or inspect.currentframe().f_back.f_code is not SyntheticDraftConfirmation._native_completed.__code__):
+            fail('v3_completion_disabled')
+        composition.db._guard()
+        if self.uncertain or self.store.uncertain or composition.db.uncertain: fail('v3_UNKNOWN_read_only')
+        v, raw, tag, after = self._begin(c, expected_revision)
+        self._fresh(c, eligibility=False); self._auth(c, composition._context)
+        r = after['operations'][c['operation']]
+        applied = deepcopy(r['pending']); applied['status'] = 'applied'
+        observed, observation = observe_ledger(self.readers.ledger)
+        expected = dict(mode=PROVIDER, fingerprint=c['fingerprint'], start_digest=digest(r['start']),
+            pending_digest=digest(r['pending']), snapshot_digest=digest(observed), observation=observation,
+            at=certificate.get('at') if type(certificate) is dict else None)
+        if (r['request'] != c or r['phase'] != 'writer_started' or self._shared(c, executing=True) != r['claim']
+                or composition._applied != applied or composition.db.events != composition.db.expected
+                or observed != planned_after(c['before'], c['plan']) or observation != composition._ledger_observation
+                or type(expected['at']) is not int or not r['start']['at'] <= expected['at'] <= self.clock()
+                or certificate != expected): fail('v3_exact_writer_completion_required')
+        r.update(phase='complete_fixture', completion=deepcopy(certificate)); after['revision'] += 1
+        self._point('before_completion')
+        self._fresh(c, eligibility=False); self._auth(c, composition._context)
+        if (self._shared(c, executing=True) != r['claim'] or observe_ledger(self.readers.ledger) != (observed, observation)):
+            fail('v3_observation_changed')
+        self._native_observation = self.store._commit(v, raw, tag, after, expected_revision)
+        self._point('after_completion')
 
     def inspect(self, c, context=None):
         result = dict(classification='UNKNOWN', synthetic_only=True, real_native_complete=False,
@@ -324,8 +406,11 @@ class IsolatedDraftContract(IsolatedConfirmationContract):
                 if (r['phase'] == 'pending' and self._pending_ticket == c['fingerprint'] and observed == c['before']
                         and observation == r['unstarted']['ledger']): result['classification'] = 'NOT_EXECUTED'
                 elif observed != c['before'] and observed != full: result['classification'] = 'PARTIAL'
+                elif (r['phase'] == 'complete_fixture' and observed == full
+                        and r['completion']['observation'] == observation): result['classification'] = 'COMPLETE'
             if self.store.read() != (v, raw, tag) or self.shared.read() != shared or observe_ledger(self.readers.ledger) != (observed, observation):
                 result['classification'] = 'UNKNOWN'
+            self._fresh(c, eligibility=False)
         except (StateError, KeyError, ValueError, TypeError, AttributeError, OSError):
             result['classification'] = 'UNKNOWN'
         return result

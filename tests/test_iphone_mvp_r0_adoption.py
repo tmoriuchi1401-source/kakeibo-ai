@@ -174,7 +174,8 @@ def test_no_runtime_auth_bundle_or_existing_workflow_changed_since_141():
         'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
     # The next user-approved isolation adds only these modules. The old code,
     # auth bundle and every pre-existing runtime remain byte-for-byte pinned.
-    allowed = {'app/receipt_confirmation_draft_request.py', 'staging_shadow/receipt_draft_contract.py'}
+    allowed = {'app/receipt_confirmation_draft_request.py', 'staging_shadow/receipt_draft_contract.py',
+        'staging_shadow/synthetic_draft_writer.py'}  # Separately approved v3-only composition.
     assert set(names) <= allowed
     status = subprocess.check_output(['git', 'diff', '--name-status', START, '--',
         'app', 'auth-session', 'staging_shadow'], cwd=ROOT, text=True).splitlines()
