@@ -581,3 +581,13 @@ def test_shared_accounting_requires_explicit_opt_in(monkeypatch):
         IsolatedDraftContract(h.store, h.shared, h.auth, h.readers, clock=lambda: NOW,
             enabled=True, isolated_synthetic=True, fresh_process=True)
     assert frozen(h) == before
+
+
+@pytest.mark.parametrize('phase', ['held', 'requested', 'failed', 'new'])
+def test_general_candidate_hold_or_unknown_cannot_be_overridden(phase, monkeypatch):
+    h = harness('normal', monkeypatch); legacy = deepcopy(h.legacy)
+    legacy['records'][h.c['source']['source_id']]['phase'] = phase
+    with pytest.raises(StateError, match='candidate_held_or_unknown'):
+        prepare_inputs(legacy, 'normal', h.c['case_id'], h.c['owner'], token(*h.native.read_versioned()),
+            '2026-10-19', h.readers)
+    assert h.native.writes == 1 and h.f.financial_calls == 0

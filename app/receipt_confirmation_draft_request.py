@@ -250,6 +250,7 @@ def _derive(legacy, kind, case_id, owner, native_observation, prepared_at, value
     original_parsed = None
     if kind == 'normal':
         if fields['category'] != '': fail('receipt_category')
+        if legacy['records'][sid]['phase'] != 'complete': fail('candidate_held_or_unknown')
         original = legacy['records'][sid]['parsed']
         original_parsed = ReceiptResult.model_validate(original)
         if len(entries) != len(original['items']) or not entries: fail('fixed_catalog')
