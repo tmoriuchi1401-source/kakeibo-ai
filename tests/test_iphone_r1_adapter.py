@@ -149,3 +149,21 @@ def test_medical_parser_normalization_requires_an_explicit_edit(monkeypatch,fiel
     d['revision']+=1;d['input_digest']=digest(d['value']);set_value(h.readers.draft,d)
     with pytest.raises(StateError,match='normalization_requires_explicit_edit'):ui.proof(h.f.case_id,'post',gate)
     assert h.readers.ledger.writes==0
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+def test_new_request_cannot_replace_completed_authority_evidence(monkeypatch,kind):
+    h,c,rebuild=ui_fixture(kind,monkeypatch);ui=rebuild();gate=Gate()
+    proof,claims=ui.proof(h.f.case_id,'post',gate)
+    class OtherSession(Gate):
+        def current(self):
+            rt,ticket,record,actor=super().current();ticket.cookie='other-session'
+            return rt,ticket,record,actor
+    second=OtherSession();newproof,newclaims=ui.proof(h.f.case_id,'post',second)
+    assert claims['request_id']!=newclaims['request_id']
+    assert ui.post(dict(proof=proof,value=claims['draft']['value'],confirmed=True),gate)['status']=='COMPLETE'
+    before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]
+    with pytest.raises(StateError,match='request_reuse'):
+        rebuild().post(dict(proof=newproof,value=newclaims['draft']['value'],confirmed=True),second)
+    assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before
+    assert rebuild().inspect(claims['request_id'],gate)['status']=='COMPLETE'

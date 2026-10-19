@@ -113,6 +113,11 @@ def test_lost_financial_response_is_inspected_without_retry(monkeypatch,tmp_path
 @pytest.mark.parametrize('width',[1365,390])
 def test_expired_session_reauth_preserves_in_progress_input(monkeypatch,tmp_path,cid,width):
     r=Rig(monkeypatch,tmp_path);r.h.login()
+    from datetime import datetime, timezone
+    from google.auth import _helpers
+    # Advance the verifier library's clock with the injected host clock. The
+    # actual RSA signature/aud/iat/exp/nonce/owner validation remains active.
+    monkeypatch.setattr(_helpers,'utcnow',lambda:datetime.fromtimestamp(r.h.now,timezone.utc))
     with sync_playwright() as pw:
         browser=pw.chromium.launch();page=browser.new_page(viewport={'width':width,'height':844})
         def bridge(route):

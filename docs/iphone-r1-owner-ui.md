@@ -70,7 +70,7 @@ JSON上のtuple/list表現をcanonicalに揃える以外、入力値のtrim・�
 最終headのCIリンク・確定件数・成否はPR #146の本文で報告する。試験を定義・開始しただけで合格としない。
 
 - 新adapter/host/browserのcollectと個別PASSED node IDを照合する。#145の342件、R0/設計/runtimeの473件、既存安全selectorの2744件も専用Ubuntu CIで実行する。旧証拠を今回の新UI試験件数に数えない。
-- PC 1365px/390px：ID検索、PNG原本popupと往復、一般明細/カテゴリ等の編集、医療空欄からの完全手入力・部分保存、再読込み保持、前後比較、明示チェックとクリック、二重クリック、結果GET、応答喪失後の照会、timeout時の入力保持、期限切れと既存hostの再認証を実イベントで検証する。
+- PC 1365px/390px：ID検索、PNG原本popupと往復、一般明細/カテゴリ等の編集、医療空欄からの完全手入力・部分保存、再読込み保持、前後比較、明示チェックとクリック、二重クリック、結果GET、応答喪失後の照会、timeout時の入力保持を実イベントで検証する。期限切れ時の入力保持・保存再開はDOM操作、再認証は既存hostの合成start/callback handlerを実行する。Googleの実ログイン画面操作は含まない。
 - Chromiumの各HTTP requestはin-process bridgeで**実Flask handler**へ渡す。POST成功responseの捏造やwriter mock成功は使わない。ネットワーク公開listener・実OAuth・実Google呼出しはない。PNGのnaturalWidth、sticky IDのviewport内表示も検証する。
 - `.private/r1-browser/`の画像・request trace/viewport JSONはCI artifact `r1-synthetic-browser-evidence`へ保存する。全て架空データであり、実原本・資格情報・監査データは含まない。
 - 新adapterで2/16独立instance、各CAS応答喪失/412、writer途中停止、全行後completion失敗、native完了後共有完了前停止、再構築read-only、後からのdraft変更を検証。dispatchの実bodyを監査しoperationごと最大1回とする。

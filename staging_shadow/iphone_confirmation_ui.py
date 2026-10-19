@@ -171,6 +171,10 @@ class OneTabConfirmation:
                     if any(old[k] != claims['snapshot'][k] for k in ('inputs','before','plan','source','ownership')):
                         deny('request_reuse')
                     return self.inspect(rid, gate)
+                if self._requests(cid):
+                    # A new session/request cannot replace evidence of an
+                    # already qualified source, even when its ledger is empty.
+                    deny('request_reuse')
             d, raw, tag = self._draft(cid)
             if (d != claims['draft'] or tag != claims['tag']):
                 # Exact save response loss/replay can be acknowledged read-only.
