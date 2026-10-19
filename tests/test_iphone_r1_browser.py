@@ -196,3 +196,30 @@ def test_unknown_before_native_record_stays_readonly_after_page_reload(monkeypat
         row.locator('.recovery').click();expect(page.locator('h2')).to_contain_text('UNKNOWN')
         assert len(posts)==1
         browser.close()
+
+
+@pytest.mark.parametrize('cid',['SYN-G101','SYN-M101'])
+@pytest.mark.parametrize('width',[1365,390])
+def test_other_operation_save_cannot_be_overwritten_from_stale_display(monkeypatch,tmp_path,cid,width):
+    from copy import deepcopy
+    r=Rig(monkeypatch,tmp_path);r.h.login();r.save(cid);posts=[]
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch();page=browser.new_page(viewport={'width':width,'height':844})
+        def bridge(route):
+            req=route.request;u=urlsplit(req.url);assert u.netloc=='confirmation.example.test'
+            if req.method=='POST':posts.append(1)
+            res=r.h.client.open(u.path,method=req.method,data=req.post_data,base_url=ORIGIN,
+                headers={k:v for k,v in req.headers.items() if k in {'origin','x-csrf-token','content-type'}})
+            route.fulfill(status=res.status_code,headers=dict(res.headers),body=res.get_data())
+        page.route('**/*',bridge);page.goto(ORIGIN+PREFIX);page.locator('#search').fill(cid)
+        row=page.locator('tbody tr:visible');row.locator('[data-field=memo]').fill('この画面の未保存メモ')
+        # Another authenticated operation commits through the ACTUAL handler.
+        proof=r.proof(cid,'save_draft');other=deepcopy(proof['claims']['draft']['value'])
+        other['fields']['memo']='別操作が先に保存したメモ'
+        assert r.post(proof,other).status_code==200
+        row.locator('[data-action=save_draft]').click()
+        expect(row.locator('.result')).to_contain_text('別操作で下書きが変更')
+        expect(row.locator('[data-field=memo]')).to_have_value('この画面の未保存メモ')
+        assert r.ui._draft(cid)[0]['value']==other
+        assert not posts and r.native[cid].readers.ledger.writes==0
+        browser.close()

@@ -29,7 +29,10 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
   async function obtain(action) {
     const r=await fetch(`${base}/r1/${initial.case_id}/${action}`,{credentials:'same-origin'});
     let data;try{data=await r.json();}catch{throw new Error('本人確認または通信状態を確認してください。入力を保持しています。');}
-    if(!r.ok)throw new Error(data.message);return data;
+    if(!r.ok)throw new Error(data.message);
+    if(data.claims.tag!==initial.draft_tag||data.claims.draft.revision!==initial.draft_revision||JSON.stringify(data.claims.draft.value)!==JSON.stringify(initial.value))
+      throw new Error('別操作で下書きが変更されました。入力をこの画面に保持し、現在の保存内容を別画面で確認してください。');
+    return data;
   }
   async function send(p, v, confirmed) {
     recovery.href=`${base}/r1/results/${p.claims.request_id}`;recovery.hidden=false;
@@ -49,7 +52,10 @@ for (const row of document.querySelectorAll('tr:has(.row-context)')) {
       if(action==='save_draft') {
         const sent=value(), p=await obtain('save_draft');
         const saved=await send(p,sent,false);result.textContent=saved.label;
-        if(JSON.stringify(sent)===JSON.stringify(value())){dirty=false;initial.value=sent;state.textContent='下書き保存済み';}
+        const unchanged=JSON.stringify(sent)===JSON.stringify(value());
+        initial.value=sent;initial.draft_revision=saved.draft_revision;initial.draft_tag=saved.draft_tag;
+        row.querySelector('.draft-revision').textContent=saved.draft_revision;
+        if(unchanged){dirty=false;state.textContent='下書き保存済み';}
         else state.textContent='送信中の追加編集を保持しています（未保存）';
         review.hidden=true;proof=null;
       } else if(action==='compare') {

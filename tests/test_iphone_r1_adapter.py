@@ -192,3 +192,20 @@ def test_unknown_before_native_qualification_remains_fenced_after_rebuild(monkey
     with pytest.raises(StateError,match='UNKNOWN'):rebuilt.proof(h.f.case_id,'post',gate)
     with pytest.raises(StateError,match='UNKNOWN'):rebuilt.post(payload,gate)
     assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority)]==before
+
+
+@pytest.mark.parametrize('kind',['normal','medical'])
+def test_save_returns_exact_readback_revision_tag_and_replay_metadata(monkeypatch,kind):
+    h,c,rebuild=ui_fixture(kind,monkeypatch);ui=rebuild();gate=Gate()
+    proof,claims=ui.proof(h.f.case_id,'save_draft',gate)
+    value=deepcopy(claims['draft']['value']);value['fields']['memo']='保存したメモ'
+    payload=dict(proof=proof,value=value,confirmed=False)
+    result=ui.post(payload,gate)
+    stored,_,tag=ui._draft(h.f.case_id)
+    assert stored['value']==value and result['draft_revision']==stored['revision']==claims['draft']['revision']+1
+    assert result['draft_tag']==tag and tag!=claims['tag']
+    before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority,h.readers.draft)]
+    assert ui.post(payload,gate)==result
+    payload['value']['fields']['memo']='同じIDで異なる内容'
+    with pytest.raises(StateError,match='reconfirm'):ui.post(payload,gate)
+    assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority,h.readers.draft)]==before

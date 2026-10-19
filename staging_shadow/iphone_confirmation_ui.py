@@ -75,6 +75,8 @@ class OneTabConfirmation:
             deny('source_changed_reconfirm')
         if (set(d) != {'domain','owner','case_id','generation','revision','input_digest','value'}
                 or d['domain'] != 'DRAFT_ONLY' or d['owner'] != self.owner or d['case_id'] != cid
+                or type(d['revision']) is not int or d['revision'] < 0
+                or type(d['generation']) is not int or d['generation'] < 1
                 or d['input_digest'] != digest(d['value'])):
             deny('draft_changed')
         baseline = image_issue(c.store.value, c.kind, c.source_id)
@@ -187,7 +189,8 @@ class OneTabConfirmation:
                 # Exact save response loss/replay can be acknowledged read-only.
                 if (action == 'save_draft' and d['revision'] == claims['draft']['revision']+1
                         and d['value'] == payload['value']):
-                    return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid)
+                    return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid,
+                                draft_revision=d['revision'], draft_tag=tag)
                 deny('reconfirm')
             if action == 'save_draft':
                 if payload['confirmed'] is not False:
@@ -201,7 +204,11 @@ class OneTabConfirmation:
                     deny('save_source_or_draft_changed')
                 after = dict(d, revision=d['revision']+1, value=deepcopy(payload['value']), input_digest=digest(payload['value']))
                 DraftCAS(c.readers.draft).replace(d, raw, tag, after)
-                return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid)
+                observed, _, saved_tag=DraftCAS(c.readers.draft).read()
+                if observed != after or saved_tag == tag:
+                    deny('draft_UNKNOWN')
+                return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid,
+                            draft_revision=after['revision'], draft_tag=saved_tag)
             current = self._prepare(cid)
             if current != claims['snapshot']:
                 deny('reconfirm')

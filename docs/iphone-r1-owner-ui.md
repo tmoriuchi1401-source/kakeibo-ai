@@ -45,6 +45,8 @@
 
 JSON上のtuple/list表現をcanonicalに揃える以外、入力値のtrim・日付変換・差額調整・カテゴリ変更は行わない。既存医療parserが日付・施設名を変換する入力は、表示proof作成前に拒否し、本人の明示編集を要求する。
 
+保存直前のproof取得で別操作の最新draftを暗黙に採用しない。画面に表示した全値/revision/strong tagとproofを比較し、別端末・別操作が先に保存した場合は送信前に拒否し、入力中の値・メモを保持する。成功時はexact read-backのrevision/tagを画面へ返し、送信中の追加編集も残す。POST後の並行更新は既存CASで拒否する。
+
 ## writer・結果
 
 #145の`SyntheticDraftConfirmation`と既存`_MemoryLedger/_GuardedConfirmation`をそのまま利用する。exact snapshot検証 → native qualification → 共有CAS/whole-source claim → native pending＋consume同一CAS → 原本/draft/master/ledger再検証 → writer_started CASと完全read-back → 一度限りlease → 既存writer本体 → 全表独立read-back → native completion → 共有awaiting_readback/complete照合 → read-only inspect。
