@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 import importlib
 import inspect
 from pathlib import Path
@@ -67,6 +68,39 @@ SINK_CALLERS = {
     ('unified_receipt_native.py', 'GroupedUnitPort._plan'),
     ('unified_receipt_native.py', 'GroupedUnitPort.execute'),
 }
+ISOLATED_SINK_CALLERS = {
+    ('synthetic_auto_writer.py', 'existing_plan'),
+    ('synthetic_auto_writer.py', 'SyntheticReceiptWriter.execute'),
+    ('synthetic_legacy_writer.py', '_GuardedConfirmation._delegate'),
+}
+
+
+def verify_isolated_sink_census(root):
+    """Review the synthetic delegates as well as all existing app call sites."""
+    # Independent adapter instances share CODE, not execution authority. Cache
+    # the AST walk only while the complete source inventory/stat tuple agrees.
+    paths = sorted(list((root / 'app').rglob('*.py')) + list((root / 'staging_shadow').rglob('*.py')))
+    signature = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in paths)
+    _verify_isolated_sink_census(root, signature)
+
+
+@lru_cache(maxsize=4)
+def _verify_isolated_sink_census(root, signature):
+    verify_sink_census(root / 'app')
+    found = set()
+    class Census(ast.NodeVisitor):
+        def __init__(self, path): self.path, self.scope = path, []
+        def scoped(self, node):
+            self.scope.append(node.name); self.generic_visit(node); self.scope.pop()
+        visit_ClassDef = visit_FunctionDef = visit_AsyncFunctionDef = scoped
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Attribute) and node.func.attr in {'_materialize_result', '_write_accounting_plan'}:
+                found.add((self.path, '.'.join(self.scope)))
+            self.generic_visit(node)
+    for path in (root / 'staging_shadow').rglob('*.py'):
+        Census(path.relative_to(root / 'staging_shadow').as_posix()).visit(ast.parse(path.read_text('utf-8')))
+    if found != ISOLATED_SINK_CALLERS:
+        raise StateError('synthetic_native_unreviewed_isolated_sink')
 
 
 def verify_sink_census(root):
