@@ -27,6 +27,10 @@ METHODS = {
     "_write_accounting_plan", "process_bytes", "post_normal", "post_manual",
 }
 ALLOWED = {
+    'staging_shadow/mandatory_receipt_gate.py', 'tests/mandatory_gate_fixtures.py',
+    'tests/test_mandatory_receipt_gate.py', 'tests/test_mandatory_gate_static.py',
+    'docs/r2-2-mandatory-gate.md', '.github/workflows/r2-2-mandatory-gate.yml',
+    'tests/test_iphone_mvp_r0_adoption.py', 'tests/test_iphone_draft_request_design.py',
     "docs/r2-1-writer-audit.md", "docs/r2-1-ingresses.json",
     "docs/r2-1-static-census.json", "docs/r2-1-pr-baseline.json",
     "tests/r2_1_static_audit.py", "tests/test_r2_1_static_audit.py",

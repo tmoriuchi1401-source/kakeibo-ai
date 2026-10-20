@@ -32,13 +32,19 @@ class StaticAudit(unittest.TestCase):
         changed = git('diff', '--name-status', BASE).decode().splitlines()
         for entry in changed:
             status, path = entry.split('\t')
-            if path == 'tests/test_production_workflows.py':
+            if path in {'tests/test_iphone_mvp_r0_adoption.py', 'tests/test_iphone_draft_request_design.py'}:
+                self.assertEqual(status, 'M', entry)
+                current = (ROOT / path).read_text('utf-8')
+                inserted = "        '" + ('A\\t' if 'draft_request' in path else '') + "staging_shadow/mandatory_receipt_gate.py',  # Authorized isolated R2-2 composition.\n"
+                self.assertEqual(current.count(inserted), 1)
+                self.assertEqual(current.replace(inserted, ''), source(BASE, path).replace('\r\n', '\n'))
+            elif path == 'tests/test_production_workflows.py':
                 self.assertEqual(status, 'M', entry)
                 # The old test body must remain byte-for-byte equivalent after
                 # removing only the new dedicated-CI classification branch.
                 old = source(BASE, path).replace('\r\n', '\n')
                 current = (ROOT / path).read_text('utf-8')
-                start = current.index("        if name == 'r2-1-static-audit.yml':")
+                start = current.index("        if name == 'r2-2-mandatory-gate.yml':")
                 end = current.index("        if name == 'iphone-r1-confirmation-checks.yml':", start)
                 self.assertEqual(current[:start] + current[end:], old)
             else:
