@@ -1,0 +1,66 @@
+name: R2-1 read-only writer inventory
+on:
+  pull_request:
+    branches: [codex/iphone-r1-confirmation-ui]
+    paths:
+      - 'docs/r2-1-*'
+      - 'tests/r2_1_static_audit.py'
+      - 'tests/test_r2_1_static_audit.py'
+      - 'tests/test_production_workflows.py'
+      - '.github/workflows/r2-1-static-audit.yml'
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-r2-1-audit-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  inventory-and-synthetic-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Static census and unchanged production sources (stdlib only)
+        run: python -m unittest discover -s tests -p test_r2_1_static_audit.py -v
+      - name: Install existing synthetic test dependencies
+        run: pip install -r requirements-test.txt
+      - name: Check dedicated workflow classification before long regressions
+        run: python -m pytest -q tests/test_production_workflows.py
+      - name: Existing source conflicts, crash fences, CAS and guarded writers
+        run: >-
+          python -m pytest -q --junitxml=/tmp/r2-1-regression.xml
+          tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py
+          tests/test_accounting_recovery.py tests/test_native_ingress_safety_stop.py
+          tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py
+          tests/test_legacy_confirmation_connection_stop.py tests/test_receipt_confirmation_contract.py
+          tests/test_synthetic_legacy_writer.py tests/test_receipt_draft_runtime.py
+          tests/test_synthetic_draft_writer.py tests/test_iphone_r1_adapter.py
+          tests/test_iphone_r1_confirmation.py tests/test_pdf_native_readonly_inventory.py
+          tests/test_production_workflows.py
+      - name: Report actual test outcomes
+        if: always()
+        run: |
+          python - <<'PY'
+          import os, pathlib, xml.etree.ElementTree as ET
+          p = pathlib.Path('/tmp/r2-1-regression.xml')
+          if p.exists():
+              root = ET.parse(p).getroot()
+              cases = root.findall('.//testcase')
+              failed = sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+              skipped = sum(c.find('skipped') is not None for c in cases)
+              line = f'Regression: {len(cases)-failed-skipped} passed / {failed} failed or error / {skipped} skipped; static unittest: see step result.'
+              print(line)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f: f.write(line+'\n')
+          PY
+      - name: Whitespace and syntax
+        run: |
+          python -m py_compile tests/r2_1_static_audit.py tests/test_r2_1_static_audit.py
+          git diff --check 7e13f6034b20ad75719ac553e031ae0813e8a3d4
