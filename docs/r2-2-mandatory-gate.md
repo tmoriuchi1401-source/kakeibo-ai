@@ -73,6 +73,8 @@ R1の非金融qualificationは既存契約に従いshared claim前に保存し�
 - `RetainedHistoryReader` は明示的に棚卸した旧文書をread-onlyで二重観測。
   pending/applied/UNKNOWN/不明operationを採用・移行せず保留する。
   登録R1 native v3の元legacyもチェックし、lineage marker以外のoperationは競合履歴として扱う。
+  登録には既存validatorのmanifest/parent pinを要求する。pinなし外部v2/v3は採用しない。
+  旧文書のraw digest/ETagも試行中固定し、途中で変われば次の保存を拒否する。
   正確な現在のqualified requestだけを自分のclaim前に除外し、別requestは除外しない。
   旧文書の所在不明はcomplete=Falseで停止する。空tupleはテストの新規fixture構築に限る。
 - 開始後の失敗時にnativeをpartial/unknownへ追記する旧adapterのcleanupも、このcompositionでは拒否。

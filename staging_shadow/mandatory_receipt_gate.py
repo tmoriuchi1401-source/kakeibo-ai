@@ -8,7 +8,6 @@ from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 import inspect
-import json
 
 from app.bank_income import INCOME_HEADERS, INCOME_SHEET
 from app.drive_run_state import StateError
@@ -20,9 +19,9 @@ from app.unified_receipt_purposes import PurposeBoundary
 from app.unified_receipt_review import digest
 from app.unified_receipt_write import ConditionalRequests
 from .auto_native_evidence import (LEDGER_SCHEMA, NativeEvidenceJournal,
-    SyntheticAutoEvidenceAdapter, load)
+    SyntheticAutoEvidenceAdapter, load, ledger_view, observation_token)
 from .native_accounting_sandbox import NativeAccountingSandbox, NativeInvocation
-from .receipt_draft_contract import IsolatedDraftContract, LINEAGE
+from .receipt_draft_contract import IsolatedDraftContract, IsolatedDraftStore, LINEAGE
 from .synthetic_auto_writer import SyntheticReceiptWriter, _SyntheticSheetsDB
 from .synthetic_draft_writer import SyntheticDraftConfirmation
 from .synthetic_legacy_writer import _MemoryLedger
@@ -62,12 +61,17 @@ class RetainedHistoryReader:
         self._reader, self._ports = ownership_reader, legacy_ports
 
     def __call__(self):
+        return self.observe()[0]
+
+    def observe(self):
         observed = []
         for port in self._ports:
             raw, tag = port.read_versioned()
             value = load(raw)
             if value.get('schema') not in {'receipt-reimport-v1','receipt-reimport-v2','receipt-reimport-v3'}:
                 deny('legacy_schema_UNKNOWN')
+            if value['schema'] != 'receipt-reimport-v1':
+                deny('registered_native_parent_pin_required')
             _legacy_clear(value)
             if any(op != LINEAGE for op in value.get('operations', {})):
                 deny('retained_operation_requires_readonly_reconciliation')
@@ -75,14 +79,14 @@ class RetainedHistoryReader:
         frame = self._reader()
         if any(p.read_versioned() != (raw, tag) for p, raw, tag in observed):
             deny('legacy_history_unstable')
-        return frame
+        return frame, tuple((digest(raw.hex()),tag) for _,raw,tag in observed)
 
 
 @dataclass
 class _Attempt:
     kind: str
     candidate: dict
-    history: dict
+    history: object
     uncertain: bool = False
 
 
@@ -103,6 +107,8 @@ class _Port:
 
     def __init__(self, composition, backend, role):
         memory_only(backend)
+        if any(hasattr(backend, k) for k in ('session','service','credentials','client','drive','sheets')):
+            deny('live_transport_forbidden')
         self._composition, self._backend, self._role = composition, backend, role
 
     def read_versioned(self):
@@ -239,8 +245,10 @@ class MandatoryReceiptComposition:
         self._active = ContextVar('mandatory_receipt_attempt', default=None)
         self._new_attempts = allow_new_attempts is True
         self.reader, self.auth = reader, auth
+        self._preflight_port = preflight
         self._candidate, self._binding, self._history = candidate_reader, binding_reader, history_reader
         self._r1_ports = []
+        self._r1_stores = {}
         self.shared = ConditionalRequests(_Port(self, shared_io, 'shared'),
             'synthetic-mandatory-receipt-shared', synthetic_accounting=True)
         self.ledger = _Port(self, ledger_io, 'ledger')
@@ -249,7 +257,7 @@ class MandatoryReceiptComposition:
         self.writer = SyntheticReceiptWriter(self.auto_ledger)
         self.adapter = SyntheticAutoEvidenceAdapter(self.journal, self.shared, auth,
             candidate_reader, binding_reader, self.auto_ledger, enabled=True, writer=self.writer)
-        self.gate = SyntheticAccountingGate(self.shared, reader, auth, preflight,
+        self.gate = SyntheticAccountingGate(self.shared, reader, auth, self._preflight,
             self.adapter.observe_boundary, enabled=True, isolated_synthetic=True,
             clock=clock, checkpoint=self.adapter.checkpoint)
         self.sandbox = NativeAccountingSandbox(self.gate,
@@ -263,6 +271,25 @@ class MandatoryReceiptComposition:
         old.apply_confirmations = lambda *a, **k: self.legacy_confirmation()
         old.save_item = lambda *a, **k: deny('v1_financial_save_closed')
         self.sandbox.module('receipt_reimport_production').ReimportStore.save = lambda *a, **k: deny('v1_save_closed')
+
+    def _preflight(self, entry, key, ownership):
+        active = self._active.get()
+        if active is None or active.kind != 'auto':
+            deny('native_attempt_required')
+        c = active.candidate
+        if ('privacy_provenance' not in c['binding'] or
+                c['binding']['privacy_provenance'] not in {None,'normal'}):
+            deny('sensitive_source_before_OCR_or_AI')
+        native = self.journal.read()
+        rows, raw, tag = ledger_view(self.auto_ledger)
+        if (ownership.value() != c['ownership'] or rows != c['before'] or
+                observation_token(raw,tag) != c['before_observation']):
+            deny('independent_before_claim_observation_changed')
+        self._fresh(active)
+        checked = self._preflight_port(entry,key,ownership)
+        if self.journal.read() != native or ledger_view(self.auto_ledger) != (rows,raw,tag):
+            deny('native_ledger_changed_during_preflight')
+        return checked
 
     def make_receipt_pipeline(self, entry, key):
         if entry not in {'normal_auto', 'buyback_income'}:
@@ -280,14 +307,19 @@ class MandatoryReceiptComposition:
         return dict(classification='HELD', reason='旧確認の金融操作は隔離gateで停止。R1の独立検証が必要。',
             synthetic_only=True, retry_allowed=False, writer_dispatches=0)
 
-    def r1_native_port(self, backend):
+    def r1_native_port(self, backend, *, expected_digest, spreadsheet_id, parent_digest):
         # Existing saved v3 lineage is required by IsolatedDraftStore. This
         # method neither seeds nor migrates a document.
         if backend in [p._backend for p in self._r1_ports] or backend in (
                 self.shared.io._backend, self.ledger._backend, self.journal.io._backend):
             deny('native_store_reused')
         p = _Port(self, backend, 'r1_native')
+        store = IsolatedDraftStore(p, expected_digest, spreadsheet_id, parent_digest=parent_digest,
+            enabled=True, isolated_synthetic=True)
+        if store.read()[0].get('schema') != 'receipt-reimport-v3':
+            deny('native_v3_history_required')
         self._r1_ports.append(p)
+        self._r1_stores[p] = store
         return p
 
     def _history_records(self, active, *, financial=False):
@@ -301,7 +333,7 @@ class MandatoryReceiptComposition:
                 continue
             records.append(r['request']['ownership'])
         for port in self._r1_ports:
-            value = load(port.read_versioned()[0])
+            value = self._r1_stores[port].read()[0]
             if value.get('schema') != 'receipt-reimport-v3':
                 deny('native_v3_history_required')
             _legacy_clear(value)
@@ -413,12 +445,12 @@ class MandatoryReceiptComposition:
         return result
 
     def _observe_history(self):
-        frame = self._history()
+        frame, observation = self._history.observe()
         if (type(frame) is not dict or set(frame) != {'complete', 'records'} or
                 frame['complete'] is not True or type(frame['records']) is not list):
             deny('legacy_history_UNKNOWN')
         for record in frame['records']:
             parse_ownership(record)
-        if self._history() != frame:
+        if self._history.observe() != (frame, observation):
             deny('legacy_history_unstable')
-        return deepcopy(frame)
+        return deepcopy((frame, observation))

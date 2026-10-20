@@ -102,6 +102,7 @@ def joint_r1(r, monkeypatch, kind='normal'):
     h.source_value = source
     h.source.frame = dict({k:v for k,v in source.items() if k!='native_source_version'}, generation=1)
     h.source.raw = DRAFT_RAW
+    h.known_classification = 'medical' if kind == 'medical' else None
     h.partition.frame = dict(source=source, generation=1, revision=1, state='not_applicable', complete=True, units=[])
     def replace(v):
         if isinstance(v, str):return v.replace(old_sid, source['source_id'])
@@ -126,7 +127,7 @@ def joint_r1(r, monkeypatch, kind='normal'):
     h.frozen = {e:h.reader.observe(e,'u1').value() for e in ('normal_auto','buyback_income')}
     h.before_observation = observation_token(*r.c.auto_ledger.read_versioned())
     c = r.c
-    native_port = c.r1_native_port(d.native)
+    native_port = c.r1_native_port(d.native,expected_digest=d.manifest,spreadsheet_id=d.spid,parent_digest=d.pin)
     d.readers = DraftReaders(**dict(d.ports, ledger=c.ledger), ownership=lambda:d.own.reader.observe('legacy_confirmation','u1'))
     inputs, baseline, plan = prepare_inputs(d.legacy, kind, d.f.case_id, d.c['owner'], token(*native_port.read_versioned()),
         '2026-10-19 00:00:00', d.readers)

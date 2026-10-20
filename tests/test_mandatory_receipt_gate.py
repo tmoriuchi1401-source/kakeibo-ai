@@ -187,6 +187,7 @@ def test_changed_or_unknown_evidence_denies_before_financial_write(change):
         saved=r.backends[1].read_versioned()
     with pytest.raises(StateError):r.call()
     assert r.backends[1].read_versioned()==saved and r.dispatches()==0
+    assert all(p.writes==0 for p in r.backends)
 
 
 @pytest.mark.parametrize('entry',['normal_auto','buyback_income'])
@@ -202,6 +203,7 @@ def test_pdf_unit_history_conflicts_with_whole_without_connecting_pdf(entry,pdf)
 @pytest.mark.parametrize('classification',['medical','sensitive_unknown','payroll'])
 def test_medical_ai_ocr_and_sensitive_auto_paths_refused(classification):
     r=Rig();r.h.known_classification=classification;saved=r.frozen()
+    r.h.sandbox.module('receipt_privacy_gate')._extract_receipt_text=lambda *a,**k:pytest.fail('sensitive OCR entered')
     with pytest.raises(StateError):r.call()
     assert r.frozen()==saved and r.dispatches()==0
 
@@ -274,7 +276,8 @@ def test_r1_races_valid_automatic_candidates_without_double_dispatch(count,monke
     instances=[r.c]+[r.new(fresh=True) for _ in range(count-1)]
     # All independently constructed instances must observe the same saved R1
     # history, even before any R1 shared claim exists.
-    for c in instances[1:]:c.r1_native_port(d.native)
+    for c in instances[1:]:
+        c.r1_native_port(d.native,expected_digest=d.manifest,spreadsheet_id=d.spid,parent_digest=d.pin)
     barrier=Barrier(count)
     def call(i):
         barrier.wait(timeout=30)
@@ -312,6 +315,33 @@ def test_start_evidence_must_still_match_before_each_append(which):
         if which=='native':row['writer_start']['sequence']=99
         else:row['state']='awaiting_readback';row['events'].append(dict(state='awaiting_readback',at=0))
         io.raw=encoded(value);io.revision+=1
+    r.c.writer.fault=change
+    with pytest.raises(StateError):r.call()
+    assert r.backends[1].writes==1 and r.dispatches()==1
+
+
+@pytest.mark.parametrize('entry',['normal_auto','buyback_income'])
+def test_registered_manual_medical_source_never_enters_automatic_writer(entry,monkeypatch):
+    r=Rig();d=joint_r1(r,monkeypatch,'medical');saved=r.frozen(),d.native.read_versioned()
+    with pytest.raises(StateError):r.call(entry)
+    assert (r.frozen(),d.native.read_versioned())==saved and r.dispatches()==0
+
+
+def test_empty_v3_cannot_hide_retained_native_history(monkeypatch):
+    from staging_shadow.auto_native_evidence import load
+    r=Rig();d=joint_r1(r,monkeypatch);value=load(d.native.raw);value['operations']={}
+    d.native.raw=encoded(value);saved=r.frozen(),d.native.read_versioned()
+    with pytest.raises(StateError):r.call()
+    assert (r.frozen(),d.native.read_versioned())==saved and r.dispatches()==0
+
+
+def test_old_document_token_change_between_appends_stops_financial_writes():
+    from staging_shadow.mandatory_receipt_gate import RetainedHistoryReader
+    from test_legacy_contract_poc import mem
+    r=Rig();old=mem(dict(schema='receipt-reimport-v1',confirmation_items={},records={}))
+    r.c._history=RetainedHistoryReader(lambda:deepcopy(r.history),legacy_ports=(old,))
+    def change(title,number):
+        if number==1:old.revision+=1
     r.c.writer.fault=change
     with pytest.raises(StateError):r.call()
     assert r.backends[1].writes==1 and r.dispatches()==1
