@@ -1,0 +1,1140 @@
+{
+  "base": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+  "historical": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+  "scope": "isolated synthetic memory only; inherited 39 ingress grades unchanged; no production complete inventory or capability closure proof",
+  "m5_credential_names": [
+    "GOOGLE_SERVICE_ACCOUNT_JSON",
+    "SPREADSHEET_ID",
+    "RECEIPT_DRIVE_FOLDER_ID",
+    "KAKEIBO_PROJECTION_FOLDER_ID",
+    "KAKEIBO_VALIDATED_MAIN_SHA"
+  ],
+  "financial_m6_connections": 0,
+  "ingresses": [
+    {
+      "id": "R03",
+      "name": "旧一般レシート確認",
+      "grade": "C",
+      "trigger": "production receiptsのscan先行 / receipt_confirmation手動scope",
+      "execution": "main + validated SHA（実値未確認）",
+      "chain": "receipt_confirmation_production.execute → ReceiptConfirmation.apply_confirmations → _write_accounting_plan → SheetsDB",
+      "sinks": "レシート/支出明細/取込データ + v1 store/archive",
+      "identity": "confirmation_operation_identity / source ID/hash/version whole-source",
+      "guards": "_parsed/_plan/validator/表示入力/source再読込/pending/readback。request_gate任意",
+      "bypass": "production constructorがgate未注入。直接applyと裸writerへ到達",
+      "retry": "pending全plan一致でapplied。v1 saveはread-then-unconditional-write",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M3。全constructor必須化、裸writer拒否、旧v1新規金融save閉鎖",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation_production.py",
+          "needle": "review=ReceiptConfirmation(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 128
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 498
+        },
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "def save(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 80
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R04",
+      "name": "医療の旧確認・完全手入力",
+      "grade": "C",
+      "trigger": "R03 + 医療確認Sheet",
+      "execution": "main/実稼働未確認",
+      "chain": "ReceiptConfirmation._parsed/_plan → apply_confirmations → _write_accounting_plan",
+      "sinks": "R03の3表/native v1",
+      "identity": "medical whole-source。旧mapping不明はD01",
+      "guards": "完全手入力/medical categories/decision_origin human/確認hash/重複検査",
+      "bypass": "旧production constructorと直接writerは共有gate任意",
+      "retry": "automatic pending凍結。human pending全行一致だけ旧完了照合",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M3。完全手入力/privacy維持。旧受付drain後R1へ段階移行",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _parsed(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 319
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 498
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R06",
+      "name": "PDF自動Unit",
+      "grade": "B",
+      "trigger": "production receipts multipage plans / PDF_INTAKE_AUTOMATION_ENABLED またはmanual dispatch",
+      "execution": "main validated（実値未確認）",
+      "chain": "pdf_intake_production.process → PageIntake.post_normal → _post → ScopedWriter → materializer",
+      "sinks": "3表/registry intent/原本archive",
+      "identity": "page-receipt-v1 Unit/index/bbox/segmentation。ledger sid=pdf-receipt-<suffix>",
+      "guards": "privacy/untouched/duplicate/AuthorityAdapter/registry If-Match/全ledger readback",
+      "bypass": "直接runnerにshared ownershipなし。wholeと別IDで二重計上し得る",
+      "retry": "native intent/recoverあり。readbackからnative完了保存は共有completionと別",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M4。manual後autoへ同adapter。automatic権限を本人grantと偽らない",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/pdf_intake_production.py",
+          "needle": "def process(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 177
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_normal(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 219
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def _post(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 241
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def recover(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 334
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R07",
+      "name": "PDF一般manual Unit",
+      "grade": "B",
+      "trigger": "既存hostがreceipt_posting proof保存→同runner。PDFManualUnitPortも存在",
+      "execution": "main runner + auth-session固定bundle",
+      "chain": "RegisteredJournal.replace → RegistryStore → PageIntake.post_manual → _post → materializer / port.execute",
+      "sinks": "R06の3表/registry/journal",
+      "identity": "Unit/index/page/snapshot/actor。authority requestとintent UUIDは別",
+      "guards": "DecisionSealer/ConfirmedItems/AuthorityAdapter/native CAS/source/formula/full before",
+      "bypass": "共有bridge経由と直接runnerは別。shared/native/authority完全binding・独立start不足",
+      "retry": "旧intent解除なし。native recover完了だけをR1 COMPLETEとしない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M4。PDF内第一候補。pending+consume同CAS/start/lease/shared complete",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "auth-session/generic_review.py",
+          "needle": "def replace(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 87
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_manual(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 308
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class PDFManualUnitPort(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 165
+        },
+        {
+          "path": "app/pdf_intake_authority.py",
+          "needle": "class DecisionSealer",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 133
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R08",
+      "name": "複数ページgrouped Unit",
+      "grade": "D",
+      "trigger": "bridge adapter注入契約 / test_tree historical load",
+      "execution": "app #146、processing c29ecc44固定。実host構成不明",
+      "chain": "GroupedUnitPort.execute → DriveUnitProcessingStore.reserve/verify_pending → ScopedWriter → materializer → complete",
+      "sinks": "3表 + historical processing store",
+      "identity": "pdf-confirmed-unit-v2/member pages/grouping revision。bbox Unitとは別型",
+      "guards": "構造確認とは別NativeInspection/plan/current/processing CASが必要",
+      "bypass": "金融issuer/live対応証拠未確認。裸portに共通gate強制なし",
+      "retry": "pending/applied保持。grouping変更で旧fenceを解放しない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M4。issuer/mapping未確認はfail-closed。最初の画像MVPの依存にしない",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class GroupedUnitPort(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 236
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def reserve(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 296
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def complete(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 333
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R09",
+      "name": "p14固定canary",
+      "grade": "C",
+      "trigger": "p14-posting-canary workflow_dispatch apply/replay",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "posting_live.main → posting.execute → ScopedMaterializerDB → materializer",
+      "sinks": "3表 + PostingStore",
+      "identity": "固定14頁原本p14専用Unit/context/rid",
+      "guards": "operator grant/owner/TTL/budget/fresh plan/claimed CAS/全値式readback",
+      "bypass": "独立native claim。共有whole/Unit ownership・writer_startedなし",
+      "retry": "unused/claimed/unknown/complete。replayでreadback完了保存あり",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M5。当面新受付閉鎖候補。再開時だけadapter、固定budget保持",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": ".github/workflows/p14-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.posting_live",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 61
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def execute(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 168
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def finish(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 152
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R10",
+      "name": "p4/p10明示Unit canary",
+      "grade": "C",
+      "trigger": "receipt-unit-posting-canary workflow_dispatch",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "unit_posting_live / ExplicitUnitPostingPort.execute → unit_posting.execute → materializer",
+      "sinks": "3表 + Unit PostingStore",
+      "identity": "同固定原本p4/p10のみ、rid/context/Unit/index",
+      "guards": "個別operator grant/fresh OIDC/budget/native CAS/full readback",
+      "bypass": "直接port/CLIは共通ownership強制なし",
+      "retry": "claimed/unknown保持。別rid/contextで取り直し不可",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M5。p14と許可を混ぜずdrain/閉鎖優先",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": ".github/workflows/receipt-unit-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.unit_posting_live",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 66
+        },
+        {
+          "path": "app/receipt_plan/unit_posting.py",
+          "needle": "def execute(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 179
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class ExplicitUnitPostingPort(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 315
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R11",
+      "name": "歴史的PDF Unit write canary workflow",
+      "grade": "C",
+      "trigger": "pdf-unit-write-canary workflow_dispatch WRITE_CANARY",
+      "execution": "inputs.approved_sha = PR #91 head c29ecc44（API観測）。main event検査後別SHA checkout",
+      "chain": "historical pdf_unit_write_canary.execute → pdf_receipt_write_canary.run_canary → AppendOnlyDB → _process_image_bytes",
+      "sinks": "3表 + CanaryStore",
+      "identity": "固定normal pages/Unit/grouping/operator manifest",
+      "guards": "先行CI/proof/privacy/native CAS、現gateコードはcheckoutにない",
+      "bypass": "現在appにmoduleがなくても歴史的writerに到達。current gate修正だけでは遮断不能",
+      "retry": "pending→applied/限定row readback。全履歴/start/shared completion不足",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M5。dispatch/re-run/旧approvalをdrain後閉鎖かgate対応SHAへ限定（今回は変更0）",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "p=get('pulls/91')",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 67
+        },
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "ref: ${{ inputs.approved_sha }}",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 81
+        },
+        {
+          "path": "app/pdf_unit_write_canary.py",
+          "needle": "def execute(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 113
+        },
+        {
+          "path": "app/pdf_receipt_write_canary.py",
+          "needle": "def run_canary(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 169
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R12",
+      "name": "historical/test_tree一般pipeline",
+      "grade": "C",
+      "trigger": "auth-session.compose(test_tree=True) / 旧checkout・CLI転用",
+      "execution": "c29ecc44 historical tree。test_treeはCI用、実配備証明なし",
+      "chain": "historical process_bytes → _process_pdf/_process_image_bytes → materializer",
+      "sinks": "3表/収入一覧。fixtureならmemory",
+      "identity": "historical whole/Unit ID。現在R01と異なる処理",
+      "guards": "旧privacy/native検査はあるがcurrent shared gateなし",
+      "bypass": "test_treeにはwriterあり。minimal bundle whitelistとは異なる。live資格情報と組合せると迂回",
+      "retry": "historical ID/marker/stateはcurrent fence未認識",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M5。test treeを実runnerへ転用しない。旧artifact digestを別確認",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "auth-session/compose.py",
+          "needle": "def compose(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 39
+        },
+        {
+          "path": "auth-session/baseline.json",
+          "needle": "baseline_commit",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 2
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_pdf(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 106
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_image_bytes(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 151
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "R14",
+      "name": "旧CLI・local cron・旧host・直接DB/API",
+      "grade": "C",
+      "trigger": "app.cli各種/ローカルscript/OS scheduler。外部配置の存在は未確認",
+      "execution": "任意checkout/SHA。production_flowを通らないCLIあり",
+      "chain": "cli.make/make_receipt_pipeline → 各pipeline / SheetsDB / raw service",
+      "sinks": "SPREADSHEET_IDの金融表/原本/SQLite capability journal",
+      "identity": "source/ledger/native履歴を共有readerへ渡す保証なし",
+      "guards": "各native validatorのみ。Actions concurrencyはlocalに効かない",
+      "bypass": "production wrapper外のconstructor/CLI/SDK/資格情報holderはコードgate外",
+      "retry": "source別state/SQLite。旧pendingを横断照合しない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M3/M5。host/cron/systemd/Task Scheduler・資格情報配布を人間が確認",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/cli.py",
+          "needle": "def make(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 93
+        },
+        {
+          "path": "app/cli.py",
+          "needle": "def main(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 139
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "class SheetsDB:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 136
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def append_raw(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 301
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    },
+    {
+      "id": "A01",
+      "name": "通常review反映・除外・統合",
+      "grade": "B",
+      "trigger": "production review_apply/process-receipts/CLI review-apply",
+      "execution": "main/local",
+      "chain": "ReviewApprovalPipeline.apply → append/update_rows",
+      "sinks": "支出明細/取込データ/要確認",
+      "identity": "import ID/expense target。receipt由来行の統合・void",
+      "guards": "候補/evidence/category/選択/native ID検査",
+      "bypass": "既存receipt値/linksに更新しR1 ledger beforeと競合",
+      "retry": "snapshot→複数update、共有CASなし。旧選択を新approvalとしない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M6。target/source解決と共通ownership/before照合",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "class ReviewApprovalPipeline:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 390
+        },
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 574
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "承認済み要確認・取込・支出",
+      "write_targets": "取込データ/支出明細/要確認",
+      "source_identity": "approval ID / imported transaction ID",
+      "native_controls": "approval snapshot + status; no shared receipt CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A02",
+      "name": "自動照合・既存支出除外",
+      "grade": "B",
+      "trigger": "production reconcile / CLI reconcile",
+      "execution": "main/local",
+      "chain": "ReconciliationPipeline.apply → update_rows",
+      "sinks": "取込データ/支出明細 status/links",
+      "identity": "receipt/import/payment identity",
+      "guards": "一意match/曖昧保留/native evidence",
+      "bypass": "別sourceでも既存ledger target重複。R1 before読後に変更可能",
+      "retry": "冪等な再照合でも横断CASでない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M6。ledger targetsとsource/nativeを一体観測",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/reconciliation.py",
+          "needle": "def apply(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 346
+        },
+        {
+          "path": "app/reconciliation.py",
+          "needle": "self.db.update_rows(\"支出明細\",excluded_expenses)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 383
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "取込・支出の照合候補",
+      "write_targets": "取込データ/支出明細 status and links",
+      "source_identity": "transaction ID / expense ID",
+      "native_controls": "existing reconciliation candidates/status; no all-ledger CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A03",
+      "name": "auto-expense・銀行最終反映",
+      "grade": "B",
+      "trigger": "production auto_expense / CLI auto-expense, bank-finalize-*",
+      "execution": "main/approved head/local",
+      "chain": "AutoExpensePipeline.apply / BankFinalizationPipeline.apply → append/update_rows",
+      "sinks": "支出明細/取込データ",
+      "identity": "import stable ID、銀行は別原本でもpayment/ledger target共有",
+      "guards": "eligibility/category/loan/non-expense/source/evidence/readback",
+      "bypass": "共有receipt gateなし。独立銀行authorityをreceiptへ読み替えない",
+      "retry": "stable IDs/finalized検査/partial retryあり",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。共通ledger boundaryでtargetをguard。bank parser/authorityは維持",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/auto_expense.py",
+          "needle": "def apply(self) -> dict:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 185
+        },
+        {
+          "path": "app/bank_finalization.py",
+          "needle": "class BankFinalizationPipeline:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 287
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "銀行取込・分類・既存支出",
+      "write_targets": "取込データ/支出明細",
+      "source_identity": "bank transaction ID / expense ID",
+      "native_controls": "existing dedupe/finalization; no receipt shared fence",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A04",
+      "name": "Amazon旧取込・商品展開・分割払い",
+      "grade": "B",
+      "trigger": "CLI amazon-* / legacy workflow / 後続materialize",
+      "execution": "main/local",
+      "chain": "AmazonPipeline / AmazonInstallmentPipeline → append/update_rows",
+      "sinks": "Amazon注文/商品マスタ/取込データ/支出明細",
+      "identity": "order/item/import/expense ID、receiptとpayment照合",
+      "guards": "注文/返金/重複/カテゴリ等の既存条件",
+      "bypass": "同会計表とreceiptに紐付くpaymentを更新可能",
+      "retry": "native stable IDとpartial replayはshared fence未認識",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。既存仕組みを保持しledger target/beforeだけ統制",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/amazon_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 232
+        },
+        {
+          "path": "app/amazon_installment.py",
+          "needle": "self.db.append(\"支出明細\", expense_new)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 276
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "Amazon注文・メール・分割払予定・商品分類",
+      "write_targets": "Amazon注文/商品マスタ/取込データ/支出明細",
+      "source_identity": "order ID / installment transaction ID",
+      "native_controls": "native checkpoint/order dedupe; no shared all-ledger CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A05",
+      "name": "Amazon recurring・money writer・canary",
+      "grade": "B",
+      "trigger": "production core/amazon_canary / CLI amazon-*（amazon-daily-importはretired echoだけ）",
+      "execution": "main validated/legacy/local",
+      "chain": "amazon_production → canonical transport / MoneyWriter → MoneyLedger.append",
+      "sinks": "取込データ/支出明細/Amazon tables/native state",
+      "identity": "money/order/payment stable ID/ledger target",
+      "guards": "money/native authority/capability/lease/SQLite journal/readback",
+      "bypass": "canonical transportはSDK直接append。receipt shared ownershipなし",
+      "retry": "durable pending/money UNKNOWN保持。別authorityで回避しない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。既存能力/証拠を保持しsink境界へadapter",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/amazon_production.py",
+          "needle": "db.append(\"支出明細\", expense_rows)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 442
+        },
+        {
+          "path": "app/amazon_money_writer.py",
+          "needle": "class MoneyLedger:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 14
+        },
+        {
+          "path": "app/amazon_money_runtime.py",
+          "needle": "def money_writer(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 15
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "Amazon canonical plan/native money book",
+      "write_targets": "Amazon注文/取込データ/支出明細/native money book",
+      "source_identity": "canonical capability / money event ID",
+      "native_controls": "sealed capability/native MoneyWriter; separate store is not atomic",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A06",
+      "name": "au PAYカードone-shot/batch/recurring",
+      "grade": "B",
+      "trigger": "aupay-card-recurring-production / production core / CLI card-*",
+      "execution": "main validated/expected head/local",
+      "chain": "SealedSheetsCandidateTransport.write_once / SealedSheetsBatchTransport → SDK values.append",
+      "sinks": "取込データ、後続A02/A03/A05で支出",
+      "identity": "card transaction + native capability/manifest",
+      "guards": "sealed grant/target/key/lease/SQLite journal/readback",
+      "bypass": "SheetsDB.appendだけのguardではSDK直接appendを捕捉しない",
+      "retry": "sealed failure/UNKNOWN保持。native recoveryも別承認",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。直接SDK transportもguard。新CAS engine不要",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "class SealedSheetsCandidateTransport:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 1009
+        },
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "def write_once(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 1030
+        },
+        {
+          "path": "app/aupay_card_batch.py",
+          "needle": "class SealedSheetsBatchTransport:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 592
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "au PAY card statement/authority/candidate",
+      "write_targets": "取込データ (direct SDK append)",
+      "source_identity": "statement source hash / line/candidate ID",
+      "native_controls": "sealed candidate proof/native state; direct SDK is outside receipt CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A07",
+      "name": "銀行canonical・income recurring/backfill",
+      "grade": "B",
+      "trigger": "bank-pdf-recurring / production drive_bank / bank-income-backfill / CLI",
+      "execution": "main/expected head/local",
+      "chain": "SealedCanonicalOneRowTransport → SDK append; BankRecurringIncome/BankIncomePipeline → append_raw",
+      "sinks": "取込データ/支出明細/収入一覧/native state",
+      "identity": "銀行stable row ID/alias。買取と収入表共用。給与とは別namespace",
+      "guards": "bank policy/audit/bounded apply/meaning/source guard/capability",
+      "bypass": "receipt shared gateなし。SDK直接writeと同ledger競合",
+      "retry": "income/production pending保持。推測再反映なし",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。bank authority維持。共同ledger boundaryとsource/target観測のみ",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/canonical_one_row_production.py",
+          "needle": "class SealedCanonicalOneRowTransport:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 954
+        },
+        {
+          "path": "app/bank_income.py",
+          "needle": "def apply(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 297
+        },
+        {
+          "path": "app/bank_income_recurring.py",
+          "needle": "def append(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 92
+        },
+        {
+          "path": "app/bank_income_backfill.py",
+          "needle": "def run_backfill(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 154
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "銀行明細・収入候補・定期収入・過去分",
+      "write_targets": "取込データ/支出明細/収入一覧/native checkpoint",
+      "source_identity": "bank statement/transaction ID / income ID",
+      "native_controls": "sealed canonical authority or income duplicate check; no cross-store transaction",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A08",
+      "name": "PayPay・au PAY速報/CSV・旧card CSV",
+      "grade": "B",
+      "trigger": "process-receipts / production drive_paypay 11 23 * * * UTC / CLI",
+      "execution": "main/legacy/local",
+      "chain": "DrivePayPayPipeline→PayPayPipeline / AuPayMailPipeline / AuPayCsvPipeline / AuPayCardPipeline",
+      "sinks": "取込データ。後続reconcile/auto-expenseで支出",
+      "identity": "CSV/mail/payment ID。同receiptとは別原本でもmatched ledger共有",
+      "guards": "dedupe/CSV確認済/parser/category",
+      "bypass": "import status/targetがR1 beforeと競合。個別dedupeは排他でない",
+      "retry": "件数単位dedupe/CSV marker。旧pending維持",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。金融importも境界対象。独立parser改修はしない",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/paypay_pipeline.py",
+          "needle": "self.db.append(\"取込データ\", rows)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 166
+        },
+        {
+          "path": "app/aupay_csv_pipeline.py",
+          "needle": "def import_csv(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 113
+        },
+        {
+          "path": "app/aupay_mail_pipeline.py",
+          "needle": "self.db.append(\"取込データ\"",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 647
+        },
+        {
+          "path": "app/aupay_card_pipeline.py",
+          "needle": "self.db.append(\"取込データ\",rows)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 206
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "PayPay CSV / au PAY CSV・メール・カード",
+      "write_targets": "取込データ; later 支出明細 via A02/A03",
+      "source_identity": "CSV file/hash/row or message ID / transaction ID",
+      "native_controls": "native import marker/dedupe; no shared receipt CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A09",
+      "name": "現金手入力・取消",
+      "grade": "B",
+      "trigger": "Apps Script manual-entry → workflow_dispatch manual-entry → app.manual_entry",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "Code.gs appendRow → execute → append_raw / set_raw_range void",
+      "sinks": "手入力受付/支出明細",
+      "identity": "manual UUID/expense MAN-<UUID sha256[:24]> ID。receipt原本へ推測結合しない",
+      "guards": "payload/categories/UUID/main/running→complete/error",
+      "bypass": "shared gateなし。取消のM列直接updateもsink",
+      "retry": "running/errorは自動replayなし。新requestで回避しない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。受付と実Actionsを別drain。request/target adapter",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "apps-script/manual-entry/Code.gs",
+          "needle": "sheet.appendRow([id",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 81
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "def execute(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 69
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "if values[12] in",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 96
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "現金受付・本人入力・取消対象",
+      "write_targets": "受付/支出明細",
+      "source_identity": "manual request/expense ID",
+      "native_controls": "existing manual native checks; Apps Script direct append is separate",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A10",
+      "name": "日常UI固定ID修正・money review",
+      "grade": "B",
+      "trigger": "production daily_requests / 日常form submit",
+      "execution": "main validated + fixed-id-v1 mode",
+      "chain": "run_daily_requests → DailyCorrections.apply_pending/apply → update_expense_fields; run_money_reviews → MoneyWriter",
+      "sinks": "支出明細 + correction/projection journal/money ledger",
+      "identity": "固定expense ID/changes before",
+      "guards": "cutover binding/ID/native intent/readback",
+      "bypass": "日常UI全体をprojection専用Eとできない。金融stageはR1 beforeと競合",
+      "retry": "queued/pending/applied/failed保持。projection repairから金融retry不可",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。既存intent/expected fieldsとtarget衝突をguard",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/daily_runtime.py",
+          "needle": "def run_daily_requests(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 49
+        },
+        {
+          "path": "app/daily_corrections.py",
+          "needle": "def apply(self, request_id):",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 109
+        },
+        {
+          "path": "app/daily_money_review.py",
+          "needle": "def run_money_reviews(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 98
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "固定expense ID・index・corrections native・本人修正",
+      "write_targets": "支出明細 A:M selected cells; MoneyWriter income/expense",
+      "source_identity": "correction request ID + expense ID / money event ID",
+      "native_controls": "DailyCorrections before fingerprint/native pending; legacy readback recovery is not exclusion",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A11",
+      "name": "分類過去反映・restore・管理手動実行",
+      "grade": "B",
+      "trigger": "category-backfill-sheet 7,27,47 * * * * / category-sheet-request / Apps Script category-submit / production categories / CLI",
+      "execution": "main/event/local。legacy flag条件あり",
+      "chain": "execute_request/category_operations → CategoryBackfillPipeline.apply/restore → update_expense_categories",
+      "sinks": "支出明細F:G + rules/request/target histories",
+      "identity": "expense ID/condition/request snapshot、receipt target含む",
+      "guards": "preview/confirm/count/date/native flags/現値照合",
+      "bypass": "分類もfinancial writer。restoreも同支出を変更",
+      "retry": "旧checkboxは新承認でない。request/target/status保持",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。既存category authorityを保持しaffected targetsへ共通guard",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def apply(self, request_id:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 356
+        },
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def restore(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 425
+        },
+        {
+          "path": "app/category_sheet_requests.py",
+          "needle": "def execute_request(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 218
+        },
+        {
+          "path": "apps-script/category-submit/Code.gs",
+          "needle": "UrlFetchApp.fetch",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 174
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "分類rule・既存支出・backfill manifest/audit",
+      "write_targets": "支出明細 F:G / category rules and audit",
+      "source_identity": "expense ID / rule or backfill operation ID",
+      "native_controls": "native approved cells/manifest and restore checks; no all-ledger CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A12",
+      "name": "台帳整列・直接Sheets/Drive/DB保守",
+      "grade": "B",
+      "trigger": "production ledger_order / CLI/運用script/SDK/owner編集",
+      "execution": "mainまたは任意script/version。実配布/ACL未確認",
+      "chain": "order_ledgers → batchUpdate sortRange; SheetsDB/raw SDK",
+      "sinks": "同金融台帳全行/原本/native。SQLiteはcapability/journalで別役割",
+      "identity": "row移動/全before/source/ledger/native",
+      "guards": "整列snapshotと固定値保持。API自体に共有ownershipなし",
+      "bypass": "owner編集/旧SA直接SDKはPython gateだけで迂回不能にできない",
+      "retry": "応答不明は再整列/writeせずbefore照合",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M1/M6。guarded handle/全表readback。ACL変更はR3個別承認",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/ledger_order.py",
+          "needle": "def order_ledgers(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 65
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def set_raw_range(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 427
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def update_expense_fields(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 985
+        },
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def write(self, payload: bytes)",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 243
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "全台帳・整列対象・管理state",
+      "write_targets": "sortRange / direct Sheets cells / Drive/native management",
+      "source_identity": "spreadsheet/table/range; stable row ID must be revalidated",
+      "native_controls": "maintenance/native checks; sort changes coordinates and full snapshot",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "A13",
+      "name": "銀行status単セル修復・カード行修復",
+      "grade": "B",
+      "trigger": "operator Python API/運用script。現CLI/workflowへの直接登録は見つからず実配布は未確認",
+      "execution": "任意operator checkout/expected head、実行SHAは本番未確認",
+      "chain": "execute_bank_status_repair_once → SealedBankStatusCellTransport.write_once → values.update; execute_repair_once → SealedSheetsRowRepairTransport.write_once → values.batchUpdate",
+      "sinks": "取込データstatus/関連列。後続照合・金融反映と同ledger",
+      "identity": "native preview repair_ref/target_ref/source identity/固定row before/承認scope",
+      "guards": "個別protected approval/TTL/capability/SQLite claim/lease/journal/exact before/after readback",
+      "bypass": "SDK直接update/batchUpdateで共有receipt gateなし。修復名でも台帳before/fenceと競合する",
+      "retry": "write attempted/outcome_unknown保持。新preview/capabilityで推測再実行しない",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "M6。既存個別修復権限を保持してtarget/source/shared claimとguarded SDK境界へadapter。修復APIを本番で今実行しない",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "class SealedBankStatusCellTransport:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 355
+        },
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "def execute_bank_status_repair_once(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 394
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "class SealedSheetsRowRepairTransport:",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 356
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "def execute_repair_once(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 391
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "read-only target adapter + unconditional execute_update denial + terminal sink denial",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only",
+      "read_targets": "repair proof・before row/status・native checkpoint",
+      "write_targets": "取込データ status cell / card import row (direct SDK)",
+      "source_identity": "bank/card transaction ID + exact cell/before",
+      "native_controls": "sealed repair transport/proof; no shared receipt all-ledger CAS",
+      "target_projection": "ledger ID + table + stable ID + observed row + columns + values/formulas; rows are not identity",
+      "snapshot_effect": "same canonical ledger changes before snapshot even with independent source/ID; table-wide maintenance conflicts with all rows",
+      "parallel_decision": "same ledger: refuse financial dispatch and require approved drain; provably different ledger: independent but financially unconnected",
+      "gate_or_drain": "DRAIN_REQUIRED; inspect_update only. A10 additionally reuses DailyCorrections._requests/_read_target. No financial native authority connection in this change.",
+      "financial_adapter_connected": false
+    },
+    {
+      "id": "R15",
+      "name": "管理state移行・pending解除・初期化",
+      "grade": "C",
+      "trigger": "state-migration workflow / operator recovery Python API / money migration initialize",
+      "execution": "main/expected destination/任意operator artifact。実使用未確認",
+      "chain": "DurableState.release_after_reconciliation / ProductionLedger.release_after_reconciliation → transport.write; state_migration.migrate → state transfer; amazon_money_migration.initialize → replace_document",
+      "sinks": "native/source checkpoint/production ledger/money book。直接の会計行writeはないが将来の再実行制御を変える",
+      "identity": "source binding/observed digest/evidence reference/preparation manifest/destination snapshot",
+      "guards": "operator-onlyの契約・digest/evidence形状・state validation・準備済み宛先照合。formal ledger再初期化は拒否",
+      "bypass": "管理APIが存在する。関数コメントやevidence hash形状だけでは人間の実照合を保証しない。旧pendingをreadyに戻すと後のrunnerを再許可し得る",
+      "retry": "新gate rolloutのためにrelease/restore/initializeを呼ばない。元checkpoint/lineage/history保持",
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "minimal": "Cは金融統制経路としての閉鎖/drain判定。M3/M5。管理権限を通常runnerに渡さずread-only inspectだけ残す。移行/解除は独立証拠と別承認が必要",
+      "production_status": "本番未確認",
+      "risk": "high",
+      "evidence": [
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 384
+        },
+        {
+          "path": "app/production_ledger.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 112
+        },
+        {
+          "path": "app/state_migration.py",
+          "needle": "def migrate(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 128
+        },
+        {
+          "path": "app/amazon_money_migration.py",
+          "needle": "def initialize(",
+          "ref": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+          "line": 246
+        }
+      ],
+      "credential_availability": "本番未確認; names in source only; no secret value/IAM/ACL/host inspection",
+      "isolated_action": "DENY legacy_launch and terminal native/DB/SDK sink; no workflow/host modified",
+      "external_action": "separate read-only execution/credentials audit, individual approval, stop admissions, drain, close old write capability; rollback read-only"
+    }
+  ]
+}

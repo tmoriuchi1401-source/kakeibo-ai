@@ -10,6 +10,33 @@ NEW={'staging_shadow/mandatory_receipt_gate.py','tests/mandatory_gate_fixtures.p
 MODIFIED={'tests/test_production_workflows.py','tests/r2_1_static_audit.py',
     'tests/test_r2_1_static_audit.py','tests/test_iphone_mvp_r0_adoption.py',
     'tests/test_iphone_draft_request_design.py'}
+NEW.update({'staging_shadow/ledger_execution_boundary.py','tests/ledger_execution_fixtures.py',
+    'tests/test_ledger_execution_boundary.py','tests/test_ledger_execution_static.py',
+    'docs/r2-2-m5-m6.md','docs/r2-2-m5-m6-inventory.json','.github/workflows/r2-2-m5-m6.yml'})
+# Exact documentation/metadata additions authorized for the R2-3 read-only audit.
+NEW.update({
+    'docs/r2-3-actions.md',
+    'docs/r2-3-cloud-host.md',
+    'docs/r2-3-ingresses.json',
+    'docs/r2-3-ingresses.md',
+    'docs/r2-3-minimal-adapters.md',
+    'docs/r2-3-read-only-audit.md',
+    'docs/r2-3-validation.md',
+    'docs/r2-3-evidence/active-runs-end.json',
+    'docs/r2-3-evidence/active-runs-start.json',
+    'docs/r2-3-evidence/latest-operational-jobs.json',
+    'docs/r2-3-evidence/local-scheduler.json',
+    'docs/r2-3-evidence/operational-history.json',
+    'docs/r2-3-evidence/pr-baseline.json',
+    'docs/r2-3-evidence/pr-final.json',
+    'docs/r2-3-evidence/production-last-executed.json',
+    'docs/r2-3-evidence/production-success-job.json',
+    'docs/r2-3-evidence/recent-runs.json',
+    'docs/r2-3-evidence/requests-start.json',
+    'docs/r2-3-evidence/workflow-definitions.json',
+    'docs/r2-3-evidence/workflows.json',
+})
+
 REGRESSION=(
     'tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py '
     'tests/test_accounting_recovery.py tests/test_native_ingress_safety_stop.py '

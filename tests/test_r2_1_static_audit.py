@@ -36,7 +36,10 @@ class StaticAudit(unittest.TestCase):
                 self.assertEqual(status, 'M', entry)
                 current = (ROOT / path).read_text('utf-8')
                 inserted = "        '" + ('A\\t' if 'draft_request' in path else '') + "staging_shadow/mandatory_receipt_gate.py',  # Authorized isolated R2-2 composition.\n"
+                m56 = "        '" + ('A\\t' if 'draft_request' in path else '') + "staging_shadow/ledger_execution_boundary.py',  # Authorized isolated M5/M6 boundary.\n"
                 self.assertEqual(current.count(inserted), 1)
+                self.assertEqual(current.count(m56), 1)
+                current = current.replace(m56, '')
                 self.assertEqual(current.replace(inserted, ''), source(BASE, path).replace('\r\n', '\n'))
             elif path == 'tests/test_production_workflows.py':
                 self.assertEqual(status, 'M', entry)
@@ -44,7 +47,7 @@ class StaticAudit(unittest.TestCase):
                 # removing only the new dedicated-CI classification branch.
                 old = source(BASE, path).replace('\r\n', '\n')
                 current = (ROOT / path).read_text('utf-8')
-                start = current.index("        if name == 'r2-2-mandatory-gate.yml':")
+                start = current.index("        if name == 'r2-2-m5-m6.yml':")
                 end = current.index("        if name == 'iphone-r1-confirmation-checks.yml':", start)
                 self.assertEqual(current[:start] + current[end:], old)
             else:

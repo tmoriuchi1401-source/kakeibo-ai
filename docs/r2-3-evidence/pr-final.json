@@ -1,0 +1,50 @@
+{
+  "observed_at": "2026-10-20T21:18:12.812Z",
+  "main": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+  "prs": [
+    {
+      "number": 146,
+      "url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/146",
+      "head": "codex/iphone-r1-confirmation-ui",
+      "head_sha": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+      "base": "codex/iphone-v3-guarded-writer",
+      "base_sha": "8658d5a1614d62e18d4c59e5eb08dfa008efac3f",
+      "draft": true,
+      "state": "open",
+      "merged": false
+    },
+    {
+      "number": 147,
+      "url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/147",
+      "head": "codex/r2-1-writer-inventory-drain",
+      "head_sha": "c46e694aeec3cff03e193db562b9b8064e1dbb0f",
+      "base": "codex/iphone-r1-confirmation-ui",
+      "base_sha": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+      "draft": true,
+      "state": "open",
+      "merged": false
+    },
+    {
+      "number": 148,
+      "url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/148",
+      "head": "codex/r2-2-isolated-mandatory-gate",
+      "head_sha": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+      "base": "codex/r2-1-writer-inventory-drain",
+      "base_sha": "c46e694aeec3cff03e193db562b9b8064e1dbb0f",
+      "draft": true,
+      "state": "open",
+      "merged": false
+    },
+    {
+      "number": 149,
+      "url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/149",
+      "head": "codex/r2-2-m5-m6-isolated-ledger",
+      "head_sha": "9ba5d11d75aeb55d21b3540ff06ee11dc937ac68",
+      "base": "codex/r2-2-isolated-mandatory-gate",
+      "base_sha": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+      "draft": true,
+      "state": "open",
+      "merged": false
+    }
+  ]
+}
