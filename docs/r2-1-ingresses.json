@@ -1,0 +1,1499 @@
+{
+  "schema": "r2-1-ingresses-v1",
+  "base": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+  "historical": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+  "scope_limit": "コードと参照先の棚卸し。実Cloud/旧host/ACL/実行SHAは未確認で、運用全入口の完全棚卸しとは報告しない。",
+  "ingresses": [
+    {
+      "id": "R01",
+      "name": "通常レシート自動取込",
+      "grade": "B",
+      "trigger": "kakeibo-production receipts: 31 */3 * * * UTC / CLI receipt, drive-receipts",
+      "execution": "main/event/validated SHA一致（実値未確認）",
+      "chain": "production_flow.invoke → production_source.receipts → cli.make_receipt_pipeline → drive_receipts.process_inbox → ReceiptPipeline.process_bytes → _materialize_result",
+      "sinks": "レシート/支出明細/取込データ/原本processed移動",
+      "identity": "receipt:<Drive ID>, R-<ID>; whole-source。native版/partition引数なし",
+      "guards": "privacy/validate_receipt_result/import marker last/production ledger",
+      "bypass": "共有store未読。R1/PDF claim中も裸pipelineがwriterへ到達。ID読取→appendはCASでない",
+      "retry": "stable IDs/marker dedupe。marker欠落partialのretryは別入口fence未認識",
+      "minimal": "M1/M2。process_bytesとmaterializerの両境界。live観測はR3承認後",
+      "evidence": [
+        {
+          "path": "app/production_flow.py",
+          "needle": "def invoke(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 77
+        },
+        {
+          "path": "app/production_source.py",
+          "needle": "def receipts(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 48
+        },
+        {
+          "path": "app/cli.py",
+          "needle": "def make_receipt_pipeline(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 107
+        },
+        {
+          "path": "app/drive_receipts.py",
+          "needle": "def process_inbox(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 30
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def process_bytes(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 77
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _materialize_result(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 120
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R02",
+      "name": "買取レシート収入",
+      "grade": "B",
+      "trigger": "R01と同じ",
+      "execution": "R01と同じ",
+      "chain": "ReceiptPipeline.process_bytes → _buyback_income → _materialize_result → append_raw",
+      "sinks": "収入一覧 + レシート/取込データ",
+      "identity": "R01と同一whole-source。通常支出と競合",
+      "guards": "buyback evidence/transaction kind/収入schema/既存content/read-back",
+      "bypass": "別income sinkにも共有gateなし。支出と収入の二重処理",
+      "retry": "income ID content検査はあるが並列appendの排他なし",
+      "minimal": "M1/M2。別actionを保持しwholeで共有",
+      "evidence": [
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _buyback_income(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 63
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "self.db.append_raw(INCOME_SHEET",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 146
+        },
+        {
+          "path": "app/bank_income.py",
+          "needle": "INCOME_SHEET =",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 22
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R03",
+      "name": "旧一般レシート確認",
+      "grade": "C",
+      "trigger": "production receiptsのscan先行 / receipt_confirmation手動scope",
+      "execution": "main + validated SHA（実値未確認）",
+      "chain": "receipt_confirmation_production.execute → ReceiptConfirmation.apply_confirmations → _write_accounting_plan → SheetsDB",
+      "sinks": "レシート/支出明細/取込データ + v1 store/archive",
+      "identity": "confirmation_operation_identity / source ID/hash/version whole-source",
+      "guards": "_parsed/_plan/validator/表示入力/source再読込/pending/readback。request_gate任意",
+      "bypass": "production constructorがgate未注入。直接applyと裸writerへ到達",
+      "retry": "pending全plan一致でapplied。v1 saveはread-then-unconditional-write",
+      "minimal": "M1/M3。全constructor必須化、裸writer拒否、旧v1新規金融save閉鎖",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation_production.py",
+          "needle": "review=ReceiptConfirmation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 128
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 498
+        },
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "def save(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 80
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R04",
+      "name": "医療の旧確認・完全手入力",
+      "grade": "C",
+      "trigger": "R03 + 医療確認Sheet",
+      "execution": "main/実稼働未確認",
+      "chain": "ReceiptConfirmation._parsed/_plan → apply_confirmations → _write_accounting_plan",
+      "sinks": "R03の3表/native v1",
+      "identity": "medical whole-source。旧mapping不明はD01",
+      "guards": "完全手入力/medical categories/decision_origin human/確認hash/重複検査",
+      "bypass": "旧production constructorと直接writerは共有gate任意",
+      "retry": "automatic pending凍結。human pending全行一致だけ旧完了照合",
+      "minimal": "M1/M3。完全手入力/privacy維持。旧受付drain後R1へ段階移行",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _parsed(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 319
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 498
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R05",
+      "name": "R1本人確定の本番候補",
+      "grade": "B",
+      "trigger": "isolated hostへone_tab明示注入。production金融providerなし",
+      "execution": "固定#146、main未統合",
+      "chain": "OneTabConfirmation.post → SyntheticDraftConfirmation.submit → IsolatedDraftContract → _GuardedConfirmation._delegate → 既存writer",
+      "sinks": "memory 3表/native v3/共有ConditionalRequests",
+      "identity": "画像whole-source。draft/source/master/ledger/native/authority exact snapshot",
+      "guards": "本人/session/Origin/CSRF/TTL/purpose、共有claim→native pending+consume CAS→start→lease→readback→completion",
+      "bypass": "本番provider/live観測/ACLがないため本番Aではない。旧runnerは別にwrite可能",
+      "retry": "同requestは照会。UNKNOWN/PARTIAL再送/別requestで回避禁止",
+      "minimal": "M1/M2。R1既存コードは今回変更0。実backend接続はR3",
+      "evidence": [
+        {
+          "path": "staging_shadow/iphone_confirmation_ui.py",
+          "needle": "def post(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 154
+        },
+        {
+          "path": "staging_shadow/synthetic_draft_writer.py",
+          "needle": "def submit(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 83
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def consume(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 296
+        },
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "def _delegate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 150
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "S01",
+      "name": "R1隔離合成compositionのみ",
+      "grade": "A",
+      "trigger": "#146 synthetic fixtures/isolated one_tab host",
+      "execution": "固定#146 memory-only",
+      "chain": "R05 + writer/ledgerのcapability/native-caller guard",
+      "sinks": "完全合成memoryのみ",
+      "identity": "R05と同じ",
+      "guards": "裸apply/_write/saveを拒否。submit→dispatchの単回lease後だけ既存body",
+      "bypass": "Aはこの固定memory composition内だけ。productionや任意Pythonの迂回不能性ではない",
+      "retry": "sticky UNKNOWN/read-only inspect/completion証拠",
+      "minimal": "変更不要。R2-2で順序とguardを再利用",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "def _guard(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 60
+        },
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "class _GuardedConfirmation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 133
+        },
+        {
+          "path": "staging_shadow/synthetic_draft_writer.py",
+          "needle": "def _dispatch_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 66
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def dispatch(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 331
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "isolated-only"
+    },
+    {
+      "id": "R06",
+      "name": "PDF自動Unit",
+      "grade": "B",
+      "trigger": "production receipts multipage plans / PDF_INTAKE_AUTOMATION_ENABLED またはmanual dispatch",
+      "execution": "main validated（実値未確認）",
+      "chain": "pdf_intake_production.process → PageIntake.post_normal → _post → ScopedWriter → materializer",
+      "sinks": "3表/registry intent/原本archive",
+      "identity": "page-receipt-v1 Unit/index/bbox/segmentation。ledger sid=pdf-receipt-<suffix>",
+      "guards": "privacy/untouched/duplicate/AuthorityAdapter/registry If-Match/全ledger readback",
+      "bypass": "直接runnerにshared ownershipなし。wholeと別IDで二重計上し得る",
+      "retry": "native intent/recoverあり。readbackからnative完了保存は共有completionと別",
+      "minimal": "M1/M4。manual後autoへ同adapter。automatic権限を本人grantと偽らない",
+      "evidence": [
+        {
+          "path": "app/pdf_intake_production.py",
+          "needle": "def process(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 177
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_normal(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 219
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def _post(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 241
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def recover(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 334
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R07",
+      "name": "PDF一般manual Unit",
+      "grade": "B",
+      "trigger": "既存hostがreceipt_posting proof保存→同runner。PDFManualUnitPortも存在",
+      "execution": "main runner + auth-session固定bundle",
+      "chain": "RegisteredJournal.replace → RegistryStore → PageIntake.post_manual → _post → materializer / port.execute",
+      "sinks": "R06の3表/registry/journal",
+      "identity": "Unit/index/page/snapshot/actor。authority requestとintent UUIDは別",
+      "guards": "DecisionSealer/ConfirmedItems/AuthorityAdapter/native CAS/source/formula/full before",
+      "bypass": "共有bridge経由と直接runnerは別。shared/native/authority完全binding・独立start不足",
+      "retry": "旧intent解除なし。native recover完了だけをR1 COMPLETEとしない",
+      "minimal": "M1/M4。PDF内第一候補。pending+consume同CAS/start/lease/shared complete",
+      "evidence": [
+        {
+          "path": "auth-session/generic_review.py",
+          "needle": "def replace(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 87
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_manual(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 308
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class PDFManualUnitPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 165
+        },
+        {
+          "path": "app/pdf_intake_authority.py",
+          "needle": "class DecisionSealer",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 133
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R08",
+      "name": "複数ページgrouped Unit",
+      "grade": "D",
+      "trigger": "bridge adapter注入契約 / test_tree historical load",
+      "execution": "app #146、processing c29ecc44固定。実host構成不明",
+      "chain": "GroupedUnitPort.execute → DriveUnitProcessingStore.reserve/verify_pending → ScopedWriter → materializer → complete",
+      "sinks": "3表 + historical processing store",
+      "identity": "pdf-confirmed-unit-v2/member pages/grouping revision。bbox Unitとは別型",
+      "guards": "構造確認とは別NativeInspection/plan/current/processing CASが必要",
+      "bypass": "金融issuer/live対応証拠未確認。裸portに共通gate強制なし",
+      "retry": "pending/applied保持。grouping変更で旧fenceを解放しない",
+      "minimal": "M4。issuer/mapping未確認はfail-closed。最初の画像MVPの依存にしない",
+      "evidence": [
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class GroupedUnitPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 236
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def reserve(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 296
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def complete(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 333
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R09",
+      "name": "p14固定canary",
+      "grade": "C",
+      "trigger": "p14-posting-canary workflow_dispatch apply/replay",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "posting_live.main → posting.execute → ScopedMaterializerDB → materializer",
+      "sinks": "3表 + PostingStore",
+      "identity": "固定14頁原本p14専用Unit/context/rid",
+      "guards": "operator grant/owner/TTL/budget/fresh plan/claimed CAS/全値式readback",
+      "bypass": "独立native claim。共有whole/Unit ownership・writer_startedなし",
+      "retry": "unused/claimed/unknown/complete。replayでreadback完了保存あり",
+      "minimal": "M1/M5。当面新受付閉鎖候補。再開時だけadapter、固定budget保持",
+      "evidence": [
+        {
+          "path": ".github/workflows/p14-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.posting_live",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 61
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 168
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def finish(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 152
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R10",
+      "name": "p4/p10明示Unit canary",
+      "grade": "C",
+      "trigger": "receipt-unit-posting-canary workflow_dispatch",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "unit_posting_live / ExplicitUnitPostingPort.execute → unit_posting.execute → materializer",
+      "sinks": "3表 + Unit PostingStore",
+      "identity": "同固定原本p4/p10のみ、rid/context/Unit/index",
+      "guards": "個別operator grant/fresh OIDC/budget/native CAS/full readback",
+      "bypass": "直接port/CLIは共通ownership強制なし",
+      "retry": "claimed/unknown保持。別rid/contextで取り直し不可",
+      "minimal": "M1/M5。p14と許可を混ぜずdrain/閉鎖優先",
+      "evidence": [
+        {
+          "path": ".github/workflows/receipt-unit-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.unit_posting_live",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 66
+        },
+        {
+          "path": "app/receipt_plan/unit_posting.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 179
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class ExplicitUnitPostingPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 315
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R11",
+      "name": "歴史的PDF Unit write canary workflow",
+      "grade": "C",
+      "trigger": "pdf-unit-write-canary workflow_dispatch WRITE_CANARY",
+      "execution": "inputs.approved_sha = PR #91 head c29ecc44（API観測）。main event検査後別SHA checkout",
+      "chain": "historical pdf_unit_write_canary.execute → pdf_receipt_write_canary.run_canary → AppendOnlyDB → _process_image_bytes",
+      "sinks": "3表 + CanaryStore",
+      "identity": "固定normal pages/Unit/grouping/operator manifest",
+      "guards": "先行CI/proof/privacy/native CAS、現gateコードはcheckoutにない",
+      "bypass": "現在appにmoduleがなくても歴史的writerに到達。current gate修正だけでは遮断不能",
+      "retry": "pending→applied/限定row readback。全履歴/start/shared completion不足",
+      "minimal": "M5。dispatch/re-run/旧approvalをdrain後閉鎖かgate対応SHAへ限定（今回は変更0）",
+      "evidence": [
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "p=get('pulls/91')",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 67
+        },
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "ref: ${{ inputs.approved_sha }}",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 81
+        },
+        {
+          "path": "app/pdf_unit_write_canary.py",
+          "needle": "def execute(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 113
+        },
+        {
+          "path": "app/pdf_receipt_write_canary.py",
+          "needle": "def run_canary(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 169
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R12",
+      "name": "historical/test_tree一般pipeline",
+      "grade": "C",
+      "trigger": "auth-session.compose(test_tree=True) / 旧checkout・CLI転用",
+      "execution": "c29ecc44 historical tree。test_treeはCI用、実配備証明なし",
+      "chain": "historical process_bytes → _process_pdf/_process_image_bytes → materializer",
+      "sinks": "3表/収入一覧。fixtureならmemory",
+      "identity": "historical whole/Unit ID。現在R01と異なる処理",
+      "guards": "旧privacy/native検査はあるがcurrent shared gateなし",
+      "bypass": "test_treeにはwriterあり。minimal bundle whitelistとは異なる。live資格情報と組合せると迂回",
+      "retry": "historical ID/marker/stateはcurrent fence未認識",
+      "minimal": "M5。test treeを実runnerへ転用しない。旧artifact digestを別確認",
+      "evidence": [
+        {
+          "path": "auth-session/compose.py",
+          "needle": "def compose(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 39
+        },
+        {
+          "path": "auth-session/baseline.json",
+          "needle": "baseline_commit",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 2
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_pdf(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 106
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_image_bytes(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 151
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R13",
+      "name": "固定10件normal再取込・過去再解析",
+      "grade": "E",
+      "trigger": "production scope receipt_reimport、manualのみ",
+      "execution": "main validated",
+      "chain": "run_reimport → reanalyze_bytes / compare_receipt → ReimportStore.save",
+      "sinks": "結果native文書だけ。Sheetsはread_only_sheets_serviceで会計writeなし",
+      "identity": "固定10 source/hash/version whole-source比較",
+      "guards": "manifest/model/source/ACL/requested/failed拒否・結果readback",
+      "bypass": "金融sinkなし。v1結果saveの安全性を金融pendingへ流用しない",
+      "retry": "requested/failed照合待ち。推測再解析retry禁止",
+      "minimal": "金融gate不要。受付/AI/結果saveはdrain対象。金融接続ならM1/M3",
+      "evidence": [
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "def run_reimport(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 121
+        },
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "db=SheetsDB(settings.spreadsheet_id,service=read_only_sheets_service())",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 217
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def reanalyze_bytes(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 39
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "R14",
+      "name": "旧CLI・local cron・旧host・直接DB/API",
+      "grade": "C",
+      "trigger": "app.cli各種/ローカルscript/OS scheduler。外部配置の存在は未確認",
+      "execution": "任意checkout/SHA。production_flowを通らないCLIあり",
+      "chain": "cli.make/make_receipt_pipeline → 各pipeline / SheetsDB / raw service",
+      "sinks": "SPREADSHEET_IDの金融表/原本/SQLite capability journal",
+      "identity": "source/ledger/native履歴を共有readerへ渡す保証なし",
+      "guards": "各native validatorのみ。Actions concurrencyはlocalに効かない",
+      "bypass": "production wrapper外のconstructor/CLI/SDK/資格情報holderはコードgate外",
+      "retry": "source別state/SQLite。旧pendingを横断照合しない",
+      "minimal": "M1/M3/M5。host/cron/systemd/Task Scheduler・資格情報配布を人間が確認",
+      "evidence": [
+        {
+          "path": "app/cli.py",
+          "needle": "def make(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 93
+        },
+        {
+          "path": "app/cli.py",
+          "needle": "def main(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 139
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "class SheetsDB:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 136
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def append_raw(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 301
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "D01",
+      "name": "対応不明旧医療・旧native履歴",
+      "grade": "D",
+      "trigger": "H301/旧p1/legacy pending/applied/UNKNOWN",
+      "execution": "保存物と実稼働構成は本番未確認",
+      "chain": "eligibility / TrustedOwnershipReader / native v3 lineageの拒否境界",
+      "sinks": "writeなし。既存ledger/native/fence保持",
+      "identity": "source/authority/Unit一意対応またはtrusted parent pin不足",
+      "guards": "legacy unmapped hold/v1 read-only/v2 lineage/sticky UNKNOWN",
+      "bypass": "新request/新Unit/空v3で履歴を落とす迂回を拒否",
+      "retry": "期限切れ/同hash/全行存在だけでは解除不可",
+      "minimal": "独立mapping証拠と承認まで保留。移植・推測再投入・空初期化禁止",
+      "evidence": [
+        {
+          "path": "app/iphone_accounting_ownership.py",
+          "needle": "def observe(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 209
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def validate(self, v):",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 92
+        },
+        {
+          "path": "app/unified_receipt_eligibility.py",
+          "needle": "LEGACY_UNMAPPED_HOLD",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 11
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "E01",
+      "name": "旧認証host・構造/明細確認・registered proof",
+      "grade": "E",
+      "trigger": "hash固定auth-session minimal bundle / historical human_general routes",
+      "execution": "c29ecc44 + hash patch/added/repository files。実配備digest未確認",
+      "chain": "shared_login/registered review → conditional journal/registry + Firestore audit; archive summary proof",
+      "sinks": "金融ledger直接writeなし。authority/journal/session/audit保存",
+      "identity": "source/page/Unit/actor/request binding。構造と金融許可を分離",
+      "guards": "既存OIDC/session/CSRF/registry CAS/proof",
+      "bypass": "確認成功は記帳完了でない。後続R07/R09が金融sink。Firestoreを金融台帳と誤認しない",
+      "retry": "proof/confirmed/pending保持。issuer受付もdrain対象",
+      "minimal": "M5。新login/schema不要。host金融provider不足はR3まで保留",
+      "evidence": [
+        {
+          "path": "auth-session/generic_review.py",
+          "needle": "class RegisteredJournal:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 78
+        },
+        {
+          "path": "auth-session/generic_archive.py",
+          "needle": "def summary(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 29
+        },
+        {
+          "path": "services/human_general/receipt_review_runtime.py",
+          "needle": "def factory(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 36
+        },
+        {
+          "path": "services/human_general/reconciliation_runtime.py",
+          "needle": "def factory(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 45
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "E02",
+      "name": "plan-only・構造/privacy下書き・probe",
+      "grade": "E",
+      "trigger": "p14-plan-only/receipt-unit-plan-only/pdf-unit-readonly/UI GET/SyntheticAccountingGate",
+      "execution": "event SHAまたはhistorical approved_sha、probeはisolated",
+      "chain": "PlanningDBでmaterializer計画 / 無副作用observer / 保存済projection GET",
+      "sinks": "金融writeなし。plan/下書き/構造saveはあり得る",
+      "identity": "表示/計画のUnit/whole。構造確定は金融許可でない",
+      "guards": "purpose/readonly transport/PlanningDB、probe accounting_writes=0",
+      "bypass": "import/probe成功は金融writeの証明でない。旧displayのsync/saveを純粋GETに使わない",
+      "retry": "下書きCASと金融claimを混用しない",
+      "minimal": "gate追加不要。金融providerへ渡す時だけM1/M4",
+      "evidence": [
+        {
+          "path": "app/receipt_plan/planning.py",
+          "needle": "class PlanningDB",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 30
+        },
+        {
+          "path": "app/iphone_accounting_gate.py",
+          "needle": "class SyntheticAccountingGate:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 86
+        },
+        {
+          "path": ".github/workflows/pdf-unit-readonly.yml",
+          "needle": "ref: ${{ inputs.approved_sha }}",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 75
+        },
+        {
+          "path": "app/receipt_plan/validated.py",
+          "needle": "def accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 22
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "A01",
+      "name": "通常review反映・除外・統合",
+      "grade": "B",
+      "trigger": "production review_apply/process-receipts/CLI review-apply",
+      "execution": "main/local",
+      "chain": "ReviewApprovalPipeline.apply → append/update_rows",
+      "sinks": "支出明細/取込データ/要確認",
+      "identity": "import ID/expense target。receipt由来行の統合・void",
+      "guards": "候補/evidence/category/選択/native ID検査",
+      "bypass": "既存receipt値/linksに更新しR1 ledger beforeと競合",
+      "retry": "snapshot→複数update、共有CASなし。旧選択を新approvalとしない",
+      "minimal": "M1/M6。target/source解決と共通ownership/before照合",
+      "evidence": [
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "class ReviewApprovalPipeline:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 390
+        },
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 574
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A02",
+      "name": "自動照合・既存支出除外",
+      "grade": "B",
+      "trigger": "production reconcile / CLI reconcile",
+      "execution": "main/local",
+      "chain": "ReconciliationPipeline.apply → update_rows",
+      "sinks": "取込データ/支出明細 status/links",
+      "identity": "receipt/import/payment identity",
+      "guards": "一意match/曖昧保留/native evidence",
+      "bypass": "別sourceでも既存ledger target重複。R1 before読後に変更可能",
+      "retry": "冪等な再照合でも横断CASでない",
+      "minimal": "M1/M6。ledger targetsとsource/nativeを一体観測",
+      "evidence": [
+        {
+          "path": "app/reconciliation.py",
+          "needle": "def apply(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 346
+        },
+        {
+          "path": "app/reconciliation.py",
+          "needle": "self.db.update_rows(\"支出明細\",excluded_expenses)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 383
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A03",
+      "name": "auto-expense・銀行最終反映",
+      "grade": "B",
+      "trigger": "production auto_expense / CLI auto-expense, bank-finalize-*",
+      "execution": "main/approved head/local",
+      "chain": "AutoExpensePipeline.apply / BankFinalizationPipeline.apply → append/update_rows",
+      "sinks": "支出明細/取込データ",
+      "identity": "import stable ID、銀行は別原本でもpayment/ledger target共有",
+      "guards": "eligibility/category/loan/non-expense/source/evidence/readback",
+      "bypass": "共有receipt gateなし。独立銀行authorityをreceiptへ読み替えない",
+      "retry": "stable IDs/finalized検査/partial retryあり",
+      "minimal": "M6。共通ledger boundaryでtargetをguard。bank parser/authorityは維持",
+      "evidence": [
+        {
+          "path": "app/auto_expense.py",
+          "needle": "def apply(self) -> dict:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 185
+        },
+        {
+          "path": "app/bank_finalization.py",
+          "needle": "class BankFinalizationPipeline:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 287
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A04",
+      "name": "Amazon旧取込・商品展開・分割払い",
+      "grade": "B",
+      "trigger": "CLI amazon-* / legacy workflow / 後続materialize",
+      "execution": "main/local",
+      "chain": "AmazonPipeline / AmazonInstallmentPipeline → append/update_rows",
+      "sinks": "Amazon注文/商品マスタ/取込データ/支出明細",
+      "identity": "order/item/import/expense ID、receiptとpayment照合",
+      "guards": "注文/返金/重複/カテゴリ等の既存条件",
+      "bypass": "同会計表とreceiptに紐付くpaymentを更新可能",
+      "retry": "native stable IDとpartial replayはshared fence未認識",
+      "minimal": "M6。既存仕組みを保持しledger target/beforeだけ統制",
+      "evidence": [
+        {
+          "path": "app/amazon_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 232
+        },
+        {
+          "path": "app/amazon_installment.py",
+          "needle": "self.db.append(\"支出明細\", expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 276
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A05",
+      "name": "Amazon recurring・money writer・canary",
+      "grade": "B",
+      "trigger": "production core/amazon_canary / CLI amazon-*（amazon-daily-importはretired echoだけ）",
+      "execution": "main validated/legacy/local",
+      "chain": "amazon_production → canonical transport / MoneyWriter → MoneyLedger.append",
+      "sinks": "取込データ/支出明細/Amazon tables/native state",
+      "identity": "money/order/payment stable ID/ledger target",
+      "guards": "money/native authority/capability/lease/SQLite journal/readback",
+      "bypass": "canonical transportはSDK直接append。receipt shared ownershipなし",
+      "retry": "durable pending/money UNKNOWN保持。別authorityで回避しない",
+      "minimal": "M6。既存能力/証拠を保持しsink境界へadapter",
+      "evidence": [
+        {
+          "path": "app/amazon_production.py",
+          "needle": "db.append(\"支出明細\", expense_rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 442
+        },
+        {
+          "path": "app/amazon_money_writer.py",
+          "needle": "class MoneyLedger:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 14
+        },
+        {
+          "path": "app/amazon_money_runtime.py",
+          "needle": "def money_writer(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 15
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A06",
+      "name": "au PAYカードone-shot/batch/recurring",
+      "grade": "B",
+      "trigger": "aupay-card-recurring-production / production core / CLI card-*",
+      "execution": "main validated/expected head/local",
+      "chain": "SealedSheetsCandidateTransport.write_once / SealedSheetsBatchTransport → SDK values.append",
+      "sinks": "取込データ、後続A02/A03/A05で支出",
+      "identity": "card transaction + native capability/manifest",
+      "guards": "sealed grant/target/key/lease/SQLite journal/readback",
+      "bypass": "SheetsDB.appendだけのguardではSDK直接appendを捕捉しない",
+      "retry": "sealed failure/UNKNOWN保持。native recoveryも別承認",
+      "minimal": "M6。直接SDK transportもguard。新CAS engine不要",
+      "evidence": [
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "class SealedSheetsCandidateTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1009
+        },
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "def write_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1030
+        },
+        {
+          "path": "app/aupay_card_batch.py",
+          "needle": "class SealedSheetsBatchTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 592
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A07",
+      "name": "銀行canonical・income recurring/backfill",
+      "grade": "B",
+      "trigger": "bank-pdf-recurring / production drive_bank / bank-income-backfill / CLI",
+      "execution": "main/expected head/local",
+      "chain": "SealedCanonicalOneRowTransport → SDK append; BankRecurringIncome/BankIncomePipeline → append_raw",
+      "sinks": "取込データ/支出明細/収入一覧/native state",
+      "identity": "銀行stable row ID/alias。買取と収入表共用。給与とは別namespace",
+      "guards": "bank policy/audit/bounded apply/meaning/source guard/capability",
+      "bypass": "receipt shared gateなし。SDK直接writeと同ledger競合",
+      "retry": "income/production pending保持。推測再反映なし",
+      "minimal": "M6。bank authority維持。共同ledger boundaryとsource/target観測のみ",
+      "evidence": [
+        {
+          "path": "app/canonical_one_row_production.py",
+          "needle": "class SealedCanonicalOneRowTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 954
+        },
+        {
+          "path": "app/bank_income.py",
+          "needle": "def apply(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 297
+        },
+        {
+          "path": "app/bank_income_recurring.py",
+          "needle": "def append(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 92
+        },
+        {
+          "path": "app/bank_income_backfill.py",
+          "needle": "def run_backfill(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 154
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A08",
+      "name": "PayPay・au PAY速報/CSV・旧card CSV",
+      "grade": "B",
+      "trigger": "process-receipts / production drive_paypay 11 23 * * * UTC / CLI",
+      "execution": "main/legacy/local",
+      "chain": "DrivePayPayPipeline→PayPayPipeline / AuPayMailPipeline / AuPayCsvPipeline / AuPayCardPipeline",
+      "sinks": "取込データ。後続reconcile/auto-expenseで支出",
+      "identity": "CSV/mail/payment ID。同receiptとは別原本でもmatched ledger共有",
+      "guards": "dedupe/CSV確認済/parser/category",
+      "bypass": "import status/targetがR1 beforeと競合。個別dedupeは排他でない",
+      "retry": "件数単位dedupe/CSV marker。旧pending維持",
+      "minimal": "M6。金融importも境界対象。独立parser改修はしない",
+      "evidence": [
+        {
+          "path": "app/paypay_pipeline.py",
+          "needle": "self.db.append(\"取込データ\", rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 166
+        },
+        {
+          "path": "app/aupay_csv_pipeline.py",
+          "needle": "def import_csv(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 113
+        },
+        {
+          "path": "app/aupay_mail_pipeline.py",
+          "needle": "self.db.append(\"取込データ\"",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 647
+        },
+        {
+          "path": "app/aupay_card_pipeline.py",
+          "needle": "self.db.append(\"取込データ\",rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 206
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A09",
+      "name": "現金手入力・取消",
+      "grade": "B",
+      "trigger": "Apps Script manual-entry → workflow_dispatch manual-entry → app.manual_entry",
+      "execution": "main/event/validated SHA（実値未確認）",
+      "chain": "Code.gs appendRow → execute → append_raw / set_raw_range void",
+      "sinks": "手入力受付/支出明細",
+      "identity": "manual UUID/expense MAN-<UUID sha256[:24]> ID。receipt原本へ推測結合しない",
+      "guards": "payload/categories/UUID/main/running→complete/error",
+      "bypass": "shared gateなし。取消のM列直接updateもsink",
+      "retry": "running/errorは自動replayなし。新requestで回避しない",
+      "minimal": "M6。受付と実Actionsを別drain。request/target adapter",
+      "evidence": [
+        {
+          "path": "apps-script/manual-entry/Code.gs",
+          "needle": "sheet.appendRow([id",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 81
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 69
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "if values[12] in",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 96
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A10",
+      "name": "日常UI固定ID修正・money review",
+      "grade": "B",
+      "trigger": "production daily_requests / 日常form submit",
+      "execution": "main validated + fixed-id-v1 mode",
+      "chain": "run_daily_requests → DailyCorrections.apply_pending/apply → update_expense_fields; run_money_reviews → MoneyWriter",
+      "sinks": "支出明細 + correction/projection journal/money ledger",
+      "identity": "固定expense ID/changes before",
+      "guards": "cutover binding/ID/native intent/readback",
+      "bypass": "日常UI全体をprojection専用Eとできない。金融stageはR1 beforeと競合",
+      "retry": "queued/pending/applied/failed保持。projection repairから金融retry不可",
+      "minimal": "M6。既存intent/expected fieldsとtarget衝突をguard",
+      "evidence": [
+        {
+          "path": "app/daily_runtime.py",
+          "needle": "def run_daily_requests(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 49
+        },
+        {
+          "path": "app/daily_corrections.py",
+          "needle": "def apply(self, request_id):",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 109
+        },
+        {
+          "path": "app/daily_money_review.py",
+          "needle": "def run_money_reviews(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 98
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A11",
+      "name": "分類過去反映・restore・管理手動実行",
+      "grade": "B",
+      "trigger": "category-backfill-sheet 7,27,47 * * * * / category-sheet-request / Apps Script category-submit / production categories / CLI",
+      "execution": "main/event/local。legacy flag条件あり",
+      "chain": "execute_request/category_operations → CategoryBackfillPipeline.apply/restore → update_expense_categories",
+      "sinks": "支出明細F:G + rules/request/target histories",
+      "identity": "expense ID/condition/request snapshot、receipt target含む",
+      "guards": "preview/confirm/count/date/native flags/現値照合",
+      "bypass": "分類もfinancial writer。restoreも同支出を変更",
+      "retry": "旧checkboxは新承認でない。request/target/status保持",
+      "minimal": "M6。既存category authorityを保持しaffected targetsへ共通guard",
+      "evidence": [
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def apply(self, request_id:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 356
+        },
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def restore(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 425
+        },
+        {
+          "path": "app/category_sheet_requests.py",
+          "needle": "def execute_request(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 218
+        },
+        {
+          "path": "apps-script/category-submit/Code.gs",
+          "needle": "UrlFetchApp.fetch",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 174
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A12",
+      "name": "台帳整列・直接Sheets/Drive/DB保守",
+      "grade": "B",
+      "trigger": "production ledger_order / CLI/運用script/SDK/owner編集",
+      "execution": "mainまたは任意script/version。実配布/ACL未確認",
+      "chain": "order_ledgers → batchUpdate sortRange; SheetsDB/raw SDK",
+      "sinks": "同金融台帳全行/原本/native。SQLiteはcapability/journalで別役割",
+      "identity": "row移動/全before/source/ledger/native",
+      "guards": "整列snapshotと固定値保持。API自体に共有ownershipなし",
+      "bypass": "owner編集/旧SA直接SDKはPython gateだけで迂回不能にできない",
+      "retry": "応答不明は再整列/writeせずbefore照合",
+      "minimal": "M1/M6。guarded handle/全表readback。ACL変更はR3個別承認",
+      "evidence": [
+        {
+          "path": "app/ledger_order.py",
+          "needle": "def order_ledgers(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 65
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def set_raw_range(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 427
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def update_expense_fields(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 985
+        },
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def write(self, payload: bytes)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 243
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "E03",
+      "name": "原本archive・backup・retention",
+      "grade": "E",
+      "trigger": "receipt/confirmation/PDF terminal、monthly-maintenance 37 18 1 * * UTC",
+      "execution": "main/event/local",
+      "chain": "drive_receipts/receipt_confirmation_archive/pdf archive_terminal → Drive update; maintenance → backup/delete",
+      "sinks": "Drive parents/processed/backup/delete。金融writeなし",
+      "identity": "原本ID/hash/versionと全Unit terminal",
+      "guards": "archive proof/readback/retention cutoff",
+      "bypass": "金融gate外でもsource証拠を変える。再投入/削除は照合破壊。drain窓で保管",
+      "retry": "archive応答喪失を会計再送で解決しない",
+      "minimal": "M5/M6。会計completionとsource lifecycleを別段階。今回は停止しない",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation_archive.py",
+          "needle": "def ",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 8
+        },
+        {
+          "path": "app/pdf_intake_production.py",
+          "needle": "def archive_terminal(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 256
+        },
+        {
+          "path": "app/maintenance.py",
+          "needle": "svc.files().delete(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 114
+        },
+        {
+          "path": "app/drive_processed.py",
+          "needle": "def ",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 7
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "E04",
+      "name": "給与preview・純粋projection・schema/UI保守",
+      "grade": "E",
+      "trigger": "CLI drive-payroll-preview / expense refresh/daily display/ledger migration/category-navigation",
+      "execution": "main/event/local",
+      "chain": "DrivePayrollPipeline.preview / ExpenseViewPipeline.refresh / projection / ledger_daily_migration",
+      "sinks": "給与preview writeなし。支出一覧/日常projection/schema/UI metadata",
+      "identity": "表示ID/入力保持。別Payroll repo writerは今回接続不明で対象外",
+      "guards": "readonly payroll/projection journal/migration financial snapshot",
+      "bypass": "daily_requests A10/category apply A11をEに含めない。別repo稼働を推測しない",
+      "retry": "display replayは金融retry起動不可",
+      "minimal": "会計gate不要。実接続/共有発覚時だけ再判定",
+      "evidence": [
+        {
+          "path": "app/drive_payroll.py",
+          "needle": "def preview(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 100
+        },
+        {
+          "path": "app/expense_view.py",
+          "needle": "def refresh(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 56
+        },
+        {
+          "path": "app/ledger_daily_migration.py",
+          "needle": "def migrate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 215
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "E05",
+      "name": "旧医療automatic helper",
+      "grade": "E",
+      "trigger": "旧関数直接呼出し（production接続を今回復活させない）",
+      "execution": "固定#146",
+      "chain": "medical_auto_posting.apply_automatic → return 0",
+      "sinks": "金融writeなし",
+      "identity": "旧automatic pendingはR04/D01で凍結",
+      "guards": "既にretired、早期return 0",
+      "bypass": "旧版hostに同名のactive bodyがないことは別途確認必要",
+      "retry": "旧AUTO intentsは解除・再開しない",
+      "minimal": "変更なし。旧版が稼働ならR14のC/Dへ",
+      "evidence": [
+        {
+          "path": "app/medical_auto_posting.py",
+          "needle": "def apply_automatic(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 150
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "E06",
+      "name": "銀行用途確認・分類ルール受付",
+      "grade": "E",
+      "trigger": "category-sheet-request bank branch / 日常bank review",
+      "execution": "main/event/local",
+      "chain": "BankReviewRequestProcessor.process → BankReviewStore metadata mutation; 後のbank recurringが金融writer",
+      "sinks": "bank review/rules metadataだけ。processorはledger write/PDF move 0",
+      "identity": "銀行stable source/meaning/approval snapshot",
+      "guards": "fresh PDF/ledger/rule再評価、atomic metadata、既存owner request",
+      "bypass": "このprocessorだけを金融writeと数えない。後続A07のauthorityとして使われるため受付drainは必要",
+      "retry": "metadata decision/rules履歴を保存",
+      "minimal": "金融gate不要。authority受付の停止/照会と後続A07のdrainを区別",
+      "evidence": [
+        {
+          "path": "app/bank_review_requests.py",
+          "needle": "class BankReviewRequestProcessor:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 34
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "E07",
+      "name": "retired Amazon legacy workflow",
+      "grade": "E",
+      "trigger": "amazon-daily-import workflow_dispatch",
+      "execution": "event main",
+      "chain": "retired job → echoだけ",
+      "sinks": "なし。CLI/credential注入なし",
+      "identity": "なし",
+      "guards": "workflow bodyが案内のみ",
+      "bypass": "現在workflowから金融writeなし。歴史的再実行や別checkoutはR14/R12で別確認",
+      "retry": "金融retryなし",
+      "minimal": "変更不要。過去runと現bodyの違いをdrain台帳で確認",
+      "evidence": [
+        {
+          "path": ".github/workflows/amazon-daily-import.yml",
+          "needle": "name: Amazon legacy entry retired",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "scope-dependent"
+    },
+    {
+      "id": "S02",
+      "name": "通常/買取の合成既存writer接続（本番再利用候補）",
+      "grade": "B",
+      "trigger": "isolated #135/#136 fixtures",
+      "execution": "固定#146 memory-only",
+      "chain": "SyntheticAccountingGate → AutoNativeEvidenceAdapter.observe_boundary → SyntheticReceiptWriter.execute → materializer",
+      "sinks": "合成memory 4表/native evidence/shared CASだけ",
+      "identity": "R01と同一whole-source。通常支出と競合",
+      "guards": "memory-only/共有claim照合/独立writer_start/単回capability/固定plan/全readback",
+      "bypass": "本番constructorなし。裸R01/R02がこのguardを通る証拠ではない",
+      "retry": "UNKNOWN保持、旧native状態の修復/本番migrationなし",
+      "minimal": "M1/M2。既存合成順序の再利用候補。本番は別承認で必須化",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_auto_writer.py",
+          "needle": "class SyntheticReceiptWriter:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 182
+        },
+        {
+          "path": "staging_shadow/auto_native_evidence.py",
+          "needle": "def observe_boundary(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 290
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "S03",
+      "name": "旧snapshot native v2合成guarded writer（本番再利用候補）",
+      "grade": "B",
+      "trigger": "isolated #139/#140 fixtures",
+      "execution": "固定#146 memory-only",
+      "chain": "SyntheticLegacyConfirmation.submit → IsolatedConfirmationContract → _GuardedConfirmation._delegate → 既存writer",
+      "sinks": "合成memory 3表/v2/shared CASだけ",
+      "identity": "medical whole-source。旧mapping不明はD01",
+      "guards": "共有claim/pending+consume同CAS/start/lease/全ledger readback/completion",
+      "bypass": "旧本番v1 constructor R03/R04は別。新draft v3と旧v2 validatorを混同しない",
+      "retry": "v2旧operations/legacyを不変保持、replay inspect-only",
+      "minimal": "M1/M3。旧validator拒否を緩めず再利用。v1本番migrationは範囲外",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "class SyntheticLegacyConfirmation:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 166
+        },
+        {
+          "path": "app/receipt_confirmation_contract.py",
+          "needle": "class IsolatedConfirmationContract:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 380
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "A13",
+      "name": "銀行status単セル修復・カード行修復",
+      "grade": "B",
+      "trigger": "operator Python API/運用script。現CLI/workflowへの直接登録は見つからず実配布は未確認",
+      "execution": "任意operator checkout/expected head、実行SHAは本番未確認",
+      "chain": "execute_bank_status_repair_once → SealedBankStatusCellTransport.write_once → values.update; execute_repair_once → SealedSheetsRowRepairTransport.write_once → values.batchUpdate",
+      "sinks": "取込データstatus/関連列。後続照合・金融反映と同ledger",
+      "identity": "native preview repair_ref/target_ref/source identity/固定row before/承認scope",
+      "guards": "個別protected approval/TTL/capability/SQLite claim/lease/journal/exact before/after readback",
+      "bypass": "SDK直接update/batchUpdateで共有receipt gateなし。修復名でも台帳before/fenceと競合する",
+      "retry": "write attempted/outcome_unknown保持。新preview/capabilityで推測再実行しない",
+      "minimal": "M6。既存個別修復権限を保持してtarget/source/shared claimとguarded SDK境界へadapter。修復APIを本番で今実行しない",
+      "evidence": [
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "class SealedBankStatusCellTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 355
+        },
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "def execute_bank_status_repair_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 394
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "class SealedSheetsRowRepairTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 356
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "def execute_repair_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 391
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    },
+    {
+      "id": "R15",
+      "name": "管理state移行・pending解除・初期化",
+      "grade": "C",
+      "trigger": "state-migration workflow / operator recovery Python API / money migration initialize",
+      "execution": "main/expected destination/任意operator artifact。実使用未確認",
+      "chain": "DurableState.release_after_reconciliation / ProductionLedger.release_after_reconciliation → transport.write; state_migration.migrate → state transfer; amazon_money_migration.initialize → replace_document",
+      "sinks": "native/source checkpoint/production ledger/money book。直接の会計行writeはないが将来の再実行制御を変える",
+      "identity": "source binding/observed digest/evidence reference/preparation manifest/destination snapshot",
+      "guards": "operator-onlyの契約・digest/evidence形状・state validation・準備済み宛先照合。formal ledger再初期化は拒否",
+      "bypass": "管理APIが存在する。関数コメントやevidence hash形状だけでは人間の実照合を保証しない。旧pendingをreadyに戻すと後のrunnerを再許可し得る",
+      "retry": "新gate rolloutのためにrelease/restore/initializeを呼ばない。元checkpoint/lineage/history保持",
+      "minimal": "Cは金融統制経路としての閉鎖/drain判定。M3/M5。管理権限を通常runnerに渡さずread-only inspectだけ残す。移行/解除は独立証拠と別承認が必要",
+      "evidence": [
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 384
+        },
+        {
+          "path": "app/production_ledger.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 112
+        },
+        {
+          "path": "app/state_migration.py",
+          "needle": "def migrate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 128
+        },
+        {
+          "path": "app/amazon_money_migration.py",
+          "needle": "def initialize(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 246
+        }
+      ],
+      "drain": "P1（受付停止と完了待ちの分離）/P2（job・request・全保存先照合）/P3（保留維持・read-only rollback）。入口固有条件は本文とminimal/retry欄。",
+      "production_status": "本番未確認",
+      "risk": "high"
+    }
+  ]
+}
