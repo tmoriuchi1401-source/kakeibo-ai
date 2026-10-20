@@ -1,0 +1,2147 @@
+[
+  {
+    "run_id": 36937573845,
+    "workflow_path": ".github/workflows/monthly-maintenance.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 110621330185,
+        "run_id": 36937573845,
+        "run_attempt": 1,
+        "head_sha": "7935ea18ab3ebc076eee291983dad0a52187a86b",
+        "name": "maintain",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-01T22:51:54Z",
+        "completed_at": "2026-10-01T22:52:20Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/36937573845/job/110621330185",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:51:55Z",
+            "completed_at": "2026-10-01T22:51:55Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:51:55Z",
+            "completed_at": "2026-10-01T22:51:57Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:51:57Z",
+            "completed_at": "2026-10-01T22:52:00Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:52:00Z",
+            "completed_at": "2026-10-01T22:52:16Z"
+          },
+          {
+            "name": "Back up spreadsheet",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-01T22:52:16Z",
+            "completed_at": "2026-10-01T22:52:16Z"
+          },
+          {
+            "name": "Permanently delete processed receipts older than one year",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:52:16Z",
+            "completed_at": "2026-10-01T22:52:18Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:52:18Z",
+            "completed_at": "2026-10-01T22:52:18Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:52:18Z",
+            "completed_at": "2026-10-01T22:52:18Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T22:52:18Z",
+            "completed_at": "2026-10-01T22:52:18Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 39483987991,
+    "workflow_path": ".github/workflows/kakeibo-production.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 118839618684,
+        "run_id": 39483987991,
+        "run_attempt": 1,
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "name": "production",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-10-20T19:30:17Z",
+        "completed_at": "2026-10-20T19:30:07Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39483987991/job/118839618684",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": null,
+        "steps": []
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34962727963,
+    "workflow_path": ".github/workflows/state-cache-inspect.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104359913603,
+        "run_id": 34962727963,
+        "run_attempt": 1,
+        "head_sha": "21112169ae62c99ac04e66c0b77fde4542fba60b",
+        "name": "inspect",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-15T11:20:14Z",
+        "completed_at": "2026-09-15T11:20:21Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34962727963/job/104359913603",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:15Z",
+            "completed_at": "2026-09-15T11:20:16Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:16Z",
+            "completed_at": "2026-09-15T11:20:17Z"
+          },
+          {
+            "name": "Verify checkout and latest completed source runs",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:17Z",
+            "completed_at": "2026-09-15T11:20:18Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:18Z",
+            "completed_at": "2026-09-15T11:20:18Z"
+          },
+          {
+            "name": "Restore exact Amazon cache",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:18Z",
+            "completed_at": "2026-09-15T11:20:18Z"
+          },
+          {
+            "name": "Restore exact card cache",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:18Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          },
+          {
+            "name": "Restore exact bank cache",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:19Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          },
+          {
+            "name": "Require exact hits and inspect isolated copies",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:19Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:19Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 16,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:19Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:20:19Z",
+            "completed_at": "2026-09-15T11:20:19Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34967852055,
+    "workflow_path": ".github/workflows/state-migration.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104376525040,
+        "run_id": 34967852055,
+        "run_attempt": 1,
+        "head_sha": "daef10eb19b96a6c92be1ce57cbb8ff78597b7c8",
+        "name": "migrate",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-15T12:15:59Z",
+        "completed_at": "2026-09-15T12:17:16Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34967852055/job/104376525040",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:00Z",
+            "completed_at": "2026-09-15T12:16:01Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:01Z",
+            "completed_at": "2026-09-15T12:16:02Z"
+          },
+          {
+            "name": "Verify checkout and latest completed source runs",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:02Z",
+            "completed_at": "2026-09-15T12:16:08Z"
+          },
+          {
+            "name": "Require normal logging before private bindings",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-09-15T12:16:08Z",
+            "completed_at": "2026-09-15T12:16:08Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:08Z",
+            "completed_at": "2026-09-15T12:16:08Z"
+          },
+          {
+            "name": "Install existing dependencies",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:08Z",
+            "completed_at": "2026-09-15T12:16:28Z"
+          },
+          {
+            "name": "Restore exact Amazon cache",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:28Z",
+            "completed_at": "2026-09-15T12:16:28Z"
+          },
+          {
+            "name": "Restore exact card cache",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:28Z",
+            "completed_at": "2026-09-15T12:16:29Z"
+          },
+          {
+            "name": "Restore exact bank cache",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:29Z",
+            "completed_at": "2026-09-15T12:16:29Z"
+          },
+          {
+            "name": "Require exact hits and transfer validated bundles",
+            "number": 10,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:16:29Z",
+            "completed_at": "2026-09-15T12:17:14Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 19,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:17:14Z",
+            "completed_at": "2026-09-15T12:17:14Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 20,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:17:14Z",
+            "completed_at": "2026-09-15T12:17:14Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 21,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T12:17:14Z",
+            "completed_at": "2026-09-15T12:17:14Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 39483038729,
+    "workflow_path": ".github/workflows/category-backfill-sheet.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 118836254918,
+        "run_id": 39483038729,
+        "run_attempt": 1,
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "name": "apply-sheet-confirmed-request",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-10-20T19:23:26Z",
+        "completed_at": "2026-10-20T19:23:26Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39483038729/job/118836254918",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": null,
+        "steps": []
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 35486220090,
+    "workflow_path": ".github/workflows/ledger-daily-migration.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 106012981870,
+        "run_id": 35486220090,
+        "run_attempt": 1,
+        "head_sha": "85a533f02a4e17d6a286d7c55623193c42f9975e",
+        "name": "migrate",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-20T03:18:16Z",
+        "completed_at": "2026-09-20T03:19:43Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/35486220090/job/106012981870",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:16Z",
+            "completed_at": "2026-09-20T03:18:17Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:17Z",
+            "completed_at": "2026-09-20T03:18:18Z"
+          },
+          {
+            "name": "Require normal logging before credentials",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-09-20T03:18:18Z",
+            "completed_at": "2026-09-20T03:18:18Z"
+          },
+          {
+            "name": "Verify tested checkout before dependencies",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:18Z",
+            "completed_at": "2026-09-20T03:18:18Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:18Z",
+            "completed_at": "2026-09-20T03:18:18Z"
+          },
+          {
+            "name": "Install existing dependencies",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:18Z",
+            "completed_at": "2026-09-20T03:18:37Z"
+          },
+          {
+            "name": "Inspect or initialize precreated money documents",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:18:37Z",
+            "completed_at": "2026-09-20T03:19:41Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:19:41Z",
+            "completed_at": "2026-09-20T03:19:41Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 14,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:19:41Z",
+            "completed_at": "2026-09-20T03:19:41Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-20T03:19:41Z",
+            "completed_at": "2026-09-20T03:19:41Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 35728364382,
+    "workflow_path": ".github/workflows/gemini-availability.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 106747484774,
+        "run_id": 35728364382,
+        "run_attempt": 1,
+        "head_sha": "51c1faaf7072081b849b1801b96abb43b3e659ca",
+        "name": "probe",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-22T12:38:08Z",
+        "completed_at": "2026-09-22T12:39:35Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/35728364382/job/106747484774",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:38:09Z",
+            "completed_at": "2026-09-22T12:38:10Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:38:10Z",
+            "completed_at": "2026-09-22T12:38:11Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:38:11Z",
+            "completed_at": "2026-09-22T12:38:11Z"
+          },
+          {
+            "name": "Install fixed diagnostic dependencies",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:38:11Z",
+            "completed_at": "2026-09-22T12:38:19Z"
+          },
+          {
+            "name": "Compare fixed synthetic text and image requests",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:38:19Z",
+            "completed_at": "2026-09-22T12:39:31Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:39:31Z",
+            "completed_at": "2026-09-22T12:39:32Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 10,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:39:32Z",
+            "completed_at": "2026-09-22T12:39:32Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-22T12:39:32Z",
+            "completed_at": "2026-09-22T12:39:32Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 38143398684,
+    "workflow_path": ".github/workflows/category-sheet-request.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 114481681937,
+        "run_id": 38143398684,
+        "run_attempt": 1,
+        "head_sha": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+        "name": "category-request",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-11T13:29:53Z",
+        "completed_at": "2026-10-11T13:32:34Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38143398684/job/114481681937",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:29:54Z",
+            "completed_at": "2026-10-11T13:29:55Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:29:55Z",
+            "completed_at": "2026-10-11T13:29:56Z"
+          },
+          {
+            "name": "Bind verified checkout for existing bank main guard",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:29:56Z",
+            "completed_at": "2026-10-11T13:29:57Z"
+          },
+          {
+            "name": "Require normal logging before private inputs",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-11T13:29:57Z",
+            "completed_at": "2026-10-11T13:29:57Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:29:57Z",
+            "completed_at": "2026-10-11T13:30:00Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:30:00Z",
+            "completed_at": "2026-10-11T13:30:15Z"
+          },
+          {
+            "name": "Process captured category input and refresh displays",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:30:15Z",
+            "completed_at": "2026-10-11T13:32:31Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:32:31Z",
+            "completed_at": "2026-10-11T13:32:31Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 14,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:32:31Z",
+            "completed_at": "2026-10-11T13:32:31Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T13:32:31Z",
+            "completed_at": "2026-10-11T13:32:31Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 39349431297,
+    "workflow_path": ".github/workflows/manual-entry.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 118389863458,
+        "run_id": 39349431297,
+        "run_attempt": 1,
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "name": "manual-entry",
+        "status": "completed",
+        "conclusion": "skipped",
+        "started_at": "2026-10-20T00:44:33Z",
+        "completed_at": "2026-10-20T00:44:33Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39349431297/job/118389863458",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": null,
+        "steps": []
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 36810525236,
+    "workflow_path": ".github/workflows/bank-pdf-diagnose.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 110204360970,
+        "run_id": 36810525236,
+        "run_attempt": 1,
+        "head_sha": "056b25a067404b8cb5a9f741d565f944934336b8",
+        "name": "diagnose",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-01T03:27:15Z",
+        "completed_at": "2026-10-01T03:27:58Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/36810525236/job/110204360970",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:16Z",
+            "completed_at": "2026-10-01T03:27:17Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:17Z",
+            "completed_at": "2026-10-01T03:27:18Z"
+          },
+          {
+            "name": "Reject debug logging before private bindings",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-01T03:27:18Z",
+            "completed_at": "2026-10-01T03:27:18Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:18Z",
+            "completed_at": "2026-10-01T03:27:21Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:21Z",
+            "completed_at": "2026-10-01T03:27:39Z"
+          },
+          {
+            "name": "Diagnose fixed files without writers or state updates",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:39Z",
+            "completed_at": "2026-10-01T03:27:56Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:56Z",
+            "completed_at": "2026-10-01T03:27:56Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:56Z",
+            "completed_at": "2026-10-01T03:27:56Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-01T03:27:56Z",
+            "completed_at": "2026-10-01T03:27:56Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 37936083187,
+    "workflow_path": ".github/workflows/pdf-unit-readonly.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 113840248945,
+        "run_id": 37936083187,
+        "run_attempt": 1,
+        "head_sha": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+        "name": "readonly",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-09T13:24:48Z",
+        "completed_at": "2026-10-09T13:31:21Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/37936083187/job/113840248945",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:24:48Z",
+            "completed_at": "2026-10-09T13:24:50Z"
+          },
+          {
+            "name": "Reject debug before any analysis Secret is provided",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-09T13:24:50Z",
+            "completed_at": "2026-10-09T13:24:50Z"
+          },
+          {
+            "name": "Validate exact draft PR head before checkout",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:24:50Z",
+            "completed_at": "2026-10-09T13:24:51Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:24:51Z",
+            "completed_at": "2026-10-09T13:24:53Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:24:53Z",
+            "completed_at": "2026-10-09T13:24:53Z"
+          },
+          {
+            "name": "Install existing receipt OCR dependencies before Secrets",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:24:53Z",
+            "completed_at": "2026-10-09T13:26:58Z"
+          },
+          {
+            "name": "Fixed confirmed Unit read-only evaluation",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:26:58Z",
+            "completed_at": "2026-10-09T13:31:17Z"
+          },
+          {
+            "name": "Encrypted diagnostic only",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:31:17Z",
+            "completed_at": "2026-10-09T13:31:18Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:31:18Z",
+            "completed_at": "2026-10-09T13:31:18Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 16,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:31:18Z",
+            "completed_at": "2026-10-09T13:31:18Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T13:31:18Z",
+            "completed_at": "2026-10-09T13:31:18Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 37174760247,
+    "workflow_path": ".github/workflows/pdf-unit-write-canary.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 111354983057,
+        "run_id": 37174760247,
+        "run_attempt": 1,
+        "head_sha": "3d0c92ea4f9ebbb57e7edbf3f7b3d99c6cdb8f4d",
+        "name": "canary",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-04T03:41:04Z",
+        "completed_at": "2026-10-04T03:55:18Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/37174760247/job/111354983057",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:04Z",
+            "completed_at": "2026-10-04T03:41:05Z"
+          },
+          {
+            "name": "Reject debug before Secrets",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-04T03:41:05Z",
+            "completed_at": "2026-10-04T03:41:05Z"
+          },
+          {
+            "name": "Check reviewed Draft head and validated main before checkout",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:05Z",
+            "completed_at": "2026-10-04T03:41:06Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:06Z",
+            "completed_at": "2026-10-04T03:41:08Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:08Z",
+            "completed_at": "2026-10-04T03:41:08Z"
+          },
+          {
+            "name": "Install existing local OCR before Secrets",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:08Z",
+            "completed_at": "2026-10-04T03:41:50Z"
+          },
+          {
+            "name": "Fixed normal accounting canary without Gemini Secret",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:41:50Z",
+            "completed_at": "2026-10-04T03:55:15Z"
+          },
+          {
+            "name": "Encrypted diagnostic only",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:55:15Z",
+            "completed_at": "2026-10-04T03:55:15Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:55:15Z",
+            "completed_at": "2026-10-04T03:55:15Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 16,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:55:15Z",
+            "completed_at": "2026-10-04T03:55:16Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-04T03:55:16Z",
+            "completed_at": "2026-10-04T03:55:16Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 37910138229,
+    "workflow_path": ".github/workflows/p14-plan-only.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 113753045368,
+        "run_id": 37910138229,
+        "run_attempt": 1,
+        "head_sha": "0c1788bf4c4f76274b6633427a55ec9952de54b4",
+        "name": "plan",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-09T09:15:51Z",
+        "completed_at": "2026-10-09T09:17:24Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/37910138229/job/113753045368",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:15:52Z",
+            "completed_at": "2026-10-09T09:15:53Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:15:53Z",
+            "completed_at": "2026-10-09T09:15:54Z"
+          },
+          {
+            "name": "Reject debug logging",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-09T09:15:54Z",
+            "completed_at": "2026-10-09T09:15:54Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:15:54Z",
+            "completed_at": "2026-10-09T09:15:56Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:15:56Z",
+            "completed_at": "2026-10-09T09:16:14Z"
+          },
+          {
+            "name": "Fresh read, queue intake, memory-only writer plan and exact read-back",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:16:14Z",
+            "completed_at": "2026-10-09T09:17:22Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:17:22Z",
+            "completed_at": "2026-10-09T09:17:23Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:17:23Z",
+            "completed_at": "2026-10-09T09:17:23Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T09:17:23Z",
+            "completed_at": "2026-10-09T09:17:23Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 37927668606,
+    "workflow_path": ".github/workflows/p14-posting-canary.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 113810420027,
+        "run_id": 37927668606,
+        "run_attempt": 1,
+        "head_sha": "30c9ddf1fc184450921aa0427088cb619b4c2394",
+        "name": "post",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-09T12:04:27Z",
+        "completed_at": "2026-10-09T12:05:09Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/37927668606/job/113810420027",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:04:27Z",
+            "completed_at": "2026-10-09T12:04:28Z"
+          },
+          {
+            "name": "Reject debug before Secrets",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-09T12:04:28Z",
+            "completed_at": "2026-10-09T12:04:28Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:04:28Z",
+            "completed_at": "2026-10-09T12:04:29Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:04:29Z",
+            "completed_at": "2026-10-09T12:04:31Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:04:31Z",
+            "completed_at": "2026-10-09T12:04:48Z"
+          },
+          {
+            "name": "One-time p14 claim, existing writer, exact accounting read-back",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:04:48Z",
+            "completed_at": "2026-10-09T12:05:07Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:05:07Z",
+            "completed_at": "2026-10-09T12:05:07Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:05:07Z",
+            "completed_at": "2026-10-09T12:05:08Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T12:05:08Z",
+            "completed_at": "2026-10-09T12:05:08Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 38002449935,
+    "workflow_path": ".github/workflows/receipt-unit-plan-only.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 114063480662,
+        "run_id": 38002449935,
+        "run_attempt": 1,
+        "head_sha": "9f502a96a826ff59231354e7f7ebfa982ec3ad96",
+        "name": "plan",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-09T23:03:08Z",
+        "completed_at": "2026-10-09T23:04:40Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38002449935/job/114063480662",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:03:08Z",
+            "completed_at": "2026-10-09T23:03:09Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:03:09Z",
+            "completed_at": "2026-10-09T23:03:11Z"
+          },
+          {
+            "name": "Reject debug logging",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-09T23:03:11Z",
+            "completed_at": "2026-10-09T23:03:11Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:03:11Z",
+            "completed_at": "2026-10-09T23:03:16Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:03:16Z",
+            "completed_at": "2026-10-09T23:03:31Z"
+          },
+          {
+            "name": "Fresh private unit evidence, bounded queue intake and memory-only writer plan",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:03:31Z",
+            "completed_at": "2026-10-09T23:04:37Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:04:37Z",
+            "completed_at": "2026-10-09T23:04:37Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:04:37Z",
+            "completed_at": "2026-10-09T23:04:37Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:04:37Z",
+            "completed_at": "2026-10-09T23:04:37Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 38005016533,
+    "workflow_path": ".github/workflows/receipt-unit-posting-canary.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 114071690798,
+        "run_id": 38005016533,
+        "run_attempt": 1,
+        "head_sha": "9f502a96a826ff59231354e7f7ebfa982ec3ad96",
+        "name": "post",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-09T23:33:39Z",
+        "completed_at": "2026-10-09T23:34:27Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38005016533/job/114071690798",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:33:40Z",
+            "completed_at": "2026-10-09T23:33:40Z"
+          },
+          {
+            "name": "Reject debug before Secrets",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-10-09T23:33:40Z",
+            "completed_at": "2026-10-09T23:33:40Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:33:40Z",
+            "completed_at": "2026-10-09T23:33:42Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:33:42Z",
+            "completed_at": "2026-10-09T23:33:47Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:33:47Z",
+            "completed_at": "2026-10-09T23:34:06Z"
+          },
+          {
+            "name": "Bound private approval, existing writer, exact accounting read-back",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:34:06Z",
+            "completed_at": "2026-10-09T23:34:25Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:34:25Z",
+            "completed_at": "2026-10-09T23:34:25Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:34:25Z",
+            "completed_at": "2026-10-09T23:34:25Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-09T23:34:25Z",
+            "completed_at": "2026-10-09T23:34:25Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 38109383309,
+    "workflow_path": ".github/workflows/category-navigation.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 114381582604,
+        "run_id": 38109383309,
+        "run_attempt": 1,
+        "head_sha": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+        "name": "navigation",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-10-11T03:45:05Z",
+        "completed_at": "2026-10-11T03:45:45Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38109383309/job/114381582604",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:06Z",
+            "completed_at": "2026-10-11T03:45:06Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:06Z",
+            "completed_at": "2026-10-11T03:45:08Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:08Z",
+            "completed_at": "2026-10-11T03:45:11Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:11Z",
+            "completed_at": "2026-10-11T03:45:30Z"
+          },
+          {
+            "name": "Verify and maintain navigation only",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:30Z",
+            "completed_at": "2026-10-11T03:45:43Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:43Z",
+            "completed_at": "2026-10-11T03:45:43Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 10,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:43Z",
+            "completed_at": "2026-10-11T03:45:44Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-10-11T03:45:44Z",
+            "completed_at": "2026-10-11T03:45:44Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34964888952,
+    "workflow_path": ".github/workflows/process-receipts.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104366904961,
+        "run_id": 34964888952,
+        "run_attempt": 1,
+        "head_sha": "21112169ae62c99ac04e66c0b77fde4542fba60b",
+        "name": "run",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-15T11:44:11Z",
+        "completed_at": "2026-09-15T11:45:46Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34964888952/job/104366904961",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:12Z",
+            "completed_at": "2026-09-15T11:44:12Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:12Z",
+            "completed_at": "2026-09-15T11:44:13Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:13Z",
+            "completed_at": "2026-09-15T11:44:17Z"
+          },
+          {
+            "name": "Install receipt OCR runtime",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:17Z",
+            "completed_at": "2026-09-15T11:44:27Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:27Z",
+            "completed_at": "2026-09-15T11:44:47Z"
+          },
+          {
+            "name": "Show configured integrations",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:47Z",
+            "completed_at": "2026-09-15T11:44:47Z"
+          },
+          {
+            "name": "Import au PAY notices from Gmail",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:44:47Z",
+            "completed_at": "2026-09-15T11:45:01Z"
+          },
+          {
+            "name": "Process Google Drive receipt inbox",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:01Z",
+            "completed_at": "2026-09-15T11:45:25Z"
+          },
+          {
+            "name": "Apply mobile review decisions",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:25Z",
+            "completed_at": "2026-09-15T11:45:27Z"
+          },
+          {
+            "name": "Import PayPay CSV files from Google Drive",
+            "number": 10,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:27Z",
+            "completed_at": "2026-09-15T11:45:29Z"
+          },
+          {
+            "name": "Reconcile imported transactions",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:29Z",
+            "completed_at": "2026-09-15T11:45:32Z"
+          },
+          {
+            "name": "Auto-post clear payment transactions",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:32Z",
+            "completed_at": "2026-09-15T11:45:35Z"
+          },
+          {
+            "name": "Refresh mobile review sheet",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:35Z",
+            "completed_at": "2026-09-15T11:45:40Z"
+          },
+          {
+            "name": "Refresh active expense view",
+            "number": 14,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:40Z",
+            "completed_at": "2026-09-15T11:45:44Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 27,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:44Z",
+            "completed_at": "2026-09-15T11:45:44Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 28,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:44Z",
+            "completed_at": "2026-09-15T11:45:44Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 29,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T11:45:44Z",
+            "completed_at": "2026-09-15T11:45:44Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34907742177,
+    "workflow_path": ".github/workflows/amazon-daily-import.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104188204788,
+        "run_id": 34907742177,
+        "run_attempt": 1,
+        "head_sha": "73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2",
+        "name": "import",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-14T23:12:12Z",
+        "completed_at": "2026-09-14T23:12:45Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34907742177/job/104188204788",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:12Z",
+            "completed_at": "2026-09-14T23:12:13Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:13Z",
+            "completed_at": "2026-09-14T23:12:14Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:14Z",
+            "completed_at": "2026-09-14T23:12:18Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:18Z",
+            "completed_at": "2026-09-14T23:12:35Z"
+          },
+          {
+            "name": "Restore latest durable run state",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:35Z",
+            "completed_at": "2026-09-14T23:12:35Z"
+          },
+          {
+            "name": "Read-only bounded write-plan preview",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2026-09-14T23:12:35Z",
+            "completed_at": "2026-09-14T23:12:35Z"
+          },
+          {
+            "name": "Materialize protected recurring authority",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:35Z",
+            "completed_at": "2026-09-14T23:12:35Z"
+          },
+          {
+            "name": "Run bounded recurring ingestion or canary",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:35Z",
+            "completed_at": "2026-09-14T23:12:43Z"
+          },
+          {
+            "name": "Save post-run durable state",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:43Z",
+            "completed_at": "2026-09-14T23:12:43Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:43Z",
+            "completed_at": "2026-09-14T23:12:43Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 18,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:43Z",
+            "completed_at": "2026-09-14T23:12:44Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 19,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:12:44Z",
+            "completed_at": "2026-09-14T23:12:44Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34907806301,
+    "workflow_path": ".github/workflows/aupay-card-recurring-production.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104188401714,
+        "run_id": 34907806301,
+        "run_attempt": 1,
+        "head_sha": "73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2",
+        "name": "ingest",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-14T23:13:01Z",
+        "completed_at": "2026-09-14T23:13:35Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34907806301/job/104188401714",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:02Z",
+            "completed_at": "2026-09-14T23:13:04Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:04Z",
+            "completed_at": "2026-09-14T23:13:05Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:05Z",
+            "completed_at": "2026-09-14T23:13:08Z"
+          },
+          {
+            "name": "Restore latest durable run state",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:08Z",
+            "completed_at": "2026-09-14T23:13:09Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:09Z",
+            "completed_at": "2026-09-14T23:13:24Z"
+          },
+          {
+            "name": "Materialize protected authority inputs",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:24Z",
+            "completed_at": "2026-09-14T23:13:24Z"
+          },
+          {
+            "name": "Run bounded incremental ingestion",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:24Z",
+            "completed_at": "2026-09-14T23:13:32Z"
+          },
+          {
+            "name": "Save post-run durable state",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:32Z",
+            "completed_at": "2026-09-14T23:13:33Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 15,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:33Z",
+            "completed_at": "2026-09-14T23:13:33Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 16,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:33Z",
+            "completed_at": "2026-09-14T23:13:33Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:13:33Z",
+            "completed_at": "2026-09-14T23:13:33Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34911236780,
+    "workflow_path": ".github/workflows/bank-pdf-recurring.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104198959801,
+        "run_id": 34911236780,
+        "run_attempt": 1,
+        "head_sha": "73ff2ffb859ca82cf7bf4a5f3a375e4e0094d9e2",
+        "name": "ingest",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-14T23:59:05Z",
+        "completed_at": "2026-09-14T23:59:32Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34911236780/job/104198959801",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:06Z",
+            "completed_at": "2026-09-14T23:59:06Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:06Z",
+            "completed_at": "2026-09-14T23:59:07Z"
+          },
+          {
+            "name": "Bind checkout to main for the Git checkpoint guard",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:07Z",
+            "completed_at": "2026-09-14T23:59:07Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:07Z",
+            "completed_at": "2026-09-14T23:59:10Z"
+          },
+          {
+            "name": "Restore latest durable run state",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:10Z",
+            "completed_at": "2026-09-14T23:59:10Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:10Z",
+            "completed_at": "2026-09-14T23:59:27Z"
+          },
+          {
+            "name": "Materialize protected recurring inputs",
+            "number": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:27Z",
+            "completed_at": "2026-09-14T23:59:27Z"
+          },
+          {
+            "name": "Run bounded bank PDF recurring preview",
+            "number": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:27Z",
+            "completed_at": "2026-09-14T23:59:30Z"
+          },
+          {
+            "name": "Save post-run durable state",
+            "number": 9,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:30Z",
+            "completed_at": "2026-09-14T23:59:30Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 17,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:30Z",
+            "completed_at": "2026-09-14T23:59:30Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 18,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:30Z",
+            "completed_at": "2026-09-14T23:59:31Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 19,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-14T23:59:31Z",
+            "completed_at": "2026-09-14T23:59:31Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  },
+  {
+    "run_id": 34956603502,
+    "workflow_path": ".github/workflows/bank-income-backfill.yml",
+    "total_count": 1,
+    "jobs": [
+      {
+        "id": 104340057868,
+        "run_id": 34956603502,
+        "run_attempt": 1,
+        "head_sha": "e0075c81fb063e3f12a04dda8b51f900c7e44caa",
+        "name": "backfill",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-15T10:11:26Z",
+        "completed_at": "2026-09-15T10:13:16Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/34956603502/job/104340057868",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "runner_group_name": "GitHub Actions",
+        "steps": [
+          {
+            "name": "Set up job",
+            "number": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:27Z",
+            "completed_at": "2026-09-15T10:11:28Z"
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "number": 2,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:28Z",
+            "completed_at": "2026-09-15T10:11:30Z"
+          },
+          {
+            "name": "Bind exact tested main",
+            "number": 3,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:30Z",
+            "completed_at": "2026-09-15T10:11:30Z"
+          },
+          {
+            "name": "Run actions/setup-python@v5",
+            "number": 4,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:30Z",
+            "completed_at": "2026-09-15T10:11:33Z"
+          },
+          {
+            "name": "Run pip install -r requirements.txt",
+            "number": 5,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:33Z",
+            "completed_at": "2026-09-15T10:11:50Z"
+          },
+          {
+            "name": "Run fixed backfill without scheduling income writes",
+            "number": 6,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:11:50Z",
+            "completed_at": "2026-09-15T10:13:14Z"
+          },
+          {
+            "name": "Post Run actions/setup-python@v5",
+            "number": 11,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:13:14Z",
+            "completed_at": "2026-09-15T10:13:14Z"
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "number": 12,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:13:14Z",
+            "completed_at": "2026-09-15T10:13:14Z"
+          },
+          {
+            "name": "Complete job",
+            "number": 13,
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-09-15T10:13:14Z",
+            "completed_at": "2026-09-15T10:13:14Z"
+          }
+        ]
+      }
+    ],
+    "query_failed": false
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "runs": [
+      {
+        "id": 38730949804,
+        "event": "schedule",
+        "head_branch": "main",
+        "head_sha": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-15T11:56:36Z",
+        "updated_at": "2026-10-15T12:08:34Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38730949804"
+      }
+    ],
+    "query_status": "success",
+    "total_count": 255
+  },
+  {
+    "runs": [
+      {
+        "id": 38052312106,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "head_sha": "ad2501274d2c07e23cef6eee5d0c71d788f0d0e5",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "failure",
+        "created_at": "2026-10-10T12:32:09Z",
+        "updated_at": "2026-10-10T12:36:50Z",
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/38052312106"
+      }
+    ],
+    "query_status": "failure",
+    "total_count": 37
+  }
+]

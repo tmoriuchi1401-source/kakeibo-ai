@@ -1,0 +1,1372 @@
+[
+  {
+    "id": 338594857,
+    "path": ".github/workflows/monthly-maintenance.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "37 18 1 * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 3,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 5,
+        "text": "- cron: '37 18 1 * *'"
+      },
+      {
+        "line": 8,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 9,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 10,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 358349068,
+    "path": ".github/workflows/synthetic-tests.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-synthetic-${{ github.ref }}",
+      "cancel-in-progress: true"
+    ],
+    "definition_evidence": [
+      {
+        "line": 10,
+        "text": "contents: read"
+      },
+      {
+        "line": 13,
+        "text": "group: kakeibo-synthetic-${{ github.ref }}"
+      },
+      {
+        "line": 14,
+        "text": "cancel-in-progress: true"
+      }
+    ]
+  },
+  {
+    "id": 358381524,
+    "path": ".github/workflows/kakeibo-production.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "17 9,21 * * *",
+      "31 */3 * * *",
+      "47 21 * * *",
+      "11 23 * * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [
+      "ref: main"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 6,
+        "text": "- cron: '17 9,21 * * *'"
+      },
+      {
+        "line": 8,
+        "text": "- cron: '31 */3 * * *'  # Receipt: every three hours, 00:31 through 21:31 UTC."
+      },
+      {
+        "line": 9,
+        "text": "- cron: '47 21 * * *'   # Bank recurring apply: 06:47 JST."
+      },
+      {
+        "line": 10,
+        "text": "- cron: '11 23 * * *'   # PayPay: 08:11 JST."
+      },
+      {
+        "line": 11,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 68,
+        "text": "contents: read"
+      },
+      {
+        "line": 71,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 72,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 73,
+        "text": "queue: max"
+      },
+      {
+        "line": 143,
+        "text": "ref: main"
+      }
+    ]
+  },
+  {
+    "id": 358662832,
+    "path": ".github/workflows/state-cache-inspect.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read",
+      "actions: read"
+    ],
+    "checkout_refs": [
+      "ref: ${{ github.sha }}"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 30,
+        "text": "contents: read"
+      },
+      {
+        "line": 31,
+        "text": "actions: read"
+      },
+      {
+        "line": 34,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 35,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 36,
+        "text": "queue: max"
+      },
+      {
+        "line": 52,
+        "text": "ref: ${{ github.sha }}"
+      }
+    ]
+  },
+  {
+    "id": 358705728,
+    "path": ".github/workflows/state-migration.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read",
+      "actions: read"
+    ],
+    "checkout_refs": [
+      "ref: ${{ github.sha }}"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 34,
+        "text": "contents: read"
+      },
+      {
+        "line": 35,
+        "text": "actions: read"
+      },
+      {
+        "line": 38,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 39,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 40,
+        "text": "queue: max"
+      },
+      {
+        "line": 70,
+        "text": "ref: ${{ github.sha }}"
+      }
+    ]
+  },
+  {
+    "id": 360175465,
+    "path": ".github/workflows/category-backfill-sheet.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "7,27,47 * * * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 14,
+        "text": "- cron: '7,27,47 * * * *'"
+      },
+      {
+        "line": 19,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 20,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 21,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 362375115,
+    "path": ".github/workflows/ledger-daily-migration.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [
+      "ref: main"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 34,
+        "text": "contents: read"
+      },
+      {
+        "line": 37,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 38,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 39,
+        "text": "queue: max"
+      },
+      {
+        "line": 72,
+        "text": "ref: main"
+      }
+    ]
+  },
+  {
+    "id": 364211628,
+    "path": ".github/workflows/gemini-availability.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 7,
+        "text": "contents: read"
+      },
+      {
+        "line": 10,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 11,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 12,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 365006593,
+    "path": ".github/workflows/category-sheet-request.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [
+      "ref: main"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 11,
+        "text": "contents: read"
+      },
+      {
+        "line": 13,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 14,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 15,
+        "text": "queue: max"
+      },
+      {
+        "line": 57,
+        "text": "ref: main"
+      }
+    ]
+  },
+  {
+    "id": 366641816,
+    "path": ".github/workflows/manual-entry.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 11,
+        "text": "contents: read"
+      },
+      {
+        "line": 13,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 14,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 15,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 371188810,
+    "path": ".github/workflows/bank-pdf-diagnose.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 6,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 9,
+        "text": "contents: read"
+      },
+      {
+        "line": 12,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 13,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 14,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 373854631,
+    "path": ".github/workflows/pdf-unit-readonly.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read",
+      "actions: read"
+    ],
+    "checkout_refs": [
+      "ref: ${{ inputs.approved_sha }}"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 24,
+        "text": "contents: read"
+      },
+      {
+        "line": 27,
+        "text": "actions: read"
+      },
+      {
+        "line": 29,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 30,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 31,
+        "text": "queue: max"
+      },
+      {
+        "line": 75,
+        "text": "ref: ${{ inputs.approved_sha }}"
+      }
+    ]
+  },
+  {
+    "id": 374308149,
+    "path": ".github/workflows/pdf-unit-write-canary.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read",
+      "actions: read"
+    ],
+    "checkout_refs": [
+      "ref: ${{ inputs.approved_sha }}"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 30,
+        "text": "contents: read"
+      },
+      {
+        "line": 33,
+        "text": "actions: read"
+      },
+      {
+        "line": 35,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 36,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 37,
+        "text": "queue: max"
+      },
+      {
+        "line": 81,
+        "text": "ref: ${{ inputs.approved_sha }}"
+      }
+    ]
+  },
+  {
+    "id": 379442321,
+    "path": ".github/workflows/p14-plan-only.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 17,
+        "text": "contents: read"
+      },
+      {
+        "line": 19,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 20,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 21,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 379566172,
+    "path": ".github/workflows/p14-posting-canary.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 23,
+        "text": "contents: read"
+      },
+      {
+        "line": 25,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 26,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 27,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 379627318,
+    "path": ".github/workflows/receipt-unit-plan-only.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 21,
+        "text": "contents: read"
+      },
+      {
+        "line": 23,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 24,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 25,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 380086605,
+    "path": ".github/workflows/receipt-unit-posting-canary.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 27,
+        "text": "contents: read"
+      },
+      {
+        "line": 29,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 30,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 31,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 380246330,
+    "path": ".github/workflows/hga-shared-session-checks.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": [
+      {
+        "line": 10,
+        "text": "contents: read"
+      }
+    ]
+  },
+  {
+    "id": 380916459,
+    "path": ".github/workflows/category-navigation.yml",
+    "state": "active",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 18,
+        "text": "contents: read"
+      },
+      {
+        "line": 22,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 23,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 24,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 381215889,
+    "path": ".github/workflows/unified-receipt-write-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 387482987,
+    "path": ".github/workflows/iphone-review-contract-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 387979902,
+    "path": ".github/workflows/iphone-sheet-adapter-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388039376,
+    "path": ".github/workflows/iphone-readonly-host-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388048457,
+    "path": ".github/workflows/iphone-phase5b1-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388119335,
+    "path": ".github/workflows/iphone-phase5b2a-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388136324,
+    "path": ".github/workflows/iphone-phase5b2b1-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388164396,
+    "path": ".github/workflows/iphone-accounting-gate-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388310106,
+    "path": ".github/workflows/iphone-accounting-recovery-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388349679,
+    "path": ".github/workflows/iphone-auto-native-evidence-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388374903,
+    "path": ".github/workflows/iphone-synthetic-native-writer-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388390880,
+    "path": ".github/workflows/iphone-legacy-confirmation-stop-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388819574,
+    "path": ".github/workflows/iphone-legacy-contract-poc-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388838721,
+    "path": ".github/workflows/iphone-native-receipt-v2-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 388993355,
+    "path": ".github/workflows/iphone-synthetic-legacy-writer-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389240692,
+    "path": ".github/workflows/iphone-pdf-native-readonly-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389306060,
+    "path": ".github/workflows/iphone-mvp-r0-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389363657,
+    "path": ".github/workflows/iphone-draft-request-design-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389390610,
+    "path": ".github/workflows/iphone-draft-runtime-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389870429,
+    "path": ".github/workflows/iphone-v3-draft-writer-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 389896875,
+    "path": ".github/workflows/iphone-r1-confirmation-checks.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 390108885,
+    "path": ".github/workflows/r2-1-static-audit.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 390455593,
+    "path": ".github/workflows/r2-2-mandatory-gate.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 390586478,
+    "path": ".github/workflows/r2-2-m5-m6.yml",
+    "state": "active",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 335466226,
+    "path": ".github/workflows/process-receipts.yml",
+    "state": "disabled_manually",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "17 */3 * * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 3,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 5,
+        "text": "- cron: '17 */3 * * *'"
+      },
+      {
+        "line": 7,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 8,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 9,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 341573607,
+    "path": ".github/workflows/amazon-daily-import.yml",
+    "state": "disabled_manually",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 7,
+        "text": "contents: read"
+      },
+      {
+        "line": 10,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 11,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 12,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 355238907,
+    "path": ".github/workflows/aupay-card-recurring-production.yml",
+    "state": "disabled_manually",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "23 20 * * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 12,
+        "text": "- cron: '23 20 * * *'"
+      },
+      {
+        "line": 15,
+        "text": "contents: read"
+      },
+      {
+        "line": 18,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 19,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 20,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 357782098,
+    "path": ".github/workflows/bank-pdf-recurring.yml",
+    "state": "disabled_manually",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [
+      "47 21 * * *"
+    ],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 5,
+        "text": "- cron: '47 21 * * *'"
+      },
+      {
+        "line": 6,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 16,
+        "text": "contents: read"
+      },
+      {
+        "line": 19,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 20,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 21,
+        "text": "queue: max"
+      }
+    ]
+  },
+  {
+    "id": 358624125,
+    "path": ".github/workflows/bank-income-backfill.yml",
+    "state": "disabled_manually",
+    "definition_ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "cron_utc": [],
+    "workflow_dispatch": true,
+    "environments": [],
+    "permissions": [
+      "contents: read"
+    ],
+    "checkout_refs": [
+      "ref: main"
+    ],
+    "concurrency": [
+      "group: kakeibo-production",
+      "cancel-in-progress: false",
+      "queue: max"
+    ],
+    "definition_evidence": [
+      {
+        "line": 4,
+        "text": "workflow_dispatch:"
+      },
+      {
+        "line": 18,
+        "text": "contents: read"
+      },
+      {
+        "line": 21,
+        "text": "group: kakeibo-production"
+      },
+      {
+        "line": 22,
+        "text": "cancel-in-progress: false"
+      },
+      {
+        "line": 23,
+        "text": "queue: max"
+      },
+      {
+        "line": 39,
+        "text": "ref: main"
+      }
+    ]
+  },
+  {
+    "id": 371620159,
+    "path": ".github/workflows/medical-amount-selection-synthetic.yml",
+    "state": "disabled_manually",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  },
+  {
+    "id": 371661100,
+    "path": ".github/workflows/medical-independent-amount-synthetic.yml",
+    "state": "disabled_manually",
+    "definition_ref": null,
+    "cron_utc": [],
+    "workflow_dispatch": false,
+    "environments": [],
+    "permissions": [],
+    "checkout_refs": [],
+    "concurrency": [],
+    "definition_evidence": []
+  }
+]

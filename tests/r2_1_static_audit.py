@@ -40,6 +40,30 @@ ALLOWED = {
     "tests/test_production_workflows.py",
     ".github/workflows/r2-1-static-audit.yml",
 }
+# Exact documentation/metadata additions authorized for the R2-3 read-only audit.
+ALLOWED.update({
+    'docs/r2-3-actions.md',
+    'docs/r2-3-cloud-host.md',
+    'docs/r2-3-ingresses.json',
+    'docs/r2-3-ingresses.md',
+    'docs/r2-3-minimal-adapters.md',
+    'docs/r2-3-read-only-audit.md',
+    'docs/r2-3-validation.md',
+    'docs/r2-3-evidence/active-runs-end.json',
+    'docs/r2-3-evidence/active-runs-start.json',
+    'docs/r2-3-evidence/latest-operational-jobs.json',
+    'docs/r2-3-evidence/local-scheduler.json',
+    'docs/r2-3-evidence/operational-history.json',
+    'docs/r2-3-evidence/pr-baseline.json',
+    'docs/r2-3-evidence/pr-final.json',
+    'docs/r2-3-evidence/production-last-executed.json',
+    'docs/r2-3-evidence/production-success-job.json',
+    'docs/r2-3-evidence/recent-runs.json',
+    'docs/r2-3-evidence/requests-start.json',
+    'docs/r2-3-evidence/workflow-definitions.json',
+    'docs/r2-3-evidence/workflows.json',
+})
+
 
 
 def git(*args):

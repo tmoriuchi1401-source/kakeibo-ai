@@ -1,0 +1,1522 @@
+{
+  "schema": "r2-3-observations-v1",
+  "fixed_head": "9ba5d11d75aeb55d21b3540ff06ee11dc937ac68",
+  "main": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+  "scope": "39分類行を保持。分類の時点/範囲はstatus_scope。実会計データ未取得。起動可能は定義された条件付き経路が残る意味で、credential有効性の検証でない。",
+  "ingresses": [
+    {
+      "id": "R01",
+      "name": "通常レシート自動取込",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "レシート/支出明細/取込データ/原本processed移動",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/production_flow.py",
+          "needle": "def invoke(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 77
+        },
+        {
+          "path": "app/production_source.py",
+          "needle": "def receipts(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 48
+        },
+        {
+          "path": "app/cli.py",
+          "needle": "def make_receipt_pipeline(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 107
+        },
+        {
+          "path": "app/drive_receipts.py",
+          "needle": "def process_inbox(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 30
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def process_bytes(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 77
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _materialize_result(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 120
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R02",
+      "name": "買取レシート収入",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "収入一覧 + レシート/取込データ",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _buyback_income(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 63
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "self.db.append_raw(INCOME_SHEET",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 146
+        },
+        {
+          "path": "app/bank_income.py",
+          "needle": "INCOME_SHEET =",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 22
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R03",
+      "name": "旧一般レシート確認",
+      "inherited_grade": "C",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "レシート/支出明細/取込データ + v1 store/archive",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation_production.py",
+          "needle": "review=ReceiptConfirmation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 128
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 498
+        },
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "def save(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 80
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R04",
+      "name": "医療の旧確認・完全手入力",
+      "inherited_grade": "C",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "R03の3表/native v1",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _parsed(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 319
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def apply_confirmations(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 402
+        },
+        {
+          "path": "app/receipt_confirmation.py",
+          "needle": "def _write_accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 498
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R05",
+      "name": "R1本人確定の本番候補",
+      "inherited_grade": "B",
+      "production_status": "コード上のみ存在",
+      "status_scope": "新R1はmain未統合・production provider未接続。外部コピーの配備有無は未確認。",
+      "workflow_paths": [],
+      "sinks": "memory 3表/native v3/共有ConditionalRequests",
+      "same_source_or_ledger_and_bypass": "既知compositionはmemory限定。本番の同一ledger/gate成立を主張しない。",
+      "evidence": [
+        {
+          "path": "staging_shadow/iphone_confirmation_ui.py",
+          "needle": "def post(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 154
+        },
+        {
+          "path": "staging_shadow/synthetic_draft_writer.py",
+          "needle": "def submit(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 83
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def consume(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 296
+        },
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "def _delegate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 150
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "S01",
+      "name": "R1隔離合成compositionのみ",
+      "inherited_grade": "A",
+      "production_status": "コード上のみ存在",
+      "status_scope": "隔離memory composition。#149 CI成功履歴は本番実行でない。",
+      "workflow_paths": [],
+      "sinks": "完全合成memoryのみ",
+      "same_source_or_ledger_and_bypass": "既知compositionはmemory限定。本番の同一ledger/gate成立を主張しない。",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "def _guard(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 60
+        },
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "class _GuardedConfirmation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 133
+        },
+        {
+          "path": "staging_shadow/synthetic_draft_writer.py",
+          "needle": "def _dispatch_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 66
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def dispatch(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 331
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R06",
+      "name": "PDF自動Unit",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "3表/registry intent/原本archive",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/pdf_intake_production.py",
+          "needle": "def process(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 177
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_normal(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 219
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def _post(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 241
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def recover(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 334
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R07",
+      "name": "PDF一般manual Unit",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "旧host/旧treeとのコード経路は存在。稼働imageのソース対応・native/authority・実呼出しは未確認。",
+      "workflow_paths": [],
+      "sinks": "R06の3表/registry/journal",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "auth-session/generic_review.py",
+          "needle": "def replace(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 87
+        },
+        {
+          "path": "app/pdf_intake_runner.py",
+          "needle": "def post_manual(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 308
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class PDFManualUnitPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 165
+        },
+        {
+          "path": "app/pdf_intake_authority.py",
+          "needle": "class DecisionSealer",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 133
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R08",
+      "name": "複数ページgrouped Unit",
+      "inherited_grade": "D",
+      "production_status": "本番未確認",
+      "status_scope": "旧host/旧treeとのコード経路は存在。稼働imageのソース対応・native/authority・実呼出しは未確認。",
+      "workflow_paths": [],
+      "sinks": "3表 + historical processing store",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class GroupedUnitPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 236
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def reserve(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 296
+        },
+        {
+          "path": "app/pdf_unit_processing.py",
+          "needle": "def complete(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 333
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R09",
+      "name": "p14固定canary",
+      "inherited_grade": "C",
+      "production_status": "起動可能だが実行なし",
+      "status_scope": "p14-posting active/dispatch定義、最新run37927668606 success、現在Actions実行なし。flag/権限成立は未確認。",
+      "workflow_paths": [
+        "p14-posting-canary.yml"
+      ],
+      "sinks": "3表 + PostingStore",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": ".github/workflows/p14-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.posting_live",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 61
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 168
+        },
+        {
+          "path": "app/receipt_plan/posting.py",
+          "needle": "def finish(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 152
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R10",
+      "name": "p4/p10明示Unit canary",
+      "inherited_grade": "C",
+      "production_status": "起動可能だが実行なし",
+      "status_scope": "receipt-unit-posting active/dispatch定義、最新run38005016533 success、現在Actions実行なし。flag/権限成立は未確認。",
+      "workflow_paths": [
+        "receipt-unit-posting-canary.yml"
+      ],
+      "sinks": "3表 + Unit PostingStore",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": ".github/workflows/receipt-unit-posting-canary.yml",
+          "needle": "run: python -m app.receipt_plan.unit_posting_live",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 66
+        },
+        {
+          "path": "app/receipt_plan/unit_posting.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 179
+        },
+        {
+          "path": "app/unified_receipt_native.py",
+          "needle": "class ExplicitUnitPostingPort(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 315
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R11",
+      "name": "歴史的PDF Unit write canary workflow",
+      "inherited_grade": "C",
+      "production_status": "起動可能だが実行なし",
+      "status_scope": "pdf-unit-write-canary active/dispatch定義、最新run37174760247 success、historical checkout実値未確認。",
+      "workflow_paths": [
+        "pdf-unit-write-canary.yml"
+      ],
+      "sinks": "3表 + CanaryStore",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "p=get('pulls/91')",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 67
+        },
+        {
+          "path": ".github/workflows/pdf-unit-write-canary.yml",
+          "needle": "ref: ${{ inputs.approved_sha }}",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 81
+        },
+        {
+          "path": "app/pdf_unit_write_canary.py",
+          "needle": "def execute(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 113
+        },
+        {
+          "path": "app/pdf_receipt_write_canary.py",
+          "needle": "def run_canary(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 169
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R12",
+      "name": "historical/test_tree一般pipeline",
+      "inherited_grade": "C",
+      "production_status": "本番未確認",
+      "status_scope": "旧host/旧treeとのコード経路は存在。稼働imageのソース対応・native/authority・実呼出しは未確認。",
+      "workflow_paths": [],
+      "sinks": "3表/収入一覧。fixtureならmemory",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "auth-session/compose.py",
+          "needle": "def compose(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 39
+        },
+        {
+          "path": "auth-session/baseline.json",
+          "needle": "baseline_commit",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 2
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_pdf(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 106
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def _process_image_bytes(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 151
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R13",
+      "name": "固定10件normal再取込・過去再解析",
+      "inherited_grade": "E",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "結果native文書だけ。Sheetsはread_only_sheets_serviceで会計writeなし",
+      "same_source_or_ledger_and_bypass": "native/authority/source変更を介する影響あり。実binding未確認。",
+      "evidence": [
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "def run_reimport(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 121
+        },
+        {
+          "path": "app/receipt_reimport_production.py",
+          "needle": "db=SheetsDB(settings.spreadsheet_id,service=read_only_sheets_service())",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 217
+        },
+        {
+          "path": "app/receipt_pipeline.py",
+          "needle": "def reanalyze_bytes(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 39
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R14",
+      "name": "旧CLI・local cron・旧host・直接DB/API",
+      "inherited_grade": "C",
+      "production_status": "本番未確認",
+      "status_scope": "Windows schedulerはCIM閲覧不可。他端末cron/CLI/SDK・配布済みcredential・Apps Script実配置は未確認。",
+      "workflow_paths": [],
+      "sinks": "SPREADSHEET_IDの金融表/原本/SQLite capability journal",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/cli.py",
+          "needle": "def make(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 93
+        },
+        {
+          "path": "app/cli.py",
+          "needle": "def main(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 139
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "class SheetsDB:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 136
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def append_raw(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 301
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "D01",
+      "name": "対応不明旧医療・旧native履歴",
+      "inherited_grade": "D",
+      "production_status": "本番未確認",
+      "status_scope": "H301/p1等の実native所在・pending/UNKNOWN本文は未取得。旧mappingは推測しない。",
+      "workflow_paths": [],
+      "sinks": "writeなし。既存ledger/native/fence保持",
+      "same_source_or_ledger_and_bypass": "この経路自体の金融writeなし。実配備・外部旧版は別途確認。",
+      "evidence": [
+        {
+          "path": "app/iphone_accounting_ownership.py",
+          "needle": "def observe(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 209
+        },
+        {
+          "path": "staging_shadow/receipt_draft_contract.py",
+          "needle": "def validate(self, v):",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 92
+        },
+        {
+          "path": "app/unified_receipt_eligibility.py",
+          "needle": "LEGACY_UNMAPPED_HOLD",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 11
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E01",
+      "name": "旧認証host・構造/明細確認・registered proof",
+      "inherited_grade": "E",
+      "production_status": "実稼働を確認",
+      "status_scope": "Cloud Run service available・最新revisionへtraffic100%。現在0rps表示。実request/authority/金融完了は未確認。",
+      "workflow_paths": [],
+      "sinks": "金融ledger直接writeなし。authority/journal/session/audit保存",
+      "same_source_or_ledger_and_bypass": "native/authority/source変更を介する影響あり。実binding未確認。",
+      "evidence": [
+        {
+          "path": "auth-session/generic_review.py",
+          "needle": "class RegisteredJournal:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 78
+        },
+        {
+          "path": "auth-session/generic_archive.py",
+          "needle": "def summary(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 29
+        },
+        {
+          "path": "services/human_general/receipt_review_runtime.py",
+          "needle": "def factory(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 36
+        },
+        {
+          "path": "services/human_general/reconciliation_runtime.py",
+          "needle": "def factory(",
+          "ref": "c29ecc44e1fb9fcc854cde1da5cce940e633e8fa",
+          "line": 45
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E02",
+      "name": "plan-only・構造/privacy下書き・probe",
+      "inherited_grade": "E",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "p14-plan-only.yml",
+        "receipt-unit-plan-only.yml",
+        "pdf-unit-readonly.yml"
+      ],
+      "sinks": "金融writeなし。plan/下書き/構造saveはあり得る",
+      "same_source_or_ledger_and_bypass": "この経路自体の金融writeなし。実配備・外部旧版は別途確認。",
+      "evidence": [
+        {
+          "path": "app/receipt_plan/planning.py",
+          "needle": "class PlanningDB",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 30
+        },
+        {
+          "path": "app/iphone_accounting_gate.py",
+          "needle": "class SyntheticAccountingGate:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 86
+        },
+        {
+          "path": ".github/workflows/pdf-unit-readonly.yml",
+          "needle": "ref: ${{ inputs.approved_sha }}",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 75
+        },
+        {
+          "path": "app/receipt_plan/validated.py",
+          "needle": "def accounting_plan(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 22
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A01",
+      "name": "通常review反映・除外・統合",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "支出明細/取込データ/要確認",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "class ReviewApprovalPipeline:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 390
+        },
+        {
+          "path": "app/review_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 574
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A02",
+      "name": "自動照合・既存支出除外",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "取込データ/支出明細 status/links",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/reconciliation.py",
+          "needle": "def apply(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 346
+        },
+        {
+          "path": "app/reconciliation.py",
+          "needle": "self.db.update_rows(\"支出明細\",excluded_expenses)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 383
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A03",
+      "name": "auto-expense・銀行最終反映",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "支出明細/取込データ",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/auto_expense.py",
+          "needle": "def apply(self) -> dict:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 185
+        },
+        {
+          "path": "app/bank_finalization.py",
+          "needle": "class BankFinalizationPipeline:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 287
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A04",
+      "name": "Amazon旧取込・商品展開・分割払い",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "amazon-daily-import.yml"
+      ],
+      "sinks": "Amazon注文/商品マスタ/取込データ/支出明細",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/amazon_pipeline.py",
+          "needle": "self.db.append(\"支出明細\",expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 232
+        },
+        {
+          "path": "app/amazon_installment.py",
+          "needle": "self.db.append(\"支出明細\", expense_new)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 276
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A05",
+      "name": "Amazon recurring・money writer・canary",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "取込データ/支出明細/Amazon tables/native state",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/amazon_production.py",
+          "needle": "db.append(\"支出明細\", expense_rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 442
+        },
+        {
+          "path": "app/amazon_money_writer.py",
+          "needle": "class MoneyLedger:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 14
+        },
+        {
+          "path": "app/amazon_money_runtime.py",
+          "needle": "def money_writer(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 15
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A06",
+      "name": "au PAYカードone-shot/batch/recurring",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "aupay-card-recurring-production.yml"
+      ],
+      "sinks": "取込データ、後続A02/A03/A05で支出",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "class SealedSheetsCandidateTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1009
+        },
+        {
+          "path": "app/aupay_card_production.py",
+          "needle": "def write_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1030
+        },
+        {
+          "path": "app/aupay_card_batch.py",
+          "needle": "class SealedSheetsBatchTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 592
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A07",
+      "name": "銀行canonical・income recurring/backfill",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "bank-pdf-recurring.yml",
+        "bank-income-backfill.yml"
+      ],
+      "sinks": "取込データ/支出明細/収入一覧/native state",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/canonical_one_row_production.py",
+          "needle": "class SealedCanonicalOneRowTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 954
+        },
+        {
+          "path": "app/bank_income.py",
+          "needle": "def apply(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 297
+        },
+        {
+          "path": "app/bank_income_recurring.py",
+          "needle": "def append(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 92
+        },
+        {
+          "path": "app/bank_income_backfill.py",
+          "needle": "def run_backfill(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 154
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A08",
+      "name": "PayPay・au PAY速報/CSV・旧card CSV",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "process-receipts.yml"
+      ],
+      "sinks": "取込データ。後続reconcile/auto-expenseで支出",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/paypay_pipeline.py",
+          "needle": "self.db.append(\"取込データ\", rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 166
+        },
+        {
+          "path": "app/aupay_csv_pipeline.py",
+          "needle": "def import_csv(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 113
+        },
+        {
+          "path": "app/aupay_mail_pipeline.py",
+          "needle": "self.db.append(\"取込データ\"",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 647
+        },
+        {
+          "path": "app/aupay_card_pipeline.py",
+          "needle": "self.db.append(\"取込データ\",rows)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 206
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A09",
+      "name": "現金手入力・取消",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "manual-entry最新job skipped。Apps Script deployment/trigger/実行者・受付nativeは未確認。",
+      "workflow_paths": [
+        "manual-entry.yml"
+      ],
+      "sinks": "手入力受付/支出明細",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "apps-script/manual-entry/Code.gs",
+          "needle": "sheet.appendRow([id",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 81
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "def execute(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 69
+        },
+        {
+          "path": "app/manual_entry.py",
+          "needle": "if values[12] in",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 96
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A10",
+      "name": "日常UI固定ID修正・money review",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "manual-entry.yml"
+      ],
+      "sinks": "支出明細 + correction/projection journal/money ledger",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/daily_runtime.py",
+          "needle": "def run_daily_requests(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 49
+        },
+        {
+          "path": "app/daily_corrections.py",
+          "needle": "def apply(self, request_id):",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 109
+        },
+        {
+          "path": "app/daily_money_review.py",
+          "needle": "def run_money_reviews(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 98
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A11",
+      "name": "分類過去反映・restore・管理手動実行",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "category-backfill-sheet.yml",
+        "category-sheet-request.yml"
+      ],
+      "sinks": "支出明細F:G + rules/request/target histories",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def apply(self, request_id:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 356
+        },
+        {
+          "path": "app/category_backfill.py",
+          "needle": "def restore(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 425
+        },
+        {
+          "path": "app/category_sheet_requests.py",
+          "needle": "def execute_request(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 218
+        },
+        {
+          "path": "apps-script/category-submit/Code.gs",
+          "needle": "UrlFetchApp.fetch",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 174
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A12",
+      "name": "台帳整列・直接Sheets/Drive/DB保守",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml"
+      ],
+      "sinks": "同金融台帳全行/原本/native。SQLiteはcapability/journalで別役割",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/ledger_order.py",
+          "needle": "def order_ledgers(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 65
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def set_raw_range(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 427
+        },
+        {
+          "path": "app/sheets.py",
+          "needle": "def update_expense_fields(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 985
+        },
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def write(self, payload: bytes)",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 243
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E03",
+      "name": "原本archive・backup・retention",
+      "inherited_grade": "E",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "monthly-maintenance.yml",
+        "kakeibo-production.yml"
+      ],
+      "sinks": "Drive parents/processed/backup/delete。金融writeなし",
+      "same_source_or_ledger_and_bypass": "native/authority/source変更を介する影響あり。実binding未確認。",
+      "evidence": [
+        {
+          "path": "app/receipt_confirmation_archive.py",
+          "needle": "def ",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 8
+        },
+        {
+          "path": "app/pdf_intake_production.py",
+          "needle": "def archive_terminal(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 256
+        },
+        {
+          "path": "app/maintenance.py",
+          "needle": "svc.files().delete(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 114
+        },
+        {
+          "path": "app/drive_processed.py",
+          "needle": "def ",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 7
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E04",
+      "name": "給与preview・純粋projection・schema/UI保守",
+      "inherited_grade": "E",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "ledger-daily-migration.yml",
+        "category-navigation.yml"
+      ],
+      "sinks": "給与preview writeなし。支出一覧/日常projection/schema/UI metadata",
+      "same_source_or_ledger_and_bypass": "この経路自体の金融writeなし。実配備・外部旧版は別途確認。",
+      "evidence": [
+        {
+          "path": "app/drive_payroll.py",
+          "needle": "def preview(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 100
+        },
+        {
+          "path": "app/expense_view.py",
+          "needle": "def refresh(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 56
+        },
+        {
+          "path": "app/ledger_daily_migration.py",
+          "needle": "def migrate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 215
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E05",
+      "name": "旧医療automatic helper",
+      "inherited_grade": "E",
+      "production_status": "コード上のみ存在",
+      "status_scope": "現行helperはreturn 0。別SHA/外部医療処理の停止証明ではない。",
+      "workflow_paths": [],
+      "sinks": "金融writeなし",
+      "same_source_or_ledger_and_bypass": "この経路自体の金融writeなし。実配備・外部旧版は別途確認。",
+      "evidence": [
+        {
+          "path": "app/medical_auto_posting.py",
+          "needle": "def apply_automatic(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 150
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E06",
+      "name": "銀行用途確認・分類ルール受付",
+      "inherited_grade": "E",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "kakeibo-production.yml",
+        "category-sheet-request.yml"
+      ],
+      "sinks": "bank review/rules metadataだけ。processorはledger write/PDF move 0",
+      "same_source_or_ledger_and_bypass": "native/authority/source変更を介する影響あり。実binding未確認。",
+      "evidence": [
+        {
+          "path": "app/bank_review_requests.py",
+          "needle": "class BankReviewRequestProcessor:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 34
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "E07",
+      "name": "retired Amazon legacy workflow",
+      "inherited_grade": "E",
+      "production_status": "現在停止中と確認",
+      "status_scope": "amazon-daily-import API disabled_manually、mainはechoだけ。過去runはretire前。CLI/親のAmazonは別入口。",
+      "workflow_paths": [
+        "amazon-daily-import.yml"
+      ],
+      "sinks": "なし。CLI/credential注入なし",
+      "same_source_or_ledger_and_bypass": "この経路自体の金融writeなし。実配備・外部旧版は別途確認。",
+      "evidence": [
+        {
+          "path": ".github/workflows/amazon-daily-import.yml",
+          "needle": "name: Amazon legacy entry retired",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 1
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "S02",
+      "name": "通常/買取の合成既存writer接続（本番再利用候補）",
+      "inherited_grade": "B",
+      "production_status": "コード上のみ存在",
+      "status_scope": "合成自動/買取writer。production未接続。",
+      "workflow_paths": [],
+      "sinks": "合成memory 4表/native evidence/shared CASだけ",
+      "same_source_or_ledger_and_bypass": "既知compositionはmemory限定。本番の同一ledger/gate成立を主張しない。",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_auto_writer.py",
+          "needle": "class SyntheticReceiptWriter:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 182
+        },
+        {
+          "path": "staging_shadow/auto_native_evidence.py",
+          "needle": "def observe_boundary(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 290
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "S03",
+      "name": "旧snapshot native v2合成guarded writer（本番再利用候補）",
+      "inherited_grade": "B",
+      "production_status": "コード上のみ存在",
+      "status_scope": "合成v2 guarded writer。production未接続。",
+      "workflow_paths": [],
+      "sinks": "合成memory 3表/v2/shared CASだけ",
+      "same_source_or_ledger_and_bypass": "既知compositionはmemory限定。本番の同一ledger/gate成立を主張しない。",
+      "evidence": [
+        {
+          "path": "staging_shadow/synthetic_legacy_writer.py",
+          "needle": "class SyntheticLegacyConfirmation:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 166
+        },
+        {
+          "path": "app/receipt_confirmation_contract.py",
+          "needle": "class IsolatedConfirmationContract:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 380
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "A13",
+      "name": "銀行status単セル修復・カード行修復",
+      "inherited_grade": "B",
+      "production_status": "本番未確認",
+      "status_scope": "専用workflowなし。CLI/SDK/運用者の資格情報・実実行は未確認。",
+      "workflow_paths": [],
+      "sinks": "取込データstatus/関連列。後続照合・金融反映と同ledger",
+      "same_source_or_ledger_and_bypass": "同一SPREADSHEET_IDへ到達するコード。実保存先binding/ACL未確認。共有gate迂回可能な旧コード経路あり。",
+      "evidence": [
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "class SealedBankStatusCellTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 355
+        },
+        {
+          "path": "app/bank_status_repair.py",
+          "needle": "def execute_bank_status_repair_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 394
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "class SealedSheetsRowRepairTransport:",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 356
+        },
+        {
+          "path": "app/aupay_card_repair.py",
+          "needle": "def execute_repair_once(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 391
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-cloud-host.md"
+      ],
+      "financial_write_possible_in_legacy_code": true,
+      "live_financial_write_verified": false
+    },
+    {
+      "id": "R15",
+      "name": "管理state移行・pending解除・初期化",
+      "inherited_grade": "C",
+      "production_status": "本番未確認",
+      "status_scope": "実request・source別stageは未確認。親の最新job skipped/過去successだけから当該writerの稼働・停止を断定しない。",
+      "workflow_paths": [
+        "state-migration.yml",
+        "ledger-daily-migration.yml"
+      ],
+      "sinks": "native/source checkpoint/production ledger/money book。直接の会計行writeはないが将来の再実行制御を変える",
+      "same_source_or_ledger_and_bypass": "native/authority/source変更を介する影響あり。実binding未確認。",
+      "evidence": [
+        {
+          "path": "app/drive_run_state.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 384
+        },
+        {
+          "path": "app/production_ledger.py",
+          "needle": "def release_after_reconciliation(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 112
+        },
+        {
+          "path": "app/state_migration.py",
+          "needle": "def migrate(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 128
+        },
+        {
+          "path": "app/amazon_money_migration.py",
+          "needle": "def initialize(",
+          "ref": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+          "line": 246
+        }
+      ],
+      "metadata_evidence": [
+        "r2-3-evidence/operational-history.json",
+        "r2-3-evidence/latest-operational-jobs.json"
+      ],
+      "financial_write_possible_in_legacy_code": false,
+      "live_financial_write_verified": false
+    }
+  ]
+}
