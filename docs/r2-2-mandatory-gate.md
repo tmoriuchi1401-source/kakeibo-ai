@@ -25,8 +25,9 @@ flowchart TD
   N --> W[既存 SyntheticReceiptWriter]
   W --> B[変更しない ReceiptPipeline._materialize_result]
   B --> L[保存先の文脈チェック / 同一memory台帳backend]
-  R[R1 frozen candidate / 既存 native v3 validator] --> O
-  R --> D[既存 SyntheticDraftConfirmation / guarded writer]
+  R[R1 frozen candidate / 既存 SyntheticDraftConfirmation・native v3 validator] --> O
+  O --> V[既存 native v3 pending / consume / start]
+  V --> D[既存 guarded writer / 変更しない旧writer本体]
   D --> L
   X[旧一般・医療 apply / execute / v1金融save] --> H[HELD / 拒否・write 0]
   L --> I[独立全ledger照合 / native完了 / 共有CAS完了]

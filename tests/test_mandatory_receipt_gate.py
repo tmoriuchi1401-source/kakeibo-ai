@@ -345,3 +345,17 @@ def test_old_document_token_change_between_appends_stops_financial_writes():
     r.c.writer.fault=change
     with pytest.raises(StateError):r.call()
     assert r.backends[1].writes==1 and r.dispatches()==1
+
+
+@pytest.mark.parametrize('opaque',['source_missing','operation_disguised_as_lineage'])
+def test_unmapped_v1_never_becomes_empty_history(opaque):
+    from staging_shadow.mandatory_receipt_gate import RetainedHistoryReader
+    from staging_shadow.receipt_draft_contract import LINEAGE
+    from test_legacy_contract_poc import mem
+    r=Rig();value=dict(schema='receipt-reimport-v1',confirmation_items={},records={})
+    if opaque=='source_missing':value['confirmation_items']['old']=dict(status='waiting')
+    else:value['operations']={LINEAGE:dict(phase='UNKNOWN')}
+    old=mem(value);r.c._history=RetainedHistoryReader(lambda:deepcopy(r.history),legacy_ports=(old,))
+    saved=r.frozen(),old.read_versioned()
+    with pytest.raises(StateError):r.call()
+    assert (r.frozen(),old.read_versioned())==saved and r.dispatches()==0

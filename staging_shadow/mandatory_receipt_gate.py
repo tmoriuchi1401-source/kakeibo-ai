@@ -12,7 +12,7 @@ import inspect
 from app.bank_income import INCOME_HEADERS, INCOME_SHEET
 from app.drive_run_state import StateError
 from app.iphone_accounting_gate import ENTRIES, SyntheticAccountingGate
-from app.iphone_accounting_ownership import TrustedOwnershipReader, parse_ownership, relation
+from app.iphone_accounting_ownership import TrustedOwnershipReader, parse_ownership, relation, hashed
 from app.receipt_confirmation_contract import encoded, memory_only, snapshot
 from app.sheets import HEADERS
 from app.unified_receipt_purposes import PurposeBoundary
@@ -36,7 +36,10 @@ def _legacy_clear(value):
     legacy = value.get('legacy', value)
     items = legacy.get('confirmation_items', {})
     for item in items.values():
-        if item.get('status') != 'waiting' or item.get('require_reconfirm'):
+        source = item.get('source', {})
+        if (item.get('status') != 'waiting' or item.get('require_reconfirm') or
+                not isinstance(source,dict) or not source.get('source_id') or
+                not source.get('version') or not hashed(source.get('sha256'))):
             deny('retained_legacy_fence')
     waiting = {i['source']['source_id'] for i in items.values() if isinstance(i.get('source'), dict)}
     for sid, record in legacy.get('records', {}).items():
@@ -73,7 +76,7 @@ class RetainedHistoryReader:
             if value['schema'] != 'receipt-reimport-v1':
                 deny('registered_native_parent_pin_required')
             _legacy_clear(value)
-            if any(op != LINEAGE for op in value.get('operations', {})):
+            if value.get('operations'):
                 deny('retained_operation_requires_readonly_reconciliation')
             observed.append((port, raw, tag))
         frame = self._reader()
