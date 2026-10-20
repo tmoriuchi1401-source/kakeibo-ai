@@ -1353,7 +1353,7 @@
       "grade": "B",
       "trigger": "isolated #135/#136 fixtures",
       "execution": "固定#146 memory-only",
-      "chain": "SyntheticAccountingGate → AutoNativeEvidenceAdapter.observe_boundary → SyntheticReceiptWriter.execute → materializer",
+      "chain": "SyntheticAccountingGate → SyntheticAutoEvidenceAdapter.observe_boundary → SyntheticReceiptWriter.execute → materializer",
       "sinks": "合成memory 4表/native evidence/shared CASだけ",
       "identity": "R01と同一whole-source。通常支出と競合",
       "guards": "memory-only/共有claim照合/独立writer_start/単回capability/固定plan/全readback",
