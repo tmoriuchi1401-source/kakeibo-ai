@@ -225,6 +225,7 @@ def test_weak_backend_does_not_qualify_by_readback():
 def test_existing_daily_correction_reader_is_readonly_and_never_dispatches(state):
     from test_daily_corrections import setup,REQUEST
     store,reader,_,db,inbox=setup()
+    store.synthetic_memory_only=db.synthetic_memory_only=True
     inbox.prepare(REQUEST,'a',{'amount':120})  # Fixture provisioning only.
     store.data['corrections']['requests'][REQUEST]['state']=state
     r=PolicyRig();v=load(r.backends[1].raw)
@@ -242,6 +243,21 @@ def test_existing_daily_correction_reader_is_readonly_and_never_dispatches(state
         with pytest.raises(StateError,match='not_new_queued'):
             r.boundary.inspect_daily_correction(store,db,REQUEST,native_io=native)
     assert (store.data,r.frozen(),native.read_versioned(),reader.rows)==saved and db.calls==[]
+
+
+@pytest.mark.parametrize('bad',['external_store','external_db','native_ledger_mismatch'])
+def test_daily_correction_adapter_rejects_external_IO_or_disagreeing_ledger(bad):
+    from test_daily_corrections import setup,REQUEST
+    store,reader,_,db,inbox=setup();inbox.prepare(REQUEST,'a',{'amount':120})
+    store.synthetic_memory_only=db.synthetic_memory_only=True
+    r=PolicyRig();v=load(r.backends[1].raw)
+    for part in v['snapshot']:part['支出明細']=deepcopy(reader.rows)
+    if bad=='native_ledger_mismatch':v['snapshot'][0]['支出明細'][0][4]=999
+    if bad=='external_store':store.synthetic_memory_only=False
+    if bad=='external_db':db.synthetic_memory_only=False
+    r.backends[1].raw=encoded(v);native=mem(store.data['corrections']);saved=r.frozen(),deepcopy(store.data)
+    with pytest.raises(StateError):r.boundary.inspect_daily_correction(store,db,REQUEST,native_io=native)
+    assert (r.frozen(),store.data)==saved and db.calls==[]
 
 
 @pytest.mark.parametrize('number',[2,3,None])

@@ -265,6 +265,7 @@ class LedgerExecutionBoundary:
         """
         from app.daily_corrections import DailyCorrections
         from app.monthly_projection import fingerprint
+        for io in (store,db,native_io):_memory(io)
         service=DailyCorrections(store,db);before=service._requests()
         item=before['requests'].get(request_id)
         if not item or item.get('state')!='queued':refuse('native_correction_not_new_queued')
@@ -274,6 +275,8 @@ class LedgerExecutionBoundary:
         report=self.inspect_update('A10',ledger_id=self.ledger_id,native_io=native_io,
             source_identity=dict(namespace='daily_corrections',request_id=request_id,expense_id=item['expense_id']),
             targets=[dict(table='支出明細',id=item['expense_id'],row=number,columns=[c for c,_ in item['cells']])])
+        if report['targets'][0]['observed']!=[(number,row)]:
+            refuse('native_correction_ledger_mismatch')
         if service._requests()!=before or service._read_target(item['expense_id'])!=(number,row):
             refuse('native_correction_changed')
         return dict(report,adapter='existing_DailyCorrections_readers')
