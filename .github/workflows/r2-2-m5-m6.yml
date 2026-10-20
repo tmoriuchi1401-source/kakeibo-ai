@@ -1,0 +1,63 @@
+name: R2-2 isolated M5 M6 ledger boundary
+on:
+  pull_request:
+    branches: [codex/r2-2-isolated-mandatory-gate]
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-r2-2-m5-m6-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-ledger-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing test dependencies
+        run: pip install -r requirements-test.txt
+      - name: New M5 M6 boundary and static checks
+        run: python -m pytest -q --junitxml=/tmp/r256-new.xml tests/test_ledger_execution_boundary.py tests/test_ledger_execution_static.py
+      - name: Inherited M1 M3 mandatory gate and static checks
+        run: python -m pytest -q --junitxml=/tmp/r256-m1m3.xml tests/test_mandatory_receipt_gate.py tests/test_mandatory_gate_static.py
+      - name: Inherited R2-1 static inventory
+        run: python -m pytest -q --junitxml=/tmp/r256-static.xml tests/test_r2_1_static_audit.py
+      - name: Existing R1 normal buyback legacy safety regressions
+        run: >-
+          python -m pytest -q --junitxml=/tmp/r256-existing.xml
+          tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py
+          tests/test_accounting_recovery.py tests/test_native_ingress_safety_stop.py
+          tests/test_auto_native_evidence.py tests/test_synthetic_existing_writer.py
+          tests/test_legacy_confirmation_connection_stop.py tests/test_receipt_confirmation_contract.py
+          tests/test_synthetic_legacy_writer.py tests/test_receipt_draft_runtime.py
+          tests/test_synthetic_draft_writer.py tests/test_iphone_r1_adapter.py
+          tests/test_iphone_r1_confirmation.py tests/test_pdf_native_readonly_inventory.py
+          tests/test_production_workflows.py tests/test_receipt_pipeline.py tests/test_receipt_confirmation.py
+          tests/test_receipt_privacy_gate.py tests/test_receipt_text_extraction.py
+          tests/test_iphone_mvp_r0_adoption.py tests/test_iphone_draft_request_design.py
+          tests/test_daily_corrections.py tests/test_p14_posting.py tests/test_receipt_unit_posting.py
+      - name: Actual separate test counts
+        if: always()
+        run: |
+          python - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          for group in ('new','m1m3','static','existing'):
+              p=pathlib.Path('/tmp/r256-'+group+'.xml')
+              if p.exists():
+                  cases=ET.parse(p).getroot().findall('.//testcase')
+                  failed=sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+                  skipped=sum(c.find('skipped') is not None for c in cases)
+                  print(f'{group}: {len(cases)-failed-skipped} passed; {failed} failed/error; {skipped} skipped')
+          PY
+      - name: Syntax and whitespace
+        run: |
+          python -m compileall -q staging_shadow/ledger_execution_boundary.py tests/ledger_execution_fixtures.py
+          git diff --check 540427f865c47066a7d8b3e3a0e0c7ae714fd7c8

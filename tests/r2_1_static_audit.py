@@ -27,6 +27,9 @@ METHODS = {
     "_write_accounting_plan", "process_bytes", "post_normal", "post_manual",
 }
 ALLOWED = {
+    'staging_shadow/ledger_execution_boundary.py', 'tests/ledger_execution_fixtures.py',
+    'tests/test_ledger_execution_boundary.py', 'tests/test_ledger_execution_static.py',
+    'docs/r2-2-m5-m6.md', 'docs/r2-2-m5-m6-inventory.json', '.github/workflows/r2-2-m5-m6.yml',
     'staging_shadow/mandatory_receipt_gate.py', 'tests/mandatory_gate_fixtures.py',
     'tests/test_mandatory_receipt_gate.py', 'tests/test_mandatory_gate_static.py',
     'docs/r2-2-mandatory-gate.md', '.github/workflows/r2-2-mandatory-gate.yml',

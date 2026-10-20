@@ -10,6 +10,9 @@ NEW={'staging_shadow/mandatory_receipt_gate.py','tests/mandatory_gate_fixtures.p
 MODIFIED={'tests/test_production_workflows.py','tests/r2_1_static_audit.py',
     'tests/test_r2_1_static_audit.py','tests/test_iphone_mvp_r0_adoption.py',
     'tests/test_iphone_draft_request_design.py'}
+NEW.update({'staging_shadow/ledger_execution_boundary.py','tests/ledger_execution_fixtures.py',
+    'tests/test_ledger_execution_boundary.py','tests/test_ledger_execution_static.py',
+    'docs/r2-2-m5-m6.md','docs/r2-2-m5-m6-inventory.json','.github/workflows/r2-2-m5-m6.yml'})
 REGRESSION=(
     'tests/test_accounting_ownership.py tests/test_accounting_enforced_gate.py '
     'tests/test_accounting_recovery.py tests/test_native_ingress_safety_stop.py '
