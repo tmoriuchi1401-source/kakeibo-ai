@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'r2-2-mandatory-gate.yml':
+            from test_mandatory_gate_static import assert_workflow
+            assert_workflow(workflow)
+            continue
         if name == 'r2-1-static-audit.yml':
             from test_r2_1_static_audit import StaticAudit
             StaticAudit('test_dedicated_ci_has_no_production_capabilities').test_dedicated_ci_has_no_production_capabilities()
