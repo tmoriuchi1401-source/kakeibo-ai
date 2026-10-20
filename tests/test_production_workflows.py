@@ -131,6 +131,26 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'r2-1-static-audit.yml':
+            from test_r2_1_static_audit import StaticAudit
+            StaticAudit('test_dedicated_ci_has_no_production_capabilities').test_dedicated_ci_has_no_production_capabilities()
+            assert workflow['on'] == {'pull_request': {
+                'branches': ['codex/iphone-r1-confirmation-ui'],
+                'paths': ['docs/r2-1-*', 'tests/r2_1_static_audit.py',
+                          'tests/test_r2_1_static_audit.py', 'tests/test_production_workflows.py',
+                          '.github/workflows/r2-1-static-audit.yml'],
+            }}
+            assert workflow['permissions'] == {'contents': 'read'}
+            assert workflow['env'] == {'UNIFIED_RECEIPT_WRITE_ENABLED': 'false'}
+            assert workflow['concurrency'] == {
+                'group': 'kakeibo-r2-1-audit-${{ github.ref }}', 'cancel-in-progress': 'true'}
+            assert set(workflow['jobs']) == {'inventory-and-synthetic-regression'}
+            job = workflow['jobs']['inventory-and-synthetic-regression']
+            assert job['runs-on'] == 'ubuntu-24.04'
+            assert job['steps'][0] == {'uses': 'actions/checkout@v4', 'with': {
+                'ref': '${{ github.event.pull_request.head.sha }}', 'fetch-depth': '0',
+                'persist-credentials': 'false'}}
+            continue
         if name == 'iphone-r1-confirmation-checks.yml':
             from test_iphone_r1_confirmation import test_ci_is_isolated
             test_ci_is_isolated()

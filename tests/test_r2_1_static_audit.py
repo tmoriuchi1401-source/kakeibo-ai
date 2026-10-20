@@ -28,11 +28,21 @@ class StaticAudit(unittest.TestCase):
                 with self.subTest(path=path):
                     self.assertEqual(digest((ROOT / path).read_text('utf-8-sig')), record['sha256_lf'])
 
-    def test_only_authorized_additions(self):
+    def test_only_authorized_audit_changes(self):
         changed = git('diff', '--name-status', BASE).decode().splitlines()
         for entry in changed:
             status, path = entry.split('\t')
-            self.assertEqual(status, 'A', entry)
+            if path == 'tests/test_production_workflows.py':
+                self.assertEqual(status, 'M', entry)
+                # The old test body must remain byte-for-byte equivalent after
+                # removing only the new dedicated-CI classification branch.
+                old = source(BASE, path).replace('\r\n', '\n')
+                current = (ROOT / path).read_text('utf-8')
+                start = current.index("        if name == 'r2-1-static-audit.yml':")
+                end = current.index("        if name == 'iphone-r1-confirmation-checks.yml':", start)
+                self.assertEqual(current[:start] + current[end:], old)
+            else:
+                self.assertEqual(status, 'A', entry)
             self.assertIn(path, ALLOWED)
         for path in git('ls-files', '--others', '--exclude-standard').decode().splitlines():
             self.assertIn(path, ALLOWED)

@@ -228,6 +228,8 @@ R2-2の隔離検証は既存2/16並列、通常↔買取↔R1↔PDF whole/Unit�
 ## 6. 静的検証・CIと限界
 
 追加検査は `tests/r2_1_static_audit.py` と `tests/test_r2_1_static_audit.py`。
+既存の静的 `tests/test_production_workflows.py` には、新専用CIの明示分類と無資格情報/PR限定/checkout/permission検査だけを追加する。
+既存の分類分岐・assert本体はそのままであることも差分検査する。R1の合成実装や既存production workflowは変更しない。
 appをimportせず、gitの固定treeを文字列/ASTとして読み、候補call siteと参照・source hash・行番号を保存する。
 39分類行（A=1は隔離合成のみ、B=20、C=8、D=2、E=8）。R15は直接金融writeでなく再実行許可を変える統制経路としてCに含める。
 現基点299 Pythonファイル/2,407候補call、historical 292ファイル/2,216候補callを収録した。
@@ -240,6 +242,8 @@ appをimportせず、gitの固定treeを文字列/ASTとして読み、候補cal
 既存tests/conftest.pyがlive socket接続を拒否する。Google SDKをインストールしてもlive clientや資格情報は与えない。
 
 CI URL/確定head/実行済み件数/未実行範囲は新Draft PR本文に記録する。失敗をskip/xfailへ変更しない。
+最初の全回帰runでは新CIの未登録による静的分類1件が失敗し、合成回帰2,327件は成功した。
+上記の明示分類を追加し、同じ回帰を最終headで再実行する。途中/重複runは最終成功件数へ加算しない。
 静的テストは「危険経路を見落とさず現状を固定する」検査であり、発見した経路を閉鎖した検査ではない。
 
 限界: 任意の `getattr`/動的DI/monkeypatch/外部コード、過去の任意SHA、未追跡script、CI外host、Google ACL/本番データ/実backendの耐久性、正しいlive reader、実request/in-flight、現在のActions有効状態は証明しない。

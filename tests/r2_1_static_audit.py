@@ -30,6 +30,7 @@ ALLOWED = {
     "docs/r2-1-writer-audit.md", "docs/r2-1-ingresses.json",
     "docs/r2-1-static-census.json", "docs/r2-1-pr-baseline.json",
     "tests/r2_1_static_audit.py", "tests/test_r2_1_static_audit.py",
+    "tests/test_production_workflows.py",
     ".github/workflows/r2-1-static-audit.yml",
 }
 
