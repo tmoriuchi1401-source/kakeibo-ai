@@ -44,6 +44,8 @@ no-store／no-referrer、認証前の下書き読取り禁止、入力・医療�
   privacy状態・カテゴリmaster・全ledger・planを再導出。取込には既存`post(save_draft)`だけを使う。
 - `SyntheticDraftConfirmation`と既存guarded writerは無変更・新経路からの呼出し0。
   確定時に`OneTabConfirmation.post(post)`へ流さず、native qualification前で停止する。
+- 既存save_draftの結果に`newly_saved`を追加し、新規CAS成功と保存済み値のread-only読戻しを区別する。
+  同じ値を別操作が先に保存していても、今回の取込成功として採用しない。既存の金融POST処理は無変更。
 - #131一般fixtureはPDF Unit契約であり、画像whole-sourceへ流用しない。
   #147〜#152の金融mandatory gate／drainは今回越えない。#153のNO-GOを解消したとは扱わない。
 
@@ -88,7 +90,7 @@ page count／master／native draft変更、別owner／期限／CSRF／Origin、�
 2／16並列、journal意図保存前後・下書きCAS前後・結果CAS前後の応答喪失、UNKNOWN保持を検証する。
 本経路のnative／shared／ledger／authorityポートとwriter入口はfail-on-callで遮断する。
 実ホスト試験は既存RSA署名・owner/session/CSRF検証を通し、金融writeなしで往復する。
-既存reader／journal／原本観測／明細／医療手入力／認証／workflow境界の回帰323件も実行する。
+既存reader／journal／原本観測／明細／医療手入力／認証／workflow境界とsave_draftの回帰325件も実行する。
 件数・最終headのUbuntu CI結果はPR checks／JUnitを参照。古いCI成功を今回の新規成功へ加算しない。
 
 Windowsの固定bundleはrepo外かつ許可作業フォルダ内の一時領域で構築した。hash条件・旧ソースは無変更。

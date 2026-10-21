@@ -190,7 +190,7 @@ class OneTabConfirmation:
                 if (action == 'save_draft' and d['revision'] == claims['draft']['revision']+1
                         and d['value'] == payload['value']):
                     return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid,
-                                draft_revision=d['revision'], draft_tag=tag)
+                                draft_revision=d['revision'], draft_tag=tag, newly_saved=False)
                 deny('reconfirm')
             if action == 'save_draft':
                 if payload['confirmed'] is not False:
@@ -208,7 +208,7 @@ class OneTabConfirmation:
                 if observed != after or saved_tag == tag:
                     deny('draft_UNKNOWN')
                 return dict(status='draft_saved', label=LABELS['draft_saved'], request_id=rid,
-                            draft_revision=after['revision'], draft_tag=saved_tag)
+                            draft_revision=after['revision'], draft_tag=saved_tag, newly_saved=True)
             current = self._prepare(cid)
             if current != claims['snapshot']:
                 deny('reconfirm')

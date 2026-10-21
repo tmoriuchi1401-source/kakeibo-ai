@@ -225,12 +225,13 @@ class SheetDraftHandoff:
             deny('attempt_UNKNOWN_snapshot_changed')
         if action == 'import_draft':
             try:
-                self.confirmation.post(dict(proof=claims['inner_proof'], value=frame['value'], confirmed=False), gate)
+                saved_draft = self.confirmation.post(dict(proof=claims['inner_proof'], value=frame['value'], confirmed=False), gate)
             except Exception:
                 self.uncertain = True
                 raise
             observed = self.confirmation._draft(cid)[0]
-            if observed['value'] != frame['value'] or observed['revision'] != frame['draft']['revision']+1:
+            if (saved_draft.get('newly_saved') is not True or observed['value'] != frame['value']
+                    or observed['revision'] != frame['draft']['revision']+1):
                 deny('draft_UNKNOWN')
             _, observations = self.confirmation.cases[cid].readers.observe()
             if observations[1:] != frame['observations'][1:]:

@@ -234,6 +234,22 @@ def test_latest_import_is_ordered_by_cas_revision_and_old_results_are_retained(m
     assert r.financial() == r.before_financial
 
 
+@pytest.mark.parametrize('kind', ['normal', 'medical'])
+def test_identical_competing_save_is_not_adopted_as_this_import(kind, monkeypatch, tmp_path):
+    r = Rig(kind, monkeypatch, tmp_path); r.set('memo', 'same competing value'); p = r.proof()
+    original = r.adapter.confirmation.post
+    def competing(payload, gate):
+        d, raw, tag = r.ui._draft(r.cid)
+        d.update(revision=d['revision']+1, value=deepcopy(payload['value']), input_digest=digest(payload['value']))
+        r.c.readers.draft.replace_versioned(raw, tag, encoded(d))
+        return original(payload, gate)
+    monkeypatch.setattr(r.adapter.confirmation, 'post', competing)
+    with pytest.raises(StateError, match='draft_UNKNOWN'): r.send(p)
+    assert r.adapter.inspect(p['request_id'], r.gate)['status'] == 'UNKNOWN'
+    assert r.rebuild().inspect(p['request_id'], r.gate)['status'] == 'UNKNOWN'
+    assert r.financial() == r.before_financial
+
+
 @pytest.mark.parametrize('attack', ['default_off', 'foreign_owner', 'foreign_contract', 'live_journal'])
 def test_composition_cannot_use_a_foreign_or_live_domain(attack, monkeypatch, tmp_path):
     from staging_shadow.iphone_sheet_handoff import SheetDraftHandoff
@@ -263,7 +279,7 @@ def test_ci_is_exactly_isolated():
             {'name': 'New handoff and authenticated host evidence', 'run':
                 'python -m pytest -q tests/test_iphone_sheet_handoff.py tests/test_iphone_sheet_handoff_host.py --junitxml=.private/handoff-new.xml'},
             {'name': 'Existing reader journal source manual-input and authentication regressions', 'run':
-                'python -m pytest -q tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_review_drafts.py tests/test_iphone_confirmation.py tests/test_production_workflows.py --junitxml=.private/handoff-regression.xml'},
+                'python -m pytest -q tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_review_drafts.py tests/test_iphone_confirmation.py tests/test_production_workflows.py tests/test_iphone_r1_adapter.py::test_save_returns_exact_readback_revision_tag_and_replay_metadata --junitxml=.private/handoff-regression.xml'},
             {'uses': 'actions/upload-artifact@v4', 'if': 'always()', 'with': {
                 'name': 'one-tab-handoff-synthetic-junit', 'path': '.private/handoff-*.xml', 'include-hidden-files': 'true'}},
             {'name': 'Compile and whitespace', 'run':
