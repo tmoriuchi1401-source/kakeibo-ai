@@ -1,4 +1,11 @@
 {
   "confirmed": false,
-  "values": {}
+  "values": {},
+  "repository_owner_permission_metadata": {
+    "method": "connected GitHub collaborator permission read",
+    "role": "admin",
+    "principal": "repository-owner",
+    "observed_date_UTC": "2026-10-21",
+    "dispatch_or_rerun_performed": false
+  }
 }

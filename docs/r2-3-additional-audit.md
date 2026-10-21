@@ -52,6 +52,8 @@ main側workflowにはEnvironment binding定義がない。既存Environment一�
 
 historical `pdf-unit-write-canary.yml` はactive、`inputs.approved_sha` のcheckoutが存在し、PR #91 head/checksとvalidated mainの検証も持つ。runのhead SHAとcheckout SHAを混同しない。p14/receipt-unit系の旧dispatchもactiveとして残る。re-runのUI実行権限、再実行時点の変数評価、全Secret供給範囲は未確認。dispatch/re-runを行って確認することはしない。
 
+補足：接続済みGitHubのcollaborator permission照会では、既存run主体であるrepository ownerのrepository roleは **admin** と確認できた。これはsettings用APIが現在の接続ツールで公開されていることや、旧workflowへ必要な全credentialが供給されることの証明ではない。照会結果は [Variablesアクセス記録](r2-3-additional-evidence/variables-access.json) に付記した。実行操作はしていない。
+
 確認手順（人間の既存権限で閲覧のみ）：Settings → Secrets and variables → Actions → **Variables** で上記4設定と関連flagの名前・値・更新時刻を照合。Secretsは名前・供給範囲のみ。Settings → Environmentsでbinding/保護規則を確認。現在とrun実行時点の値は分けて記録し、過去値不明なら理由の確定は保留。flagをtrueへ変更したりvalidated SHAを更新したりしない。
 
 ## A-2 Cloud Run公開範囲
