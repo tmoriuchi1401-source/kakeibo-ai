@@ -72,7 +72,7 @@ historical `pdf-unit-write-canary.yml` はactive、`inputs.approved_sha` のchec
 | 旧config | Secret hga-p14-page-config version6、`/secrets/p14-config/config.json` |
 | credential Secret IAM | runtime SAにresource直付けSecret Manager Secret Accessor、表示上は継承なし |
 
-他にweb-config / owner-policy / session-keyのversion1マウントを確認した。本文・OAuth client secret・credentialに含まれるSA IDやscopeは未取得。runtime SAはDatastoreの条件付きロールとは**別binding**で旧credential Secretを参照できる。Secret version1の存在・有効・Accessorは確認済みでも、Secret内のcredentialの有効性、失効、実Sheet共有ACL、Drive対象範囲、他projectの権限は未確認である。
+他にweb-config / owner-policy / session-keyのversion1マウントを確認した。本文・OAuth client secret・credentialに含まれるSA IDやscopeは未取得。runtime SAにはDatastoreの条件付きロールとは**別binding**で旧credential SecretのAccessorが付与されている。Secret version1の存在・有効・Accessor bindingは確認済みだが、条件列に表示されなかった条件の有無、deny/組織policyを含む実アクセス評価は未確認。Secret内のcredentialの有効性、失効、実Sheet共有ACL、Drive対象範囲、他projectの権限も未確認である。
 
 IAM invokerはCloud Runへの入口、アプリ内部認証は到達後の処理の認可であり別の層。repoのauth-sessionはGoogle本人、owner、session、Origin/CSRF、nonce/PKCE、期限と目的別のnative検証を持つ。しかしimage→commit対応を証明しておらず、それらが現行host全endpointで成立すると断定しない。公開invokerだけで匿名金融write可能とも断定しない。今回は匿名HTTP試験・認証試行・金融POSTを一切行っていない。
 
