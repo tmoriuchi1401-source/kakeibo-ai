@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'iphone-sheet-handoff-ui-checks.yml':
+            from test_iphone_handoff_ui import test_ui_ci_is_exactly_isolated
+            test_ui_ci_is_exactly_isolated()
+            continue
         if name == 'iphone-sheet-handoff-checks.yml':
             from test_iphone_sheet_handoff import test_ci_is_exactly_isolated
             test_ci_is_exactly_isolated()
