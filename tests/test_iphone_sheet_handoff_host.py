@@ -38,8 +38,9 @@ def test_real_authenticated_host_import_confirm_and_result_without_financial_wri
     assert r.send(p, True).status_code == 409
     assert r.h.db.data == auth
     assert {cid:r.old.frozen(cid) for cid in r.old.native} == r.before
-    # The composition registers no financial R1 endpoint or new Web UI.
-    assert r.h.get(PREFIX).status_code == 404
+    # The reused one-tab UI now exists; the financial R1 endpoint still does not.
+    page = r.h.get(PREFIX)
+    assert page.status_code == 200 and '確認済み・未記帳' in page.get_data(as_text=True)
     assert r.h.client.post('/isolated-synthetic/iphone-confirmation/r1/request',base_url=ORIGIN).status_code == 404
 
 
