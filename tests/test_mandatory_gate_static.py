@@ -50,6 +50,19 @@ REGRESSION=(
     'tests/test_iphone_mvp_r0_adoption.py tests/test_iphone_draft_request_design.py')
 
 
+# Exact R2-4 isolated additions; existing runtime/workflow assertions remain unchanged.
+NEW.update({
+    'staging_shadow/isolated_update_adapters.py',
+    'tests/isolated_update_fixtures.py',
+    'tests/test_isolated_update_adapters.py',
+    'tests/test_isolated_update_static.py',
+    'docs/r2-4-isolated-updates.md',
+    'docs/r2-4-update-validation.json',
+    'docs/r2-4-pr-baseline.json',
+    '.github/workflows/r2-4-isolated-updates.yml',
+})
+
+
 def git(*args):return subprocess.check_output(['git','-C',str(ROOT),*args]).decode('utf-8')
 
 

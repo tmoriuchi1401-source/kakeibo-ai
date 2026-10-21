@@ -177,6 +177,7 @@ def test_no_runtime_auth_bundle_or_existing_workflow_changed_since_141():
     allowed = {'app/receipt_confirmation_draft_request.py', 'staging_shadow/receipt_draft_contract.py',
         'staging_shadow/mandatory_receipt_gate.py',  # Authorized isolated R2-2 composition.
         'staging_shadow/ledger_execution_boundary.py',  # Authorized isolated M5/M6 boundary.
+        'staging_shadow/isolated_update_adapters.py',  # Authorized isolated R2-4 adapters.
         'staging_shadow/synthetic_draft_writer.py',
         'app/iphone_item_drafts.py', 'app/iphone_confirmation_host.py',
         'app/unified_shadow_templates/iphone_one_tab.html', 'app/unified_shadow_templates/iphone_one_tab.js',
