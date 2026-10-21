@@ -214,6 +214,7 @@ class _DB:
                     deny('row_ID_changed')
                 before = deepcopy(target[number-2])
             bound.append(dict(id=row[0], row=number, before=before, after=row))
+        if len({v['id'] for v in bound}) != len(bound): deny('duplicate_plan_ID')
         operation = dict(table=title, mode=mode, targets=bound, columns=columns)
         if self.sink: self.sink(operation)
         self.plan.append(operation)
@@ -359,10 +360,22 @@ class IsolatedUpdates:
             for rows in part.values():
                 if any(not r or not r[0] for r in rows) or len({r[0] for r in rows}) != len(rows): deny('ambiguous_ID')
         db = _DB(before, source[0]['payload'])
+        if entry == 'A10':
+            # Rebuild the immutable request with the EXISTING native prepare
+            # validator on an isolated empty inbox. Never persist this proposal.
+            original = native[0]['payload']['corrections']['requests'][arguments[0]]
+            checked_db = _DB(before, source[0]['payload'])
+            checked_store = _CorrectionsStore(dict(native[0]['payload'], corrections={'requests':{}}), checked_db)
+            validator = self.module('daily_corrections').DailyCorrections(checked_store, checked_db)
+            checked = validator.prepare(arguments[0], original['expense_id'], original['changes'],
+                **({'form_digest':original['form_digest']} if 'form_digest' in original else {}))
+            immutable = ('expense_id','changes','before','after','cells','category_pair','state','error','form_digest')
+            if any(checked.get(k) != original.get(k) for k in immutable): deny('native_request_binding_changed')
         # A01's Amazon-money path belongs to A04/A05 and stays disconnected.
         if entry == 'A01' and any(len(r) > 11 and r[11] == 'Amazon注文と照合' for r in db.get('要確認!A2:V')):
             deny('Amazon_out_of_scope')
         result = self._invoke(entry, db, native[0]['payload'], arguments, options)
+        snapshot(db.rows)  # Reject duplicate IDs/formula projection damage BEFORE claim.
         if result.get('errors', 0) or entry == 'A10' and result.get('state') != 'applied': deny('native_validator_failed')
         pending = db.native_writes[0] if entry == 'A10' and db.native_writes else None
         state = dict(entry=entry, arguments=arguments, options=options, before=before,

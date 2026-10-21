@@ -307,3 +307,21 @@ def test_review_auxiliary_store_CAS_failure_is_a_separate_held_prefix(mode):
     assert not r.new().inspect(c.request_id)['retry_allowed']
     with pytest.raises(StateError):r.adapter.execute(c)
     assert r.frozen()==saved
+
+
+@pytest.mark.parametrize('field,value',[('cells',[[0,'other-ID']]),('after','0'*64),
+    ('changes',{'source':'different'}),('cells',[[10,'different-import']])])
+def test_correction_reuses_native_prepare_validator_for_immutable_request(field,value):
+    r=Rig('A10')
+    mutate(r.native_io,lambda v:v['payload']['corrections']['requests'][REQUEST].update({field:value}))
+    saved=r.frozen()
+    with pytest.raises(Exception):r.candidate()
+    assert r.frozen()==saved and r.adapter.dispatches==[]
+
+
+def test_duplicate_review_ID_never_reaches_the_first_writer():
+    r=Rig('A01')
+    mutate(r.source_io,lambda v:v['payload']['tables']['要確認'].append(deepcopy(v['payload']['tables']['要確認'][0])))
+    saved=r.frozen()
+    with pytest.raises(StateError):r.candidate()
+    assert r.frozen()==saved and r.adapter.dispatches==[]

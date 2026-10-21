@@ -30,7 +30,7 @@ A01〜A03に個別の署名済みreceipt authorityがあるとは扱わない。
 
 1. source（取込・review・カテゴリ/rule・補助index）とnativeを別々のversioned frameで観測。前後2回のframeを一致させる。実原本は読まず、合成sourceのみ。
 2. 全ledgerのbefore snapshot、ID・診断用行位置・全値/数式、全変更planと完了後snapshotを固定。行番号だけをidentityにしない。
-3. 既存native writerを純粋なmemory plan DBで実行し、元のdomain validator・分類・duplicate・bank canary・DailyCorrections fingerprintを再利用。validator errorがあれば拒否。
+3. 既存native writerを純粋なmemory plan DBで実行し、元のdomain validator・分類・duplicate・bank canary・DailyCorrections fingerprintを再利用。DailyCorrectionsのqueued requestは元のprepare validatorでも再構築し、changes/cells/before/after/category bindingを一致させる。重複IDのplanはclaim前に拒否。validator errorがあれば拒否。
 4. 合成execution journalの全ledger ownershipと既存shared revisionの強CAS。別source・別IDも全snapshotを変えるため同時実行を許可しない。
 5. 元のProductionLedger.begin、または元のDailyCorrectionsが計画時に生成したpending payloadをCASで保存。既存pending/UNKNOWN/PARTIALは受付けない。journalのrequest IDは一度だけ消費する。
 6. native pendingと独立してwriter_startedをCAS永続化し、dispatch budgetを1回だけ消費。
