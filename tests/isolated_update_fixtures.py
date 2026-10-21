@@ -28,6 +28,7 @@ class Rig:
         tables = {t: [] for t in ('レシート', '支出明細', '取込データ', '銀行振込_入金明細')}
         tables['支出明細'] = [row('synthetic-existing', amount=7)]
         source = dict(money_mode=False,category_rule_auto_apply_enabled=False,
+            reconciliation_lookback_months=6,confirmed_internal_transfers=[],
             bank_finalization=dict(approved_target='synthetic-joint-ledger',expected_head=native_code_identity()),
             categories=[['食費','食料品'], ['その他','未分類']],
             tables={'要確認': [], '店舗': [], 'カテゴリ自動分類ルール': []}, projection={})

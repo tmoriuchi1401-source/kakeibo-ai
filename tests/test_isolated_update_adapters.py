@@ -381,3 +381,23 @@ def test_fresh_journal_and_old_receipt_composition_cannot_ignore_a_ledger_hold(p
     assert r.frozen()==saved and receipt.dispatches()==0
     assert r.new().inspect(c.request_id)['classification'] in {'UNKNOWN','PARTIAL'}
     assert r.frozen()==saved
+
+
+@pytest.mark.parametrize('entry,key',[('A02','reconciliation_lookback_months'),('A03-bank','confirmed_internal_transfers')])
+def test_missing_native_business_configuration_is_not_replaced_with_a_default(entry,key):
+    r=Rig(entry);mutate(r.source_io,lambda v:v['payload'].pop(key));saved=r.frozen()
+    with pytest.raises(StateError,match='observation_required'):r.candidate()
+    assert r.frozen()==saved
+
+
+def test_existing_reconciliation_lookback_is_preserved_from_independent_config():
+    from datetime import datetime,timedelta
+    from isolated_update_fixtures import imported
+    counts=[]
+    for months in (1,6):
+        r=Rig('A02');old=imported('synthetic-old-resolved',status='matched_receipt',amount=999)
+        old[4]=(datetime.now()-timedelta(days=90)).strftime('%Y-%m-%d');old[5]='別の合成店舗'
+        mutate(r.ledger_io,lambda v:[part['取込データ'].append(deepcopy(old)) for part in v['snapshot']])
+        mutate(r.source_io,lambda v:v['payload'].update(reconciliation_lookback_months=months))
+        c=r.candidate();r.adapter.execute(c);counts.append(c.result['scoped_transactions'])
+    assert counts[1]==counts[0]+1

@@ -346,13 +346,21 @@ class IsolatedUpdates:
                 target_spreadsheet_id=self.boundary.ledger_id, approved_target=approved['approved_target'],
                 current_head=head, expected_head=approved['expected_head'])
         kwargs = {}
+        if entry == 'A02':
+            months = db.source.get('reconciliation_lookback_months')
+            if type(months) is not int: deny('native_lookback_observation_required')
+            kwargs['lookback_months'] = months
         if entry == 'A03':
             enabled = db.source['category_rule_auto_apply_enabled']
             if type(enabled) is not bool or options.get('category_rules', enabled) != enabled:
                 deny('independent_category_flag_binding_required')
             kwargs['category_rule_auto_apply_enabled'] = enabled
         if entry == 'A03-bank':
-            kwargs['confirmed_internal_transfers'] = frozenset(tuple(v) for v in db.source.get('confirmed_internal_transfers', []))
+            transfers = db.source.get('confirmed_internal_transfers')
+            if (type(transfers) is not list or any(type(v) is not list or len(v)!=3
+                    or any(type(field) is not str for field in v) for v in transfers)):
+                deny('native_transfers_observation_required')
+            kwargs['confirmed_internal_transfers'] = frozenset(tuple(v) for v in transfers)
         return kind(db, **kwargs).apply(*arguments)
 
     def _native_valid(self, entry, payload, arguments):
