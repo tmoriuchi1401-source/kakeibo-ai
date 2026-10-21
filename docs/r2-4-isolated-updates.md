@@ -12,7 +12,7 @@
 | A03 銀行最終反映 | BankFinalizationPipeline.apply | 既存validate_bank_finalization_canaryの固定対象/commit検証、既存decision・カテゴリ・duplicate・独立_verify。合成laneではauto_expense native stageを使用 |
 | A10 固定ID支出修正 | DailyCorrections.apply / bounded apply_pending adapter | 既存queued request、入力・before/after fingerprint、index固定ID再確認、カテゴリrevision、pending→applied。v3へ変換しない |
 
-**A10の収入/money reviewは未接続**。DailyCorrectionsは元から支出専用で、収入はdaily_money_review→既存MoneyWriterという別nativeである。今回A05等を改修しない範囲を優先し、この別nativeへの金融接続や新たな収入authorityを追加していない。A10全体が完成したとは報告しない。A04〜A09/A11〜A13も未接続のまま。parser・PDF金融writerは変更なし。
+**A10の収入修正とmoney reviewは、それぞれ未接続**。DailyCorrectionsは元から支出専用。daily_money_review→MoneyReviews→MoneyWriterも汎用の収入修正nativeではなく、既存金銭例外の計上・対応付け等を扱い、writerは取込/支出へ反映する。今回指定された関数群に固定ID収入修正の既存contractは確認できなかったため、支出用nativeの流用や新たな収入authority追加で補わない。この機能は適切な既存native/authorityと対象表の特定が必要な保留事項である。A10全体が完成したとは報告しない。A04〜A09/A11〜A13も未接続のまま。parser・PDF金融writerは変更なし。
 
 A01〜A03に個別の署名済みreceipt authorityがあるとは扱わない。既存productionのnativeは親ProductionLedgerのstageと既存domain validatorであり、今回もその形式を保持する。A10には既存corrections requestがある。合成execution journalはこれらの検証結果・開始/消費・対象bindingを記録するだけで、本番金融authorityの代替ではない。銀行の原本取込authorityはこの最終反映adapterが新たに発行/消費するものではない。
 
@@ -61,6 +61,6 @@ CAS 412、timeout、応答喪失、writer途中停止、全行後停止、native
 
 合成backendはlock-backed Memoryのstrong CASであり、実Google backendのCAS/ABA保証は未証明。本番constructorは存在せず、booleanだけで有効化できない。Python introspectionを敵対的sandboxとして防ぐ仕組みではなく、ライブclientを一切与えない隔離compositionである。
 
-R3には①Aの実flag/validated SHA・旧host/image/credential主体/実効ACLの不足確認、②本番pending/UNKNOWN照合への個別read承認、③全金融旧入口（A04〜A09/A11〜A13とA10 moneyを含む）のadapter接続または限定drain/閉鎖、④実backend強CAS/全ledger観測/authorityと保存先bindingの証明、⑤旧金融能力の権限側閉鎖と表示導線の影響承認、⑥限定切替・独立read-back/受付停止/read-only rollbackの個別承認が必要。
+R3には①Aの実flag/validated SHA・旧host/image/credential主体/実効ACLの不足確認、②本番pending/UNKNOWN照合への個別read承認、③全金融旧入口（A04〜A09/A11〜A13とA10 moneyを含む）のadapter接続または限定drain/閉鎖、④実backend強CAS/全ledger観測/authorityと保存先bindingの証明、⑤旧金融能力の権限側閉鎖と表示導線の影響承認、⑥限定切替・独立read-back/受付停止/read-only rollbackの個別承認が必要。A10収入修正は、既存native/authority・入力revision・before fingerprint・固定income ID・対象表を先に特定し、その範囲を改めて承認するまで未実装とする。
 
 既存の定期取込を維持し、一般receipt・医療完全手入力R1を先行、PDF金融接続は後続とする方針を維持する。今回の合成接続を本番の全金融入口完成・R3開始GOとは扱わない。
