@@ -1,0 +1,27 @@
+[
+  {
+    "status": "queued",
+    "total_count": 0,
+    "runs": []
+  },
+  {
+    "status": "waiting",
+    "total_count": 0,
+    "runs": []
+  },
+  {
+    "status": "in_progress",
+    "total_count": 0,
+    "runs": []
+  },
+  {
+    "status": "pending",
+    "total_count": 0,
+    "runs": []
+  },
+  {
+    "status": "requested",
+    "total_count": 0,
+    "runs": []
+  }
+]

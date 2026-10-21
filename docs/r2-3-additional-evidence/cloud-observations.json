@@ -1,0 +1,74 @@
+{
+  "observed_date_UTC": "2026-10-21",
+  "method": "existing signed-in Console DOM; manually transcribed metadata, not API export",
+  "identifiers_masked": true,
+  "secret_payloads_read": 0,
+  "application_endpoint_requests": 0,
+  "financial_POST": 0,
+  "configuration_changes": 0,
+  "service": {
+    "name": "hga-auth-synthetic",
+    "region": "asia-northeast1",
+    "revision": "hga-auth-synthetic-00019-xf7",
+    "traffic_percent": 100,
+    "image_digest": "sha256:509b0a6612c29824636eecc992e3886be9f735cda602bac8cf024873dad304ab",
+    "ingress": "all",
+    "resource_invoker": "allUsers",
+    "runtime_SA": "hga-synthetic-runtime@<project>.iam.gserviceaccount.com",
+    "image_commit_mapping": "unconfirmed"
+  },
+  "project_IAM": {
+    "role": "roles/datastore.user",
+    "condition_title": "hga_synthetic_database_only",
+    "expression": "resource.name=='projects/<project>/databases/hga-synthetic-auth'"
+  },
+  "mounts": [
+    {
+      "secret": "hga-synthetic-web-config",
+      "version": "1",
+      "path": "/secrets/oauth/config.json"
+    },
+    {
+      "secret": "hga-synthetic-owner-policy",
+      "version": "1",
+      "path": "/secrets/owner/policy.json"
+    },
+    {
+      "secret": "hga-synthetic-session-key",
+      "version": "1",
+      "path": "/secrets/session/key"
+    },
+    {
+      "secret": "hga-p14-drive-credential",
+      "version": "1",
+      "path": "/secrets/p14-credential/credential.json"
+    },
+    {
+      "secret": "hga-p14-page-config",
+      "version": "6",
+      "path": "/secrets/p14-config/config.json"
+    }
+  ],
+  "credential_secret": {
+    "name": "hga-p14-drive-credential",
+    "version": "1",
+    "state": "enabled",
+    "resource_role": "roles/secretmanager.secretAccessor",
+    "principal": "hga-synthetic-runtime@<project>.iam.gserviceaccount.com",
+    "inherited": false,
+    "condition_shown": false,
+    "credential_subject_scopes_validity": "unconfirmed; secret payload not read"
+  },
+  "console_paths": [
+    "/run/services?project=<project>",
+    "/run/detail/asia-northeast1/hga-auth-synthetic/revisions?project=<project>",
+    "/iam-admin/iam?project=<project>",
+    "/security/secret-manager/secret/hga-p14-drive-credential/permissions?project=<project>"
+  ],
+  "unconfirmed": [
+    "Drive/Sheets effective resource ACL",
+    "other projects and distributed credentials",
+    "deployed image app auth/financial route reachability",
+    "other four Secret resource IAM bindings"
+  ]
+}
