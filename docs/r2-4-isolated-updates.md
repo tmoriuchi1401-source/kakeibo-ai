@@ -53,6 +53,8 @@ plan時と実dispatch時に同じ元writerを使い、clockだけprivate module�
 
 `apply_pending()` はqueuedだけを固定ID順に上限付きで個別gateへ送る。旧pendingを元のDailyCorrections.applyで自動回復する経路は露出させない。1件UNKNOWNになれば次へ進まない。
 
+当該実行が新規queuedから自分で保存したpendingについては、そのphaseからも元のnative計画を求める。同値修正は元のnative read-backでcell writeなしに正常完了できる。実行前から存在したpendingは、値が一致していてもこの例外に入れず拒否する。
+
 ## 異常時と再構築
 
 CAS 412、timeout、応答喪失、writer途中停止、全行後停止、native完了後/共有完了前停止を注入する。例外時は追加の共有状態遷移・native recovery・retry・fence解除を行わない。永続phaseをそのまま保持し、`inspect()` はCOMPLETE / UNKNOWN / PARTIAL、全ledger一致、retry_allowed=falseをread-onlyで返す。writer_startedの永続dispatches=1は開始枠の消費であり、プロセス停止時の実call成功数を断定するカウンタではない。

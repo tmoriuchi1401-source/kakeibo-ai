@@ -421,6 +421,17 @@ class IsolatedUpdates:
         snapshot(db.rows)  # Reject duplicate IDs/formula projection damage BEFORE claim.
         if result.get('errors', 0) or entry == 'A10' and result.get('state') != 'applied': deny('native_validator_failed')
         pending = db.native_writes[0] if entry == 'A10' and db.native_writes else None
+        if entry == 'A10':
+            # Our OWN pending marker is persisted before dispatch. Plan the
+            # unchanged native body from that exact phase too: a no-op change
+            # can legitimately finish by native read-back with zero cell writes.
+            if pending is None: deny('native_pending_evidence_required')
+            planned = _DB(before, source[0]['payload'])
+            own_pending = dict(native[0]['payload'], corrections=pending)
+            checked_result = self._invoke(entry, planned, own_pending, arguments, options)
+            if checked_result != result or planned.rows != db.rows or planned.source != db.source:
+                deny('native_pending_plan_changed')
+            db = planned
         state = dict(entry=entry, arguments=arguments, options=options, before=before,
             source=source[0]['payload'], native=native[0]['payload'], plan=db.plan,
             after=db.rows, source_after=db.source)
@@ -555,7 +566,8 @@ class IsolatedUpdates:
             # Re-run native validators from frozen source and original before;
             # no untrusted caller-supplied authority can bypass this step.
             check = _DB(load(c.ledger[0])['snapshot'], c.source[0]['payload'])
-            check_result = self._invoke(c.entry, check, c.native[0]['payload'], c.arguments, dict(c.options))
+            checked_native = frames['native'][0]['payload'] if c.entry=='A10' else c.native[0]['payload']
+            check_result = self._invoke(c.entry, check, checked_native, c.arguments, dict(c.options))
             if tuple(check.plan) != c.plan or check_result != c.result: deny('native_revalidation_failed')
             phase('writer_started', dispatches=1); self.point('after_writer_start')
             fresh_frames(); self.dispatches.append(c.operation)

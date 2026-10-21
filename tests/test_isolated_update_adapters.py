@@ -401,3 +401,27 @@ def test_existing_reconciliation_lookback_is_preserved_from_independent_config()
         mutate(r.source_io,lambda v:v['payload'].update(reconciliation_lookback_months=months))
         c=r.candidate();r.adapter.execute(c);counts.append(c.result['scoped_transactions'])
     assert counts[1]==counts[0]+1
+
+
+def test_own_noop_correction_completes_without_a_cell_write_or_retry():
+    r=Rig('A10')
+    def noop(value):
+        item=value['payload']['corrections']['requests'][REQUEST]
+        item.update(changes={'amount':7},after=item['before'],cells=[[4,7]])
+    mutate(r.native_io,noop);c=r.candidate()
+    assert c.plan==() and c.after==load(c.ledger[0])['snapshot']
+    assert r.adapter.execute(c)['state']=='complete'
+    assert len(r.adapter.dispatches)==1 and r.ledger_io.writes==2  # observation hold/publication only
+    saved=r.frozen();assert r.new().inspect(c.request_id)['classification']=='COMPLETE'
+    with pytest.raises(StateError):r.adapter.execute(c)
+    assert r.frozen()==saved
+
+
+def test_preexisting_noop_pending_is_still_not_recovered():
+    r=Rig('A10')
+    def pending(value):
+        item=value['payload']['corrections']['requests'][REQUEST]
+        item.update(changes={'amount':7},after=item['before'],cells=[[4,7]],state='pending')
+    mutate(r.native_io,pending);saved=r.frozen()
+    with pytest.raises(StateError):r.candidate()
+    assert r.frozen()==saved and r.adapter.dispatches==[]
