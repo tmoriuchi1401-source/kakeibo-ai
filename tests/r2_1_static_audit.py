@@ -66,6 +66,19 @@ ALLOWED.update({
 
 
 
+# Exact R2-4 isolated additions; existing runtime/workflow assertions remain unchanged.
+ALLOWED.update({
+    'staging_shadow/isolated_update_adapters.py',
+    'tests/isolated_update_fixtures.py',
+    'tests/test_isolated_update_adapters.py',
+    'tests/test_isolated_update_static.py',
+    'docs/r2-4-isolated-updates.md',
+    'docs/r2-4-update-validation.json',
+    'docs/r2-4-pr-baseline.json',
+    '.github/workflows/r2-4-isolated-updates.yml',
+})
+
+
 def git(*args):
     return subprocess.check_output(
         ["git", "-c", "safe.directory=" + ROOT.as_posix(), "-C", str(ROOT), *args]

@@ -135,6 +135,10 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
             from test_ledger_execution_static import assert_workflow
             assert_workflow(workflow)
             continue
+        if name == 'r2-4-isolated-updates.yml':
+            from test_isolated_update_static import assert_workflow
+            assert_workflow(workflow)
+            continue
         if name == 'r2-2-mandatory-gate.yml':
             from test_mandatory_gate_static import assert_workflow
             assert_workflow(workflow)

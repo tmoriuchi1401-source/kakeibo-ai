@@ -40,6 +40,9 @@ class StaticAudit(unittest.TestCase):
                 self.assertEqual(current.count(inserted), 1)
                 self.assertEqual(current.count(m56), 1)
                 current = current.replace(m56, '')
+                r24 = "        '" + ('A\\t' if 'draft_request' in path else '') + "staging_shadow/isolated_update_adapters.py',  # Authorized isolated R2-4 adapters.\n"
+                self.assertEqual(current.count(r24), 1)
+                current = current.replace(r24, '')
                 self.assertEqual(current.replace(inserted, ''), source(BASE, path).replace('\r\n', '\n'))
             elif path == 'tests/test_production_workflows.py':
                 self.assertEqual(status, 'M', entry)
