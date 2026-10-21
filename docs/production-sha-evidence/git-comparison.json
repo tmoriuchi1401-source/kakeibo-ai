@@ -1,0 +1,256 @@
+{
+  "old": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+  "main": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+  "merge_base": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+  "reachable_commits": [
+    {
+      "sha": "b1769752694ab49cdb9251e5c98093bf03f8d640",
+      "parents": [
+        "fffbe7568db3acd647e9a088280bd4fcbed6c5c9"
+      ],
+      "subject": "docs: preserve approved iPhone Sheets review UI",
+      "first_parent_files": [
+        "AGENTS.md",
+        "docs/iphone-receipt-review-mvp-spec.md"
+      ],
+      "classification": "A"
+    },
+    {
+      "sha": "6b1bfe4f26fd8a7ad83a32f4b4b3d810bcb4883c",
+      "parents": [
+        "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+        "b1769752694ab49cdb9251e5c98093bf03f8d640"
+      ],
+      "subject": "Merge pull request #125: persist approved iPhone Sheets UI specification",
+      "first_parent_files": [
+        "AGENTS.md",
+        "docs/iphone-receipt-review-mvp-spec.md"
+      ],
+      "classification": "A"
+    },
+    {
+      "sha": "3cc93645ccb357d76093c5fc7bbb603fb74919c0",
+      "parents": [
+        "6b1bfe4f26fd8a7ad83a32f4b4b3d810bcb4883c"
+      ],
+      "subject": "docs: adopt confirmed one-tab iPhone review UI and safety gates",
+      "first_parent_files": [
+        "AGENTS.md",
+        "docs/iphone-receipt-review-mvp-spec.md"
+      ],
+      "classification": "A"
+    },
+    {
+      "sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+      "parents": [
+        "6b1bfe4f26fd8a7ad83a32f4b4b3d810bcb4883c",
+        "3cc93645ccb357d76093c5fc7bbb603fb74919c0"
+      ],
+      "subject": "Merge pull request #126: adopt one-tab iPhone review UI",
+      "first_parent_files": [
+        "AGENTS.md",
+        "docs/iphone-receipt-review-mvp-spec.md"
+      ],
+      "classification": "A"
+    }
+  ],
+  "first_parent_commits": [
+    "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "6b1bfe4f26fd8a7ad83a32f4b4b3d810bcb4883c"
+  ],
+  "changed_files": [
+    {
+      "path": "AGENTS.md",
+      "old": null,
+      "main": "100644 blob b2dc0582d23162b90dd2209002d5fde374b2b9b3",
+      "classification": "A"
+    },
+    {
+      "path": "docs/iphone-receipt-review-mvp-spec.md",
+      "old": null,
+      "main": "100644 blob e4f4578b45708db24dd87b21be8c4e4f17c6d699",
+      "classification": "A"
+    }
+  ],
+  "numstat": [
+    "23\t0\tAGENTS.md",
+    "146\t0\tdocs/iphone-receipt-review-mvp-spec.md"
+  ],
+  "entire_tree_entries_old": 571,
+  "entire_tree_entries_main": 573,
+  "identical_non_document_entries": 571,
+  "identical_prefix_counts": {
+    "app/": 250,
+    ".github/workflows/": 24,
+    "tests/": 216,
+    "apps-script/": 7
+  },
+  "focal_blobs": [
+    {
+      "path": ".github/workflows/kakeibo-production.yml",
+      "old": "100644 blob e8bf2970fe26cbe82b870eddf479351131451fa7",
+      "main": "100644 blob e8bf2970fe26cbe82b870eddf479351131451fa7",
+      "identical": true
+    },
+    {
+      "path": "app/production_flow.py",
+      "old": "100644 blob 572d55ee34dedbedbff3939e76519a6e6bb2592c",
+      "main": "100644 blob 572d55ee34dedbedbff3939e76519a6e6bb2592c",
+      "identical": true
+    },
+    {
+      "path": "app/production_run.py",
+      "old": "100644 blob 234e83daddb060698402c52c560ca78b44ea259f",
+      "main": "100644 blob 234e83daddb060698402c52c560ca78b44ea259f",
+      "identical": true
+    },
+    {
+      "path": "app/production_source.py",
+      "old": "100644 blob 95f55f13912def346bea4325aa3d8f7440218309",
+      "main": "100644 blob 95f55f13912def346bea4325aa3d8f7440218309",
+      "identical": true
+    },
+    {
+      "path": "app/cli.py",
+      "old": "100644 blob f661f25ea8fe09c0011bd38df701c223db6d0b42",
+      "main": "100644 blob f661f25ea8fe09c0011bd38df701c223db6d0b42",
+      "identical": true
+    },
+    {
+      "path": "app/drive_receipts.py",
+      "old": "100644 blob 4dabcaac140b0a4c2d951b5cd7365f159499fc1d",
+      "main": "100644 blob 4dabcaac140b0a4c2d951b5cd7365f159499fc1d",
+      "identical": true
+    },
+    {
+      "path": "app/receipt_pipeline.py",
+      "old": "100644 blob 3e01d0ab53f22b338a41ac2914a911c53deb0d3c",
+      "main": "100644 blob 3e01d0ab53f22b338a41ac2914a911c53deb0d3c",
+      "identical": true
+    },
+    {
+      "path": "app/receipt_privacy_gate.py",
+      "old": "100644 blob d84cbd236c72c8215bc478bb0392462435cc4f7b",
+      "main": "100644 blob d84cbd236c72c8215bc478bb0392462435cc4f7b",
+      "identical": true
+    },
+    {
+      "path": "app/bank_pdf_recurring.py",
+      "old": "100644 blob 85304e2a15f5854a138b49a2592627a011cedb35",
+      "main": "100644 blob 85304e2a15f5854a138b49a2592627a011cedb35",
+      "identical": true
+    },
+    {
+      "path": "app/bank_income.py",
+      "old": "100644 blob 8ba9820d86a994510d9ada23885a2c06ab3f2dbd",
+      "main": "100644 blob 8ba9820d86a994510d9ada23885a2c06ab3f2dbd",
+      "identical": true
+    },
+    {
+      "path": "app/bank_finalization.py",
+      "old": "100644 blob f86fc1603ef9f8bcb43ffbc5c34382b720bccc45",
+      "main": "100644 blob f86fc1603ef9f8bcb43ffbc5c34382b720bccc45",
+      "identical": true
+    },
+    {
+      "path": "app/drive_paypay.py",
+      "old": "100644 blob d2864910bbbe839fb4f068531f08bb0ac7d22057",
+      "main": "100644 blob d2864910bbbe839fb4f068531f08bb0ac7d22057",
+      "identical": true
+    },
+    {
+      "path": "app/paypay_pipeline.py",
+      "old": "100644 blob 97cffecc5a22a6c9d2f3232c0c40fe4164087a41",
+      "main": "100644 blob 97cffecc5a22a6c9d2f3232c0c40fe4164087a41",
+      "identical": true
+    },
+    {
+      "path": "app/amazon_production.py",
+      "old": "100644 blob 0858bea31ba9a2b9651d3d7ffc3644ed94a508ee",
+      "main": "100644 blob 0858bea31ba9a2b9651d3d7ffc3644ed94a508ee",
+      "identical": true
+    },
+    {
+      "path": "app/amazon_money_runtime.py",
+      "old": "100644 blob 6c8f11bdc37f465d98433f6018aac8086213daeb",
+      "main": "100644 blob 6c8f11bdc37f465d98433f6018aac8086213daeb",
+      "identical": true
+    },
+    {
+      "path": "app/review_pipeline.py",
+      "old": "100644 blob 94a9e276f9191d58391e7546fac1d531a3977a77",
+      "main": "100644 blob 94a9e276f9191d58391e7546fac1d531a3977a77",
+      "identical": true
+    },
+    {
+      "path": "app/reconciliation.py",
+      "old": "100644 blob c585f506f4801e65c27edcd5ee3bceda3e56fdff",
+      "main": "100644 blob c585f506f4801e65c27edcd5ee3bceda3e56fdff",
+      "identical": true
+    },
+    {
+      "path": "app/auto_expense.py",
+      "old": "100644 blob d0eb4850a02710542ceae5cbd93270369ce4d4bb",
+      "main": "100644 blob d0eb4850a02710542ceae5cbd93270369ce4d4bb",
+      "identical": true
+    },
+    {
+      "path": "app/drive_run_state.py",
+      "old": "100644 blob b34001a021479fb62afed983dac286be61eeac47",
+      "main": "100644 blob b34001a021479fb62afed983dac286be61eeac47",
+      "identical": true
+    },
+    {
+      "path": "app/production_ledger.py",
+      "old": "100644 blob 3520ca52bb6a52b188fa70a35a94548ac6321a29",
+      "main": "100644 blob 3520ca52bb6a52b188fa70a35a94548ac6321a29",
+      "identical": true
+    },
+    {
+      "path": "app/google_clients.py",
+      "old": "100644 blob 9a95d0de1fe76c115cef08ab5be9b943942c29fb",
+      "main": "100644 blob 9a95d0de1fe76c115cef08ab5be9b943942c29fb",
+      "identical": true
+    },
+    {
+      "path": "app/sheets.py",
+      "old": "100644 blob ccfd1240022793aeda6dfbf8941eb51d77d89c19",
+      "main": "100644 blob ccfd1240022793aeda6dfbf8941eb51d77d89c19",
+      "identical": true
+    },
+    {
+      "path": "app/daily_corrections.py",
+      "old": "100644 blob be440cf1d320dd47df115196e4db9cbf53a3cd01",
+      "main": "100644 blob be440cf1d320dd47df115196e4db9cbf53a3cd01",
+      "identical": true
+    },
+    {
+      "path": "app/manual_entry.py",
+      "old": "100644 blob a8b77590317627a259346ed2128e9f82a1449736",
+      "main": "100644 blob a8b77590317627a259346ed2128e9f82a1449736",
+      "identical": true
+    },
+    {
+      "path": "app/ledger_order.py",
+      "old": "100644 blob df59a05a90fb6a7bb93e50d28e4b1d5d4ac35782",
+      "main": "100644 blob df59a05a90fb6a7bb93e50d28e4b1d5d4ac35782",
+      "identical": true
+    },
+    {
+      "path": "requirements.txt",
+      "old": "100644 blob 1b73de3f3249b10109380fb07a71065fbd211749",
+      "main": "100644 blob 1b73de3f3249b10109380fb07a71065fbd211749",
+      "identical": true
+    },
+    {
+      "path": "requirements-test.txt",
+      "old": "100644 blob 966868c7ab5ffbc49905c5a7fb8c431076f8a970",
+      "main": "100644 blob 966868c7ab5ffbc49905c5a7fb8c431076f8a970",
+      "identical": true
+    }
+  ],
+  "B_changes": [],
+  "C_changes": [],
+  "D_changes": [],
+  "limitation": "Delta classification does not certify pre-existing live state, permissions or exclusive execution."
+}

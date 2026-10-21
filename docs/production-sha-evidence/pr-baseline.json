@@ -1,0 +1,302 @@
+[
+  {
+    "number": 123,
+    "head": "codex/unified-receipt-readonly",
+    "head_sha": "1db04aca633531871b3519e9eed8f7b76712f0e5",
+    "base": "main",
+    "base_sha": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 124,
+    "head": "codex/unified-receipt-write-bridge",
+    "head_sha": "936388f2580e3c12c3f8c0ae470d8a59c1c431ef",
+    "base": "codex/unified-receipt-readonly",
+    "base_sha": "1db04aca633531871b3519e9eed8f7b76712f0e5",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 125,
+    "head": "codex/iphone-ui-confirmed-spec",
+    "head_sha": "b1769752694ab49cdb9251e5c98093bf03f8d640",
+    "base": "main",
+    "base_sha": "fffbe7568db3acd647e9a088280bd4fcbed6c5c9",
+    "draft": false,
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "number": 126,
+    "head": "docs/iphone-one-tab-adoption",
+    "head_sha": "3cc93645ccb357d76093c5fc7bbb603fb74919c0",
+    "base": "main",
+    "base_sha": "6b1bfe4f26fd8a7ad83a32f4b4b3d810bcb4883c",
+    "draft": false,
+    "state": "closed",
+    "merged": true
+  },
+  {
+    "number": 127,
+    "head": "codex/iphone-one-tab-safety",
+    "head_sha": "ec38ae45445ce738a8630234366ecf2735a50c12",
+    "base": "codex/unified-receipt-write-bridge",
+    "base_sha": "936388f2580e3c12c3f8c0ae470d8a59c1c431ef",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 128,
+    "head": "codex/iphone-raw-draft-adapter",
+    "head_sha": "e8a8048efc08327c1b37f3ba8cb38dfdb6fc71b5",
+    "base": "codex/iphone-one-tab-safety",
+    "base_sha": "ec38ae45445ce738a8630234366ecf2735a50c12",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 129,
+    "head": "codex/phase5a-synthetic-readonly",
+    "head_sha": "a9066dc753fcf2271a13de8332ed43bba31d5f22",
+    "base": "codex/iphone-raw-draft-adapter",
+    "base_sha": "e8a8048efc08327c1b37f3ba8cb38dfdb6fc71b5",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 130,
+    "head": "codex/phase5b1-draft-foundation",
+    "head_sha": "ebb2e970a52aa55295a11ff61609fb92fb61a021",
+    "base": "codex/phase5a-synthetic-readonly",
+    "base_sha": "a9066dc753fcf2271a13de8332ed43bba31d5f22",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 131,
+    "head": "codex/phase5b2a-synthetic-confirmation",
+    "head_sha": "d781d1863cfabb57f08640b76b5fed0927c641f2",
+    "base": "codex/phase5b1-draft-foundation",
+    "base_sha": "ebb2e970a52aa55295a11ff61609fb92fb61a021",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 132,
+    "head": "codex/phase5b2b1-shared-native-claims",
+    "head_sha": "cf15d48bfbbb3412f9b95bf71f31fc49f9d7c80f",
+    "base": "codex/phase5b2a-synthetic-confirmation",
+    "base_sha": "d781d1863cfabb57f08640b76b5fed0927c641f2",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 133,
+    "head": "codex/phase5b2b1-ownership-enforced-gate",
+    "head_sha": "d4aec4e3b90a0009f83edb5547d3388894dfe9ec",
+    "base": "codex/phase5b2b1-shared-native-claims",
+    "base_sha": "cf15d48bfbbb3412f9b95bf71f31fc49f9d7c80f",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 134,
+    "head": "codex/phase5b2b1-step-c-recovery",
+    "head_sha": "6ede12c838799a4ed24d16e2f531c6bdc2f06080",
+    "base": "codex/phase5b2b1-ownership-enforced-gate",
+    "base_sha": "d4aec4e3b90a0009f83edb5547d3388894dfe9ec",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 135,
+    "head": "codex/phase5b2b2a-auto-native-evidence",
+    "head_sha": "0a61648e318feb250cf0ffdaeb40a0c472260307",
+    "base": "codex/phase5b2b1-step-c-recovery",
+    "base_sha": "6ede12c838799a4ed24d16e2f531c6bdc2f06080",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 136,
+    "head": "codex/phase5b2b2b2b-synthetic-writer",
+    "head_sha": "237c53585e5bbb1c000682d4916182a118acab0a",
+    "base": "codex/phase5b2b2a-auto-native-evidence",
+    "base_sha": "0a61648e318feb250cf0ffdaeb40a0c472260307",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 137,
+    "head": "codex/phase5b2b2c-legacy-confirmation",
+    "head_sha": "4cb8e16f84386f5a9f464980cfb8d912b05bb967",
+    "base": "codex/phase5b2b2b2b-synthetic-writer",
+    "base_sha": "237c53585e5bbb1c000682d4916182a118acab0a",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 138,
+    "head": "codex/phase5b2b2c1-native-contract-poc",
+    "head_sha": "0689e279dee3dce8e862dda9d9c74e77e2ec067b",
+    "base": "codex/phase5b2b2c-legacy-confirmation",
+    "base_sha": "4cb8e16f84386f5a9f464980cfb8d912b05bb967",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 139,
+    "head": "codex/phase5b2b2c2-isolated-native-v2",
+    "head_sha": "84befbf998ff832281e9bf9d3aab955ae8f00ada",
+    "base": "codex/phase5b2b2c1-native-contract-poc",
+    "base_sha": "0689e279dee3dce8e862dda9d9c74e77e2ec067b",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 140,
+    "head": "codex/phase5b2b2c3-synthetic-legacy-writer",
+    "head_sha": "40d824c7bf1b2b8b28df598d67fe30700f32281d",
+    "base": "codex/phase5b2b2c2-isolated-native-v2",
+    "base_sha": "84befbf998ff832281e9bf9d3aab955ae8f00ada",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 141,
+    "head": "codex/phase5b2b2d1-pdf-native-design",
+    "head_sha": "bcf8f2ce7b791a1a65b8e06d1b3d0e3c83de77dc",
+    "base": "codex/phase5b2b2c3-synthetic-legacy-writer",
+    "base_sha": "40d824c7bf1b2b8b28df598d67fe30700f32281d",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 142,
+    "head": "codex/iphone-mvp-r0-r1-synthetic",
+    "head_sha": "66a259b7e77d62a153cc918518e09aff8d48ffb5",
+    "base": "codex/phase5b2b2d1-pdf-native-design",
+    "base_sha": "bcf8f2ce7b791a1a65b8e06d1b3d0e3c83de77dc",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 143,
+    "head": "codex/iphone-draft-request-v2-design",
+    "head_sha": "9ab8ca506528a5de55d950adf940fc05f9ea19c9",
+    "base": "codex/iphone-mvp-r0-r1-synthetic",
+    "base_sha": "66a259b7e77d62a153cc918518e09aff8d48ffb5",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 144,
+    "head": "codex/iphone-draft-native-v3-runtime",
+    "head_sha": "759f444526a9266d2cae49c8758de2fd5ec94a54",
+    "base": "codex/iphone-draft-request-v2-design",
+    "base_sha": "9ab8ca506528a5de55d950adf940fc05f9ea19c9",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 145,
+    "head": "codex/iphone-v3-guarded-writer",
+    "head_sha": "8658d5a1614d62e18d4c59e5eb08dfa008efac3f",
+    "base": "codex/iphone-draft-native-v3-runtime",
+    "base_sha": "759f444526a9266d2cae49c8758de2fd5ec94a54",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 146,
+    "head": "codex/iphone-r1-confirmation-ui",
+    "head_sha": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+    "base": "codex/iphone-v3-guarded-writer",
+    "base_sha": "8658d5a1614d62e18d4c59e5eb08dfa008efac3f",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 147,
+    "head": "codex/r2-1-writer-inventory-drain",
+    "head_sha": "c46e694aeec3cff03e193db562b9b8064e1dbb0f",
+    "base": "codex/iphone-r1-confirmation-ui",
+    "base_sha": "7e13f6034b20ad75719ac553e031ae0813e8a3d4",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 148,
+    "head": "codex/r2-2-isolated-mandatory-gate",
+    "head_sha": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+    "base": "codex/r2-1-writer-inventory-drain",
+    "base_sha": "c46e694aeec3cff03e193db562b9b8064e1dbb0f",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 149,
+    "head": "codex/r2-2-m5-m6-isolated-ledger",
+    "head_sha": "9ba5d11d75aeb55d21b3540ff06ee11dc937ac68",
+    "base": "codex/r2-2-isolated-mandatory-gate",
+    "base_sha": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 150,
+    "head": "codex/r2-3-read-only-audit",
+    "head_sha": "d25d3823310c832fe955a2b3d51eb1df539c7184",
+    "base": "codex/r2-2-isolated-mandatory-gate",
+    "base_sha": "540427f865c47066a7d8b3e3a0e0c7ae714fd7c8",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 151,
+    "head": "codex/r2-3-additional-readonly-audit",
+    "head_sha": "fea7b91aa9ca681661914361af5a7e03fc8addad",
+    "base": "codex/r2-3-read-only-audit",
+    "base_sha": "d25d3823310c832fe955a2b3d51eb1df539c7184",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  },
+  {
+    "number": 152,
+    "head": "codex/r2-4-isolated-update-adapters",
+    "head_sha": "84a8d2d120bbb47cc6b6b951e09227fbada4454b",
+    "base": "codex/r2-3-read-only-audit",
+    "base_sha": "d25d3823310c832fe955a2b3d51eb1df539c7184",
+    "draft": true,
+    "state": "open",
+    "merged": false
+  }
+]

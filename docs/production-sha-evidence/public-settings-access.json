@@ -1,0 +1,324 @@
+{
+  "requests": [
+    {
+      "path": "/actions/workflows?per_page=100",
+      "at": "2026-10-21T14:32:38.420565+00:00",
+      "status": 200
+    },
+    {
+      "path": "/actions/variables?per_page=100",
+      "at": "2026-10-21T14:32:38.802740+00:00",
+      "status": 401
+    }
+  ],
+  "workflows": [
+    {
+      "id": 338594857,
+      "name": "Monthly backup and receipt retention",
+      "path": ".github/workflows/monthly-maintenance.yml",
+      "state": "active"
+    },
+    {
+      "id": 358349068,
+      "name": "Synthetic integration checks",
+      "path": ".github/workflows/synthetic-tests.yml",
+      "state": "active"
+    },
+    {
+      "id": 358381524,
+      "name": "Kakeibo unified production",
+      "path": ".github/workflows/kakeibo-production.yml",
+      "state": "active"
+    },
+    {
+      "id": 358662832,
+      "name": "Inspect legacy state cache",
+      "path": ".github/workflows/state-cache-inspect.yml",
+      "state": "active"
+    },
+    {
+      "id": 358705728,
+      "name": "Migrate fixed production state",
+      "path": ".github/workflows/state-migration.yml",
+      "state": "active"
+    },
+    {
+      "id": 360175465,
+      "name": "Apply approved category backfill from Sheets",
+      "path": ".github/workflows/category-backfill-sheet.yml",
+      "state": "active"
+    },
+    {
+      "id": 362375115,
+      "name": "Initialize ledger daily money state",
+      "path": ".github/workflows/ledger-daily-migration.yml",
+      "state": "active"
+    },
+    {
+      "id": 364211628,
+      "name": "Gemini synthetic availability",
+      "path": ".github/workflows/gemini-availability.yml",
+      "state": "active"
+    },
+    {
+      "id": 365006593,
+      "name": "Category sheet request",
+      "path": ".github/workflows/category-sheet-request.yml",
+      "state": "active"
+    },
+    {
+      "id": 366641816,
+      "name": "Manual expense entry",
+      "path": ".github/workflows/manual-entry.yml",
+      "state": "active"
+    },
+    {
+      "id": 371188810,
+      "name": "Read-only fixed bank PDF diagnosis",
+      "path": ".github/workflows/bank-pdf-diagnose.yml",
+      "state": "active"
+    },
+    {
+      "id": 373854631,
+      "name": "PDF confirmed Unit read-only",
+      "path": ".github/workflows/pdf-unit-readonly.yml",
+      "state": "active"
+    },
+    {
+      "id": 374308149,
+      "name": "PDF confirmed Unit accounting canary",
+      "path": ".github/workflows/pdf-unit-write-canary.yml",
+      "state": "active"
+    },
+    {
+      "id": 379442321,
+      "name": "p14 authenticated plan only",
+      "path": ".github/workflows/p14-plan-only.yml",
+      "state": "active"
+    },
+    {
+      "id": 379566172,
+      "name": "p14 explicit posting canary",
+      "path": ".github/workflows/p14-posting-canary.yml",
+      "state": "active"
+    },
+    {
+      "id": 379627318,
+      "name": "authenticated receipt unit plan only",
+      "path": ".github/workflows/receipt-unit-plan-only.yml",
+      "state": "active"
+    },
+    {
+      "id": 380086605,
+      "name": "explicit receipt unit posting canary",
+      "path": ".github/workflows/receipt-unit-posting-canary.yml",
+      "state": "active"
+    },
+    {
+      "id": 380246330,
+      "name": "Shared Google session contracts",
+      "path": ".github/workflows/hga-shared-session-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 380916459,
+      "name": "Category navigation UI maintenance",
+      "path": ".github/workflows/category-navigation.yml",
+      "state": "active"
+    },
+    {
+      "id": 381215889,
+      "name": "Unified receipt write bridge checks",
+      "path": ".github/workflows/unified-receipt-write-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 387482987,
+      "name": "iPhone one-tab offline contracts",
+      "path": ".github/workflows/iphone-review-contract-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 387979902,
+      "name": "iPhone Sheets adapter offline checks",
+      "path": ".github/workflows/iphone-sheet-adapter-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388039376,
+      "name": "iPhone Phase 5A synthetic readonly host",
+      "path": ".github/workflows/iphone-readonly-host-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388048457,
+      "name": "iPhone Phase 5B-1 synthetic foundations",
+      "path": ".github/workflows/iphone-phase5b1-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388119335,
+      "name": "iPhone Phase 5B-2A synthetic owner acknowledgement",
+      "path": ".github/workflows/iphone-phase5b2a-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388136324,
+      "name": "iPhone Phase 5B-2B-1 native ingress safety stop",
+      "path": ".github/workflows/iphone-phase5b2b1-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388164396,
+      "name": "iPhone synthetic accounting ownership and enforced gates",
+      "path": ".github/workflows/iphone-accounting-gate-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388310106,
+      "name": "iPhone synthetic accounting recovery checkpoints",
+      "path": ".github/workflows/iphone-accounting-recovery-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388349679,
+      "name": "iPhone synthetic auto native execution evidence",
+      "path": ".github/workflows/iphone-auto-native-evidence-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388374903,
+      "name": "iPhone synthetic native writer connection",
+      "path": ".github/workflows/iphone-synthetic-native-writer-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388390880,
+      "name": "iPhone legacy confirmation connection stop",
+      "path": ".github/workflows/iphone-legacy-confirmation-stop-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388819574,
+      "name": "iPhone legacy native contract PoC",
+      "path": ".github/workflows/iphone-legacy-contract-poc-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388838721,
+      "name": "iPhone isolated native receipt v2",
+      "path": ".github/workflows/iphone-native-receipt-v2-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 388993355,
+      "name": "iPhone synthetic legacy confirmation writer",
+      "path": ".github/workflows/iphone-synthetic-legacy-writer-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389240692,
+      "name": "iPhone PDF native readonly investigation",
+      "path": ".github/workflows/iphone-pdf-native-readonly-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389306060,
+      "name": "iPhone MVP R0 adoption and stopping evidence",
+      "path": ".github/workflows/iphone-mvp-r0-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389363657,
+      "name": "iPhone draft request v2 readonly design",
+      "path": ".github/workflows/iphone-draft-request-design-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389390610,
+      "name": "iPhone isolated draft native v3 runtime",
+      "path": ".github/workflows/iphone-draft-runtime-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389870429,
+      "name": "iPhone v3 draft guarded writer synthetic",
+      "path": ".github/workflows/iphone-v3-draft-writer-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 389896875,
+      "name": "iPhone R1 one-tab owner confirmation synthetic",
+      "path": ".github/workflows/iphone-r1-confirmation-checks.yml",
+      "state": "active"
+    },
+    {
+      "id": 390108885,
+      "name": "R2-1 read-only writer inventory",
+      "path": ".github/workflows/r2-1-static-audit.yml",
+      "state": "active"
+    },
+    {
+      "id": 390455593,
+      "name": "R2-2 isolated mandatory receipt gate",
+      "path": ".github/workflows/r2-2-mandatory-gate.yml",
+      "state": "active"
+    },
+    {
+      "id": 390586478,
+      "name": "R2-2 isolated M5 M6 ledger boundary",
+      "path": ".github/workflows/r2-2-m5-m6.yml",
+      "state": "active"
+    },
+    {
+      "id": 391676833,
+      "name": "R2-4 isolated update adapters",
+      "path": ".github/workflows/r2-4-isolated-updates.yml",
+      "state": "active"
+    },
+    {
+      "id": 335466226,
+      "name": "Process receipt inbox",
+      "path": ".github/workflows/process-receipts.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 341573607,
+      "name": "Amazon legacy entry retired",
+      "path": ".github/workflows/amazon-daily-import.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 355238907,
+      "name": "au PAY card recurring production",
+      "path": ".github/workflows/aupay-card-recurring-production.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 357782098,
+      "name": "Bank PDF recurring production",
+      "path": ".github/workflows/bank-pdf-recurring.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 358624125,
+      "name": "Fixed bank income backfill",
+      "path": ".github/workflows/bank-income-backfill.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 371620159,
+      "name": ".github/workflows/medical-amount-selection-synthetic.yml",
+      "path": ".github/workflows/medical-amount-selection-synthetic.yml",
+      "state": "disabled_manually"
+    },
+    {
+      "id": 371661100,
+      "name": "Medical independent payment synthetic smoke",
+      "path": ".github/workflows/medical-independent-amount-synthetic.yml",
+      "state": "disabled_manually"
+    }
+  ],
+  "variables_independently_confirmed": false,
+  "variables": {}
+}
