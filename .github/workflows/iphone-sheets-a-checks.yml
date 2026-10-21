@@ -1,0 +1,44 @@
+name: iPhone Sheets A synthetic completion
+'on':
+  pull_request:
+    branches: [codex/iphone-r1-confirmation-ui]
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-sheets-a-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: pip install -r requirements-test.txt playwright==1.64.0
+      - name: Install disposable Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Sheets repair and existing identity retention checks
+        run: python -m pytest -q tests/test_sheets_a_validation.py tests/test_iphone_sheet_reader.py tests/test_iphone_review_drafts.py tests/test_iphone_draft_journal.py tests/test_production_workflows.py --junitxml=.private/sheets-a-contracts.xml
+      - name: Existing isolated PC and 390px confirmation regression
+        run: python -m pytest -q tests/test_iphone_r1_adapter.py tests/test_iphone_r1_confirmation.py tests/test_iphone_r1_browser.py --junitxml=.private/sheets-a-browser.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sheets-a-synthetic-evidence
+          path: |
+            .private/r1-browser/
+            .private/sheets-a-*.xml
+          include-hidden-files: true
+      - name: Compile and whitespace
+        run: |
+          python -m compileall -q staging_shadow/sheets_a_validation.py tests/test_sheets_a_validation.py
+          git diff --check
