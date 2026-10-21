@@ -7,5 +7,12 @@
     "principal": "repository-owner",
     "observed_date_UTC": "2026-10-21",
     "dispatch_or_rerun_performed": false
+  },
+  "environment_metadata_public_GET": {
+    "status": 200,
+    "total_count": 0,
+    "environments": [],
+    "observed_at": "2026-10-21T12:26:46.201678+00:00",
+    "secrets_read": false
   }
 }

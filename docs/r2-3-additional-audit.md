@@ -44,7 +44,7 @@ main固定SHAのソースではjob `if` が repository、main ref、`KAKEIBO_PRO
 
 全workflowのflag名・secret参照名・schedule・if・checkoutは [ソース定義の抽出](r2-3-additional-evidence/definition-metadata.json) に分離した。値を保存していない。資格情報は例えば `GOOGLE_SERVICE_ACCOUNT_JSON`、Gmail token、bank/card authorityのSecret参照があるが、実際の登録有無・値・配布先・可用性をソースから断定しない。
 
-main側workflowにはEnvironment binding定義がない。既存Environment一覧、保護規則、environment secret供給範囲、repository/organization secretアクセス設定、既定GITHUB_TOKEN権限は未確認。親はソース上contents:read、OIDC token要求なし。これをGoogle credentialの権限なしと読み替えない。
+main側workflowにはEnvironment binding定義がない。追加の公開GET `/environments?per_page=100` は200・total_count=0で、**観測時点のrepository Environmentは0件**と確認できた（[アクセス記録](r2-3-additional-evidence/variables-access.json)）。このrepositoryに既存Environment/そのsecret供給経路は観測されなかった。一方、repository/organization secretアクセス設定、既定GITHUB_TOKEN権限は未確認。親はソース上contents:read、OIDC token要求なし。これをGoogle credentialの権限なしと読み替えない。
 
 ### schedule / dispatch / re-run
 
@@ -75,6 +75,8 @@ historical `pdf-unit-write-canary.yml` はactive、`inputs.approved_sha` のchec
 他にweb-config / owner-policy / session-keyのversion1マウントを確認した。本文・OAuth client secret・credentialに含まれるSA IDやscopeは未取得。runtime SAはDatastoreの条件付きロールとは**別binding**で旧credential Secretを参照できる。Secret version1の存在・有効・Accessorは確認済みでも、Secret内のcredentialの有効性、失効、実Sheet共有ACL、Drive対象範囲、他projectの権限は未確認である。
 
 IAM invokerはCloud Runへの入口、アプリ内部認証は到達後の処理の認可であり別の層。repoのauth-sessionはGoogle本人、owner、session、Origin/CSRF、nonce/PKCE、期限と目的別のnative検証を持つ。しかしimage→commit対応を証明しておらず、それらが現行host全endpointで成立すると断定しない。公開invokerだけで匿名金融write可能とも断定しない。今回は匿名HTTP試験・認証試行・金融POSTを一切行っていない。
+
+解釈の一次資料：[Cloud Run公開アクセス](https://docs.cloud.google.com/run/docs/authenticating/public)、[end-user認証](https://docs.cloud.google.com/run/docs/authenticating/end-users)、[IAM Conditions](https://docs.cloud.google.com/iam/docs/conditions-overview)。条件は該当role bindingへ適用され、別のSecret Accessor bindingまで制限するものではない。invokerを閉じた場合の既存ブラウザー導線への影響は、これらの仕様とrepo設計からの推定で、現行endpointで試験した結果ではない。
 
 repoには旧p14/PDF/native金融実行に至る設計が存在し、hostにはそのconfig/credential参照が残る。実効write到達性は未確認。この組合せはR1切替前に閉じるべき阻害条件である。
 
