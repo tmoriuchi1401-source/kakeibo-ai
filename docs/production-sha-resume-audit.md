@@ -103,4 +103,6 @@ coreの順序はproduction_run.DEPENDENCIESを維持。ReviewApprovalPipelineは
 
 専用Ubuntuは#151由来アプリを実行せず、**d62そのものの独立worktree**で既存全synthetic pytestと既存Node3群を実行する。socket connectを拒否し、Secret/Variables/Environmentを供給しない。元テスト・安全assert・production workflowは一切変更しない。OCRは既存合成画像/fixtureとローカルtesseractだけを用い、原本やAI APIを使わない。CIの実測結果は新Draft PR本文/runに記載し、本番の強CAS/資格情報/未完了状態の証拠に流用しない。
 
-ローカルWindowsは30 passed / Bash専用9 skipped。9件はUbuntuで必須実行する。main全回帰はUbuntuを正本とし、実結果を完了報告する。PR #123〜#152のhead/base/Draft/stateはbaselineと終了時にread-only比較し、#152コードは変更しない。
+条件の局所モデルは今回のstring/bool比較文法だけを扱い、Actions engineの代用ではない。文字列比較は[GitHub公式仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions)に合わせ大小文字を区別しない。後段Bash/Pythonの厳密一致guardは別で、job条件trueだけを実行許可とは扱わない。
+
+ローカルWindowsは31 passed / Bash専用9 skipped。9件はUbuntuで必須実行する。main全回帰はUbuntuを正本とし、実結果を完了報告する。PR #123〜#152のhead/base/Draft/stateはbaselineと終了時にread-only比較し、#152コードは変更しない。

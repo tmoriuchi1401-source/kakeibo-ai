@@ -51,8 +51,9 @@ def job_condition(context):
             if isinstance(node.op, ast.Or): return any(values)
         if isinstance(node, ast.Compare) and len(node.ops) == 1:
             left, right = evaluate(node.left), evaluate(node.comparators[0])
-            if isinstance(node.ops[0], ast.Eq): return left == right
-            if isinstance(node.ops[0], ast.NotEq): return left != right
+            # GitHub string comparisons ignore case; contexts here are strings.
+            if isinstance(node.ops[0], ast.Eq): return left.casefold() == right.casefold()
+            if isinstance(node.ops[0], ast.NotEq): return left.casefold() != right.casefold()
         raise AssertionError('Unexpected job-condition grammar')
     return evaluate(tree)
 
@@ -74,11 +75,17 @@ def test_real_condition_sha_truth_table(event, sha, validated, expected):
 @pytest.mark.parametrize('key,value', [
     ('github.repository', 'fork/repo'), ('github.ref', 'refs/heads/feature'),
     *[(key, value) for key in ('vars.KAKEIBO_PRODUCTION_ENABLED', 'vars.KAKEIBO_LEGACY_DISABLED',
-                              'vars.KAKEIBO_SCHEDULE_ENABLED') for value in ('', 'false', 'TRUE')]])
+                              'vars.KAKEIBO_SCHEDULE_ENABLED') for value in ('', 'false', 'not-true')]])
 def test_missing_or_disabled_gate_rejects_schedule(key, value):
     values = context(validated=MAIN)
     values[key] = value
     assert job_condition(values) is False
+
+
+def test_github_case_insensitive_strings_are_not_python_boundary_approval():
+    values = context(validated=MAIN.upper())
+    values['vars.KAKEIBO_PRODUCTION_ENABLED'] = 'TRUE'
+    assert job_condition(values) is True  # The later Bash/Python exact guards still differ.
 
 
 @pytest.mark.parametrize('production_flag,legacy_flag,schedule_flag', list(itertools.product(['true', 'false'], repeat=3)))
