@@ -1,0 +1,59 @@
+[
+  {
+    "run_id": 39548028007,
+    "jobs": [
+      {
+        "id": 119050589543,
+        "name": "production",
+        "status": "completed",
+        "conclusion": "skipped",
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "started_at": "2026-10-21T05:10:14Z",
+        "completed_at": "2026-10-21T05:10:05Z",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39548028007/job/119050589543",
+        "steps": []
+      }
+    ]
+  },
+  {
+    "run_id": 39527573301,
+    "jobs": [
+      {
+        "id": 118985782795,
+        "name": "production",
+        "status": "completed",
+        "conclusion": "skipped",
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "started_at": "2026-10-21T01:29:14Z",
+        "completed_at": "2026-10-21T01:29:05Z",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39527573301/job/118985782795",
+        "steps": []
+      }
+    ]
+  },
+  {
+    "run_id": 39519630251,
+    "jobs": [
+      {
+        "id": 118960018493,
+        "name": "production",
+        "status": "completed",
+        "conclusion": "skipped",
+        "head_sha": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+        "started_at": "2026-10-21T00:09:56Z",
+        "completed_at": "2026-10-21T00:09:56Z",
+        "labels": [
+          "ubuntu-latest"
+        ],
+        "html_url": "https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/39519630251/job/118960018493",
+        "steps": []
+      }
+    ]
+  }
+]

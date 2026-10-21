@@ -1,0 +1,809 @@
+[
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/amazon-daily-import.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [],
+    "secret_reference_NAMES_only": [],
+    "jobs": [
+      {
+        "name": "retired",
+        "condition": "github.ref == 'refs/heads/main'",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": []
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/aupay-card-recurring-production.yml",
+    "schedule": [
+      {
+        "cron": "23 20 * * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED"
+    ],
+    "secret_reference_NAMES_only": [
+      "AUPAY_CARD_AUDIT_KEY_JSON",
+      "AUPAY_CARD_RECURRING_AUTHORITY_JSON",
+      "GOOGLE_GMAIL_TOKEN_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "ingest",
+        "condition": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/bank-income-backfill.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [],
+    "secret_reference_NAMES_only": [
+      "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+      "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+      "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "backfill",
+        "condition": "${{ github.ref == 'refs/heads/main' }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "main"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/bank-pdf-diagnose.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "BANK_STATE_FILE_ID",
+      "KAKEIBO_STATE_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+      "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+      "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON",
+      "BANK_PDF_RECURRING_AUTHORITY_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "diagnose",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/fix/bank-pdf-hold-diagnostics' && vars.KAKEIBO_VALIDATED_MAIN_SHA == 'ae4c8a4c91e4dd8b591782b72b029b9712925a83'",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/bank-pdf-recurring.yml",
+    "schedule": [
+      {
+        "cron": "47 21 * * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "BANK_INCOME_WRITE_ENABLED",
+      "BANK_PDF_PROCESSED_DRIVE_FOLDER_ID",
+      "BANK_REVIEW_ENABLED",
+      "KAKEIBO_LEGACY_DISABLED"
+    ],
+    "secret_reference_NAMES_only": [
+      "BANK_AUDIT_KEY_JSON",
+      "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+      "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+      "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON",
+      "BANK_PDF_DRIVE_FOLDER_ID",
+      "BANK_PDF_RECURRING_AUTHORITY_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "ingest",
+        "condition": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/category-backfill-sheet.yml",
+    "schedule": [
+      {
+        "cron": "7,27,47 * * * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": null,
+    "variable_references": [
+      "CATEGORY_BACKFILL_APPLY_ENABLED",
+      "CATEGORY_BACKFILL_PREVIEW_ENABLED",
+      "CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED",
+      "CATEGORY_RULE_SAVE_ENABLED",
+      "CATEGORY_RULE_UI_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "apply-sheet-confirmed-request",
+        "condition": "${{ github.ref == 'refs/heads/main' && vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true' && (vars.KAKEIBO_PROJECTION_FOLDER_ID == '' || github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA) }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/category-navigation.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "navigation",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/category-sheet-request.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "AMAZON_STATE_FILE_ID",
+      "AUPAY_CARD_STATE_FILE_ID",
+      "BANK_INCOME_WRITE_ENABLED",
+      "BANK_PDF_PROCESSED_DRIVE_FOLDER_ID",
+      "BANK_REVIEW_ENABLED",
+      "BANK_REVIEW_REPLAY_ENABLED",
+      "BANK_STATE_FILE_ID",
+      "CATEGORY_BACKFILL_APPLY_ENABLED",
+      "CATEGORY_BACKFILL_PREVIEW_ENABLED",
+      "CATEGORY_RULE_SAVE_ENABLED",
+      "CATEGORY_RULE_UI_ENABLED",
+      "KAKEIBO_DAILY_CORRECTIONS_MODE",
+      "KAKEIBO_DAILY_SPREADSHEET_ID",
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_RUN_LEDGER_FILE_ID",
+      "KAKEIBO_STATE_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "BANK_AUDIT_KEY_JSON",
+      "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+      "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+      "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON",
+      "BANK_PDF_DRIVE_FOLDER_ID",
+      "BANK_PDF_RECURRING_AUTHORITY_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "category-request",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "main"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/gemini-availability.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GEMINI_API_KEY"
+    ],
+    "jobs": [
+      {
+        "name": "probe",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/hga-shared-session-checks.yml",
+    "schedule": null,
+    "dispatch": false,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [],
+    "secret_reference_NAMES_only": [],
+    "jobs": [
+      {
+        "name": "shared-session",
+        "condition": null,
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/kakeibo-production.yml",
+    "schedule": [
+      {
+        "cron": "17 9,21 * * *"
+      },
+      {
+        "cron": "31 */3 * * *"
+      },
+      {
+        "cron": "47 21 * * *"
+      },
+      {
+        "cron": "11 23 * * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "AMAZON_STATE_FILE_ID",
+      "AUPAY_CARD_STATE_FILE_ID",
+      "AUPAY_GMAIL_QUERY",
+      "BANK_INCOME_WRITE_ENABLED",
+      "BANK_PDF_PROCESSED_DRIVE_FOLDER_ID",
+      "BANK_REVIEW_ENABLED",
+      "BANK_STATE_FILE_ID",
+      "CATEGORY_BACKFILL_APPLY_ENABLED",
+      "CATEGORY_BACKFILL_PREVIEW_ENABLED",
+      "CATEGORY_RULE_AUTO_APPLY_ENABLED",
+      "CATEGORY_RULE_SAVE_ENABLED",
+      "CATEGORY_RULE_UI_ENABLED",
+      "KAKEIBO_AMAZON_MONEY_MODE",
+      "KAKEIBO_DAILY_CORRECTIONS_MODE",
+      "KAKEIBO_DAILY_SPREADSHEET_ID",
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_RUN_LEDGER_FILE_ID",
+      "KAKEIBO_SCHEDULE_ENABLED",
+      "KAKEIBO_STATE_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA",
+      "PAYPAY_PROCESSED_DRIVE_FOLDER_ID",
+      "PDF_INTAKE_AUTOMATION_ENABLED",
+      "PDF_INTAKE_CONFIG_FILE_ID",
+      "RECEIPT_CONFIRMATION_BINDING"
+    ],
+    "secret_reference_NAMES_only": [
+      "AUPAY_CARD_AUDIT_KEY_JSON",
+      "AUPAY_CARD_RECURRING_AUTHORITY_JSON",
+      "BANK_AUDIT_KEY_JSON",
+      "BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON",
+      "BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON",
+      "BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON",
+      "BANK_PDF_DRIVE_FOLDER_ID",
+      "BANK_PDF_RECURRING_AUTHORITY_JSON",
+      "GEMINI_API_KEY",
+      "GOOGLE_GMAIL_TOKEN_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "PAYPAY_DRIVE_FOLDER_ID",
+      "PROCESSED_DRIVE_FOLDER_ID",
+      "RECEIPT_DRIVE_FOLDER_ID",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "production",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "main"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/ledger-daily-migration.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_AMAZON_MONEY_MODE",
+      "KAKEIBO_DAILY_CORRECTIONS_MODE",
+      "KAKEIBO_DAILY_SPREADSHEET_ID",
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_RUN_LEDGER_FILE_ID",
+      "KAKEIBO_SCHEDULE_ENABLED",
+      "KAKEIBO_STATE_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA",
+      "RECEIPT_CONFIRMATION_BINDING"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "migrate",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.sha == inputs.expected_sha && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && (inputs.operation == 'key-info' || (\n  vars.KAKEIBO_PRODUCTION_ENABLED != 'true' &&\n  vars.KAKEIBO_SCHEDULE_ENABLED != 'true' &&\n  vars.KAKEIBO_LEGACY_DISABLED == 'true' &&\n  vars.KAKEIBO_AMAZON_MONEY_MODE == '' &&\n  vars.KAKEIBO_DAILY_CORRECTIONS_MODE == ''))",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "main"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/manual-entry.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_DAILY_CORRECTIONS_MODE",
+      "KAKEIBO_DAILY_SPREADSHEET_ID",
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "manual-entry",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/monthly-maintenance.yml",
+    "schedule": [
+      {
+        "cron": "37 18 1 * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": null,
+    "variable_references": [],
+    "secret_reference_NAMES_only": [
+      "BACKUP_DRIVE_FOLDER_ID",
+      "GOOGLE_DRIVE_BACKUP_TOKEN_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "PROCESSED_DRIVE_FOLDER_ID",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "maintain",
+        "condition": "${{ github.ref == 'refs/heads/main' }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/p14-plan-only.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "plan",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/p14-posting-canary.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "post",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && inputs.confirm == 'POST_P14_3801' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/pdf-unit-readonly.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read",
+      "pull-requests": "read",
+      "checks": "read",
+      "actions": "read"
+    },
+    "variable_references": [
+      "PDF_GROUPING_BINDING"
+    ],
+    "secret_reference_NAMES_only": [
+      "GEMINI_API_KEY",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "RECEIPT_DRIVE_FOLDER_ID",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "readonly",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/pdf-page-privacy') && inputs.confirm == 'READ_ONLY'",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "${{ inputs.approved_sha }}"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/pdf-unit-write-canary.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read",
+      "pull-requests": "read",
+      "checks": "read",
+      "actions": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA",
+      "PDF_GROUPING_BINDING"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "RECEIPT_DRIVE_FOLDER_ID",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "canary",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm == 'WRITE_CANARY' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "${{ inputs.approved_sha }}"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/process-receipts.yml",
+    "schedule": [
+      {
+        "cron": "17 */3 * * *"
+      }
+    ],
+    "dispatch": true,
+    "permissions": null,
+    "variable_references": [
+      "AUPAY_GMAIL_QUERY",
+      "CATEGORY_RULE_AUTO_APPLY_ENABLED",
+      "KAKEIBO_LEGACY_DISABLED",
+      "PAYPAY_PROCESSED_DRIVE_FOLDER_ID"
+    ],
+    "secret_reference_NAMES_only": [
+      "GEMINI_API_KEY",
+      "GOOGLE_GMAIL_TOKEN_JSON",
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "PAYPAY_DRIVE_FOLDER_ID",
+      "PROCESSED_DRIVE_FOLDER_ID",
+      "RECEIPT_DRIVE_FOLDER_ID",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "run",
+        "condition": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/receipt-unit-plan-only.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "plan",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/receipt-unit-posting-canary.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_PROJECTION_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "post",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && inputs.confirm == 'POST_CONFIRMED_RECEIPT_UNIT' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/state-cache-inspect.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read",
+      "actions": "read"
+    },
+    "variable_references": [],
+    "secret_reference_NAMES_only": [],
+    "jobs": [
+      {
+        "name": "inspect",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.operation == 'inspect' && github.sha == inputs.expected_sha",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "${{ github.sha }}"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/state-migration.yml",
+    "schedule": null,
+    "dispatch": true,
+    "permissions": {
+      "contents": "read",
+      "actions": "read"
+    },
+    "variable_references": [
+      "AMAZON_STATE_FILE_ID",
+      "AUPAY_CARD_STATE_FILE_ID",
+      "BANK_STATE_FILE_ID",
+      "KAKEIBO_LEGACY_DISABLED",
+      "KAKEIBO_PRODUCTION_ENABLED",
+      "KAKEIBO_RUN_LEDGER_FILE_ID",
+      "KAKEIBO_SCHEDULE_ENABLED",
+      "KAKEIBO_STATE_FOLDER_ID",
+      "KAKEIBO_VALIDATED_MAIN_SHA"
+    ],
+    "secret_reference_NAMES_only": [
+      "GOOGLE_SERVICE_ACCOUNT_JSON",
+      "SPREADSHEET_ID"
+    ],
+    "jobs": [
+      {
+        "name": "migrate",
+        "condition": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.sha == inputs.expected_sha && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && vars.KAKEIBO_PRODUCTION_ENABLED != 'true' && vars.KAKEIBO_SCHEDULE_ENABLED != 'true' && (inputs.operation != 'migrate' || vars.KAKEIBO_LEGACY_DISABLED == 'true')",
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "${{ github.sha }}"
+        ]
+      }
+    ]
+  },
+  {
+    "ref": "d62e1e254692e676f4e4a72dc593524a80fbea08",
+    "path": ".github/workflows/synthetic-tests.yml",
+    "schedule": null,
+    "dispatch": false,
+    "permissions": {
+      "contents": "read"
+    },
+    "variable_references": [],
+    "secret_reference_NAMES_only": [],
+    "jobs": [
+      {
+        "name": "local-ocr-runtime",
+        "condition": null,
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      },
+      {
+        "name": "test",
+        "condition": null,
+        "environment_binding": null,
+        "permissions": null,
+        "checkout_refs": [
+          "event-default"
+        ]
+      }
+    ]
+  }
+]

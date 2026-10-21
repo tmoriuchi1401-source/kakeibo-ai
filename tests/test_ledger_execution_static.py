@@ -39,6 +39,20 @@ MODIFIED={'tests/test_mandatory_gate_static.py','tests/r2_1_static_audit.py',
      'tests/test_iphone_mvp_r0_adoption.py','tests/test_iphone_draft_request_design.py'}
 
 
+# Exact R2-3 additional read-only metadata/documents; no runtime changes.
+NEW.update({
+    'docs/r2-3-additional-audit.md',
+    'docs/r2-3-additional-evidence/active-runs.json',
+    'docs/r2-3-additional-evidence/cloud-observations.json',
+    'docs/r2-3-additional-evidence/definition-metadata.json',
+    'docs/r2-3-additional-evidence/pr-baseline.json',
+    'docs/r2-3-additional-evidence/production-jobs.json',
+    'docs/r2-3-additional-evidence/production-runs.json',
+    'docs/r2-3-additional-evidence/requests.json',
+    'docs/r2-3-additional-evidence/variables-access.json',
+    'docs/r2-3-additional-evidence/workflows.json',
+})
+
 def git(*args):return subprocess.check_output(['git','-C',str(ROOT),*args]).decode('utf8')
 def inventory():return json.loads((ROOT/'docs/r2-2-m5-m6-inventory.json').read_text('utf8'))
 
