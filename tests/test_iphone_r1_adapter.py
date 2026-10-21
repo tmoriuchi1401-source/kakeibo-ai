@@ -204,8 +204,9 @@ def test_save_returns_exact_readback_revision_tag_and_replay_metadata(monkeypatc
     stored,_,tag=ui._draft(h.f.case_id)
     assert stored['value']==value and result['draft_revision']==stored['revision']==claims['draft']['revision']+1
     assert result['draft_tag']==tag and tag!=claims['tag']
+    assert result['newly_saved'] is True
     before=[p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority,h.readers.draft)]
-    assert ui.post(payload,gate)==result
+    assert ui.post(payload,gate)==dict(result,newly_saved=False)
     payload['value']['fields']['memo']='同じIDで異なる内容'
     with pytest.raises(StateError,match='reconfirm'):ui.post(payload,gate)
     assert [p.read_versioned() for p in (h.native,h.shared.io,h.readers.ledger,h.readers.authority,h.readers.draft)]==before

@@ -1,0 +1,40 @@
+name: iPhone one-tab draft handoff boundary
+'on':
+  pull_request:
+    branches: [codex/iphone-sheets-a-completion]
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-sheet-handoff-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  synthetic-boundary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing synthetic dependencies
+        run: pip install -r requirements-test.txt
+      - name: New handoff and authenticated host evidence
+        run: python -m pytest -q tests/test_iphone_sheet_handoff.py tests/test_iphone_sheet_handoff_host.py --junitxml=.private/handoff-new.xml
+      - name: Existing reader journal source manual-input and authentication regressions
+        run: python -m pytest -q tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_review_drafts.py tests/test_iphone_confirmation.py tests/test_production_workflows.py tests/test_iphone_r1_adapter.py::test_save_returns_exact_readback_revision_tag_and_replay_metadata --junitxml=.private/handoff-regression.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: one-tab-handoff-synthetic-junit
+          path: .private/handoff-*.xml
+          include-hidden-files: true
+      - name: Compile and whitespace
+        run: |
+          python -m compileall -q app/iphone_sheet_handoff_host.py staging_shadow/iphone_sheet_handoff.py tests/sheet_handoff_fixtures.py tests/sheet_handoff_host_fixtures.py tests/test_iphone_sheet_handoff.py tests/test_iphone_sheet_handoff_host.py
+          git diff --check
