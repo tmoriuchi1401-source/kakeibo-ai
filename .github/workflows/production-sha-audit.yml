@@ -1,0 +1,62 @@
+name: Production SHA read-only audit
+on:
+  pull_request:
+    branches: [codex/r2-3-additional-readonly-audit]
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-sha-audit-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Extract exact production code without changing main
+        run: git worktree add --detach "$RUNNER_TEMP/observed-main" d62e1e254692e676f4e4a72dc593524a80fbea08
+      - name: Install existing main test dependencies
+        run: |
+          pip install -r "$RUNNER_TEMP/observed-main/requirements-test.txt"
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+      - name: Real job condition tree identity and stubbed Bash routing
+        env:
+          PYTHONPATH: ${{ github.workspace }}/audit_checks/offline
+        run: python -m pytest -q --junitxml=/tmp/sha-audit.xml audit_checks/test_production_sha_resume.py
+      - name: Existing full main synthetic regression with network denied
+        env:
+          PYTHONPATH: ${{ github.workspace }}/audit_checks/offline
+        run: |
+          cd "$RUNNER_TEMP/observed-main"
+          test "$(git rev-parse HEAD)" = d62e1e254692e676f4e4a72dc593524a80fbea08
+          python -m pytest -q --tb=short --junitxml=/tmp/sha-main.xml
+          node --test .github/scripts/verify-state-cache-runs.test.cjs
+          node --test apps-script/category-submit/Code.test.cjs
+          node --test apps-script/manual-entry/Code.test.cjs
+      - name: Report measured counts
+        if: always()
+        run: |
+          python - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          for group in ('audit', 'main'):
+              p=pathlib.Path('/tmp/sha-'+group+'.xml')
+              if not p.exists():
+                  print(group+': result unavailable')
+                  continue
+              cases=ET.parse(p).getroot().findall('.//testcase')
+              bad=sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+              skipped=sum(c.find('skipped') is not None for c in cases)
+              print(f'{group}: {len(cases)-bad-skipped} passed; {bad} failed/error; {skipped} skipped')
+          PY
+      - name: Check new diff
+        run: git diff --check fea7b91aa9ca681661914361af5a7e03fc8addad

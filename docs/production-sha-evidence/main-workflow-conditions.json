@@ -1,0 +1,981 @@
+[
+  {
+    "path": ".github/workflows/amazon-daily-import.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "retired": {
+        "if": "github.ref == 'refs/heads/main'",
+        "steps": [
+          {
+            "name": "Use the unified production entry",
+            "modules": [],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/aupay-card-recurring-production.yml",
+    "validated_reference": false,
+    "schedule": [
+      {
+        "cron": "23 20 * * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "ingest": {
+        "if": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "steps": [
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Materialize protected authority inputs",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Run bounded incremental ingestion",
+            "modules": [
+              "app.cli"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/bank-income-backfill.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "backfill": {
+        "if": "${{ github.ref == 'refs/heads/main' }}",
+        "steps": [
+          {
+            "name": "Bind exact tested main",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Run fixed backfill without scheduling income writes",
+            "modules": [
+              "app.bank_income_backfill",
+              "app.bank_income_backfill"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/bank-pdf-diagnose.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "diagnose": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/fix/bank-pdf-hold-diagnostics' && vars.KAKEIBO_VALIDATED_MAIN_SHA == 'ae4c8a4c91e4dd8b591782b72b029b9712925a83'",
+        "steps": [
+          {
+            "name": "Reject debug logging before private bindings",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Diagnose fixed files without writers or state updates",
+            "modules": [
+              "app.bank_pdf_diagnostics"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/bank-pdf-recurring.yml",
+    "validated_reference": false,
+    "schedule": [
+      {
+        "cron": "47 21 * * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "ingest": {
+        "if": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "steps": [
+          {
+            "name": "Bind checkout to main for the Git checkpoint guard",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Materialize protected recurring inputs",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Run bounded bank PDF recurring preview",
+            "modules": [
+              "app.cli",
+              "app.cli"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/category-backfill-sheet.yml",
+    "validated_reference": true,
+    "schedule": [
+      {
+        "cron": "7,27,47 * * * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "apply-sheet-confirmed-request": {
+        "if": "${{ github.ref == 'refs/heads/main' && vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'true' && (vars.KAKEIBO_PROJECTION_FOLDER_ID == '' || github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA) }}",
+        "steps": [
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Refresh opt-in category condition candidates",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.CATEGORY_RULE_UI_ENABLED == 'true' }}"
+          },
+          {
+            "name": "Save only explicitly checked future category rules",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ github.event.inputs.display_only != 'true' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.CATEGORY_RULE_UI_ENABLED == 'true' && env.CATEGORY_RULE_SAVE_ENABLED == 'true' }}"
+          },
+          {
+            "name": "Refresh phone-width condition choices",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Materialize checked fixed previews",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ github.event.inputs.display_only != 'true' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Refresh count, amount, exclusions, and target details",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Apply only Sheet-confirmed fixed requests",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && github.event.inputs.display_only != 'true' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Refresh result state after apply",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/category-navigation.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "navigation": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Verify and maintain navigation only",
+            "modules": [
+              "app.category_navigation_maintenance"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/category-sheet-request.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "category-request": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Bind verified checkout for existing bank main guard",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Require normal logging before private inputs",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Process captured category input and refresh displays",
+            "modules": [
+              "app.category_sheet_requests"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/gemini-availability.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "probe": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Install fixed diagnostic dependencies",
+            "modules": [
+              "pip"
+            ],
+            "if": null
+          },
+          {
+            "name": "Compare fixed synthetic text and image requests",
+            "modules": [
+              "app.gemini_probe"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/hga-shared-session-checks.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": null,
+    "jobs": {
+      "shared-session": {
+        "if": null,
+        "steps": [
+          {
+            "name": "Install offline contract dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Test hash-pinned existing service plus session delta (no production secrets)",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Verify deployable whitelist without deploying",
+            "modules": [],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/kakeibo-production.yml",
+    "validated_reference": true,
+    "schedule": [
+      {
+        "cron": "17 9,21 * * *"
+      },
+      {
+        "cron": "31 */3 * * *"
+      },
+      {
+        "cron": "47 21 * * *"
+      },
+      {
+        "cron": "11 23 * * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "production": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Bind verified checkout for existing bank main guard",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Require normal logging before private bindings",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": "Install dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Install existing OCR runtime",
+            "modules": [
+              "app.receipt_local_ocr"
+            ],
+            "if": "${{ (github.event_name == 'schedule' && github.event.schedule == '31 */3 * * *') || (github.event_name != 'schedule' && (inputs.scope == 'all' || inputs.scope == 'receipts' || inputs.scope == 'drive_receipts' || inputs.scope == 'receipt_reimport' || inputs.scope == 'receipt_confirmation')) }}"
+          },
+          {
+            "name": "Execute sources and dependent accounting serially",
+            "modules": [
+              "app.production_flow"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/ledger-daily-migration.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "migrate": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.sha == inputs.expected_sha && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && (inputs.operation == 'key-info' || (\n  vars.KAKEIBO_PRODUCTION_ENABLED != 'true' &&\n  vars.KAKEIBO_SCHEDULE_ENABLED != 'true' &&\n  vars.KAKEIBO_LEGACY_DISABLED == 'true' &&\n  vars.KAKEIBO_AMAZON_MONEY_MODE == '' &&\n  vars.KAKEIBO_DAILY_CORRECTIONS_MODE == ''))",
+        "steps": [
+          {
+            "name": "Require normal logging before credentials",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": "Verify tested checkout before dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Install existing dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Inspect or initialize precreated money documents",
+            "modules": [
+              "app.ledger_daily_migration"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/manual-entry.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "manual-entry": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Require normal logging before private inputs",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Post request and refresh display",
+            "modules": [
+              "app.manual_entry"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/monthly-maintenance.yml",
+    "validated_reference": false,
+    "schedule": [
+      {
+        "cron": "37 18 1 * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "maintain": {
+        "if": "${{ github.ref == 'refs/heads/main' }}",
+        "steps": [
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Back up spreadsheet",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.SPREADSHEET_ID != '' && env.BACKUP_DRIVE_FOLDER_ID != '' && env.GOOGLE_DRIVE_BACKUP_TOKEN_JSON != '' }}"
+          },
+          {
+            "name": "Permanently delete processed receipts older than one year",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.PROCESSED_DRIVE_FOLDER_ID != '' }}"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/p14-plan-only.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "plan": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Reject debug logging",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Fresh read, queue intake, memory-only writer plan and exact read-back",
+            "modules": [
+              "app.receipt_plan.runner"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/p14-posting-canary.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "post": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && inputs.confirm == 'POST_P14_3801' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Reject debug before Secrets",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "One-time p14 claim, existing writer, exact accounting read-back",
+            "modules": [
+              "app.receipt_plan.posting_live"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/pdf-unit-readonly.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "readonly": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/pdf-page-privacy') && inputs.confirm == 'READ_ONLY'",
+        "steps": [
+          {
+            "name": "Reject debug before any analysis Secret is provided",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": "Validate exact draft PR head before checkout",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Install existing receipt OCR dependencies before Secrets",
+            "modules": [
+              "pip",
+              "app.receipt_local_ocr"
+            ],
+            "if": null
+          },
+          {
+            "name": "Fixed confirmed Unit read-only evaluation",
+            "modules": [
+              "app.pdf_unit_readonly_analysis"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/pdf-unit-write-canary.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "canary": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm == 'WRITE_CANARY' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Reject debug before Secrets",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": "Check reviewed Draft head and validated main before checkout",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Install existing local OCR before Secrets",
+            "modules": [
+              "pip",
+              "app.receipt_local_ocr"
+            ],
+            "if": null
+          },
+          {
+            "name": "Fixed normal accounting canary without Gemini Secret",
+            "modules": [
+              "app.pdf_unit_write_canary"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/process-receipts.yml",
+    "validated_reference": false,
+    "schedule": [
+      {
+        "cron": "17 */3 * * *"
+      }
+    ],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "run": {
+        "if": "${{ github.ref == 'refs/heads/main' && vars.KAKEIBO_LEGACY_DISABLED != 'true' }}",
+        "steps": [
+          {
+            "name": "Install receipt OCR runtime",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Show configured integrations",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Import au PAY notices from Gmail",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.GOOGLE_GMAIL_TOKEN_JSON != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Process Google Drive receipt inbox",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.GEMINI_API_KEY != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' && env.RECEIPT_DRIVE_FOLDER_ID != '' }}"
+          },
+          {
+            "name": "Apply mobile review decisions",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Import PayPay CSV files from Google Drive",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ env.PAYPAY_DRIVE_FOLDER_ID != '' && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Reconcile imported transactions",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Auto-post clear payment transactions",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Refresh mobile review sheet",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          },
+          {
+            "name": "Refresh active expense view",
+            "modules": [
+              "app.cli"
+            ],
+            "if": "${{ always() && env.SPREADSHEET_ID != '' && env.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/receipt-unit-plan-only.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "plan": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Reject debug logging",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Fresh private unit evidence, bounded queue intake and memory-only writer plan",
+            "modules": [
+              "app.receipt_plan.unit_runner"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/receipt-unit-posting-canary.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "post": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && inputs.confirm == 'POST_CONFIRMED_RECEIPT_UNIT' && vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true' && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA",
+        "steps": [
+          {
+            "name": "Reject debug before Secrets",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": null,
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Bound private approval, existing writer, exact accounting read-back",
+            "modules": [
+              "app.receipt_plan.unit_posting_live"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/state-cache-inspect.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "inspect": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.operation == 'inspect' && github.sha == inputs.expected_sha",
+        "steps": [
+          {
+            "name": "Require exact hits and inspect isolated copies",
+            "modules": [
+              "app.state_cache_inspect"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/state-migration.yml",
+    "validated_reference": true,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-production",
+      "cancel-in-progress": "false",
+      "queue": "max"
+    },
+    "jobs": {
+      "migrate": {
+        "if": "github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.sha == inputs.expected_sha && github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && vars.KAKEIBO_PRODUCTION_ENABLED != 'true' && vars.KAKEIBO_SCHEDULE_ENABLED != 'true' && (inputs.operation != 'migrate' || vars.KAKEIBO_LEGACY_DISABLED == 'true')",
+        "steps": [
+          {
+            "name": "Require normal logging before private bindings",
+            "modules": [],
+            "if": "${{ runner.debug == '1' }}"
+          },
+          {
+            "name": "Install existing dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Require exact hits and transfer validated bundles",
+            "modules": [
+              "app.state_migration"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  },
+  {
+    "path": ".github/workflows/synthetic-tests.yml",
+    "validated_reference": false,
+    "schedule": [],
+    "concurrency": {
+      "group": "kakeibo-synthetic-${{ github.ref }}",
+      "cancel-in-progress": "true"
+    },
+    "jobs": {
+      "local-ocr-runtime": {
+        "if": null,
+        "steps": [
+          {
+            "name": "Verify pinned public models and offline pixel processing",
+            "modules": [
+              "app.receipt_local_ocr"
+            ],
+            "if": null
+          }
+        ]
+      },
+      "test": {
+        "if": null,
+        "steps": [
+          {
+            "name": "Install test dependencies",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Run isolated synthetic suite",
+            "modules": [
+              "pytest"
+            ],
+            "if": null
+          },
+          {
+            "name": "Check final cache run selection without credentials",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Check category checkbox submission without credentials",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Check manual entry capture without credentials",
+            "modules": [],
+            "if": null
+          },
+          {
+            "name": "Compile and check whitespace",
+            "modules": [
+              "compileall"
+            ],
+            "if": null
+          }
+        ]
+      }
+    }
+  }
+]
