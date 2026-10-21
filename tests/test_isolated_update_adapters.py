@@ -9,7 +9,7 @@ import pytest
 
 from app.drive_run_state import StateError
 from staging_shadow.auto_native_evidence import load
-from staging_shadow.isolated_update_adapters import ENTRIES, Envelope, _DB
+from staging_shadow.isolated_update_adapters import native_code_identity, ENTRIES, Envelope, _DB
 from isolated_update_fixtures import Rig, REQUEST, mutate
 
 
@@ -62,8 +62,8 @@ def test_all_independent_changes_refuse_before_dispatch(entry,part):
 
 
 @pytest.mark.parametrize('entry', ENTRIES)
-@pytest.mark.parametrize('point',['after_shared_claim','after_native_pending','after_writer_start',
-                                 'after_write_1','after_all_rows','after_native_complete'])
+@pytest.mark.parametrize('point',['after_ledger_claim','after_shared_claim','after_native_pending','after_writer_start',
+                                 'after_write_1','after_all_rows','after_native_complete','before_ledger_release'])
 def test_crash_retains_fence_no_retry_or_automatic_native_repair(entry,point):
     r=Rig(entry); c=r.candidate()
     def crash(name):
@@ -153,10 +153,12 @@ def test_apply_pending_is_bounded_fixed_ID_and_never_recovers_pending():
 
 
 def test_bank_native_canary_validator_is_mandatory():
-    r=Rig('A03-bank');saved=r.frozen()
+    r=Rig('A03-bank')
+    mutate(r.source_io,lambda v:v['payload']['bank_finalization'].update(expected_head='b'*40))
+    saved=r.frozen()
     with pytest.raises(RuntimeError,match='expected_head_mismatch'):
         r.adapter.prepare('A03-bank',str(uuid4()),arguments=(('synthetic-bank-1',),),
-            options={'head':'a'*40,'expected_head':'b'*40})
+            options={'head':native_code_identity(),'expected_head':'b'*40})
     assert r.frozen()==saved
 
 
@@ -309,13 +311,15 @@ def test_review_auxiliary_store_CAS_failure_is_a_separate_held_prefix(mode):
     assert r.frozen()==saved
 
 
-@pytest.mark.parametrize('field,value',[('cells',[[0,'other-ID']]),('after','0'*64),
-    ('changes',{'source':'different'}),('cells',[[10,'different-import']])])
-def test_correction_reuses_native_prepare_validator_for_immutable_request(field,value):
+@pytest.mark.parametrize('field,value,reason',[('cells',[[0,'other-ID']],'native_request_binding_changed'),
+    ('after','0'*64,'native_request_binding_changed'),('changes',{'source':'different'},'correction_fields_invalid'),
+    ('cells',[[10,'different-import']],'native_request_binding_changed')])
+def test_correction_reuses_native_prepare_validator_for_immutable_request(field,value,reason):
     r=Rig('A10')
     mutate(r.native_io,lambda v:v['payload']['corrections']['requests'][REQUEST].update({field:value}))
     saved=r.frozen()
-    with pytest.raises(Exception):r.candidate()
+    error=r.adapter.module('monthly_projection').ProjectionError if reason=='correction_fields_invalid' else StateError
+    with pytest.raises(error,match=reason):r.candidate()
     assert r.frozen()==saved and r.adapter.dispatches==[]
 
 
@@ -325,3 +329,55 @@ def test_duplicate_review_ID_never_reaches_the_first_writer():
     saved=r.frozen()
     with pytest.raises(StateError):r.candidate()
     assert r.frozen()==saved and r.adapter.dispatches==[]
+
+
+def test_matching_caller_SHA_strings_cannot_replace_independent_code_identity():
+    r=Rig('A03-bank');saved=r.frozen()
+    with pytest.raises(StateError,match='independent_code_config_binding_required'):
+        r.adapter.prepare('A03-bank',str(uuid4()),arguments=(('synthetic-bank-1',),),
+            options={'head':'b'*40,'expected_head':'b'*40})
+    assert r.frozen()==saved
+
+
+def test_bank_approved_target_is_read_from_the_independent_config():
+    r=Rig('A03-bank')
+    mutate(r.source_io,lambda v:v['payload']['bank_finalization'].update(approved_target='synthetic-other-ledger'))
+    saved=r.frozen()
+    with pytest.raises(RuntimeError,match='approved_target_mismatch'):r.candidate()
+    assert r.frozen()==saved
+
+
+def test_category_boolean_cannot_override_observed_native_configuration():
+    r=Rig('A03');saved=r.frozen()
+    with pytest.raises(StateError,match='independent_category_flag_binding_required'):
+        r.adapter.prepare('A03',str(uuid4()),options={'category_rules':True})
+    assert r.frozen()==saved
+
+
+@pytest.mark.parametrize('point',['after_ledger_claim','after_writer_start','after_all_rows','before_ledger_release'])
+def test_fresh_journal_and_old_receipt_composition_cannot_ignore_a_ledger_hold(point):
+    from ledger_execution_fixtures import Rig as ReceiptRig
+    from isolated_update_fixtures import memory
+    from staging_shadow.isolated_update_adapters import UpdateLedgerBoundary
+    from staging_shadow.ledger_execution_boundary import LedgerExecutionBoundary
+    receipt=ReceiptRig();r=Rig(receipt=receipt);attach_receipts(r,receipt);c=r.candidate()
+    def crash(name):
+        if name==point:raise TimeoutError('synthetic death with ledger hold')
+    r.adapter.fault=crash
+    with pytest.raises(TimeoutError):r.adapter.execute(c)
+    saved=r.frozen()
+    assert load(r.ledger_io.raw)['complete'] is False
+    # Deliberately wrong/fresh inventory must not turn the SAME ledger into a
+    # fresh financial resource. No native migration/hold clearing is attempted.
+    other=UpdateLedgerBoundary(ledger_id=r.boundary.ledger_id,shared_io=r.shared_io,ledger_io=r.ledger_io,
+        retained_update_ports=(),evidence_io=memory(dict(revision=0,payload=dict(synthetic_only=True,operations=[]))),
+        native_io=memory(c.native[0]),source_io=memory(c.source[0]),enabled=True,isolated_synthetic=True)
+    with pytest.raises(StateError):other.compose_updates().prepare('A03',str(uuid4()))
+    old=LedgerExecutionBoundary(ledger_id=r.boundary.ledger_id,shared_io=r.shared_io,ledger_io=r.ledger_io,
+        retained_update_ports=(),enabled=True,isolated_synthetic=True)
+    receipt.boundary=old;receipt.instances=[]
+    with pytest.raises(StateError):
+        receipt.new(fresh=True);receipt.call('normal_auto',revision=receipt.c.shared.read()[0]['revision'])
+    assert r.frozen()==saved and receipt.dispatches()==0
+    assert r.new().inspect(c.request_id)['classification'] in {'UNKNOWN','PARTIAL'}
+    assert r.frozen()==saved

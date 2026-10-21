@@ -44,6 +44,11 @@ def test_original_writers_validators_and_CAS_are_pinned_and_reused():
     assert not any(x.startswith(('google','requests','httpx','subprocess')) for x in imports)
     assert not any(isinstance(n,ast.FunctionDef) and n.name in {'main','from_environment','from_env'} for n in ast.walk(tree))
     assert 'receipt-reimport-v3' not in source
+    process_calls=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+        and isinstance(n.func.value,ast.Name) and n.func.value.id=='subprocess']
+    assert len(process_calls)==1 and process_calls[0].func.attr=='check_output'
+    args=process_calls[0].args[0].elts
+    assert [args[i].value for i in (0,1,3,4)]==['git','-C','rev-parse','HEAD']
 
 
 def assert_workflow(workflow):

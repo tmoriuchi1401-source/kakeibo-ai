@@ -14,6 +14,7 @@ import inspect
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 from uuid import UUID, uuid4
@@ -39,6 +40,25 @@ PHASES = ('claimed', 'native_pending', 'writer_started', 'native_complete', 'com
 
 def deny(reason='gate_required'):
     raise StateError('isolated_update_' + reason)
+
+
+def native_code_identity():
+    """Read local checkout metadata only; no caller-provided current SHA."""
+    return subprocess.check_output(['git', '-C', str(Path(__file__).resolve().parents[1]),
+        'rev-parse', 'HEAD'], text=True).strip()
+
+
+def held_ledger(io):
+    """Read-only inspection of an in-progress synthetic observation.
+
+    Other existing compositions require complete=True and therefore refuse it.
+    This function never creates permission or clears an incomplete observation.
+    """
+    raw, tag = io.read_versioned(); value = load(raw)
+    from app.pdf_intake_registry import strong_etag
+    if (set(value) != {'complete','snapshot'} or type(value['complete']) is not bool
+            or not strong_etag(tag)): deny('ledger_observation_UNKNOWN')
+    return snapshot(value['snapshot']), value['complete'], raw, tag
 
 
 class Envelope(ConditionalRequests):
@@ -89,8 +109,9 @@ class UpdateLedgerBoundary(LedgerExecutionBoundary):
     """Adds inventoried update evidence to the existing full-ledger admission.
 
 The shared request schema is NOT changed or mislabelled as receipt authority.
-Updates reserve its existing revision by CAS while their native journal owns
-the full-ledger fence. Receipt admission observes that durable fence too.
+    Updates first CAS the existing ledger observation to incomplete; even old
+    compositions/new journals cannot ignore that durable hold. Their native
+    evidence and the existing shared revision then bind the exact execution.
 """
     def __init__(self, *, evidence_io, native_io, source_io, **kwargs):
         super().__init__(**kwargs)
@@ -117,6 +138,11 @@ the full-ledger fence. Receipt admission observes that durable fence too.
                     or candidate.get('fingerprint') != digest({k:candidate[k] for k in
                         ('entry','arguments','options','before','source','native','plan','after','source_after')})):
                 deny('journal_binding_UNKNOWN')
+            from app.pdf_intake_registry import strong_etag
+            claim = record.get('ledger_claim', {})
+            if (set(claim) != {'tag','raw_digest'} or not strong_etag(claim['tag'])
+                    or claim['raw_digest'] != digest(encoded(dict(complete=False,snapshot=candidate['before'])).hex())):
+                deny('ledger_claim_binding_UNKNOWN')
             if record['phase'] == 'complete':
                 if (record.get('dispatches') != 1 or record.get('completion') !=
                         digest([record['candidate']['after'], record['candidate']['source_after'], record.get('native_after')])):
@@ -312,10 +338,19 @@ class IsolatedUpdates:
             store = _CorrectionsStore(payload, db, native_sink)
             return kind(store, db).apply(*arguments)
         if entry == 'A03-bank':
+            approved = db.source['bank_finalization']
+            head = native_code_identity()
+            if options != dict(head=head, expected_head=approved['expected_head']):
+                deny('independent_code_config_binding_required')
             self.module(module).validate_bank_finalization_canary(arguments[0],
-                target_spreadsheet_id=self.boundary.ledger_id, approved_target=self.boundary.ledger_id,
-                current_head=options['head'], expected_head=options['expected_head'])
-        kwargs = dict(category_rule_auto_apply_enabled=options.get('category_rules', False)) if entry == 'A03' else {}
+                target_spreadsheet_id=self.boundary.ledger_id, approved_target=approved['approved_target'],
+                current_head=head, expected_head=approved['expected_head'])
+        kwargs = {}
+        if entry == 'A03':
+            enabled = db.source['category_rule_auto_apply_enabled']
+            if type(enabled) is not bool or options.get('category_rules', enabled) != enabled:
+                deny('independent_category_flag_binding_required')
+            kwargs['category_rule_auto_apply_enabled'] = enabled
         if entry == 'A03-bank':
             kwargs['confirmed_internal_transfers'] = frozenset(tuple(v) for v in db.source.get('confirmed_internal_transfers', []))
         return kind(db, **kwargs).apply(*arguments)
@@ -400,7 +435,7 @@ class IsolatedUpdates:
             output.append(self.execute(self.prepare('A10', str(uuid4()), arguments=(key,))))
         return output
 
-    def apply_core(self, *, category_rules=False):
+    def apply_core(self, *, category_rules=None):
         """Same review -> reconciliation -> automatic-expense native order.
 
         Each stage completes both stores before the next is prepared. No intake,
@@ -408,7 +443,8 @@ class IsolatedUpdates:
         """
         results = []
         for entry in ('A01', 'A02', 'A03'):
-            c = self.prepare(entry, str(uuid4()), options={'category_rules':category_rules} if entry=='A03' else None)
+            c = self.prepare(entry, str(uuid4()), options={'category_rules':category_rules}
+                if entry=='A03' and category_rules is not None else None)
             results.append(self.execute(c))
         return results
 
@@ -418,6 +454,16 @@ class IsolatedUpdates:
         if fresh != c: deny('candidate_changed')
         b = self.boundary
         self.point('before_claim')
+        # FIRST durable admission is on the SAME ledger observed by old receipt
+        # compositions too. A fresh/different journal cannot hide this hold.
+        # Reuse the existing complete flag: a partial execution is not a complete
+        # independent ledger observation. No new CAS engine/schema is added.
+        held = load(c.ledger[0]); held['complete'] = False
+        held_raw = encoded(held)
+        b._ledger.replace_versioned(*c.ledger, held_raw)
+        ledger_claim = b._ledger.read_versioned()
+        if ledger_claim[0] != held_raw or ledger_claim[1] == c.ledger[1]: deny('ledger_claim_UNKNOWN')
+        self.point('after_ledger_claim')
         accepted = dict(entry=c.entry, arguments=c.arguments, options=dict(c.options),
             before=load(c.ledger[0])['snapshot'], source=c.source[0]['payload'], native=c.native[0]['payload'],
             plan=list(c.plan), after=c.after, source_after=c.source_after,
@@ -426,10 +472,11 @@ class IsolatedUpdates:
                 (('ledger',c.ledger),('source',c.source),('native',c.native),('shared',c.shared))})
         accepted = load(encoded(accepted))  # Persist JSON types; tuple != list on exact CAS read-back.
         record = dict(request_id=c.request_id, operation=c.operation, binding=digest(accepted), candidate=accepted,
+            ledger_claim=dict(tag=ledger_claim[1], raw_digest=digest(ledger_claim[0].hex())),
             phase='claimed', dispatches=0, events=['claimed'])
         value = deepcopy(c.journal[0]['payload']); value['operations'].append(record)
         journal = b.evidence.save(c.journal, value)  # Durable ownership of whole ledger.
-        frames = dict(ledger=c.ledger, source=c.source, native=c.native, journal=journal, shared=c.shared)
+        frames = dict(ledger=ledger_claim, source=c.source, native=c.native, journal=journal, shared=c.shared)
         token = b._update.set((c.operation, frames))
         def fresh_frames():
             if b._update.get() != (c.operation, frames): deny('dispatch_context_required')
@@ -510,7 +557,7 @@ class IsolatedUpdates:
                 lambda v: native_save(dict(frames['native'][0]['payload'], corrections=v)))
             self.point('after_all_rows')
             fresh_frames()
-            if (offset != len(c.plan) or _ledger(b._ledger)[0] != c.after
+            if (offset != len(c.plan) or held_ledger(b._ledger)[0] != c.after
                     or frames['source'][0]['payload'] != c.source_after): deny('all_ledger_readback_UNKNOWN')
             if stage is not None: stage.complete(STAGES[c.entry], result, 0.0)
             else:
@@ -520,6 +567,18 @@ class IsolatedUpdates:
             self.point('after_native_complete')
             reserve()  # Separate shared completion; never a cross-store transaction.
             phase('complete', completion=digest([c.after, c.source_after, frames['native'][0]['payload']]))
+            self.point('before_ledger_release')
+            fresh_frames()
+            # Only this live, completed attempt publishes a complete observation.
+            # Restart/inspect has NO route to release an old UNKNOWN hold.
+            value=load(frames['ledger'][0])
+            if value['complete'] is not False or value['snapshot'] != c.after: deny('ledger_release_binding_UNKNOWN')
+            value['complete']=True
+            old_raw,old_tag=frames['ledger'];proposed=encoded(value)
+            b._ledger.replace_versioned(old_raw,old_tag,proposed)
+            actual=b._ledger.read_versioned()
+            if actual[0]!=proposed or actual[1]==old_tag:deny('ledger_completion_UNKNOWN')
+            frames['ledger']=actual
             fresh_frames(); self.point('after_shared_complete')
             return dict(state='complete', synthetic_only=True, production_connected=False, result=result)
         finally:
@@ -528,11 +587,15 @@ class IsolatedUpdates:
 
     def inspect(self, request_id):
         records = [r for r in self.boundary.records() if r['request_id'] == request_id]
-        if len(records) != 1: deny('result_unknown')
+        current, complete, _, _ = held_ledger(self.boundary._ledger)
+        if len(records) != 1:
+            if not records and complete is False:
+                return dict(phase='unattributed_ledger_hold',classification='UNKNOWN',readonly=True,
+                    dispatches=None,retry_allowed=False,production_connected=False)
+            deny('result_unknown')
         r = records[0]
-        current = _ledger(self.boundary._ledger)[0]
         return dict(phase=r['phase'], dispatches=r['dispatches'], readonly=True,
             ledger_matches=current == r['candidate']['after'],
-            classification='COMPLETE' if r['phase']=='complete' else
+            classification='COMPLETE' if r['phase']=='complete' and complete is True else
                 'PARTIAL' if current not in (r['candidate']['before'],r['candidate']['after']) else 'UNKNOWN',
             retry_allowed=False, production_connected=False)

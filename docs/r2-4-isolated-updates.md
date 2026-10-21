@@ -20,7 +20,7 @@ A01〜A03に個別の署名済みreceipt authorityがあるとは扱わない。
 
 `staging_shadow/isolated_update_adapters.py` の `UpdateLedgerBoundary` は既存 `LedgerExecutionBoundary` を継承する。既存 `execute_update` の無条件拒否を変更/解除せず、memory-onlyの `compose_updates()` からだけ新しい接続を作る。receipt側は既存 `compose_receipts()` → `MandatoryReceiptComposition` →既存guarded writerのままである。
 
-既存の全ledger snapshot（支出・収入・receipt・取込の全値/数式）と同一shared storeを使う。更新側のclaimは、全ledger/source/nativeのbeforeとstrong tag、全対象ID/行/値/式・固定planを合成execution journalへ既存CASで永続化した後、**既存shared request documentのrevisionだけをCASで予約**する。receipt用request/ownership/金融authority schemaへbankやcorrectionを偽装しない。receipt admissionも同じjournalの未完了を確認する。更新中にreceipt側が先にclaimした場合も、独立再観測とledger CASで止まり、両方holdになることがある。自動retryで稼働性を作らない。
+既存の全ledger snapshot（支出・収入・receipt・取込の全値/数式）と同一shared storeを使う。更新側は**最初に同じledgerの既存completeフラグをCASでfalseへ置く**。更新途中は他のreaderに完全な独立snapshotを公開しないためで、旧receipt構成もこの既存条件で止まる。別の空journalを与えた再構築でもholdを隠せない。その後、全ledger/source/nativeのbeforeとstrong tag、全対象ID/行/値/式・固定plan・ledger claimを合成execution journalへ既存CASで永続化し、**既存shared request documentのrevisionをCASで予約**する。receipt用request/ownership/金融authority schemaへbankやcorrectionを偽装しない。更新中にreceipt側が先にclaimした場合も、独立再観測とledger CASで止まり、両方holdになることがある。自動retryで稼働性を作らない。
 
 新DB・CAS engine・login方式は追加しない。`Envelope` は合成保存形のrevision/payloadを読む薄いadapterで、compare/replace/read-backそのものは**元のConditionalRequests.replace**を継承する。native payloadはProductionLedger/correctionsの元の形式を保持し、合成用envelopeの内側へ格納する。本番nativeのmigrationや初期化は一切含まない。新たな金融authority schemaではない。
 
@@ -31,13 +31,13 @@ A01〜A03に個別の署名済みreceipt authorityがあるとは扱わない。
 1. source（取込・review・カテゴリ/rule・補助index）とnativeを別々のversioned frameで観測。前後2回のframeを一致させる。実原本は読まず、合成sourceのみ。
 2. 全ledgerのbefore snapshot、ID・診断用行位置・全値/数式、全変更planと完了後snapshotを固定。行番号だけをidentityにしない。
 3. 既存native writerを純粋なmemory plan DBで実行し、元のdomain validator・分類・duplicate・bank canary・DailyCorrections fingerprintを再利用。DailyCorrectionsのqueued requestは元のprepare validatorでも再構築し、changes/cells/before/after/category bindingを一致させる。重複IDのplanはclaim前に拒否。validator errorがあれば拒否。
-4. 合成execution journalの全ledger ownershipと既存shared revisionの強CAS。別source・別IDも全snapshotを変えるため同時実行を許可しない。
+4. 同じledgerの既存完全観測flagを強CASでholdし、合成execution journalの全ledger ownershipと既存shared revisionをbindingする。別source・別IDも全snapshotを変えるため同時実行を許可しない。
 5. 元のProductionLedger.begin、または元のDailyCorrectionsが計画時に生成したpending payloadをCASで保存。既存pending/UNKNOWN/PARTIALは受付けない。journalのrequest IDは一度だけ消費する。
 6. native pendingと独立してwriter_startedをCAS永続化し、dispatch budgetを1回だけ消費。
 7. dispatch直前にsource/native/journal/shared/全ledgerの全frameを再確認し、既存validatorの再実行planと凍結planを一致させる。
 8. private moduleの既存apply bodyを1回dispatch。guarded methodは正確な呼出元と専用memory DBを要求する。裸apply/live DB/任意writer callback/approved=Trueは開放しない。production appをmonkeypatchしない。
 9. 各sinkがplanの固定ID/行/順序と全frameを確認し、全ledger/backendを直接CAS。全行後はwriterの返却値だけに依存せず、全対象・無関係行・数式を独立read-back。
-10. 元native complete/appliedのread-back→journal native_complete→別CASのshared完了予約→journal completeを照合。途中で落ちても追加writeやcleanupをしない。
+10. 元native complete/appliedのread-back→journal native_complete→別CASのshared完了予約→journal completeを照合し、最後にこの同一実行だけがledgerの完全観測flagをCASでtrueとして公開する。途中で落ちても追加writeやcleanupをしない。旧UNKNOWNのholdを解除するAPIはない。
 
 完了した旧receiptの行をA02/A10等が正当に更新した場合、過去のreceipt native証跡は消さない。完了済み更新の厳密なbefore/after差分を**読取り上だけ**逆にたどって元のnative proofと照合する。実ledgerへの巻戻しwriteではない。証明できない変更はholdする。
 
@@ -47,13 +47,15 @@ A01〜A03に個別の署名済みreceipt authorityがあるとは扱わない。
 
 plan時と実dispatch時に同じ元writerを使い、clockだけprivate module内で固定する。カテゴリrule traceの時刻も同じplanへbindingする。DailyCorrectionsは指定cellだけを変更し、無関係formulaを保持する。既存のUSER_ENTEREDで数式に解釈され得る入力は隔離adapterが保守的に拒否する。本番Sheetsの値解釈・projection invalidation・validation装飾・実権限の挙動は合成成功で証明しない。
 
+銀行canaryのcurrent HEADは固定argvのローカル `git rev-parse HEAD` から独立取得し、既存CLIと同じapproved_target/expected_headを独立source configから読み、元のvalidatorへ渡す。呼出側が同じ偽SHAを2個渡しても通らない。既存writerの固定ソースhashも別途検証する。category_rule_auto_apply_enabledも独立source configの観測値を使用し、caller booleanで上書きしない。このGit照会はcommitメタデータのread-only取得のみで、本番CLIを実行するものではない。
+
 `apply_pending()` はqueuedだけを固定ID順に上限付きで個別gateへ送る。旧pendingを元のDailyCorrections.applyで自動回復する経路は露出させない。1件UNKNOWNになれば次へ進まない。
 
 ## 異常時と再構築
 
 CAS 412、timeout、応答喪失、writer途中停止、全行後停止、native完了後/共有完了前停止を注入する。例外時は追加の共有状態遷移・native recovery・retry・fence解除を行わない。永続phaseをそのまま保持し、`inspect()` はCOMPLETE / UNKNOWN / PARTIAL、全ledger一致、retry_allowed=falseをread-onlyで返す。writer_startedの永続dispatches=1は開始枠の消費であり、プロセス停止時の実call成功数を断定するカウンタではない。
 
-新しいcompositionを同じ合成backendsから再構築しても未完了journal/nativeがreceipt/更新の双方を拒否する。journal完了labelだけでは不十分で、native_after・candidate binding・開始証拠・全ledgerを照合する。旧v1へのfallbackや解除APIはない。
+新しいcompositionを同じ合成backendsから再構築しても未完了journal/native/ledger観測flagがreceipt/更新の双方を拒否する。別の新規journalや元のLedgerExecutionBoundaryを使った入口も同じledger holdを拒否する。journal保存前のcrashは所有者未確定のledger holdとしてread-only照会し、journal完了後でもledger公開前ならUNKNOWNを維持する。journal完了labelだけでは不十分で、native_after・candidate binding・開始証拠・全ledgerを照合する。旧v1へのfallbackや解除APIはない。
 
 ## 検証と残件
 

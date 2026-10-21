@@ -7,7 +7,7 @@ from app.drive_run_state import StateBinding
 from app.production_ledger import initial_ledger
 from app.receipt_confirmation_contract import encoded
 from staging_shadow.auto_native_evidence import load
-from staging_shadow.isolated_update_adapters import UpdateLedgerBoundary, _DB, _CorrectionsStore
+from staging_shadow.isolated_update_adapters import native_code_identity, UpdateLedgerBoundary, _DB, _CorrectionsStore
 from test_legacy_contract_poc import mem
 from test_projection_refresh import initialized, row
 
@@ -27,7 +27,9 @@ class Rig:
     def __init__(self, entry='A03', *, receipt=None):
         tables = {t: [] for t in ('レシート', '支出明細', '取込データ', '銀行振込_入金明細')}
         tables['支出明細'] = [row('synthetic-existing', amount=7)]
-        source = dict(money_mode=False,categories=[['食費','食料品'], ['その他','未分類']],
+        source = dict(money_mode=False,category_rule_auto_apply_enabled=False,
+            bank_finalization=dict(approved_target='synthetic-joint-ledger',expected_head=native_code_identity()),
+            categories=[['食費','食料品'], ['その他','未分類']],
             tables={'要確認': [], '店舗': [], 'カテゴリ自動分類ルール': []}, projection={})
         tables['取込データ'] = [imported()]
         if entry == 'A01':
@@ -82,7 +84,7 @@ class Rig:
     def candidate(self, request_id=None):
         return self.adapter.prepare(self.entry, request_id or str(uuid4()),
             arguments=(REQUEST,) if self.entry == 'A10' else (('synthetic-bank-1',),) if self.entry=='A03-bank' else (),
-            options={'head':'a'*40,'expected_head':'a'*40} if self.entry=='A03-bank' else None)
+            options={'head':native_code_identity(),'expected_head':native_code_identity()} if self.entry=='A03-bank' else None)
 
     def frozen(self):
         return tuple(p.read_versioned() for p in (self.shared_io,self.ledger_io,self.evidence_io,self.native_io,self.source_io))
