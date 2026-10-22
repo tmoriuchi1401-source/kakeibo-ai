@@ -5,6 +5,7 @@ Each worker restores to a different empty temporary directory. Actual CAS
 code is the unchanged hash-pinned FirestoreConditionalState implementation.
 """
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,11 @@ class Server:
         with self.connect() as db:
             payload, version, fault = db.execute('select payload,version,fault from document').fetchone()
         if fault == 'read':raise PermissionError('synthetic revoked')
+        if fault == 'expired':
+            class Expired(Snapshot):
+                def get(self, name):
+                    return datetime(2000,1,1,tzinfo=timezone.utc) if name == 'expires_at' else super().get(name)
+            return Expired(payload, version)
         return Snapshot(payload, version)
     def update(self, values, *, option, retry, timeout):
         assert retry is None and timeout == 10 and set(values) == {'payload'}

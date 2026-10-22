@@ -122,7 +122,7 @@ def test_missing_revoked_and_old_checkpoint_fail_closed(shared,tmp_path,fault):
     elif fault == 'revoked':(shared/'slots/revoked').touch()
     elif fault == 'cas_missing':
         with sqlite3.connect(shared/'server.sqlite') as db:db.execute('update document set payload=?',(b'',))
-    else:Server(shared/'server.sqlite').set_fault('read')
+    else:Server(shared/'server.sqlite').set_fault('expired')
     result = launch(shared,tmp_path/'fresh',check=False)
     assert result.returncode == 2 and json.loads(result.stdout)['status'] == 'STOPPED_ERROR'
     assert not (tmp_path/'fresh/checkpoint.json').exists()

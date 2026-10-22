@@ -177,8 +177,9 @@ def test_deadline_before_io_is_clean_stop(setup):
 
 def test_unknown_backend_result_fences_later_slots(setup):
     root,control,port=setup
-    port.fault=lambda p:dict(results=[dict(case_id='SYN-G101',status='UNKNOWN')],pending=[])
+    port.fault=lambda p:dict(results=[dict(case_id='SYN-G101',status='UNKNOWN')],pending=[dict(id='must-not-publish')])
     assert launch(setup)['status']=='UNKNOWN'
+    assert control.read()[0]['phase']=='backend_result'
     assert launch(setup)['status']=='UNKNOWN' and port.calls==['poll']
 
 
