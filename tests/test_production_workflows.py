@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'live-synthetic-sheets-checks.yml':
+            from test_live_sheets_ci import test_live_sheets_ci_is_exactly_isolated
+            test_live_sheets_ci_is_exactly_isolated()
+            continue
         if name == 'sheets-registration-checks.yml':
             from test_registration_ci import test_registration_ci_is_exactly_isolated
             test_registration_ci_is_exactly_isolated()
