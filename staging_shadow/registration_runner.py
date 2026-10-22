@@ -207,6 +207,13 @@ class ShortRunner:
                     if a!=b:raise CaptureConflict()
                     outcome=self.step('poll',lambda budget:self.port.poll(a,b,budget))
                     results=outcome['results']
+                    # An unresolved native result fences the whole run BEFORE
+                    # claiming any result-display intent. In particular, do
+                    # not spend more custody generations publishing holds
+                    # while an ATTEMPTING receipt already needs reconciliation.
+                    if any(r['status']=='UNKNOWN' for r in results):
+                        self.commit(status='UNKNOWN',phase='backend_result',pending=dict(reason='backend_unknown'))
+                        return self.summary('UNKNOWN',results)
                     for item in outcome['pending']:
                         self.guard();fresh=self.port.capture()
                         ready=self.step('ready',lambda budget:self.port.ready(item['id'],fresh,budget))

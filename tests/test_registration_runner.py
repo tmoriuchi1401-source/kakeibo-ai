@@ -177,8 +177,9 @@ def test_deadline_before_io_is_clean_stop(setup):
 
 def test_unknown_backend_result_fences_later_slots(setup):
     root,control,port=setup
-    port.fault=lambda p:dict(results=[dict(case_id='SYN-G101',status='UNKNOWN')],pending=[])
+    port.fault=lambda p:dict(results=[dict(case_id='SYN-G101',status='UNKNOWN')],pending=[dict(id='must-not-publish')])
     assert launch(setup)['status']=='UNKNOWN'
+    assert control.read()[0]['phase']=='backend_result'
     assert launch(setup)['status']=='UNKNOWN' and port.calls==['poll']
 
 
@@ -242,14 +243,17 @@ def test_existing_adapter_across_real_process_restart_and_readonly_recovery(tmp_
     for a,b in zip(before['sheets'][0]['data'][0]['rowData'],after['sheets'][0]['data'][0]['rowData']):
         assert a['values'][:1]+a['values'][3:]==b['values'][:1]+b['values'][3:]
     repeated=run_cli(root)
-    assert repeated['status']==('ALREADY_OBSERVED' if scenario=='normal' else 'UNKNOWN')
+    # A subprocess can cross the 30-minute slot boundary. Both observations
+    # are read-only and must leave receipts/checkpoint/backend untouched.
+    allowed={'ALREADY_OBSERVED','UNCHANGED'} if scenario=='normal' else {'UNKNOWN'}
+    assert repeated['status'] in allowed
     assert repeated['backend_calls']==0 and (root/'checkpoint.json').read_bytes()==checkpoint
     # Private export/restore to an EMPTY test directory preserves ciphertext,
     # immutable history and pending. No lifecycle reset is performed.
     target=tmp_path/'restored';shutil.copytree(root,target)
     assert Control(target).read()==Control(root).read()
     recovered=run_cli(target)
-    assert recovered['status']==repeated['status'] and recovered['backend_calls']==0
+    assert recovered['status'] in allowed and recovered['backend_calls']==0
     if scenario=='native_unknown':
         assert any(r['status']=='ATTEMPTING' for r in inspect['registrations']['requests'].values())
 
