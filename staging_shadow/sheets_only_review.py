@@ -35,6 +35,20 @@ def uid(value):
 
 
 class SheetsOnlyReview:
+    schema, slot, labels = SCHEMA, SLOT, LABELS
+    request_word = '比較'
+    policy_rejection = 'CONFLICT'
+
+    def _checkpoint(self, cid, frame=None, *, before=None):
+        """Extension point for an isolated policy, never financial authority."""
+        return None
+
+    def _validated(self, cid, rid, record, batch, frame, policy):
+        return self._finish(cid, rid, record, batch, 'COMPARED', frame=frame, owns_lease=True)
+
+    def _other_pending(self):
+        return False
+
     def __init__(self, handoff, surface, *, enabled=False, isolated_synthetic=False):
         if (enabled is not True or isolated_synthetic is not True
                 or type(handoff) is not SheetDraftHandoff or type(surface) is not SyntheticSheetSurface
@@ -51,15 +65,15 @@ class SheetsOnlyReview:
 
     def _state(self):
         state, _, tag = self.journal._state()
-        ledger = deepcopy(state['details'].get(SLOT, dict(schema=SCHEMA, requests={})))
+        ledger = deepcopy(state['details'].get(self.slot, dict(schema=self.schema, requests={})))
         try:
-            if set(ledger) != {'schema', 'requests'} or ledger['schema'] != SCHEMA or len(ledger['requests']) > 64:
+            if set(ledger) != {'schema', 'requests'} or ledger['schema'] != self.schema or len(ledger['requests']) > 64:
                 fail('journal_quarantined')
             for rid, r in ledger['requests'].items():
                 if (set(r) != {'fingerprint','case_id','command','core_digest','status','frame','comparison_digest',
                               'basis','reason','approval_established','sequence_accepted','created_at','expires_at'}
                         or rid != uid(r['fingerprint']) or r['case_id'] not in self.surface.contract['cases']
-                        or r['status'] not in set(LABELS) | {'ATTEMPTING'}
+                        or r['status'] not in set(self.labels) | {'ATTEMPTING'}
                         or r['comparison_digest'] != digest([rid, r['frame']])
                         or r['expires_at']-r['created_at'] != 600
                         or type(r['sequence_accepted']) is not bool or r['approval_established'] is not False):
@@ -70,7 +84,7 @@ class SheetsOnlyReview:
 
     def _save(self, batch, ledger, rid, stage, tag):
         state, _, _ = self._state()
-        details = deepcopy(state['details']); details[SLOT] = ledger
+        details = deepcopy(state['details']); details[self.slot] = ledger
         expected = ledger['requests'][rid]['status']
         try:
             result = self.journal.save(batch, tag, uid(rid+':'+stage), details=details)
@@ -85,7 +99,7 @@ class SheetsOnlyReview:
 
     def _sequence(self, ledger, cid):
         return max([int(r['command'].split()[1]) for _, r in self._records(ledger, cid)
-                    if r['sequence_accepted'] and re.fullmatch(r'比較 [1-9][0-9]{0,2}', r['command'])]+[0])
+                    if r['sequence_accepted'] and re.fullmatch(self.request_word+r' [1-9][0-9]{0,2}', r['command'])]+[0])
 
     def _options(self, ledger, cid, record):
         if record['status'] in {'UNKNOWN', 'FINANCIAL_BOUNDARY_STOPPED'}:
@@ -96,7 +110,7 @@ class SheetsOnlyReview:
         return options
 
     def _display(self, cid, record):
-        text = LABELS[record['status']]
+        text = self.labels[record['status']]
         if record['status'] == 'UNKNOWN':
             return text+'。自動再実行しません。入力を保持しています。'
         if record['status'] == 'FINANCIAL_BOUNDARY_STOPPED':
@@ -145,7 +159,7 @@ class SheetsOnlyReview:
             self.projection_unknown.add(cid)
 
     def _new(self, cid, command, core_digest):
-        fingerprint = digest([SCHEMA, self.journal.scope, cid, command, core_digest])
+        fingerprint = digest([self.schema, self.journal.scope, cid, command, core_digest])
         rid = uid(fingerprint)
         now = self.handoff.confirmation.clock()
         return rid, dict(fingerprint=fingerprint, case_id=cid, command=command,
@@ -186,7 +200,7 @@ class SheetsOnlyReview:
     def _compare(self, cid, command, batch, core_digest, ledger, tag):
         rid, record = self._new(cid, command, core_digest)
         expected = self._sequence(ledger, cid)+1
-        if command != '比較 '+str(expected):
+        if command != self.request_word+' '+str(expected):
             return self._finish(cid, rid, record, batch, 'CONFLICT', '古い依頼または順序不一致。次の比較版を選択してください。')
         record['sequence_accepted'] = True
         try:
@@ -202,8 +216,14 @@ class SheetsOnlyReview:
                         approval_established=False, accounting_permission=False, writer_dispatches=0, authority_dispatches=0)
         if captured != batch:
             return self._finish(cid, rid, record, batch, 'CONFLICT', '同時編集を検出しました。')
+        try:
+            policy = self._checkpoint(cid, frame)
+        except StateError:
+            return self._finish(cid, rid, record, batch, self.policy_rejection,
+                                '事前設定の権限または入力値が許可範囲と一致しません。')
         ledger['requests'][rid] = record
         self._save(batch, ledger, rid, 'attempt', tag)
+        self._checkpoint(cid, frame, before=policy)
         # Intent CAS is the only lease to enter this existing metadata draft CAS.
         if self.handoff._capture(cid, 'import_draft') != (batch, frame):
             fail('attempt_UNKNOWN_snapshot_changed')
@@ -225,7 +245,8 @@ class SheetsOnlyReview:
             return self._finish(cid, rid, record, batch, 'HELD', '必須項目または明細別入力が不足しています。部分入力は保存済みです。', owns_lease=True)
         if fresh != batch or compared['value'] != frame['value']:
             fail('attempt_UNKNOWN_snapshot_changed')
-        return self._finish(cid, rid, record, batch, 'COMPARED', frame=compared, owns_lease=True)
+        self._checkpoint(cid, compared, before=policy)
+        return self._validated(cid, rid, record, batch, compared, policy)
 
     def _confirm(self, cid, command, batch, core_digest, ledger, tag):
         rid, record = self._new(cid, command, core_digest)
@@ -268,11 +289,11 @@ class SheetsOnlyReview:
         if self.uncertain:
             rid, expected = self.uncertain
             observed = ledger['requests'].get(rid, {}).get('status')
-            if observed in LABELS and (expected == 'ATTEMPTING' or observed == expected):
+            if observed in self.labels and (expected == 'ATTEMPTING' or observed == expected):
                 self.uncertain = None  # exact terminal read-back only
         pending = [rid for rid, r in ledger['requests'].items() if r['status'] in {'ATTEMPTING', 'UNKNOWN'}]
         previous_pending = [rid for rid, r in previous_handoff['requests'].items() if r['status'] == 'ATTEMPTING']
-        if pending or self.uncertain or previous_pending or self.handoff.uncertain:
+        if pending or self.uncertain or previous_pending or self.handoff.uncertain or self._other_pending():
             rid = pending[0] if pending else self.uncertain[0] if self.uncertain else previous_pending[0] if previous_pending else 'unavailable'
             for cid in self.surface.contract['cases']:
                 try: command = self.surface.command(cid)
@@ -347,7 +368,7 @@ class SheetsOnlyReview:
                 self._project(cid, record, batch, ledger)
                 results.append(self.inspect(rid)); continue
             try:
-                if re.fullmatch(r'比較 [1-9][0-9]{0,2}', command):
+                if re.fullmatch(self.request_word+r' [1-9][0-9]{0,2}', command):
                     result = self._compare(cid, command, batch, batch.snapshot_digest, ledger, tag)
                 elif re.fullmatch(r'確定 [a-f0-9]{8}', command):
                     result = self._confirm(cid, command, batch, batch.snapshot_digest, ledger, tag)

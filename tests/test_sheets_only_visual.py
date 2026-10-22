@@ -27,6 +27,10 @@ def test_native_fixture_values_wrap_and_identity_remains_visible(browser,width,s
         monkeypatch.setattr(r.old.old.native[cid].readers.draft,'replace_versioned',fail)
     r.worker.poll()
     if scenario=='medical_request':r.request(cid,r.token(cid));r.worker.poll()
+    render_cells(browser,r,cid,width,scenario)
+
+
+def render_cells(browser,r,cid,width,scenario):
     text=evaluate(r.sheet,cid)
     assert text==r.sheet.view_text(cid)
     cells=r.sheet.row(cid)
