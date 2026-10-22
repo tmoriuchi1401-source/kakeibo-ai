@@ -43,5 +43,7 @@ def test_runner_ci_has_no_external_network():
     if os.environ.get('GITHUB_ACTIONS')=='true':assert os.environ.get('REGISTRATION_OUTER_NETNS')
     if not os.environ.get('REGISTRATION_OUTER_NETNS'):pytest.skip('Ubuntu network namespace evidence only')
     assert os.readlink('/proc/self/ns/net')!=os.environ['REGISTRATION_OUTER_NETNS']
-    assert set(p.name for p in Path('/sys/class/net').iterdir())=={'lo'}
+    # /sys can remain the inherited host mount after unshare --net. Query
+    # interfaces in the CURRENT network namespace, not that mount's view.
+    assert {name for _,name in socket.if_nameindex()}=={'lo'}
     with pytest.raises(OSError):socket.create_connection(('1.1.1.1',443),timeout=.1)
