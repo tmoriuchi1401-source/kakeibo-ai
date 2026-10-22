@@ -118,7 +118,7 @@ workerはmemory-only surfaceのSheet/source読取メソッドへ明示接続さ�
 既存#156のブラウザー回帰も維持する。Ubuntuでは既存のloopback-only namespace内でChromiumを実行し、外部通信を遮断する。
 画像・計算値・境界counter・JUnit・namespace証拠をCI artifactへ保存する。
 
-ローカル最終検証：新機能/式/CAS/CI境界62、既存回帰442、既存ブラウザー34、静的セル表示10、計548 passed。
+ローカル最終検証：新機能/式/CAS/CI境界63、既存回帰442、既存ブラウザー34、静的セル表示10、計549 passed。
 compile/whitespaceも成功。最終headのUbuntu結果は独立Draft PRのCIとartifactで確認する。
 
 次の実機項目は未確認：実Google Sheetsの式再計算、プルダウンの表示/選択、セル編集後の同期、offline/再起動/再ログイン、

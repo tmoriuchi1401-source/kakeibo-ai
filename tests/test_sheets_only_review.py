@@ -340,3 +340,12 @@ def test_losing_preflight_cannot_finalize_another_workers_intent(r,monkeypatch):
     _,ledger,_=r.worker._state();record=ledger['requests'][result['request_id']]
     assert r.rebuild()._finish('SYN-G101',result['request_id'],record,r.reader.read(),'CONFLICT')['status']=='COMPARED'
     assert r.old.journal.read_versioned()==before
+
+
+def test_first_selection_has_native_pending_formula_before_backend_poll(r):
+    before=r.old.journal.read_versioned(),r.draft_writes(),r.sheet.writes
+    for cid in r.sheet.contract['cases']:
+        assert evaluate(r.sheet,cid)=='未確定・比較を依頼してください'
+        r.request(cid,'比較 1')
+        assert evaluate(r.sheet,cid)==r.sheet.view_text(cid)=='受付待ち・自動処理を待ってください'
+    assert (r.old.journal.read_versioned(),r.draft_writes(),r.sheet.writes)==before

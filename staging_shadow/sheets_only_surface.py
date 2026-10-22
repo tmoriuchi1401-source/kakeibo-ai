@@ -63,6 +63,9 @@ class SyntheticSheetSurface:
             if n == 0:
                 row['values'] = [cell(v) for v in CORE_HEADERS[:1]+['操作依頼','比較・結果']+CORE_HEADERS[1:]]
             if n:
+                row['values'][2] = {'userEnteredValue': {'formulaValue':
+                    '=IF(B'+str(n+1)+'='+literal(IDLE)+','+literal('未確定・比較を依頼してください')+','+
+                    literal('受付待ち・自動処理を待ってください')+')'}}
                 row['values'][1]['dataValidation'] = rule([IDLE, '比較 1'])
                 opened.append(dict(sheetId=contract['sheet_id'], startRowIndex=n, endRowIndex=n+1,
                                    startColumnIndex=1, endColumnIndex=2))
@@ -176,7 +179,7 @@ class SyntheticSheetSurface:
         """Fixture display oracle; Google formula recalculation remains untested."""
         e = self.expected.get(cid)
         if not e:
-            return '未確定・比較を依頼してください' if self.command(cid) == IDLE else '受付待ち'
+            return '未確定・比較を依頼してください' if self.command(cid) == IDLE else '受付待ち・自動処理を待ってください'
         if e['text'].startswith('UNKNOWN'):
             return e['text']
         if self.command(cid) != e['command']:
