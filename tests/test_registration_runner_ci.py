@@ -27,16 +27,20 @@ def test_offline_runner_ci_is_exactly_isolated():
     expected['on']['pull_request']['branches']=['codex/live-synthetic-sheets-registration']
     expected['concurrency']=dict(group='kakeibo-offline-registration-runner-${{ github.ref }}',**{'cancel-in-progress':'false'})
     job=expected['jobs'].pop('isolated-live-sheet');expected['jobs']['offline-runner']=job
+    install=next(s for s in job['steps'] if s.get('name')=='Install synthetic verification dependencies')
+    install['run']='pip install -r requirements-test.txt formulas==1.3.4\n'
+    job['steps']=[s for s in job['steps'] if s.get('name')!='Static Sheet fixture visibility and existing browser regressions with blocked egress']
     job['steps'].insert(4,dict(name='Offline runner with blocked egress',run=ISOLATED))
     compile_step=next(s for s in job['steps'] if s.get('name')=='Compile preserved scripts and whitespace')
     compile_step['run']=compile_step['run'].replace('python -m compileall -q ','python -m compileall -q staging_shadow/registration_runner.py tests/offline_registration_runner.py tests/test_registration_runner.py tests/test_registration_runner_ci.py ',1)
+    compile_step['run']+='git diff --exit-code ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} -- app/unified_shadow_templates tests/test_registration_visual.py tests/test_sheets_only_visual.py tests/test_iphone_handoff_browser.py\n'
     artifact=job['steps'][-1]['with']
     artifact['name']='offline-registration-synthetic-evidence'
-    artifact['path']='.private/offline-runner.xml\n'+artifact['path']
+    artifact['path']='.private/offline-runner.xml\n.private/live-sheets-*.xml\n'
     source=(root/'.github/workflows/offline-registration-runner-checks.yml').read_text('utf8')
     assert yaml.load(source,Loader=yaml.BaseLoader)==expected
     assert not any(v in source for v in ('schedule:','workflow_dispatch','secrets.','vars.','environment:','continue-on-error','actions/cache'))
-    assert artifact['path'].splitlines()==['.private/offline-runner.xml','.private/live-sheets-*.xml','.private/sheets-only/*.png','.private/sheets-only/*-evidence.json','.private/handoff-ui/*.png','.private/handoff-ui/*-evidence.json']
+    assert artifact['path'].splitlines()==['.private/offline-runner.xml','.private/live-sheets-*.xml']
 
 
 def test_runner_ci_has_no_external_network():

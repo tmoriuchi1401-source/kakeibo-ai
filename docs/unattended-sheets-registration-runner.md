@@ -114,6 +114,8 @@ cache/artifactを正本にしない。鍵・snapshot・journalは公開CI成果�
 既存production workflowは一切変更/dispatch/再実行しない。
 CI groupは `kakeibo-offline-registration-runner-${{ github.ref }}`、cancel-in-progressはfalse。
 合成runner試験はloopbackしかない別network namespaceで実行し、外部通信不能をassertする。
+今回はUI変更がないため、新CIはrunnerと既存機能回帰を実行し、ブラウザー環境の再導入は行わない。
+UI/template/ブラウザー試験に差分がないことをgit diffで必須検査する。#159の既存CI 1,072件成功は維持する。
 旧writerと共有排他が証明できたとは扱わず、金融NO-GOを維持する。
 
 将来の定期workflowはPR用groupを流用せず、固定したbook/scope単位のgroupと共有CAS claimを両方使う。
