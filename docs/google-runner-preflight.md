@@ -23,7 +23,7 @@ CAS全体の管理者巻戻しやprotocolを迂回するwriterはコードだけ
 `staging_shadow/google_runner_preflight.py` は既定でDISABLED。
 `validate_manifest` は資格情報を含まないprivate JSONを検証する。
 candidate SHAは別のtrusted入力との一致が必要。book ID/親/sheet ID、原本の
-case/file/親/MIME/hash/version、専用OAuth client、owner email、slot固定ID、
+case/file/親/MIME/hash/version、専用OAuth client、owner email/permissionId、slot固定ID、
 明示project/named database/document/runtime principalを固定する。
 default database、ADC projectへのfallback、ID重複、入力と保存先の重複、未知flagは拒否。
 最初の1件試験は8空slot（初期＋最大5回の変化＋予備2）を準備する。
@@ -38,7 +38,8 @@ API失敗・権限失効・構造差替えは固定エラーで停止し、生SD
 
 成功時も必ず `METADATA_VERIFIED_NO_GO` / `runner_write_allowed=False`。
 Firestore実効隔離・保存復元試験が未証明のままGOへ変換する経路はない。
-原本hash/version未取得・storage未作成は明示blockerとする。
+原本hash/version未取得・storage未作成・初回owner permissionId未確認は明示blockerとする。
+初回観測のpermissionIdはprivate返却値をレビューしてpinし、同じemailでもIDが変われば停止する。
 返却する観測値もprivateなローカルファイルに限定し、ログ/artifactへ出さない。
 同意・scope・所有者照合とFirestore IAM検証は異なる境界である。
 

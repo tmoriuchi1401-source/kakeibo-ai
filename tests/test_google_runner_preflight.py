@@ -12,7 +12,7 @@ CLIENT='123-probe.apps.googleusercontent.com'
 
 
 def manifest():
-    return dict(schema=SCHEMA,candidate_sha=SHA,owner_email='owner@example.test',oauth_client_id=CLIENT,
+    return dict(schema=SCHEMA,candidate_sha=SHA,owner_email='owner@example.test',owner_permission_id='owner-id',oauth_client_id=CLIENT,
         book=dict(file_id='book',parent_id='inputs',sheet_id=42),
         sources=[dict(case_id='SYN-G101',file_id='png',parent_id='inputs',mime_type='image/png',sha256='b'*64,version='9')],
         storage=dict(folder_id='state',slot_ids=['slot'+str(n) for n in range(8)]),
@@ -84,7 +84,7 @@ def test_metadata_success_cannot_enable_worker_or_assert_iam_isolation():
     assert result['firestore_resource']=='projects/synthetic-project/databases/synthetic-state/documents/synthetic_runner_control/one'
 
 
-@pytest.mark.parametrize('change',['sha','default_database','project_fallback','old_collection','client_missing','slot_overlap','few_slots','storage_parent','extra_flag','duplicate_source','path'])
+@pytest.mark.parametrize('change',['sha','default_database','project_fallback','old_collection','client_missing','slot_overlap','few_slots','storage_parent','extra_flag','duplicate_source','owner_id','path'])
 def test_unsafe_configuration_rejected_before_any_io(change):
     m=manifest();s=ReadOnlyServices()
     if change=='sha':m['candidate_sha']='c'*40
@@ -97,6 +97,7 @@ def test_unsafe_configuration_rejected_before_any_io(change):
     elif change=='storage_parent':m['storage']['folder_id']='inputs'
     elif change=='extra_flag':m['write_enabled']=True
     elif change=='duplicate_source':m['sources']*=2
+    elif change=='owner_id':m['owner_permission_id']='../owner'
     else:m['book']['file_id']='../book'
     with pytest.raises(StateError):run(s,m)
     assert s.calls==[]
@@ -129,3 +130,18 @@ def test_different_oauth_client_is_not_silently_reused():
     s=ReadOnlyServices()
     with pytest.raises(StateError):ReadOnlyPreflight(s,s).run(manifest(),expected_sha=SHA,granted_scopes=[DRIVE_FILE],actual_client_id='different',enabled=True)
     assert s.calls==[]
+
+
+def test_first_owner_observation_requires_review_before_pinning():
+    m=manifest();m['owner_permission_id']=None
+    r=run(ReadOnlyServices(),m)
+    assert r['owner_permission_id']=='owner-id'
+    assert 'OWNER_PERMISSION_ID_REVIEW_REQUIRED' in r['blockers']
+    assert r['runner_write_allowed'] is False
+
+
+def test_same_email_cannot_hide_changed_owner_permission_id():
+    m=manifest();m['owner_permission_id']='previous-owner'
+    s=ReadOnlyServices()
+    with pytest.raises(StateError,match='connected_owner_changed'):run(s,m)
+    assert s.calls==[('get',None)]

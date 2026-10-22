@@ -35,12 +35,13 @@ def validate_manifest(value, *, expected_sha):
     """
     m = deepcopy(value)
     try:
-        if set(m) != {'schema','candidate_sha','owner_email','oauth_client_id','book','sources','storage','firestore'}:
+        if set(m) != {'schema','candidate_sha','owner_email','owner_permission_id','oauth_client_id','book','sources','storage','firestore'}:
             fail('manifest_fields')
         if (m['schema'] != SCHEMA or not re.fullmatch('[a-f0-9]{40}',expected_sha)
                 or m['candidate_sha'] != expected_sha):fail('candidate_sha_mismatch')
         if not isinstance(m['owner_email'],str) or not re.fullmatch(r'[^\s@]+@[^\s@]+',m['owner_email']):
             fail('owner_required')
+        if m['owner_permission_id'] is not None:identity(m['owner_permission_id'])
         if not isinstance(m['oauth_client_id'],str) or not re.fullmatch(r'[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com',m['oauth_client_id']):
             fail('dedicated_oauth_client_required')
         b = m['book']
@@ -118,6 +119,8 @@ class ReadOnlyPreflight:
             owner = about['user']
             if not owner.get('permissionId') or owner.get('emailAddress') != m['owner_email']:
                 fail('connected_owner_changed')
+            if m['owner_permission_id'] is not None and owner['permissionId'] != m['owner_permission_id']:
+                fail('connected_owner_changed')
             b = m['book']
             self._file(b['file_id'],b['parent_id'],BOOK,owner,editable=True)
             sheet = self.sheets.spreadsheets().get(spreadsheetId=b['file_id'],includeGridData=False,
@@ -126,6 +129,7 @@ class ReadOnlyPreflight:
                     or sheet['sheets'][0]['properties'] != dict(sheetId=b['sheet_id'],title='確認')):
                 fail('sheet_structure_changed')
             observations = []; blockers = ['FIRESTORE_EFFECTIVE_ISOLATION_UNPROVEN','PERSISTENCE_WRITE_TRIAL_REQUIRED']
+            if m['owner_permission_id'] is None:blockers.append('OWNER_PERMISSION_ID_REVIEW_REQUIRED')
             for s in m['sources']:
                 meta = self._file(s['file_id'],s['parent_id'],s['mime_type'],owner)
                 current = dict(case_id=s['case_id'],file_id=s['file_id'],sha256=meta.get('sha256Checksum'),version=meta.get('version'))
@@ -145,7 +149,7 @@ class ReadOnlyPreflight:
                     meta = transport._metadata()
                     if meta.get('capabilities',{}).get('canEdit') is not True:fail('slot_not_editable')
             return dict(status='METADATA_VERIFIED_NO_GO',runner_write_allowed=False,
-                blockers=sorted(set(blockers)),observations=observations,
+                blockers=sorted(set(blockers)),observations=observations,owner_permission_id=owner['permissionId'],
                 storage_quota=about.get('storageQuota'),firestore_resource=firestore_document_resource(m,expected_sha=expected_sha))
         except StateError:raise
         except Exception:fail('metadata_unavailable_or_revoked')
