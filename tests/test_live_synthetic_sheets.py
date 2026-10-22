@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -268,6 +269,9 @@ def test_checkpoint_process_restart_keeps_outbox_unknown_and_no_duplicate_import
         result=json.loads((directory/'response.json').read_bytes());assert 'error' not in result,result
         return result
     assert run(request)['results'][-1]['status']=='SYNC_WAIT'
+    # The integration probe uses the trusted host clock. Process startup on
+    # Ubuntu can be faster than the required 3s stable-input observation.
+    time.sleep(3.1)
     accepted=run(request)
     assert accepted['results'][-1]['status']=='VALIDATED_UNPOSTED'
     ready=run(dict(op='ready',id=accepted['pending'][0]['id'],raw=x.raw,sources=x.sources,profile=x.profile,acl=x.acl))
