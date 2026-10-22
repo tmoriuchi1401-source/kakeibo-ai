@@ -194,6 +194,10 @@ TTL/PITR/backup等の有料機能は新規有効化しない。
 4. 別承認後にdocument/slotの初回provision・read-backとSecrets接続を行う。
 5. 既存Google reader/result request契約を使う実port/client compositionと、固定SHAの**手動のみ**workflowを
    private manifestへ接続し、supervisor下で一度実行する。実Googleport選択とmanual workflowは今回は有効化しない。
+   通常の `workflow_dispatch` はdefault branchへのworkflow登録が必要なため、専用workflowのmain登録も
+   別PR・別承認にする。レビュー済みSHAを固定し、利用者入力で任意のPRコードを選択できないようにする。
+   今回はmain登録も実施しない。
+   [GitHubの手動起動仕様](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 6. 正常→別Actions実行環境の復元、同時claim、故障・失効、原本/入力/表示保持を実backendで実測する。
    次回の1回の試験だけでは、全実backend故障ケースの合格までは主張しない。
 
