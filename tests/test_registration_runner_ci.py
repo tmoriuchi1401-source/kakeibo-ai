@@ -2,6 +2,8 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import socket
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -50,4 +52,8 @@ def test_runner_ci_has_no_external_network():
     # /sys can remain the inherited host mount after unshare --net. Query
     # interfaces in the CURRENT network namespace, not that mount's view.
     assert {name for _,name in socket.if_nameindex()}=={'lo'}
-    with pytest.raises(OSError):socket.create_connection(('1.1.1.1',443),timeout=.1)
+    # Keep conftest's socket-denial fixture intact. A fresh child inherits the
+    # OS namespace and probes the kernel fence without pytest monkeypatches.
+    script="import socket,sys\ntry:\n socket.create_connection(('1.1.1.1',443),timeout=.1)\nexcept OSError:\n print('OS_NETWORK_BLOCKED')\nelse:\n sys.exit(5)"
+    child=subprocess.run([sys.executable,'-c',script],capture_output=True,text=True,timeout=3)
+    assert child.returncode==0 and child.stdout.strip()=='OS_NETWORK_BLOCKED'
