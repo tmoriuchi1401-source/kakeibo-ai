@@ -78,7 +78,8 @@ Workspaceの限定条件で編集者情報が取れる可能性はあるが、�
 | #154 | 歴史的4タブは無変更。正式1タブのみの投影を合成検証 |
 | #156 | 取込/比較/別の明示操作/保存結果照会の分離と状態契約を継承。HTML/JS/hostは削除も日常導線への追加もしない |
 
-比較依頼はjournalへATTEMPTINGをCAS保存し、新規CAS成功時だけ既存draft CASへ進む。
+比較依頼はjournalへATTEMPTINGをCAS保存し、新規CAS成功時だけ既存draft CASへ進む。結果の確定もその新規CASを取得した処理だけに限定する。
+同じ要求を見た別workerの事前検証失敗は、既存のATTEMPTINGやterminal結果を上書きしない。
 これは認証未検証のSheet下書きの**メタデータ保存**であり、本人承認や金融処理ではない。
 既存明細ID/カテゴリ/状態は独立backend下書きから保持する。
 保存後に再導出したexact native snapshotをjournalへ保存する。部分医療入力は保存し必須不足で保留する。
@@ -117,7 +118,7 @@ workerはmemory-only surfaceのSheet/source読取メソッドへ明示接続さ�
 既存#156のブラウザー回帰も維持する。Ubuntuでは既存のloopback-only namespace内でChromiumを実行し、外部通信を遮断する。
 画像・計算値・境界counter・JUnit・namespace証拠をCI artifactへ保存する。
 
-ローカル最終検証：新機能/式/CAS/CI境界61、既存回帰442、既存ブラウザー34、静的セル表示10、計547 passed。
+ローカル最終検証：新機能/式/CAS/CI境界62、既存回帰442、既存ブラウザー34、静的セル表示10、計548 passed。
 compile/whitespaceも成功。最終headのUbuntu結果は独立Draft PRのCIとartifactで確認する。
 
 次の実機項目は未確認：実Google Sheetsの式再計算、プルダウンの表示/選択、セル編集後の同期、offline/再起動/再ログイン、

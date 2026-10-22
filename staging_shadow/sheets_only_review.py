@@ -153,8 +153,19 @@ class SheetsOnlyReview:
             basis='', reason='', approval_established=False, sequence_accepted=False,
             created_at=now, expires_at=now+600)
 
-    def _finish(self, cid, rid, record, batch, status, reason='', frame=None, basis=''):
+    def _finish(self, cid, rid, record, batch, status, reason='', frame=None, basis='', owns_lease=False):
         _, ledger, tag = self._state()
+        existing = ledger['requests'].get(rid)
+        if existing:
+            if existing['status'] != 'ATTEMPTING':
+                self._project(cid, existing, batch, ledger)
+                return self.inspect(rid)  # terminal receipts are immutable
+            if not owns_lease:
+                return self.inspect(rid)  # another worker owns this intent
+            if existing != record:
+                fail('attempt_UNKNOWN_intent_changed')
+        elif owns_lease:
+            fail('attempt_UNKNOWN_intent_missing')
         after = deepcopy(record)
         after.update(status=status, reason=reason, frame=canon(frame), comparison_digest=digest([rid, canon(frame)]), basis=basis)
         ledger['requests'][rid] = after
@@ -211,10 +222,10 @@ class SheetsOnlyReview:
             fresh, partial = self.handoff._capture(cid, 'import_draft')
             if fresh != batch or partial['value'] != frame['value']:
                 fail('attempt_UNKNOWN_partial_changed')
-            return self._finish(cid, rid, record, batch, 'HELD', '必須項目または明細別入力が不足しています。部分入力は保存済みです。')
+            return self._finish(cid, rid, record, batch, 'HELD', '必須項目または明細別入力が不足しています。部分入力は保存済みです。', owns_lease=True)
         if fresh != batch or compared['value'] != frame['value']:
             fail('attempt_UNKNOWN_snapshot_changed')
-        return self._finish(cid, rid, record, batch, 'COMPARED', frame=compared)
+        return self._finish(cid, rid, record, batch, 'COMPARED', frame=compared, owns_lease=True)
 
     def _confirm(self, cid, command, batch, core_digest, ledger, tag):
         rid, record = self._new(cid, command, core_digest)
@@ -248,7 +259,7 @@ class SheetsOnlyReview:
         # NO call to authenticated post, gate, qualify, authority or writer.
         # A cell value, editor email, ACL, trigger owner and worker credential
         # are not verified owner consent bound to this exact comparison.
-        return self._finish(cid, rid, record, batch, 'APPROVAL_UNESTABLISHED', basis=basis['comparison_digest'])
+        return self._finish(cid, rid, record, batch, 'APPROVAL_UNESTABLISHED', basis=basis['comparison_digest'], owns_lease=True)
 
     def poll(self):
         state, ledger, tag = self._state()

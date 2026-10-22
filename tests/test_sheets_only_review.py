@@ -320,3 +320,23 @@ def test_composition_rejects_live_or_implicit_transport_before_use(r,attack,monk
     elif attack=='journal_transport':monkeypatch.setattr(r.old.io,'synthetic_memory_only',False)
     with pytest.raises(StateError):
         SheetsOnlyReview(r.adapter,r.sheet,enabled=attack!='disabled',isolated_synthetic=attack!='environment')
+
+
+def test_losing_preflight_cannot_finalize_another_workers_intent(r,monkeypatch):
+    original=r.old.journal.save;checked=[]
+    def intercept(batch,*args,**kwargs):
+        result=original(batch,*args,**kwargs)
+        records=kwargs.get('details',{}).get(SLOT,{}).get('requests',{})
+        if not checked and records and next(iter(records.values()))['status']=='ATTEMPTING':
+            checked.append(1);rid,record=next(iter(records.items()))
+            before=r.old.journal.read_versioned()
+            loser=r.rebuild()
+            assert loser._finish(record['case_id'],rid,deepcopy(record),batch,'CONFLICT','競合側の一時的な観測')['status']=='UNKNOWN'
+            assert r.old.journal.read_versioned()==before
+        return result
+    monkeypatch.setattr(r.old.journal,'save',intercept)
+    result=r.compare();assert checked and result['status']=='COMPARED'
+    before=r.old.journal.read_versioned()
+    _,ledger,_=r.worker._state();record=ledger['requests'][result['request_id']]
+    assert r.rebuild()._finish('SYN-G101',result['request_id'],record,r.reader.read(),'CONFLICT')['status']=='COMPARED'
+    assert r.old.journal.read_versioned()==before
