@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'google-runner-preflight-checks.yml':
+            from test_google_runner_preflight_ci import test_preflight_ci_is_exactly_isolated
+            test_preflight_ci_is_exactly_isolated()
+            continue
         if name == 'persistent-registration-runner-checks.yml':
             from test_persistent_runner_ci import test_new_ci_reuses_credential_free_ubuntu_contract
             test_new_ci_reuses_credential_free_ubuntu_contract()
