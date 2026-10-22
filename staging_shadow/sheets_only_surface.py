@@ -44,7 +44,10 @@ def literal(value):
 class SyntheticSheetSurface:
     synthetic_memory_only = True
 
-    def __init__(self, trusted_core, contract):
+    def __init__(self, trusted_core, contract, *, registration=False):
+        self.registration = registration is True
+        self.idle_text = '未登録・入力後に登録を依頼してください' if self.registration else '未確定・比較を依頼してください'
+        self.changed_text = '入力変更・新しい登録を依頼してください' if self.registration else '入力変更・比較を依頼してください'
         self.trusted_core = deepcopy(trusted_core)
         self.contract = deepcopy(contract)
         self.sources = {c['identity']['source_id']:deepcopy(c['identity'])
@@ -59,14 +62,14 @@ class SyntheticSheetSurface:
         for n, row in enumerate(sheet['data'][0]['rowData']):
             values = row['values']
             row['values'] = values[:1]+[cell('操作依頼' if n == 0 else IDLE),
-                cell('比較・結果' if n == 0 else '未確定・比較を依頼してください')]+values[1:]
+                cell(('登録・結果' if self.registration else '比較・結果') if n == 0 else self.idle_text)]+values[1:]
             if n == 0:
-                row['values'] = [cell(v) for v in CORE_HEADERS[:1]+['操作依頼','比較・結果']+CORE_HEADERS[1:]]
+                row['values'] = [cell(v) for v in CORE_HEADERS[:1]+['操作依頼','登録・結果' if self.registration else '比較・結果']+CORE_HEADERS[1:]]
             if n:
                 row['values'][2] = {'userEnteredValue': {'formulaValue':
-                    '=IF(B'+str(n+1)+'='+literal(IDLE)+','+literal('未確定・比較を依頼してください')+','+
+                    '=IF(B'+str(n+1)+'='+literal(IDLE)+','+literal(self.idle_text)+','+
                     literal('受付待ち・自動処理を待ってください')+')'}}
-                row['values'][1]['dataValidation'] = rule([IDLE, '比較 1'])
+                row['values'][1]['dataValidation'] = rule([IDLE, '登録 1' if self.registration else '比較 1'])
                 opened.append(dict(sheetId=contract['sheet_id'], startRowIndex=n, endRowIndex=n+1,
                                    startColumnIndex=1, endColumnIndex=2))
         self.layout = deepcopy(self.raw)
@@ -144,10 +147,10 @@ class SyntheticSheetSurface:
             ref = column(physical(index))+str(n)
             matches.append(ref+'='+str(value) if type(value) in (int, float)
                            else 'EXACT('+ref+','+literal(value)+')')
-        same = 'AND('+','.join(matches or ['TRUE'])+')' if text.startswith('比較済み') else 'TRUE'
+        same = 'AND('+','.join(matches or ['TRUE'])+')' if text.startswith(('比較済み', '登録検証済み')) else 'TRUE'
         b = 'B'+str(n)
         return ('=IF('+b+'='+literal(command)+',IF('+same+','+literal(text)+','+
-                literal('入力変更・比較を依頼してください')+'),IF('+b+'='+literal(IDLE)+','+
+                literal(self.changed_text)+'),IF('+b+'='+literal(IDLE)+','+
                 literal('入力中・未確定')+','+literal('受付待ち・自動処理を待ってください')+'))')
 
     def publish(self, cid, command, text, batch, options):
@@ -156,7 +159,7 @@ class SyntheticSheetSurface:
         # introduced here. Fresh backend confirmation rejects stale projection.
         if self.fault:
             self.fault('before_publish')
-        if text.startswith('比較済み') and digest(self.core()) != batch.snapshot_digest:
+        if text.startswith(('比較済み', '登録検証済み')) and digest(self.core()) != batch.snapshot_digest:
             fail('projection_conflict')
         cells = self.row(cid)
         cells[2] = {'userEnteredValue': {'formulaValue': self.formula(cid, command, text, batch)}}
@@ -167,7 +170,7 @@ class SyntheticSheetSurface:
         if self.fault:
             self.fault('after_publish')
         self.check_published(cid)
-        if text.startswith('比較済み') and digest(self.core()) != batch.snapshot_digest:
+        if text.startswith(('比較済み', '登録検証済み')) and digest(self.core()) != batch.snapshot_digest:
             fail('projection_conflict')
 
     def check_published(self, cid):
@@ -179,7 +182,7 @@ class SyntheticSheetSurface:
         """Fixture display oracle; Google formula recalculation remains untested."""
         e = self.expected.get(cid)
         if not e:
-            return '未確定・比較を依頼してください' if self.command(cid) == IDLE else '受付待ち・自動処理を待ってください'
+            return self.idle_text if self.command(cid) == IDLE else '受付待ち・自動処理を待ってください'
         if e['text'].startswith('UNKNOWN'):
             return e['text']
         if self.command(cid) != e['command']:
@@ -187,4 +190,4 @@ class SyntheticSheetSurface:
         current = self.core()
         cells = current['sheets'][0]['data'][0]['rowData'][self.contract['cases'][cid]['row_index']]['values']
         old = next(d for d in e['batch'].drafts.values() if d['case_id'] == cid)['cells']
-        return e['text'] if all(raw_value(cells[i]) == raw_value(old[i]) for i in self.contract['cases'][cid]['editable']) else '入力変更・比較を依頼してください'
+        return e['text'] if all(raw_value(cells[i]) == raw_value(old[i]) for i in self.contract['cases'][cid]['editable']) else self.changed_text

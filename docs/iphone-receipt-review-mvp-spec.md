@@ -1,6 +1,6 @@
 # KakeiboAI：iPhone領収書・PDF確認 MVP 仕様と開発方針
 
-- **更新日**：2026-10-22（最新のSheets完結型方針は第11節）
+- **更新日**：2026-10-22（最新の事前許可・個別承認廃止方針は第12節）
 - **状態**：Google Sheetsアプリ（A方式）の合成確認UIは、ユーザーのiPhone実機評価により基本操作性を採用可能と判断。確定仕様は第10節。認証付き確定処理・本番接続の完成や承認ではなく、**デプロイ・本番書込み・処理コードのmain mergeの承認でもない**（今回のPhase 1 Markdown専用PRは差分・CI正常後のmergeが個別承認済み）。
 - **適用範囲**：家計簿管理の領収書確認、PDFページ確認、医療領収書の手入力、関連するiPhone UI／認証／既存記帳処理との接続。
 - **優先原則**：**iPhoneで実際に使える最小機能を早く完成させる**。ただし、医療情報の保護、二重記帳防止、原本・権限の整合性は簡略化しない。
@@ -160,3 +160,17 @@ Phase 1はAGENTS.mdと本仕様のMarkdown専用PRとし、差分・CIが正常�
 - 検証：完全合成fixtureとCIで処理接続・式・390pxの静的セル視認性を確認する。実Sheets計算・モバイルプルダウン・同期・iPhone実機は未確認と区別する。
 
 詳細は `docs/sheets-only-review.md`。実接続・トリガー/定期処理の有効化・Cloud/IAM・鍵・Variables/Secrets/validated SHA・金融write・main merge/deployは承認していない。従来4処理・新R1のNO-GOを維持する。
+
+## 12. 取引ごとの本人承認廃止（2026-10-22・ユーザー明示指示）
+
+日常経路は **入力→登録依頼→backend検証→記帳結果表示**。取引ごとの比較・Google再認証・本人確認POST・CSRF付き承認を要求しない。
+第1～11節の個別承認を前提にした日常操作は、この方針で置き換える。旧コード・旧本番承認gateは維持し、削除/迂回/有効化しない。
+
+- 初期設定でGoogleアカウントと利用権限を検証し、信頼する入力元・許可範囲・保存先・実行主体・writerをbackendで固定する。セルで編集者を特定したとは扱わない。事前許可は実行権限の代用ではなく、両方必要とする。
+- 通常レシート/銀行/PayPay/Amazonは既存自動判定を満たす対象だけ。矛盾/不明/重複疑いは保留。医療/現金の手入力は必須項目・同期・identityを検証し、入力中は登録しない。
+- 固定案件/原本identity、fresh snapshot/revision、duplicate/replay、durable CAS/journal、UNKNOWN自動再送禁止、正確な記帳後read-back、権限外writer拒否、医療AI禁止を維持する。
+- 正式1タブの合成投影は標準「登録 n」と「登録・結果」に簡略化する。原本・既存入力/メモ/保留を保持。Safariや新UI/DB/認証基盤を追加しない。
+- #157を基点に独立合成経路で事前許可を検証する。初期account検証は既存hostを再利用する。実Google権限/本番許可の検証・新権限契約とnative writerの接続がない間は **登録検証済み・未記帳** と表示して停止し、成功を装わない。
+- 実backend CAS・旧writer競合排除・pending照合・実同期/実機は未解決。従来4処理・新R1はNO-GO。本番金融write/authority/Cloud/IAM/Variables/Secrets/validated SHA/main/本番Sheets変更は禁止。merge/本番接続/有効化は別承認。
+
+成立条件・合成実装と未接続範囲・操作手順は `docs/sheets-preauthorized-registration.md`。

@@ -143,3 +143,6 @@ compile/whitespaceも成功。最終headのUbuntu結果は独立Draft PRのCIと
 - [Menus / drawings](https://developers.google.com/apps-script/guides/menus)：画像/図形へ割り当てたスクリプトはmobileで起動しない。今回依存しない。
 
 「既存owner/session/CSRFの本人承認がこのセルモデルでは成立しない」は、この公式制約と既存実装を照合した設計判断である。
+
+
+2026-10-22追記：この文書は#157時点の個別承認モデルの記録です。新しい日常経路はユーザー指示により取引ごとの承認を廃止し、`docs/sheets-preauthorized-registration.md` と継続仕様第12節の事前許可モデルへ変更します。旧コード/本番gate/UNKNOWNは引き続き保持します。
