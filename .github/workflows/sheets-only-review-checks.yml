@@ -1,0 +1,63 @@
+name: Sheets-only synthetic review
+on:
+  pull_request:
+    branches: [codex/iphone-sheet-handoff-ui]
+permissions:
+  contents: read
+env:
+  UNIFIED_RECEIPT_WRITE_ENABLED: 'false'
+concurrency:
+  group: kakeibo-sheets-only-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolated-sheet:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install synthetic verification dependencies
+        run: |
+          pip install -r requirements-test.txt playwright==1.64.0 formulas==1.3.4
+          python -m playwright install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Sheets-only polling CAS formula and approval-denial contracts
+        run: python -m pytest -q tests/test_sheets_only_review.py tests/test_sheets_only_ci.py --junitxml=.private/sheets-only-core.xml
+      - name: Existing reader journal adapter host and input regressions
+        run: python -m pytest -q tests/test_iphone_sheet_handoff.py tests/test_iphone_sheet_handoff_host.py tests/test_iphone_handoff_ui.py tests/test_iphone_sheet_reader.py tests/test_iphone_draft_journal.py tests/test_iphone_persistent_drafts.py tests/test_iphone_source_observation.py tests/test_iphone_item_drafts.py tests/test_iphone_review_drafts.py tests/test_iphone_confirmation.py tests/test_production_workflows.py tests/test_iphone_r1_adapter.py::test_save_returns_exact_readback_revision_tag_and_replay_metadata tests/test_iphone_r1_confirmation.py::test_partial_save_and_medical_origin_block tests/test_iphone_r1_confirmation.py::test_holds_have_no_qualification --junitxml=.private/sheets-only-regression.xml
+      - name: Static Sheet fixture visibility and existing browser regressions with blocked egress
+        run: |
+          for tool in unshare ip runuser sudo; do command -v "$tool" >/dev/null; done
+          task_user=$(id -un)
+          task_python=$(command -v python)
+          task_netns=$(readlink /proc/self/ns/net)
+          sudo unshare --net -- sh -eu -c '
+            ip link set lo up
+            exec runuser -u "$1" -- env HANDOFF_OUTER_NETNS="$3" UNIFIED_RECEIPT_WRITE_ENABLED=false "$2" -m pytest -q tests/test_sheets_only_visual.py tests/test_iphone_handoff_browser.py --junitxml=.private/sheets-only-browser.xml
+          ' sh "$task_user" "$task_python" "$task_netns"
+      - name: Compile preserved scripts and whitespace
+        run: |
+          python -m compileall -q staging_shadow/sheets_only_review.py staging_shadow/sheets_only_surface.py tests/sheets_only_fixtures.py tests/test_sheets_only_review.py tests/test_sheets_only_ci.py tests/test_sheets_only_visual.py
+          node --check app/unified_shadow_templates/iphone_sheet_handoff.js
+          git diff --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sheets-only-synthetic-evidence
+          path: |
+            .private/sheets-only-*.xml
+            .private/sheets-only/*.png
+            .private/sheets-only/*-evidence.json
+            .private/handoff-ui/*.png
+            .private/handoff-ui/*-evidence.json
+          include-hidden-files: true
+          retention-days: 7
