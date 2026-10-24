@@ -111,3 +111,7 @@ API状態が未確認のサービス画面をread-only調査先として開か�
 
 新CIはUbuntu・外向き通信不可の合成worker試験、core/既存回帰を実施する。
 実Google値・token・鍵は入力せず、artifactは完全合成JUnitのみ。
+
+A0-Gの固定2ファイル契約、送信前のGET制限、分離した認証交換adapterと工程別承認は
+[`google-a0g-preparation.md`](google-a0g-preparation.md)を参照する。
+その追加層も既定OFFであり、このpreflightのNO-GOやstorage/IAM条件を緩めない。
