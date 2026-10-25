@@ -263,7 +263,7 @@ class LiveSyntheticBridge:
             text=label+'\n案件 '+cid+'\n合成専用・記帳処理には接続していません'
             ledger=self.worker._state()[1]
             receipt=ledger['requests'].get(r.get('request_id')) if r else None
-            medical_display=bool(receipt and receipt['reason'].startswith(PREFIX))
+            medical_display=bool(receipt and receipt['status']==status and receipt['reason'].startswith(PREFIX))
             if medical_display:
                 text=e['text']  # Saved validator outcome -> field names only.
             if r and r.get('request_id'):text+='\n受付 '+r['request_id'][:8]

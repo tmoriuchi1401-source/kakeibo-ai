@@ -6,7 +6,6 @@ The caller has already saved and re-read the exact partial draft.
 
 PREFIX = '医療・完全手入力\n'
 STOPPED = '自動処理は停止中。入力修正だけでは登録検証・記帳されません。'
-PARTIAL = '必須項目または明細別入力が不足しています。部分入力は保存済みです。'
 RECEIVED = 'この原本の登録検証は受付済みです。保存結果を照会してください。'
 
 

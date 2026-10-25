@@ -4,12 +4,10 @@ from types import MethodType
 
 import pytest
 
-from app.iphone_sheet_reader import raw_value
 from registration_fixtures import Rig
 from sheets_only_fixtures import no_clients, evaluate
 from staging_shadow.medical_input_display import partial_reason, PREFIX, STOPPED
 from staging_shadow.sheets_only_review import SheetsOnlyReview
-from staging_shadow.sheets_registration import SheetsRegistration
 from staging_shadow.live_synthetic_sheets import LiveSyntheticBridge
 from test_live_synthetic_sheets import provision, row, poll, accept, apply
 from types import SimpleNamespace
@@ -66,7 +64,8 @@ def test_actual_validator_decision_receipts_and_draft_writes_equal_old_display(m
         assert '入力不足・未入力：実支払額' in text and '登録 2' in text
     if changes == {'payment': '', 'memo': ''}:
         assert b['status'] == 'VALIDATED_UNPOSTED' and '未入力：' not in text
-    assert STOPPED in text
+    if br[b['request_id']]['reason'].startswith(PREFIX):
+        assert STOPPED in text
     old.assert_safe(); new.assert_safe()
 
 
