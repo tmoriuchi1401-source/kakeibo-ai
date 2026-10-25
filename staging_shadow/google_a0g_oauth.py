@@ -19,7 +19,8 @@ TOKEN_URL = 'https://oauth2.googleapis.com/token'
 
 
 def _token_post_direct(params, *, timeout, max_bytes):
-    if set(params) != {'client_id', 'client_secret', 'code', 'code_verifier', 'redirect_uri', 'grant_type'}:
+    required = {'client_id', 'code', 'code_verifier', 'redirect_uri', 'grant_type'}
+    if set(params) not in (required, required | {'client_secret'}):
         fail('exchange_fields')
     if params['grant_type'] != 'authorization_code':
         fail('refresh_forbidden')
@@ -67,8 +68,16 @@ class ApprovedCodeExchange:
         self._wall, self._mono, self._sender = wall_clock, monotonic, sender
         self._start = monotonic(); self._attempted = False; self._lock = threading.Lock()
         check_approval(self._contract, expected_sha, approval, wall_clock())
+        if sender is token_post:
+            self.close()
+            fail('durable_local_entry_required')
+
+    def close(self):
+        self._attempted = True
+        self._contract = self._approval = self._sender = None
 
     def exchange(self, *, callback, expected_state, code_verifier, redirect_uri, client_secret):
+        request=response=value=code=params=None
         with self._lock:
             try:
                 if self._attempted:
@@ -87,16 +96,17 @@ class ApprovedCodeExchange:
                 code = callback.get('code')
                 if (not isinstance(code, str) or not 1 <= len(code) <= 4096 or
                         any(ch.isspace() for ch in code) or not code.isascii() or
-                        not isinstance(client_secret, str) or not client_secret or
-                        any(ch.isspace() for ch in client_secret)):
+                        (client_secret is not None and (not isinstance(client_secret, str) or not client_secret or
+                        any(ch.isspace() for ch in client_secret)))):
                     fail('exchange_input')
                 remaining = LIMITS['process_seconds'] - (self._mono() - self._start)
                 timeout = min(LIMITS['http_seconds'], remaining, self._approval.expires_at - now)
                 if timeout <= 0:
                     fail('exchange_deadline')
-                request = dict(client_id=params['client_id'], client_secret=client_secret,
+                request = dict(client_id=params['client_id'],
                     code=code, code_verifier=code_verifier, redirect_uri=redirect_uri,
                     grant_type='authorization_code')
+                if client_secret is not None: request['client_secret'] = client_secret
                 response = self._sender(request, timeout=timeout, max_bytes=65_536)
                 if (not isinstance(response, Response) or response.status != 200 or
                         type(response.body) is not bytes or len(response.body) > 65_536):
@@ -111,3 +121,8 @@ class ApprovedCodeExchange:
                 raise
             except Exception:
                 fail('exchange_unavailable')
+            finally:
+                if isinstance(request,dict): request.clear()
+                if isinstance(value,dict): value.clear()  # includes refresh token, never handed to GET
+                request=response=value=code=params=client_secret=code_verifier=None
+                self.close()
