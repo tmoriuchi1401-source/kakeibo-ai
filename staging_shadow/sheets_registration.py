@@ -38,8 +38,9 @@ class SheetsRegistration(SheetsOnlyReview):
         return any(r['status'] in {'ATTEMPTING','UNKNOWN'} for r in old._state()[1]['requests'].values())
 
     def _options(self, ledger, cid, record):
-        if record['reason'].startswith(PREFIX) and (record['status'] == 'CONFLICT'
-                or '受付済み・未記帳' in record['reason']):
+        reason = self._presentation_reason(record)
+        if reason.startswith(PREFIX) and (record['status'] == 'CONFLICT'
+                or '受付済み・未記帳' in reason):
             return []  # Presentation only; do not suggest another registration.
         return [] if record['status'] in {'UNKNOWN','VALIDATED_UNPOSTED','FINANCIAL_BOUNDARY_STOPPED'} else ['登録 '+str(self._sequence(ledger,cid)+1)]
 
@@ -53,6 +54,16 @@ class SheetsRegistration(SheetsOnlyReview):
         if case is not None and case.kind == 'medical':
             reason = terminal_reason(status, reason)
         return super()._finish(cid, rid, record, batch, status, reason, frame, basis, owns_lease)
+
+    def _presentation_reason(self, record):
+        reason = record['reason']
+        if record['status'] == 'CONFLICT' and not reason.startswith(PREFIX):
+            # Existing polling can project a stale command as a transient
+            # conflict over an immutable receipt. Keep the receipt unchanged.
+            saved = self._state()[1]['requests'].get(uid(record['fingerprint']))
+            if saved and saved['reason'].startswith(PREFIX):
+                return terminal_reason('CONFLICT', '')
+        return reason
 
     def _project(self,cid,record,batch,ledger):
         # Durable publication intent, in the SAME encrypted journal. A worker
@@ -88,14 +99,15 @@ class SheetsRegistration(SheetsOnlyReview):
 
     def _display(self, cid, record):
         status = record['status']
-        if record['reason'].startswith(PREFIX):
+        reason = self._presentation_reason(record)
+        if reason.startswith(PREFIX):
             # Old immutable receipts keep the old projection, including on
             # restart. Only newly finished medical receipts carry this prefix.
-            label = '受付済み・未記帳' if status == 'HELD' and '受付済み・未記帳' in record['reason'] else self.labels[status]
-            text = label+'\n'+record['reason'][len(PREFIX):]
+            label = '受付済み・未記帳' if status == 'HELD' and '受付済み・未記帳' in reason else self.labels[status]
+            text = label+'\n'+reason[len(PREFIX):]
             if status == 'VALIDATED_UNPOSTED':
                 text += '\n記帳完了ではありません。結果照会のみ。'
-            if status == 'HELD' and record['reason'].startswith(PREFIX+'入力不足・未入力：'):
+            if status == 'HELD' and reason.startswith(PREFIX+'入力不足・未入力：'):
                 ledger = self._state()[1]
                 if not any(r['status'] in {'UNKNOWN', 'ATTEMPTING', 'VALIDATED_UNPOSTED'}
                            for _, r in self._records(ledger, cid)):

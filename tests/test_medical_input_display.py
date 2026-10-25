@@ -156,3 +156,21 @@ def test_legacy_medical_receipt_is_not_republished_for_new_wording(monkeypatch, 
     assert not poll(x)['pending']
     assert x.raw == before and r.worker._state()[1] == receipts and r.draft_writes() == writes
     r.assert_safe()
+
+
+def test_stale_accepted_number_projects_conflict_without_resend_advice(monkeypatch, tmp_path):
+    no_clients(monkeypatch); r = Rig(monkeypatch, tmp_path)
+    r.set(CID, 'amount', '')
+    original_memo = r.sheet.row(CID)[14]['userEnteredValue'].get('stringValue', '')
+    assert r.register(CID)['status'] == 'HELD'
+    r.set(CID, 'memo', 'synthetic second request')
+    assert r.register(CID, 2)['status'] == 'HELD'
+    receipts = deepcopy(r.worker._state()[1])
+    r.set(CID, 'memo', original_memo); r.request(CID, '登録 1')
+    assert r.worker.poll()[-1]['status'] == 'CONFLICT'
+    text = evaluate(r.sheet, CID)
+    assert '再登録せず' in text and '登録 3' not in text and '次の登録' not in text
+    options = r.sheet.row(CID)[1]['dataValidation']['condition']['values']
+    assert not any(v['userEnteredValue'] == '登録 3' for v in options)
+    assert r.worker._state()[1] == receipts
+    r.assert_safe()
