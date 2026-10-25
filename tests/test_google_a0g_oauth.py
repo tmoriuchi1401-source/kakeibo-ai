@@ -28,7 +28,7 @@ def call(adapter, cb=None, **kwargs):
 def test_separate_approved_exchange_hands_only_access_token_to_six_get_composition():
     calls = []
     def sender(params, **options):
-        calls.append((params, options))
+        calls.append((deepcopy(params), options))
         return a0.Response(200, json.dumps(dict(access_token='SYNTHETIC_ACCESS_TOKEN',
             refresh_token='SYNTHETIC_REFRESH_TOKEN', scope=a0.DRIVE_FILE,
             expires_in=90, token_type='Bearer')).encode())

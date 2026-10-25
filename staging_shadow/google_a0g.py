@@ -113,6 +113,10 @@ class AccessGrant:
     scopes: tuple
     expires_at: float
 
+    def close(self):
+        # Release this reference, NOT a claim of secure Python/OS RAM erasure.
+        object.__setattr__(self, 'access_token', '')
+
 
 def valid_deadline(value, now):
     return type(value) in (int, float) and math.isfinite(value) and value > now
@@ -303,7 +307,20 @@ class GuardedMetadataHTTP:
         self._responses = []
         if enabled is not True:
             fail('disabled')
-        self._check_handoff()
+        try:
+            self._check_handoff()
+            if sender is https_get:
+                fail('durable_local_entry_required')
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        self._stopped = True
+        if isinstance(self._grant, AccessGrant): self._grant.close()
+        self._grant = None
+        self._responses.clear()
+        self._sender = None
 
     def _check_handoff(self):
         now = self._wall()
@@ -361,10 +378,10 @@ class GuardedMetadataHTTP:
                 self._responses.append(deepcopy(value))
                 return value
             except StateError:
-                self._stopped = True
+                self.close()
                 raise
             except Exception:
-                self._stopped = True
+                self.close()
                 fail('transport_unavailable')
 
 
@@ -429,17 +446,20 @@ def run_metadata_audit(contract, *, expected_sha, approval=None, grant=None,
     http = GuardedMetadataHTTP(c, expected_sha=expected_sha, approval=approval,
         grant=grant, enabled=True, sender=sender, wall_clock=wall_clock, monotonic=monotonic)
     services = _MetadataServices(http)
-    result = ReadOnlyPreflight(services, services).run(c['preflight'], expected_sha=expected_sha,
-        actual_client_id=grant.client_id, granted_scopes=grant.scopes, enabled=True)
-    if http.count != 6:
-        fail('six_requests_required')
-    book_version = http._responses[1].get('version')
-    if not isinstance(book_version, str) or not book_version.isdigit():
-        result['blockers'].append('RAW_BOOK_VERSION_REQUIRED')
-    if c['book_version'] is None:
-        result['blockers'].append('BOOK_VERSION_REVIEW_REQUIRED')
-    elif c['book_version'] != book_version:
-        fail('book_revision_changed')
-    result['book_version'] = book_version
-    result['blockers'] = sorted(set(result['blockers']))
-    return result
+    try:
+        result = ReadOnlyPreflight(services, services).run(c['preflight'], expected_sha=expected_sha,
+            actual_client_id=grant.client_id, granted_scopes=grant.scopes, enabled=True)
+        if http.count != 6:
+            fail('six_requests_required')
+        book_version = http._responses[1].get('version')
+        if not isinstance(book_version, str) or not book_version.isdigit():
+            result['blockers'].append('RAW_BOOK_VERSION_REQUIRED')
+        if c['book_version'] is None:
+            result['blockers'].append('BOOK_VERSION_REVIEW_REQUIRED')
+        elif c['book_version'] != book_version:
+            fail('book_revision_changed')
+        result['book_version'] = book_version
+        result['blockers'] = sorted(set(result['blockers']))
+        return result
+    finally:
+        http.close()

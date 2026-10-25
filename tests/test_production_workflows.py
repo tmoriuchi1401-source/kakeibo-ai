@@ -131,6 +131,10 @@ def test_pdf_native_readonly_ci_is_exactly_isolated():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
+        if name == 'google-a0g-local-checks.yml':
+            from test_google_a0g_local_ci import test_local_ci_is_exactly_isolated_and_credentials_free
+            test_local_ci_is_exactly_isolated_and_credentials_free()
+            continue
         if name == 'google-a0g-preparation-checks.yml':
             from test_google_a0g_ci import test_a0g_ci_is_exactly_isolated_and_credentials_free
             test_a0g_ci_is_exactly_isolated_and_credentials_free()

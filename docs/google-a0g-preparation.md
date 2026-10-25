@@ -1,5 +1,9 @@
 # A0-G: 固定2ファイル・6 metadata GETの実施準備
 
+追加の一回限りのlocal実行入口・durable承認消費・callback・終了手順は
+[`google-a0g-local-execution.md`](google-a0g-local-execution.md)を参照する。
+低level adapter単独の既定live senderは拒否され、実行許可は依然として別承認が必要。
+
 基点はDraft #162の `3e7a5b39e6346f94edbf3caff477221710d4db8a`。
 今回の変更は契約照合・HTTP送信制限・資格情報なし合成検証まで。
 本番4処理・R1・無人runnerはNO-GO。#162や#163のhead、Apps Script、既存金融gateは変更しない。
