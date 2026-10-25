@@ -14,6 +14,7 @@ from app.iphone_sheet_reader import (RawReader, issue_contract, cell_content,
 from app.unified_receipt_review import digest
 from app.iphone_persistent_drafts import PersistentJournal
 from .sheets_only_surface import physical, literal, column, rule, IDLE
+from .medical_input_display import PREFIX
 from .sheets_only_review import uid
 from .sheets_registration import SheetsRegistration
 
@@ -260,8 +261,13 @@ class LiveSyntheticBridge:
                 CONFLICT='競合・新しい入力を採用していません',PERMISSION_UNVERIFIED='権限未検証・未記帳',
                 UNKNOWN='UNKNOWN・結果照合待ち／自動再送しません').get(status,'保留・未記帳')
             text=label+'\n案件 '+cid+'\n合成専用・記帳処理には接続していません'
+            ledger=self.worker._state()[1]
+            receipt=ledger['requests'].get(r.get('request_id')) if r else None
+            medical_display=bool(receipt and receipt['reason'].startswith(PREFIX))
+            if medical_display:
+                text=e['text']  # Saved validator outcome -> field names only.
             if r and r.get('request_id'):text+='\n受付 '+r['request_id'][:8]
-            if status=='HELD' and cid in self.worker.handoff.confirmation.cases:
+            if status=='HELD' and not medical_display and cid in self.worker.handoff.confirmation.cases:
                 ledger=self.worker._state()[1]
                 if not any(r['case_id']==cid and r['status']=='VALIDATED_UNPOSTED' for r in ledger['requests'].values()):
                     text+='\n必須項目を入力後、次は「登録 '+str(self.worker._sequence(ledger,cid)+1)+'」'

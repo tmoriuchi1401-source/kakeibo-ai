@@ -11,6 +11,7 @@ from app.unified_receipt_review import digest
 from .sheets_only_review import SheetsOnlyReview, LABELS, canon, uid
 from .sheets_only_surface import fail, rule, IDLE
 from .standing_permission import SyntheticStandingPermission, deny
+from .medical_input_display import PREFIX, partial_reason, terminal_reason
 
 
 class SheetsRegistration(SheetsOnlyReview):
@@ -37,7 +38,21 @@ class SheetsRegistration(SheetsOnlyReview):
         return any(r['status'] in {'ATTEMPTING','UNKNOWN'} for r in old._state()[1]['requests'].values())
 
     def _options(self, ledger, cid, record):
+        if record['reason'].startswith(PREFIX) and (record['status'] == 'CONFLICT'
+                or '受付済み・未記帳' in record['reason']):
+            return []  # Presentation only; do not suggest another registration.
         return [] if record['status'] in {'UNKNOWN','VALIDATED_UNPOSTED','FINANCIAL_BOUNDARY_STOPPED'} else ['登録 '+str(self._sequence(ledger,cid)+1)]
+
+    def _partial_reason(self, cid, error, partial):
+        if self.handoff.confirmation.cases[cid].kind == 'medical':
+            return partial_reason(error, partial['value']['fields'])
+        return super()._partial_reason(cid, error, partial)
+
+    def _finish(self, cid, rid, record, batch, status, reason='', frame=None, basis='', owns_lease=False):
+        case = self.handoff.confirmation.cases.get(cid)
+        if case is not None and case.kind == 'medical':
+            reason = terminal_reason(status, reason)
+        return super()._finish(cid, rid, record, batch, status, reason, frame, basis, owns_lease)
 
     def _project(self,cid,record,batch,ledger):
         # Durable publication intent, in the SAME encrypted journal. A worker
@@ -73,6 +88,17 @@ class SheetsRegistration(SheetsOnlyReview):
 
     def _display(self, cid, record):
         status = record['status']
+        if record['reason'].startswith(PREFIX):
+            # Old immutable receipts keep the old projection, including on
+            # restart. Only newly finished medical receipts carry this prefix.
+            label = '受付済み・未記帳' if status == 'HELD' and '受付済み・未記帳' in record['reason'] else self.labels[status]
+            text = label+'\n'+record['reason'][len(PREFIX):]
+            if status == 'HELD' and record['reason'].startswith(PREFIX+'入力不足・未入力：'):
+                ledger = self._state()[1]
+                if not any(r['status'] in {'UNKNOWN', 'ATTEMPTING', 'VALIDATED_UNPOSTED'}
+                           for _, r in self._records(ledger, cid)):
+                    text += '\n修正・同期後の試験時は「登録 '+str(self._sequence(ledger, cid)+1)+'」。'
+            return text+'\n案件 '+cid
         if status in {'VALIDATED_UNPOSTED','PERMISSION_UNVERIFIED'}:
             text = self.labels[status]+'\n案件 '+cid+'\n'+record['reason']
             if status == 'VALIDATED_UNPOSTED':
