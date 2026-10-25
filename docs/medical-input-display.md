@@ -40,8 +40,9 @@ PC/390pxは実際の結果数式を独立評価したセル表示fixtureであ�
 既存workflowは変更しない。新CIはcontents:read・write flag false、Google credentialなし、ブラウザーはloopback-only netns。
 schedule、workflow_dispatch、runner有効化は追加しない。
 
-Windowsでは既存hash固定auth-session bundleの `bundle_result_changed` により統合fixtureが構築できない。
-hash条件・fixtureを緩和せず、統合・表示はUbuntu CIで判定する。ローカルの純粋変換5件は成功。
+Windowsの一時領域権限と、Git管理下の一時領域で発生する既存bundleの `bundle_result_changed` は、
+Git管理外の作業用一時領域を指定して解消した。hash条件・fixtureは緩和していない。
+ローカルとUbuntu CIで合成検証し、最終の統合・表示結果はPR説明に記録する。
 最終CI件数と受入結果はPR説明に記録する。
 
 #159の入力・原本往復・再起動後保持の既存iPhone合格は採用し、再試験しない。

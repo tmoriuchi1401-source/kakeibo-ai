@@ -93,6 +93,8 @@ class SheetsRegistration(SheetsOnlyReview):
             # restart. Only newly finished medical receipts carry this prefix.
             label = '受付済み・未記帳' if status == 'HELD' and '受付済み・未記帳' in record['reason'] else self.labels[status]
             text = label+'\n'+record['reason'][len(PREFIX):]
+            if status == 'VALIDATED_UNPOSTED':
+                text += '\n記帳完了ではありません。結果照会のみ。'
             if status == 'HELD' and record['reason'].startswith(PREFIX+'入力不足・未入力：'):
                 ledger = self._state()[1]
                 if not any(r['status'] in {'UNKNOWN', 'ATTEMPTING', 'VALIDATED_UNPOSTED'}

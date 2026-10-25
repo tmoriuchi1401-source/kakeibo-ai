@@ -1,6 +1,7 @@
 """Only synthetic snapshots. Compare decisions/writes with the old display."""
 from copy import deepcopy
 from types import MethodType
+import time
 
 import pytest
 
@@ -43,6 +44,8 @@ def test_rejected_snapshot_to_labels_contains_no_medical_values(changes, error, 
 ])
 def test_actual_validator_decision_receipts_and_draft_writes_equal_old_display(monkeypatch, tmp_path, changes):
     no_clients(monkeypatch)
+    clock = int(time.time())
+    monkeypatch.setattr(time, 'time', lambda: clock)
     (tmp_path/'old').mkdir()
     (tmp_path/'new').mkdir()
     old = Rig(monkeypatch, tmp_path/'old')
@@ -102,17 +105,23 @@ def test_live_medical_display_preserves_inputs_and_freezes_received_results(monk
     assert saved == r.worker._state()[1] and writes == r.draft_writes()
     row(x, CID)[8]['userEnteredValue'] = {'numberValue': 135}
     row(x, CID)[1]['userEnteredValue'] = {'stringValue': '登録 2'}
-    poll(x); r.old.h.now += 3
+    deliver(x, poll(x)); r.old.h.now += 3
     result = poll(x)
     assert result['results'][-1]['status'] == 'VALIDATED_UNPOSTED'
     deliver(x, result)
     assert '登録検証済み・未記帳' in row(x, CID)[2]['userEnteredValue']['formulaValue']
-    row(x, CID)[1]['userEnteredValue'] = {'stringValue': '登録 3'}
+    r.assert_safe()
+
+
+def test_live_received_case_does_not_suggest_another_registration(monkeypatch, tmp_path):
+    no_clients(monkeypatch); r = Rig(monkeypatch, tmp_path); x = live(r)
+    deliver(x, accept(x, CID))
+    row(x, CID)[1]['userEnteredValue'] = {'stringValue': '登録 2'}
     result = poll(x)
     assert result['results'][-1]['status'] == 'HELD'
     text = result['pending'][0]['requests'][0]['updateCells']['rows'][0]['values'][0]['userEnteredValue']['formulaValue']
     assert '受付済み・未記帳' in text and '再登録せず' in text
-    assert '登録 4' not in text and '必須項目を入力後' not in text
+    assert '登録 3' not in text and '必須項目を入力後' not in text
     r.assert_safe()
 
 
