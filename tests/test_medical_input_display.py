@@ -43,6 +43,8 @@ def test_rejected_snapshot_to_labels_contains_no_medical_values(changes, error, 
 ])
 def test_actual_validator_decision_receipts_and_draft_writes_equal_old_display(monkeypatch, tmp_path, changes):
     no_clients(monkeypatch)
+    (tmp_path/'old').mkdir()
+    (tmp_path/'new').mkdir()
     old = Rig(monkeypatch, tmp_path/'old')
     new = Rig(monkeypatch, tmp_path/'new')
     # Exactly the base finishing/partial-message methods used by #159.
