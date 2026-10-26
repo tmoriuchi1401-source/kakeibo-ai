@@ -165,6 +165,49 @@ def _secret_file(directory: Path, name: str, payload: str) -> str:
     return str(path)
 
 
+def preview_authority_summary(directory: Path, sources: dict, env: dict) -> dict:
+    """Publish checks only; keep validated policy details in an external private file."""
+    from dataclasses import asdict
+    from datetime import datetime, timezone
+    import hashlib
+    from .bank_recurring_authority import ProtectedBankRecurringAuthorityProvider
+    from .aupay_card_batch import ProtectedRecurringAuthorityProvider
+    from .drive_receipts import normalize_folder_id
+    from .drive_run_state import _external_directory
+
+    public, private = {}, {}
+    now = datetime.now(timezone.utc)
+    for source, provider, origin in (
+        ("bank", ProtectedBankRecurringAuthorityProvider, "bank_pdf_drive"),
+        ("aupay_card", ProtectedRecurringAuthorityProvider, "au_pay_card_gmail"),
+    ):
+        if source not in sources:
+            continue
+        checks = {"policy_valid": False}
+        public[source] = checks
+        path = directory / source / "authority.json"
+        try:
+            policy = provider(path, repo_root=REPO).load()
+            checks.update(source_matches=policy.source == origin,
+                spreadsheet_matches=policy.expected_spreadsheet_id == env.get("SPREADSHEET_ID"),
+                bounds_valid=True, period_active=policy.valid_from <= now < policy.expires_at)
+            if source == "bank":
+                checks["folder_matches"] = normalize_folder_id(policy.expected_drive_folder_id) == normalize_folder_id(env.get("BANK_PDF_DRIVE_FOLDER_ID", ""))
+            checks["policy_valid"] = all(value for key, value in checks.items() if key != "policy_valid")
+            private[source] = {"policy": asdict(policy), "checks": dict(checks),
+                "policy_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        except Exception:
+            # Never emit exception text, paths, raw JSON, aliases or credentials.
+            private[source] = {"checks": dict(checks), "error": "authority_diagnostic_unavailable"}
+    if private:
+        private["observed_at"] = now.isoformat()
+        private["income_write_enabled"] = env.get("BANK_INCOME_WRITE_ENABLED", "false") == "true"
+        report_dir = _external_directory(Path(env.get("RUNNER_TEMP") or tempfile.gettempdir()))
+        _secret_file(report_dir, "kakeibo-authority-" + uuid4().hex + ".private.json",
+                     json.dumps(private, ensure_ascii=True, default=lambda value: value.isoformat()))
+    return public
+
+
 def source_environment(source: str, directory: Path, env: dict) -> dict:
     result = dict(env)
     if source == "amazon":
@@ -397,6 +440,8 @@ def main():
                                     receipts_only=args.scope == "receipts",
                                     selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope),
                                     require_omitted_ready=args.scope == "core")
+            if args.mode == "preview":
+                report["authority"] = preview_authority_summary(Path(directory), report["sources"], env)
         if report["success"] and args.mode == "apply" and needs_ledger_order(
                 args.scope, report, bank_apply=args.bank_apply):
             report["ledger_order"] = finish_ledger_updates(env, {}, apply=True)
