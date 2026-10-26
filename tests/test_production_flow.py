@@ -234,3 +234,121 @@ def test_categories_scope_rejects_other_source_inputs(flag,value):
     args[flag]=value
     with pytest.raises(StateError,match="categories_scope_other_source_forbidden"):
         flow.validate_scope(SimpleNamespace(**args))
+
+
+def diagnostic_policy(tmp_path, route="bank", **overrides):
+    import json
+    from datetime import datetime, timedelta, timezone
+    from app.bank_pdf_pipeline import SOURCE
+    now = datetime.now(timezone.utc)
+    policy = dict(schema_version=1, policy_id="private-policy-name",
+        source="bank_pdf_drive" if route == "bank" else "au_pay_card_gmail",
+        expected_spreadsheet_id="private-sheet-id", expected_worksheet="取込データ",
+        overlap_seconds=3600, max_window_seconds=604800,
+        initial_start=(now-timedelta(days=2)).isoformat(),
+        valid_from=(now-timedelta(days=1)).isoformat(), expires_at=(now+timedelta(days=1)).isoformat(),
+        unexpected_credential="do-not-copy-this-secret")
+    if route == "bank":
+        policy.update(expected_drive_folder_id="private-folder-id", supported_bank_sources=[SOURCE],
+            allowed_classifications=["expense"], max_files=20, max_rows=100,
+            account_alias="private-account", income_enabled=True, income_worksheet="収入明細",
+            income_accounts=[[SOURCE, "private-account"]])
+    else:
+        policy.update(allowed_statuses=["auto_expense"], max_batch_size=100, max_messages=500)
+    policy.update(overrides)
+    directory = tmp_path / "source-inputs" / route
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "authority.json"
+    path.write_text(json.dumps(policy), encoding="utf-8")
+    env = {"SPREADSHEET_ID":"private-sheet-id", "BANK_PDF_DRIVE_FOLDER_ID":"private-folder-id",
+           "RUNNER_TEMP":str(tmp_path), "BANK_INCOME_WRITE_ENABLED":"false"}
+    return path, env
+
+
+@pytest.mark.parametrize("source", ["bank", "aupay_card"])
+def test_authority_preview_keeps_details_private_and_never_changes_inputs(tmp_path, capsys, source):
+    import hashlib
+    import json
+    path, env = diagnostic_policy(tmp_path, source)
+    original, original_env = path.read_bytes(), env.copy()
+    result = flow.preview_authority_summary(path.parent.parent, {source:{"status":"success"}}, env)
+    assert result[source]["policy_valid"]
+    assert all(type(value) is bool for value in result[source].values())
+    private = json.loads(next(tmp_path.glob("kakeibo-authority-*.private.json")).read_text())
+    assert private[source]["policy"]["expected_spreadsheet_id"] == "private-sheet-id"
+    assert private[source]["policy_sha256"] == hashlib.sha256(original).hexdigest()
+    assert private[source]["policy"]["max_window_seconds"] == 604800
+    assert private["income_write_enabled"] is False
+    if source == "bank":
+        assert private[source]["policy"]["income_accounts"][0][1] == "private-account"
+    assert "do-not-copy-this-secret" not in json.dumps(private)
+    captured = capsys.readouterr()
+    public = json.dumps(result) + captured.out + captured.err
+    for value in ("private-policy-name", "private-sheet-id", "private-folder-id", "private-account",
+                  "do-not-copy-this-secret", "income_accounts", "policy_sha256"):
+        assert value not in public
+    assert path.read_bytes() == original and env == original_env
+
+
+@pytest.mark.parametrize("field", ["SPREADSHEET_ID", "BANK_PDF_DRIVE_FOLDER_ID"])
+def test_authority_preview_detects_target_mismatch_even_if_source_failed(tmp_path, field):
+    path, env = diagnostic_policy(tmp_path)
+    env[field] = "different-private-id"
+    result = flow.preview_authority_summary(path.parent.parent, {"bank":{"status":"failed"}}, env)
+    assert not result["bank"]["policy_valid"]
+    assert result["bank"]["bounds_valid"]
+
+
+@pytest.mark.parametrize("overrides", [{"max_rows":101}, {"max_window_seconds":1},
+    {"source":"wrong-source"}, {"allowed_classifications":["income"]}])
+def test_authority_preview_rejects_invalid_bounds_or_source_without_leaking_errors(tmp_path, overrides):
+    import json
+    path, env = diagnostic_policy(tmp_path, **overrides)
+    result = flow.preview_authority_summary(path.parent.parent, {"bank":{"status":"failed"}}, env)
+    assert result == {"bank":{"policy_valid":False}}
+    private = json.loads(next(tmp_path.glob("kakeibo-authority-*.private.json")).read_text())
+    assert private["bank"] == {"checks":{"policy_valid":False},"error":"authority_diagnostic_unavailable"}
+
+
+def test_authority_preview_detects_expiry_and_omits_unselected_sources(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    path, env = diagnostic_policy(tmp_path, valid_from=(now-timedelta(days=3)).isoformat(),
+                                  expires_at=(now-timedelta(days=1)).isoformat())
+    assert flow.preview_authority_summary(path.parent.parent, {}, env) == {}
+    assert not list(tmp_path.glob("kakeibo-authority-*.private.json"))
+    result = flow.preview_authority_summary(path.parent.parent, {"bank":{"status":"failed"}}, env)
+    assert not result["bank"]["period_active"] and not result["bank"]["policy_valid"]
+
+
+def test_authority_private_report_cannot_be_written_inside_repository(tmp_path, monkeypatch):
+    path, env = diagnostic_policy(tmp_path)
+    monkeypatch.setattr("app.drive_run_state.REPOSITORY_ROOT", tmp_path)
+    with pytest.raises(StateError, match="state_directory_must_be_absolute_and_external"):
+        flow.preview_authority_summary(path.parent.parent, {"bank":{"status":"success"}}, env)
+    assert not list(tmp_path.glob("kakeibo-authority-*.private.json"))
+
+
+@pytest.mark.parametrize("mode", ["preview", "apply"])
+def test_authority_diagnostic_hook_is_preview_only_and_preserves_existing_boundary(monkeypatch, capsys, tmp_path, mode):
+    import json
+    seen = []
+    monkeypatch.setattr(flow.tempfile, "tempdir", str(tmp_path))
+    env = dict(valid_env(), GITHUB_EVENT_NAME="workflow_dispatch", SPREADSHEET_ID="sheet",
+               KAKEIBO_STATE_FOLDER_ID="folder", KAKEIBO_RUN_LEDGER_FILE_ID="file")
+    monkeypatch.setattr(flow.sys, "argv", ["production_flow", "--scope", "drive_bank", "--mode", mode])
+    for key,value in env.items(): monkeypatch.setenv(key,value)
+    monkeypatch.setattr(flow.subprocess, "check_output", lambda *a,**kw:"a"*40)
+    monkeypatch.setattr("app.private_state_bindings.decode_environment", lambda env,**kw:(env,""))
+    monkeypatch.setattr("app.google_clients.read_only_drive_service", lambda:object())
+    monkeypatch.setattr("app.google_clients.drive_service", lambda:object())
+    ledger = SimpleNamespace(transport=object(), value={"sources":{"bank":{"last_success":None,"phase":"ready","counts":{}}}})
+    monkeypatch.setattr(flow, "ProductionLedger", lambda *a:ledger)
+    monkeypatch.setattr(flow, "assemble", lambda *a,**kw:{})
+    monkeypatch.setattr(flow, "execute_serial", lambda *a,**kw:{"success":True,"sources":{"bank":{"status":"success","counts":{}}}})
+    monkeypatch.setattr("app.bank_review_refresh.refresh_bank_review_after_sources", lambda *a,**kw:{})
+    monkeypatch.setattr(flow, "preview_authority_summary", lambda *a:seen.append(True) or {"bank":{"policy_valid":True}})
+    flow.main()
+    report = json.loads(capsys.readouterr().out)
+    assert seen == ([True] if mode == "preview" else [])
+    assert ("authority" in report) == (mode == "preview")
