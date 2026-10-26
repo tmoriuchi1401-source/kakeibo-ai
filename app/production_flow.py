@@ -203,8 +203,11 @@ def preview_authority_summary(directory: Path, sources: dict, env: dict) -> dict
         private["observed_at"] = now.isoformat()
         private["income_write_enabled"] = env.get("BANK_INCOME_WRITE_ENABLED", "false") == "true"
         report_dir = _external_directory(Path(env.get("RUNNER_TEMP") or tempfile.gettempdir()))
-        _secret_file(report_dir, "kakeibo-authority-" + uuid4().hex + ".private.json",
-                     json.dumps(private, ensure_ascii=True, default=lambda value: value.isoformat()))
+        payload = json.dumps(private, ensure_ascii=True, default=lambda value: value.isoformat())
+        _secret_file(report_dir, "kakeibo-authority-" + uuid4().hex + ".private.json", payload)
+        if env.get("KAKEIBO_AUTHORITY_RECIPIENT"):
+            from .authority_report_delivery import seal_report
+            seal_report(payload.encode("utf-8"), env, report_dir)
     return public
 
 
@@ -362,6 +365,8 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        from .authority_report_delivery import validate_delivery
+        validate_delivery(env, args.mode, args.scope)
         if args.scope == "categories":
             if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
                 raise StateError("categories_manual_scope_required")

@@ -45,6 +45,10 @@ on:
         type: boolean
         default: false
         required: true
+      authority_recipient:
+        description: Optional temporary owner public key (base64 DER RSA-3072); bank preview only
+        type: string
+        required: false
       receipt_store:
         description: RSA-wrapped separate private receipt result file ID
         type: string
@@ -80,6 +84,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
       vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      (github.event_name != 'workflow_dispatch' || inputs.authority_recipient == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
@@ -87,6 +92,7 @@ jobs:
     env:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      KAKEIBO_AUTHORITY_RECIPIENT: ${{ inputs.authority_recipient }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
       KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
       KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
@@ -221,3 +227,11 @@ jobs:
             fi
           fi
           python -m app.production_flow --mode "$mode" "${args[@]}"
+      - name: Upload encrypted Authority report only
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.mode == 'preview' && inputs.scope == 'drive_bank' && inputs.authority_recipient != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: authority-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kakeibo-authority-delivery/authority-report.enc.json
+          if-no-files-found: error
+          retention-days: 1

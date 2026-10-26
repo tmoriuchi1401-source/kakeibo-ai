@@ -94,9 +94,14 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
         assert f"'{cron}') scope={scope} ;;" in script
     assert "'47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;" in script
     assert 'args+=(--scope "$scope")' in script
-    assert job["steps"][-1]["env"]["EVENT_SCHEDULE"] == "${{ github.event.schedule }}"
+    execute = next(step for step in job["steps"] if step.get("name") == "Execute sources and dependent accounting serially")
+    assert execute["env"]["EVENT_SCHEDULE"] == "${{ github.event.schedule }}"
     uses = [step.get("uses", "") for step in job["steps"]]
-    assert not any("cache/save" in value or "upload-artifact" in value for value in uses)
+    assert not any("cache/save" in value for value in uses)
+    # The sole permitted upload is the opt-in owner-encrypted report, never state/plaintext.
+    uploads = [step for step in job["steps"] if "upload-artifact" in step.get("uses", "")]
+    assert len(uploads) == 1
+    assert uploads[0]["with"]["path"] == "${{ runner.temp }}/kakeibo-authority-delivery/authority-report.enc.json"
     assert all("continue-on-error" not in step for step in job["steps"])
     checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "main"
