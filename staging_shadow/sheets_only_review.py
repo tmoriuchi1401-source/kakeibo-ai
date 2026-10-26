@@ -49,6 +49,9 @@ class SheetsOnlyReview:
     def _other_pending(self):
         return False
 
+    def _partial_reason(self, cid, error, partial):
+        return '必須項目または明細別入力が不足しています。部分入力は保存済みです。'
+
     def __init__(self, handoff, surface, *, enabled=False, isolated_synthetic=False):
         if (enabled is not True or isolated_synthetic is not True
                 or type(handoff) is not SheetDraftHandoff or type(surface) is not SyntheticSheetSurface
@@ -242,7 +245,7 @@ class SheetsOnlyReview:
             fresh, partial = self.handoff._capture(cid, 'import_draft')
             if fresh != batch or partial['value'] != frame['value']:
                 fail('attempt_UNKNOWN_partial_changed')
-            return self._finish(cid, rid, record, batch, 'HELD', '必須項目または明細別入力が不足しています。部分入力は保存済みです。', owns_lease=True)
+            return self._finish(cid, rid, record, batch, 'HELD', self._partial_reason(cid, error, partial), owns_lease=True)
         if fresh != batch or compared['value'] != frame['value']:
             fail('attempt_UNKNOWN_snapshot_changed')
         self._checkpoint(cid, compared, before=policy)
