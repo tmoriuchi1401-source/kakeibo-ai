@@ -19,7 +19,7 @@ def test_fixed_duplicate_guard_reports_sites_without_rows_or_exception_text():
         guarded.append_raw('取込データ', [row])
     result = fixed.failure_diagnostic(caught.value)
     assert result['failure_class'] == 'ValueError'
-    assert [x['site'] for x in result['failure_sites']] == ['fixed_append_guard', 'fixed_expression']
+    assert [x['site'] for x in result['failure_sites']] == ['fixed_append_guard']
     assert all(type(x['line']) is int and x['line'] > 0 for x in result['failure_sites'])
     rendered = json.dumps(result)
     assert all(s not in rendered for s in [secret, DB.sid, row[0], str(fixed.__file__)])

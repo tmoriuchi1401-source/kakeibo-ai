@@ -286,7 +286,8 @@ class FixedWriteDB:
                 or any(r[0] not in expected or r != expected[r[0]] for r in rows)):
             raise ValueError('fixed_bank_write_outside_selection')
         self.guard()
-        if any(r[0] in snapshot(self.db)[sheet] for r in rows):
+        existing = snapshot(self.db)[sheet]  # Fresh for this append, after the live guard.
+        if any(r[0] in existing for r in rows):
             raise ValueError('fixed_bank_duplicate_append')
         return self.db.append_raw(sheet, rows)
 
@@ -299,7 +300,8 @@ class FixedWriteDB:
                     abs(self.imports[r[10]][6]), '銀行口座', self.imports[r[10]][2]) for r in rows):
             raise ValueError('fixed_bank_expense_outside_selection')
         self.guard()
-        if any(r[0] in snapshot(self.db)[sheet] for r in rows):
+        existing = snapshot(self.db)[sheet]  # Never reuse another append's observation.
+        if any(r[0] in existing for r in rows):
             raise ValueError('fixed_bank_existing_expense_protected')
         return self.db.append(sheet, rows)
 

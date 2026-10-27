@@ -33,12 +33,14 @@ class DB:
     def __init__(self):
         self.data = {n: [] for n in fixed.RANGES}
         self.calls = []
+        self.reads = []
         self.fail_income = False
         self.fail_expense = False
         for n in range(185):
             i = 'protected-' + str(n)
             self.data['取込データ'].append([i, '', 'synthetic', i, '2025-01-01', 'protected', -100, '銀行口座', 'bank_non_expense', '', 'h', ''])
     def get(self, rng):
+        self.reads.append(rng)
         sheet, span = rng.split('!')
         if span in {'A1:L1', 'A1:M1', 'A1:J1'}:
             return [INCOME_HEADERS if sheet == '収入明細' else HEADERS[sheet]]
@@ -273,3 +275,137 @@ def test_classification_change_stops_after_full_pdf_verification(scenario, monke
     with pytest.raises(ValueError, match='classification_changed'):
         fixed.validate_live(s.plan,s.db,lambda _:b'pdf','policy',RULES,s.resolver)
     assert not s.db.calls
+
+
+def hundred_case(s, *, expenses=False):
+    """100 synthetic IDs; no production plan or data is used."""
+    txs = [transaction('hundred-' + str(n), -2000 if expenses or n >= 6 else 1000,
+                       '口座振替公共サービス' if expenses else '利息' if n < 6 else '振替')
+           for n in range(100)]
+    items = {}
+    for n, tx in enumerate(txs):
+        kind = 'expense' if expenses else 'income' if n < 6 else 'nonposting'
+        items[tx.source_row_identity] = dict(pdf='pdf', transaction=fixed.asdict(tx), disposition=kind,
+            classification=kind, reason=kind,
+            deposit_outcome='confirmed_income' if kind == 'income' else None,
+            deposit_reason='bank_interest_type' if kind == 'income' else None)
+    report = {k: deepcopy(v) for k, v in s.plan.items() if k in {
+        'target', 'folder', 'pdfs', 'protected', 'limit', 'policy_sha256', 'rules_sha256', 'master_sha256'}}
+    report['items'] = items
+    report['pdfs'][0]['identities'] = sorted(list(items) + list(report['protected']))
+    s.plan = fixed.make_plan(report)
+    s.txs = {tx.source_row_identity: tx for tx in txs}
+    s.grant = permission(s.plan, s.policy)
+    return s
+
+
+def append_case(sheet, *, guard=lambda: None):
+    db = DB()
+    unrelated = transaction('unrelated-income', 17, '利息')
+    db.data['収入明細'] = [fixed.deposit_decisions([unrelated])[0][0].row()]
+    db.data['支出明細'] = [[fixed.expense_id('unrelated-expense'), '2025-01-01',
+        'unrelated', '自動計上', 19, 'その他', '未分類', '銀行口座', SOURCE,
+        '', 'unrelated-expense', '', 'active']]
+    ids = ['new-' + str(n) for n in range(100)]
+    imports = {i: [i, '', 'synthetic', i, '2025-01-01', 'synthetic', -100,
+                    '銀行口座', 'bank_expense', '', 'h', ''] for i in ids}
+    incomes = {fixed.income_id(i): [fixed.income_id(i), '2025-01-01', 100,
+               '利息', 'synthetic', 'jibun-primary', i, SOURCE, 'bank_interest_type', 'h'] for i in ids}
+    if sheet == '支出明細':
+        rows = [[fixed.expense_id(i), '2025-01-01', 'synthetic', '自動計上', 100,
+                 'その他', '未分類', '銀行口座', 'synthetic', '', i, '', 'active'] for i in ids]
+    else:
+        rows = list((imports if sheet == '取込データ' else incomes).values())
+    wrapped = fixed.FixedWriteDB(db, ids, imports, incomes, guard)
+    method = wrapped.append if sheet == '支出明細' else wrapped.append_raw
+    return db, wrapped, method, rows
+
+
+@pytest.mark.parametrize('sheet', list(fixed.RANGES))
+def test_hundred_append_uses_one_fresh_snapshot_and_rerun_cannot_duplicate(sheet):
+    guard_calls = []
+    db, wrapped, append, rows = append_case(sheet, guard=lambda: guard_calls.append(True))
+    before = deepcopy(db.data)
+    append(sheet, rows)
+    assert len(db.reads) == 3  # One snapshot; all three financial sheets remain validated.
+    assert guard_calls == [True]
+    assert db.data[sheet] == before[sheet] + rows
+    assert all(db.data[s] == before[s] for s in fixed.RANGES if s != sheet)
+    assert db.data['取込データ'][:185] == before['取込データ']
+    after = deepcopy(db.data)
+    with pytest.raises(ValueError, match='duplicate_append|existing_expense_protected'):
+        append(sheet, rows)
+    assert len(db.reads) == 6 and guard_calls == [True, True]
+    assert db.data == after and len(db.calls) == 1
+
+
+@pytest.mark.parametrize('sheet', list(fixed.RANGES))
+def test_existing_id_inside_hundred_is_rejected_before_any_append(sheet):
+    db, _, append, rows = append_case(sheet)
+    db.data[sheet].append(deepcopy(rows[-1]))
+    before = deepcopy(db.data)
+    with pytest.raises(ValueError, match='duplicate_append|existing_expense_protected'):
+        append(sheet, rows)
+    assert db.data == before and not db.calls
+
+
+@pytest.mark.parametrize('sheet', list(fixed.RANGES))
+def test_each_append_observes_collision_added_after_live_guard(sheet):
+    db, wrapped, append, rows = append_case(sheet)
+    append(sheet, rows[:-1])
+    # External writer inserts the remaining ID during the second live guard.
+    wrapped.guard = lambda: db.data[sheet].append(deepcopy(rows[-1]))
+    with pytest.raises(ValueError, match='duplicate_append|existing_expense_protected'):
+        append(sheet, rows[-1:])
+    assert len(db.calls) == 1 and len(db.reads) == 6
+    assert len({r[0] for r in db.data[sheet]}) == len(db.data[sheet])
+
+
+@pytest.mark.parametrize('sheet', list(fixed.RANGES))
+def test_live_revalidation_failure_prevents_duplicate_read_and_append(sheet):
+    def changed(): raise ValueError('fixed_bank_classification_changed')
+    db, _, append, rows = append_case(sheet, guard=changed)
+    with pytest.raises(ValueError, match='classification_changed'): append(sheet, rows)
+    assert not db.reads and not db.calls
+
+
+@pytest.mark.parametrize('expenses', [False, True])
+def test_hundred_pipeline_exact_results_preserves_185_and_verified_replay(scenario, monkeypatch, expenses):
+    s = hundred_case(scenario, expenses=expenses)
+    result = execute(s, monkeypatch)
+    assert result['bounded_rows'] == 100 and result['read_back_verified'] is True
+    assert result['written'] == (100 if expenses else 6)
+    assert len(s.db.data['取込データ']) == 285
+    assert len(s.db.data['収入明細']) == (0 if expenses else 6)
+    assert len(s.db.data['支出明細']) == (100 if expenses else 0)
+    assert s.db.data['取込データ'][:185] == s.protected
+    after = deepcopy(s.db.data); writes = len(s.db.calls)
+    result = execute(s, monkeypatch)
+    assert result['duplicate'] == 100 and result['written'] == 0
+    assert s.db.data == after and len(s.db.calls) == writes
+    assert s.state.successful_window_end() is None
+
+
+@pytest.mark.parametrize('expenses', [False, True])
+def test_hundred_unknown_blocks_replay_without_resend(scenario, monkeypatch, expenses):
+    s = hundred_case(scenario, expenses=expenses)
+    s.db.fail_expense = expenses;s.db.fail_income = not expenses
+    with pytest.raises(ConnectionError): execute(s, monkeypatch)
+    after = deepcopy(s.db.data); writes = len(s.db.calls)
+    with pytest.raises(ValueError, match='unknown_do_not_retry'): execute(s, monkeypatch)
+    assert s.db.data == after and len(s.db.calls) == writes
+    assert s.db.data['取込データ'][:185] == s.protected
+    assert s.state.successful_window_end() is None
+
+
+def test_hundred_readback_detects_changed_existing_financial_row(scenario, monkeypatch):
+    s = hundred_case(scenario)
+    append_raw = s.db.append_raw
+    def changed(sheet, rows):
+        append_raw(sheet, rows)
+        if sheet == '収入明細': s.db.data['取込データ'][0][5] = 'external-edit'
+    monkeypatch.setattr(s.db, 'append_raw', changed)
+    with pytest.raises(ValueError, match='independent_readback_changed'): execute(s, monkeypatch)
+    writes = len(s.db.calls)
+    with pytest.raises(ValueError, match='unknown_do_not_retry'): execute(s, monkeypatch)
+    assert len(s.db.calls) == writes
