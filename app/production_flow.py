@@ -484,6 +484,9 @@ def main():
         report["bank_mode"] = ("apply" if args.bank_apply else "preview") if "bank" in report["sources"] else "not_run"
     except Exception as exc:
         report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
+        if os.environ.get("BANK_FIXED_BACKFILL_PLAN"):
+            from .bank_fixed_backfill import failure_diagnostic
+            report.update(failure_diagnostic(exc))
         from .category_operations import CategoryOperationFailure
         if isinstance(exc,CategoryOperationFailure):
             report.update(error="category_operation_failed",**exc.details)
