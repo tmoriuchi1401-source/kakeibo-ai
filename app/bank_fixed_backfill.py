@@ -27,6 +27,53 @@ CORE_FILES = ('bank_pdf_pipeline.py', 'bank_reconciliation.py', 'bank_income.py'
 _GRANT = object()
 
 
+def failure_diagnostic(error):
+    """Fixed codes/line numbers only; never exception text, locals or HTTP body.
+
+    A site describes the call stack, not whether a request reached Google.
+    In particular, a writer site must retain UNKNOWN until reconciled.
+    """
+    from .drive_run_state import StateError
+    from googleapiclient.errors import HttpError
+    classes = {ValueError: 'ValueError', RuntimeError: 'RuntimeError',
+               TypeError: 'TypeError', KeyError: 'KeyError', OSError: 'OSError',
+               TimeoutError: 'TimeoutError', ConnectionError: 'ConnectionError',
+               sqlite3.Error: 'SQLiteError', StateError: 'StateError', HttpError: 'HttpError'}
+    sites = {
+        ('bank_fixed_backfill.py', 'run_from_environment'): 'fixed_runtime',
+        ('bank_fixed_backfill.py', 'callback'): 'fixed_callback',
+        ('bank_fixed_backfill.py', 'execute'): 'fixed_batch',
+        ('bank_fixed_backfill.py', 'validate_live'): 'fixed_revalidation',
+        ('bank_fixed_backfill.py', 'append_raw'): 'fixed_append_guard',
+        ('bank_fixed_backfill.py', '<genexpr>'): 'fixed_expression',
+        ('bank_fixed_backfill.py', 'require_rows'): 'fixed_readback',
+        ('drive_run_state.py', 'restore'): 'bank_state_restore',
+        ('drive_run_state.py', 'begin'): 'bank_state_begin',
+        ('drive_run_state.py', 'commit'): 'bank_state_commit',
+        ('production_ledger.py', 'begin'): 'parent_ledger_begin',
+        ('production_ledger.py', 'fail'): 'parent_ledger_fail',
+        ('production_ledger.py', 'complete'): 'parent_ledger_complete',
+        ('aupay_card_recurring.py', 'record'): 'sqlite_record',
+        ('bank_income_recurring.py', 'append'): 'append_evidence',
+        ('bank_income_recurring.py', 'reconcile'): 'append_reconciliation',
+        ('sheets.py', 'append_raw'): 'google_append_call',
+        ('sheets.py', '_execute_sheet_read'): 'google_read_call',
+    }
+    frames = []
+    tb = error.__traceback__
+    while tb is not None:
+        path = Path(tb.tb_frame.f_code.co_filename)
+        site = sites.get((path.name, tb.tb_frame.f_code.co_name))
+        if site and path.resolve().parent == Path(__file__).resolve().parent:
+            frames.append({'site': site, 'line': tb.tb_lineno})
+        tb = tb.tb_next
+    result = {'failure_class': classes.get(type(error), 'OtherError'),
+              'failure_sites': frames[-8:]}
+    if type(error) is HttpError and error.resp.status in {400, 401, 403, 404, 409, 429, 500, 502, 503, 504}:
+        result['failure_http_status'] = int(error.resp.status)
+    return result
+
+
 @dataclass(frozen=True, init=False)
 class _Grant:
     plan: str
