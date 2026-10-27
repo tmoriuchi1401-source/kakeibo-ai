@@ -236,6 +236,14 @@ def test_membership_and_batch_mutation_rejected(scenario):
     with pytest.raises(ValueError, match='membership'): fixed.validate_plan(plan)
 
 
+def test_workflow_keeps_owner_gate_lock_and_no_new_secret():
+    text=(Path(__file__).resolve().parents[1]/'.github/workflows/kakeibo-production.yml').read_text()
+    assert "inputs.bank_backfill_plan == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)" in text
+    assert 'group: kakeibo-production' in text
+    assert 'BANK_FIXED_BACKFILL_APPROVAL_JSON: ${{ vars.BANK_FIXED_BACKFILL_APPROVAL_JSON }}' in text
+    assert '${{ secrets.BANK_FIXED_BACKFILL' not in text
+
+
 def test_raw_pdf_or_rule_changes_stop_before_writes(scenario):
     s = scenario
     with pytest.raises(ValueError, match='pdf_changed'):

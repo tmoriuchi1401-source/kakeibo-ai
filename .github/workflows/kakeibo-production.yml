@@ -93,6 +93,7 @@ jobs:
       vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
       vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
       (github.event_name != 'workflow_dispatch' || inputs.authority_recipient == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
+      (github.event_name != 'workflow_dispatch' || inputs.bank_backfill_plan == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
