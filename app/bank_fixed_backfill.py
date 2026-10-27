@@ -272,6 +272,7 @@ class FixedWriteDB:
         self.imports, self.incomes, self.guard = imports, incomes, guard
 
     def get(self, rng): return self.db.get(rng)
+    def get_raw(self, rng): return getattr(self.db, 'get_raw', self.db.get)(rng)
     def sheet_titles(self): return self.db.sheet_titles()
     def categories(self): return self.db.categories()
 
@@ -405,7 +406,8 @@ def execute(plan, batch, *, db, state, policy, pdf_bytes, rules, resolver, now, 
     if incomes:
         class IncomeEvidenceDB:
             sid = guarded.sid
-            def get(self, rng): return guarded.get(rng)
+            def get(self, rng): return guarded.get_raw(rng)
+            def get_raw(self, rng): return guarded.get_raw(rng)
             def sheet_titles(self): return guarded.sheet_titles()
             def append_raw(self, sheet, rows): return evidence.append(sheet, rows)
         BankIncomePipeline(IncomeEvidenceDB(), **rules, meaning_resolver=resolver).apply(
@@ -443,6 +445,9 @@ def execute(plan, batch, *, db, state, policy, pdf_bytes, rules, resolver, now, 
 
 def run_from_environment(env, *, mode, scope, bank_apply):
     """Existing main workflow and existing bank state only; no new scope/store."""
+    # Draft recovery remains disabled until a separately authorized activation.
+    if env.get('BANK_FIXED_BACKFILL_RECOVERY') and env.get('KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED') != 'true':
+        raise ValueError('fixed_bank_partial_recovery_disabled')
     import subprocess
     from .production_flow import verify_execution_boundary, REPO
     from .settings import Settings, service_account_source
@@ -467,6 +472,11 @@ def run_from_environment(env, *, mode, scope, bank_apply):
     fid = unwrap('BANK_FIXED_BACKFILL_PLAN_FILE_ID', env['BANK_FIXED_BACKFILL_PLAN'], info['private_key'])
     readonly = read_only_drive_service()
     plan = json.loads(download_drive_file(fid, readonly))
+    partial_context = None
+    if env.get('BANK_FIXED_BACKFILL_RECOVERY'):
+        from .bank_partial_recovery import income_context, evidence
+        partial_context = income_context(env, head)
+        evidence(partial_context[0], partial_context[1], plan)
     batch_text = env.get('BANK_FIXED_BACKFILL_BATCH', '')
     if not batch_text.isdecimal(): raise ValueError('fixed_bank_batch_required')
     batch = int(batch_text)
@@ -497,14 +507,25 @@ def run_from_environment(env, *, mode, scope, bank_apply):
             resolver = from_environment(db, legacy_rules=rules, env=env)
             state = SqliteRecurringRunState(local / 'bank-recurring.sqlite3', repo_root=REPO)
             checkpoint = state.successful_window_end()
-            result = execute(plan, batch, db=db, state=state, policy=policy, rules=rules, resolver=resolver,
-                now=datetime.now(timezone.utc), pdf_bytes=pdf_bytes, apply=apply, grant=grant)
+            runner, extra = execute, {}
+            if partial_context is not None:
+                from .bank_partial_recovery import execute as partial_execute
+                runner, extra = partial_execute, {'context': partial_context}
+            result = runner(plan, batch, db=db, state=state, policy=policy, rules=rules, resolver=resolver,
+                now=datetime.now(timezone.utc), pdf_bytes=pdf_bytes, apply=apply, grant=grant, **extra)
             if state.successful_window_end() != checkpoint:
                 raise ValueError('fixed_bank_checkpoint_changed')
             return result
         # Validate the complete selection before persisting financial intent.
         preview_store = DurableState(DriveStateTransport(readonly, binding), binding)
         result = run_durable_source(preview_store, root / 'preview-state', lambda p: callback(p, False), apply=False)
+        if partial_context is not None:
+            if result.get('backfill_verified_replay'):
+                return result  # Verified replay has zero financial AND state writes.
+            record = partial_context[0]
+            if (hashlib.sha256(preview_store.transport.read()).hexdigest() != record['states']['bank_pdf_drive']['expected_after_raw_sha256']
+                    or hashlib.sha256(ledger.payload).hexdigest() != record['states']['production_run']['expected_after_raw_sha256']):
+                raise ValueError('fixed_bank_partial_released_states_required')
         if mode == 'preview': return result
         ledger.begin('bank', uuid4().hex)
         store = DurableState(DriveStateTransport(service, binding), binding)

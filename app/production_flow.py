@@ -367,6 +367,8 @@ def main():
         validate_scope(args)
         if env.get("BANK_FIXED_BACKFILL_BATCH") and not env.get("BANK_FIXED_BACKFILL_PLAN"):
             raise StateError("fixed_bank_plan_required")
+        if env.get("BANK_FIXED_BACKFILL_RECOVERY") and not env.get("BANK_FIXED_BACKFILL_PLAN"):
+            raise StateError("fixed_bank_plan_required")
         if env.get("BANK_FIXED_BACKFILL_PLAN"):
             from .bank_fixed_backfill import run_from_environment
             result = run_from_environment(env, mode=args.mode, scope=args.scope, bank_apply=args.bank_apply)

@@ -57,6 +57,10 @@ on:
         description: Optional zero-based fixed batch; requires separate one-time approval
         type: string
         required: false
+      bank_partial_recovery:
+        description: Disabled unless separately enabled; encrypted proof for run 40590186305 only
+        type: string
+        required: false
       receipt_store:
         description: RSA-wrapped separate private receipt result file ID
         type: string
@@ -78,6 +82,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: kakeibo-production
@@ -94,6 +99,7 @@ jobs:
       vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
       (github.event_name != 'workflow_dispatch' || inputs.authority_recipient == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'workflow_dispatch' || inputs.bank_backfill_plan == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
+      (inputs.bank_partial_recovery == '' || (vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED == 'true' && inputs.bank_backfill_plan != '' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
@@ -104,6 +110,11 @@ jobs:
       KAKEIBO_AUTHORITY_RECIPIENT: ${{ inputs.authority_recipient }}
       BANK_FIXED_BACKFILL_PLAN: ${{ inputs.bank_backfill_plan }}
       BANK_FIXED_BACKFILL_BATCH: ${{ inputs.bank_backfill_batch }}
+      BANK_FIXED_BACKFILL_RECOVERY: ${{ inputs.bank_partial_recovery }}
+      KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED: ${{ vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED || 'false' }}
+      GH_TOKEN: ${{ github.token }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+      CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED: ${{ vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED }}
       BANK_FIXED_BACKFILL_APPROVAL_JSON: ${{ vars.BANK_FIXED_BACKFILL_APPROVAL_JSON }}
       KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}

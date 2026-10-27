@@ -1,0 +1,83 @@
+name: Inspect or release bound partial bank batch
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: One operation, then stop; never writes financial rows
+        type: choice
+        options: [inspect, release_bank, release_parent]
+        default: inspect
+        required: true
+      expected_sha:
+        description: Exact validated main SHA
+        type: string
+        required: true
+      recovery_capsule:
+        description: New encrypted proof for partial run 40590186305 only
+        type: string
+        required: true
+      bank_backfill_plan:
+        description: Existing wrapped fixed plan ID
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  reconcile:
+    if: >-
+      vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED == 'true' &&
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'tmoriuchi1401-source' &&
+      github.triggering_actor == 'tmoriuchi1401-source' &&
+      github.run_attempt == 1 &&
+      github.sha == inputs.expected_sha &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
+      vars.KAKEIBO_SCHEDULE_ENABLED == 'false' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Require normal logging before private evidence
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Perform one bounded state operation and stop
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RECOVERY_OPERATION: ${{ inputs.operation }}
+          RECOVERY_CAPSULE: ${{ inputs.recovery_capsule }}
+          BANK_FIXED_BACKFILL_PLAN: ${{ inputs.bank_backfill_plan }}
+          KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED: ${{ vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED || 'false' }}
+          GH_TOKEN: ${{ github.token }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+          KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+          CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED: ${{ vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+        run: python -m app.bank_partial_recovery
