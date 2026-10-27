@@ -49,6 +49,14 @@ on:
         description: Optional temporary owner public key (base64 DER RSA-3072); bank preview only
         type: string
         required: false
+      bank_backfill_plan:
+        description: Optional RSA-wrapped private one-time fixed bank plan ID
+        type: string
+        required: false
+      bank_backfill_batch:
+        description: Optional zero-based fixed batch; requires separate one-time approval
+        type: string
+        required: false
       receipt_store:
         description: RSA-wrapped separate private receipt result file ID
         type: string
@@ -93,6 +101,10 @@ jobs:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
       KAKEIBO_AUTHORITY_RECIPIENT: ${{ inputs.authority_recipient }}
+      BANK_FIXED_BACKFILL_PLAN: ${{ inputs.bank_backfill_plan }}
+      BANK_FIXED_BACKFILL_BATCH: ${{ inputs.bank_backfill_batch }}
+      BANK_FIXED_BACKFILL_APPROVAL_JSON: ${{ vars.BANK_FIXED_BACKFILL_APPROVAL_JSON }}
+      KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
       KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
       KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}

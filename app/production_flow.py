@@ -365,6 +365,14 @@ def main():
         from .private_state_bindings import decode_environment
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
+        if env.get("BANK_FIXED_BACKFILL_BATCH") and not env.get("BANK_FIXED_BACKFILL_PLAN"):
+            raise StateError("fixed_bank_plan_required")
+        if env.get("BANK_FIXED_BACKFILL_PLAN"):
+            from .bank_fixed_backfill import run_from_environment
+            result = run_from_environment(env, mode=args.mode, scope=args.scope, bank_apply=args.bank_apply)
+            print(json.dumps({"success": True, "mode": args.mode, "scope": args.scope,
+                              "fixed_bank_backfill": result}, sort_keys=True))
+            return
         from .authority_report_delivery import validate_delivery
         validate_delivery(env, args.mode, args.scope)
         if args.scope == "categories":
