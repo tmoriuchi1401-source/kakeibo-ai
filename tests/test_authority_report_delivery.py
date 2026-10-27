@@ -126,4 +126,6 @@ def test_workflow_uploads_only_ciphertext_for_owner_bank_preview():
         assert guard in upload["if"]
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job["if"]
     assert job["env"][delivery.RECIPIENT_ENV] == "${{ inputs.authority_recipient }}"
-    assert workflow["permissions"] == {"contents":"read"}
+    # The disabled partial-recovery path reads live run/queue status. Neither
+    # permission can mutate Actions, repository contents or report artifacts.
+    assert workflow["permissions"] == {"contents":"read", "actions":"read"}
