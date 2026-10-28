@@ -30,6 +30,13 @@ class LiteralDB(DB):
             return [headers]
         return rows if span.startswith('A2:') else [headers] + rows
 
+    def get_raw_ranges(self, ranges):
+        before = len(self.reads)
+        result = [self.get_raw(rng) for rng in ranges]
+        del self.reads[before:]
+        self.reads.append(('batch_raw', tuple(ranges)))
+        return result
+
     def get(self, rng):
         rows = self.get_raw(rng)
         name, span = rng.split('!')
@@ -84,19 +91,22 @@ def rig(scenario, monkeypatch):
     s.db.data['取込データ'].extend(deepcopy(list(imports.values())))
     bindings = {source: StateBinding(source, s.db.sid, 'folder', source + '-file') for source in partial.SOURCES}
     files = snapshot(s.state.path.parent, bindings['bank_pdf_drive'])
-    before = {'bank_pdf_drive': envelope(bindings['bank_pdf_drive'], files, generation=45, phase='pending', attempt='a' * 32)}
+    before = {'bank_pdf_drive': envelope(bindings['bank_pdf_drive'], files, generation=47, phase='pending', attempt='a' * 32)}
     ledger = json.loads(initial_ledger(bindings['production_run']))
-    ledger['generation'] = 1290
+    ledger['generation'] = 1293
     ledger['sources']['bank'].update(phase='pending', attempt='b' * 32, error='source_execution_failed')
     before['production_run'] = _encode(ledger)
-    ledger['generation'] = 1291
+    ledger['generation'] = 1294
     ledger['sources']['bank'].update(phase='ready', attempt='', error='')
-    after = dict(bank_pdf_drive=envelope(bindings['bank_pdf_drive'], files, generation=46), production_run=_encode(ledger))
+    after = dict(bank_pdf_drive=envelope(bindings['bank_pdf_drive'], files, generation=48), production_run=_encode(ledger))
     record = dict(kind='fixed_bank_partial_100_reconciliation', run_id=partial.FAILED_RUN, run_attempt=1,
         plan_sha256=fixed.digest(s.plan), financial_apply_authorized_by_this_record=False,
+        failed_main_sha=partial.FAILED_HEAD, import_origin_run=partial.IMPORT_ORIGIN_RUN,
+        origin_record_sha256=partial.ORIGIN_RECORD_SHA256, income_append_request_reached=False,
+        read_failure_http_status=429, unresolved_material_write_results=[],
         remote_sqlite_intents_requiring_resolution=[], sqlite_and_all_native_files_required_unchanged=files,
         checkpoint_before_and_required_after=[], states={})
-    for source, generation in [('bank_pdf_drive', 45), ('production_run', 1290)]:
+    for source, generation in [('bank_pdf_drive', 47), ('production_run', 1293)]:
         record['states'][source] = dict(spreadsheet_id=s.db.sid, folder_id='folder', file_id=bindings[source].file_id,
             generation_before=generation, generation_required_after=generation + 1,
             observed_raw_sha256=partial.sha(before[source]), expected_after_raw_sha256=partial.sha(after[source]),
@@ -213,16 +223,71 @@ def test_no_parent_release_before_bank_and_explicit_stop_after_each(rig):
         r.release('release_parent')
     assert not [c for c in r.calls if c[0] == 'write']
     r.release('release_bank')
+    assert json.loads(r.transports['bank_pdf_drive'].payload)['generation'] == 48
     assert r.transports['bank_pdf_drive'].payload == r.after['bank_pdf_drive']
     assert r.transports['production_run'].payload == r.before['production_run']
     assert [c[1] for c in r.calls if c[0] == 'write'] == ['bank_pdf_drive']
     r.release('release_parent')
+    assert json.loads(r.transports['production_run'].payload)['generation'] == 1294
     assert r.transports['production_run'].payload == r.after['production_run']
     assert r.report['outcome'] == 'readback_verified_stop'
     for operation in ['release_bank', 'release_parent']:
         with pytest.raises(StateError):
             r.release(operation)
     assert len([c for c in r.calls if c[0] == 'write']) == 2
+
+
+@pytest.mark.parametrize('change', ['old_generation', 'old_run', 'wrong_origin', 'append_unknown', 'unknown_result'])
+def test_new_quota_case_rejects_old_or_ambiguous_proof_before_any_release(rig, change):
+    r = rig
+    if change == 'old_generation': r.record['states']['bank_pdf_drive']['generation_before'] = 45
+    if change == 'old_run': r.record['run_id'] = 40590186305
+    if change == 'wrong_origin': r.record['origin_record_sha256'] = '0' * 64
+    if change == 'append_unknown': r.record['income_append_request_reached'] = None
+    if change == 'unknown_result': r.record['unresolved_material_write_results'] = ['unknown']
+    r.seal()
+    with pytest.raises(StateError): r.release('release_bank')
+    assert not [c for c in r.calls if c[0] == 'write'] and not r.s.db.calls
+
+
+@pytest.mark.parametrize('clears', [False, True])
+def test_quota_during_fresh_append_guard_recovers_or_stops_without_write_retry(rig, monkeypatch, clears):
+    from test_bank_read_quota import Clock, paced_db, quota
+    r = rig
+    db = paced_db(Clock())
+    original = r.s.db.get
+    faults = [0]
+    guard_done = [False]
+    def guarded_read(rng):
+        def execute():
+            # Only the final, fresh target duplicate check in FixedWriteDB.
+            if rng == '収入明細!A2:J' and guard_done[0]:
+                faults[0] += 1
+                if not clears or faults[0] <= 2: raise quota()
+            return original(rng)
+        return db._execute_sheet_read(lambda: SimpleNamespace(execute=execute))
+    # Trigger only after the guarded writer's safety checks, not preview reads.
+    real_append = fixed.FixedWriteDB.append_raw
+    def append(target, sheet, rows):
+        original_guard = target.guard
+        def guard():
+            original_guard()
+            guard_done[0] = True
+        target.guard = guard
+        monkeypatch.setattr(r.s.db, 'get', guarded_read)
+        return real_append(target, sheet, rows)
+    monkeypatch.setattr(fixed.FixedWriteDB, 'append_raw', append)
+    if clears:
+        assert r.execute()['written'] == 6
+        assert len(r.s.db.calls) == 1 and r.s.db.calls[0][1] == '収入明細'
+        assert db.sheet_read_metrics()['retries'] == 2
+    else:
+        from googleapiclient.errors import HttpError
+        with pytest.raises(HttpError): r.execute()
+        assert not r.s.db.calls and db.sheet_read_metrics()['retries'] == 4
+        monkeypatch.setattr(r.s.db, 'get', original)
+        with pytest.raises(StateError): r.execute()
+        assert not r.s.db.calls
 
 
 @pytest.mark.parametrize('source', partial.SOURCES)
@@ -368,7 +433,8 @@ def test_encrypted_capsule_verifies_new_pins_signature_and_ciphertext(rig, monke
     with pytest.raises(Exception): partial.decode_evidence(base64.b64encode(partial.encode(packet)).decode())
 
 
-def test_production_entry_verified_replay_has_no_remote_state_or_money_write(rig, monkeypatch):
+@pytest.mark.parametrize('verified_replay,old_state', [(False, ''), (True, ''), (False, 'bank'), (False, 'parent')])
+def test_new_released_states_preview_and_verified_replay_have_no_remote_write(rig, monkeypatch, verified_replay, old_state):
     import gc
     import app.google_clients as clients
     import app.settings as settings
@@ -391,13 +457,19 @@ def test_production_entry_verified_replay_has_no_remote_state_or_money_write(rig
     r.record['plan_sha256'] = fixed.digest(r.s.plan)
     r.s.grant = permission(r.s.plan, r.s.policy)
     r.seal()
-    r.execute()
+    if verified_replay:
+        r.execute()
     remote_calls = []
     files = snapshot(r.s.state.path.parent, r.bindings['bank_pdf_drive'])
     parent = json.loads(r.after['production_run'])
-    parent['generation'] = 1293
-    transports = dict(bank_pdf_drive=Transport('bank', envelope(r.bindings['bank_pdf_drive'], files, generation=48), remote_calls),
+    parent['generation'] = 1296 if verified_replay else 1294
+    transports = dict(bank_pdf_drive=Transport('bank', envelope(r.bindings['bank_pdf_drive'], files, generation=50 if verified_replay else 48), remote_calls),
                       production_run=Transport('parent', _encode(parent), remote_calls))
+    if old_state == 'bank':
+        transports['bank_pdf_drive'].payload = envelope(r.bindings['bank_pdf_drive'], files, generation=46)
+    if old_state == 'parent':
+        parent['generation'] = 1291
+        transports['production_run'].payload = _encode(parent)
     env = dict(environment(), GITHUB_WORKFLOW_REF=partial.REPOSITORY + '/' + partial.PRODUCTION + '@refs/heads/main',
         KAKEIBO_PRODUCTION_ENABLED='true', KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED='true',
         BANK_FIXED_BACKFILL_PLAN='wrapped', BANK_FIXED_BACKFILL_BATCH='0', BANK_FIXED_BACKFILL_RECOVERY='encrypted',
@@ -417,12 +489,24 @@ def test_production_entry_verified_replay_has_no_remote_state_or_money_write(rig
         bank_confirmed_internal_transfers=lambda: RULES['confirmed_internal_transfers'],
         bank_confirmed_non_own_classifications=lambda: RULES['confirmed_non_own_classifications']))
     monkeypatch.setattr(private, 'unwrap', lambda *a: 'fixed-plan')
-    monkeypatch.setattr(sheets, 'SheetsDB', lambda *a, **k: r.s.db)
+    def production_db(*a, **kwargs):
+        assert kwargs['read_pacer'].interval == 1.25
+        assert kwargs['read_retry_base'] == 20 and kwargs['read_retry_attempts'] == 5
+        assert 0 <= kwargs['read_retry_jitter']() <= 1
+        return r.s.db
+    monkeypatch.setattr(sheets, 'SheetsDB', production_db)
     monkeypatch.setattr(authority, 'ProtectedBankRecurringAuthorityProvider', lambda *a, **k: SimpleNamespace(load=lambda: r.s.policy))
     monkeypatch.setattr(meaning, 'from_environment', lambda *a, **k: r.s.resolver)
     monkeypatch.setattr(durable, 'DriveStateTransport', lambda service, binding: transports[binding.source])
     monkeypatch.setattr(fixed, 'authorize', lambda *a: r.s.grant)
-    result = fixed.run_from_environment(env, mode='apply', scope='drive_bank', bank_apply=True)
-    assert result['backfill_verified_replay'] == 1 and result['written'] == 0
+    if old_state:
+        with pytest.raises(ValueError, match='partial_released_states_required'):
+            fixed.run_from_environment(env, mode='preview', scope='drive_bank', bank_apply=False)
+        assert not r.s.db.calls and not [c for c in remote_calls if c[0] == 'write']
+        return
+    result = fixed.run_from_environment(env, mode='apply' if verified_replay else 'preview', scope='drive_bank', bank_apply=verified_replay)
+    assert result['written'] == 0 and result['imports_skipped'] == 100
+    if verified_replay:
+        assert result['backfill_verified_replay'] == 1
     assert not [c for c in remote_calls if c[0] == 'write']
-    assert len(r.s.db.calls) == 1  # Only the original synthetic six-income append.
+    assert len(r.s.db.calls) == (1 if verified_replay else 0)

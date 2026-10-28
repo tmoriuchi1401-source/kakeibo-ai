@@ -196,10 +196,10 @@ def normal_row(sheet, row):
     return result
 
 
-def snapshot(db):
+def snapshot(db, *, sheets=None, import_rows=None):
     result = {}
-    for name, span in RANGES.items():
-        rows = db.get(name + '!' + span)
+    for name in RANGES if sheets is None else sheets:
+        rows = import_rows if name == '取込データ' and import_rows is not None else db.get(name + '!' + RANGES[name])
         records = {}
         for row in rows:
             if row and row[0]:
@@ -227,8 +227,8 @@ def validate_live(plan, db, pdf_bytes, policy_sha256, rules, resolver):
             or resolver.master.fingerprint != plan['master_sha256']):
         raise ValueError('fixed_bank_configuration_changed')
     resolver.require_unchanged()
-    actual = snapshot(db)
     imports = db.get('取込データ!A2:L')
+    actual = snapshot(db, import_rows=imports)
     original = {str(r[0]): r for r in imports if r and r[0]}
     if any(i not in original or digest(original[i]) != h for i, h in plan['protected'].items()):
         raise ValueError('fixed_bank_protected_import_changed')
@@ -267,9 +267,10 @@ def validate_live(plan, db, pdf_bytes, policy_sha256, rules, resolver):
 
 class FixedWriteDB:
     """Constrain the existing writers to new rows of the selected fixed batch."""
-    def __init__(self, db, selected, imports, incomes, guard):
+    def __init__(self, db, selected, imports, incomes, guard, *, before_write=None):
         self.db, self.sid, self.selected = db, db.sid, set(selected)
         self.imports, self.incomes, self.guard = imports, incomes, guard
+        self.before_write = before_write
 
     def get(self, rng): return self.db.get(rng)
     def get_raw(self, rng): return getattr(self.db, 'get_raw', self.db.get)(rng)
@@ -287,9 +288,11 @@ class FixedWriteDB:
                 or any(r[0] not in expected or r != expected[r[0]] for r in rows)):
             raise ValueError('fixed_bank_write_outside_selection')
         self.guard()
-        existing = snapshot(self.db)[sheet]  # Fresh for this append, after the live guard.
+        existing = snapshot(self.db, sheets=(sheet,))[sheet]  # Fresh for THIS append, after the full live guard.
         if any(r[0] in existing for r in rows):
             raise ValueError('fixed_bank_duplicate_append')
+        if self.before_write is not None:
+            self.before_write()  # Read backoff must not outlive the signed stop attestation.
         return self.db.append_raw(sheet, rows)
 
     def append(self, sheet, rows):
@@ -301,7 +304,7 @@ class FixedWriteDB:
                     abs(self.imports[r[10]][6]), '銀行口座', self.imports[r[10]][2]) for r in rows):
             raise ValueError('fixed_bank_expense_outside_selection')
         self.guard()
-        existing = snapshot(self.db)[sheet]  # Never reuse another append's observation.
+        existing = snapshot(self.db, sheets=(sheet,))[sheet]  # Never reuse another append's observation.
         if any(r[0] in existing for r in rows):
             raise ValueError('fixed_bank_existing_expense_protected')
         return self.db.append(sheet, rows)
@@ -452,7 +455,8 @@ def run_from_environment(env, *, mode, scope, bank_apply):
     from .production_flow import verify_execution_boundary, REPO
     from .settings import Settings, service_account_source
     from .google_clients import read_only_drive_service, drive_service, read_only_sheets_service, download_drive_file
-    from .sheets import SheetsDB
+    from .sheets import SheetsDB, SheetsReadPacer
+    from random import random
     from .private_state_bindings import unwrap
     from .bank_recurring_authority import ProtectedBankRecurringAuthorityProvider
     from .bank_meaning_resolver import from_environment
@@ -485,7 +489,11 @@ def run_from_environment(env, *, mode, scope, bank_apply):
                  confirmed_non_own_classifications=settings.bank_confirmed_non_own_classifications())
     permit = json.loads(env.get('BANK_FIXED_BACKFILL_APPROVAL_JSON') or '{}')
     service = drive_service() if mode == 'apply' else readonly
-    db = SheetsDB(env['SPREADSHEET_ID'], service=read_only_sheets_service() if mode == 'preview' else None)
+    # All Sheets reads for this credential/job, including retries and fresh
+    # append guards, use the same pacer. 1.25s leaves headroom below 60/minute.
+    db = SheetsDB(env['SPREADSHEET_ID'], service=read_only_sheets_service() if mode == 'preview' else None,
+        read_pacer=SheetsReadPacer(interval=1.25), read_retry_base=20,
+        read_retry_attempts=5, read_retry_jitter=random)
     with tempfile.TemporaryDirectory(prefix='fixed-bank-') as temp:
         root = Path(temp);authority = root / 'authority.json'
         authority.write_text(env['BANK_PDF_RECURRING_AUTHORITY_JSON'], encoding='utf-8')
