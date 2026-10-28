@@ -35,10 +35,13 @@ def require_income_actions(repo_root, expected_head):
 
 
 def _rows(db, sheet):
+    # Compare stored literals, not locale/currency/date display formatting.
+    # Adapters must forward get_raw; in-memory fixtures may expose only get.
+    read = getattr(db, 'get_raw', db.get)
     if sheet == INCOME_SHEET:
-        return list(validate_income_rows(db.get(f"{sheet}!A2:J")).values())
+        return list(validate_income_rows(read(f"{sheet}!A2:J")).values())
     result = []
-    for raw in db.get("取込データ!A2:L"):
+    for raw in read("取込データ!A2:L"):
         if not any(raw):
             continue
         row = (["" if v is None else v for v in raw] + [""] * 12)[:12]
@@ -50,7 +53,8 @@ def _exact_present(db, sheet, expected):
     actual = _rows(db, sheet)
     for row in expected:
         matches = [r for r in actual if r[0] == row[0]]
-        if matches != [row]:
+        if (matches != [row] or (sheet != INCOME_SHEET and matches
+                                and isinstance(matches[0][6], bool))):
             raise RuntimeError("bank_income_recurring_append_reconciliation_required")
 
 
