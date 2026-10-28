@@ -58,7 +58,7 @@ on:
         type: string
         required: false
       bank_partial_recovery:
-        description: Disabled unless separately enabled; encrypted proof for run 40590186305 only
+        description: Disabled unless separately enabled; encrypted proof for run 40671398177 only
         type: string
         required: false
       receipt_store:

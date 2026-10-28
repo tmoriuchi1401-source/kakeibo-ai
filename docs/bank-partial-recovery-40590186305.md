@@ -1,5 +1,9 @@
 # Fixed bank batch 0 partial recovery (Draft; never execute from a PR branch)
 
+Historical first recovery. The subsequent 429 failure has a different attempt,
+proof and state generations; see [40671398177 recovery](bank-read-quota-recovery-40671398177.md).
+Do not reuse the old proof below to release the new pending states.
+
 This case is run **40590186305**: all 100 imports are present, all six new
 incomes (4,669 yen total) are absent, and no expense was added. The approved
 308-ID plan, four PDFs, classification core and standing authorities stay fixed.

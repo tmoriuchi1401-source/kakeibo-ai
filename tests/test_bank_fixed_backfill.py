@@ -327,7 +327,7 @@ def test_hundred_append_uses_one_fresh_snapshot_and_rerun_cannot_duplicate(sheet
     db, wrapped, append, rows = append_case(sheet, guard=lambda: guard_calls.append(True))
     before = deepcopy(db.data)
     append(sheet, rows)
-    assert len(db.reads) == 3  # One snapshot; all three financial sheets remain validated.
+    assert db.reads == [sheet + '!' + fixed.RANGES[sheet]]  # Fresh target check after the full live guard.
     assert guard_calls == [True]
     assert db.data[sheet] == before[sheet] + rows
     assert all(db.data[s] == before[s] for s in fixed.RANGES if s != sheet)
@@ -335,7 +335,7 @@ def test_hundred_append_uses_one_fresh_snapshot_and_rerun_cannot_duplicate(sheet
     after = deepcopy(db.data)
     with pytest.raises(ValueError, match='duplicate_append|existing_expense_protected'):
         append(sheet, rows)
-    assert len(db.reads) == 6 and guard_calls == [True, True]
+    assert db.reads == [sheet + '!' + fixed.RANGES[sheet]] * 2 and guard_calls == [True, True]
     assert db.data == after and len(db.calls) == 1
 
 
@@ -357,7 +357,7 @@ def test_each_append_observes_collision_added_after_live_guard(sheet):
     wrapped.guard = lambda: db.data[sheet].append(deepcopy(rows[-1]))
     with pytest.raises(ValueError, match='duplicate_append|existing_expense_protected'):
         append(sheet, rows[-1:])
-    assert len(db.calls) == 1 and len(db.reads) == 6
+    assert len(db.calls) == 1 and db.reads == [sheet + '!' + fixed.RANGES[sheet]] * 2
     assert len({r[0] for r in db.data[sheet]}) == len(db.data[sheet])
 
 

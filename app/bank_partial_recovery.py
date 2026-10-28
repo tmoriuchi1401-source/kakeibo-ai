@@ -1,4 +1,4 @@
-"""Bound recovery of run 40590186305: keep 100 imports, append six incomes only.
+"""Bound recovery of read-quota failure 40671398177; retain original 100 imports.
 
 Release bank and release parent are separate manual Actions operations. Financial
 completion uses the existing production workflow/permit, after both releases.
@@ -25,9 +25,11 @@ from .production_ledger import ProductionLedger, validate_ledger
 
 WORKFLOW = '.github/workflows/bank-partial-recovery.yml'
 PRODUCTION = '.github/workflows/kakeibo-production.yml'
-FAILED_RUN = 40590186305
-FAILED_HEAD = 'f555f8a59a0d6084263ab1de5347c6af6a0cb45a'
-RECORD_SHA256 = 'bdd0583dbcda759471cebe1c64331ac2a0c427acf664e6440ed7c94fe730fd24'
+FAILED_RUN = 40671398177
+FAILED_HEAD = 'f665a82d6ce954f1f80e967889bcb3e99db65135'
+IMPORT_ORIGIN_RUN = 40590186305
+ORIGIN_RECORD_SHA256 = 'bdd0583dbcda759471cebe1c64331ac2a0c427acf664e6440ed7c94fe730fd24'
+RECORD_SHA256 = 'b6b03fda99f6539bd644ecb160e63c5b7d749831dfd8dc8a3082e833f81464fe'
 MANIFEST_SHA256 = '23f0eb18ce93243597faabbd14d99f09c0d66bba4cbeeeb6d8ce31d9b4b7be67'
 PLAN_SHA256 = '8f64ac790aafb03c605c270a9540db5826ad248630b0eb2db36a26cc05d99135'
 SOURCES = ('bank_pdf_drive', 'production_run')
@@ -123,19 +125,27 @@ def evidence(record, manifest, plan):
         and record['kind'] == 'fixed_bank_partial_100_reconciliation'
         and record['plan_sha256'] == fixed.digest(plan) == PLAN_SHA256
         and not record['financial_apply_authorized_by_this_record']
-        and not record['remote_sqlite_intents_requiring_resolution'])
+        and not record['remote_sqlite_intents_requiring_resolution']
+        and record['failed_main_sha'] == FAILED_HEAD
+        and record['import_origin_run'] == IMPORT_ORIGIN_RUN
+        and record['origin_record_sha256'] == ORIGIN_RECORD_SHA256
+        and record['income_append_request_reached'] is False
+        and record['read_failure_http_status'] == 429
+        and not record['unresolved_material_write_results'])
     require(list(fixed.batch_ids(plan, 0)) == manifest['selected100']
         and len(set(manifest['selected100'])) == 100 and len(manifest['incomes']) == 6
         and sum(r[2] for r in manifest['incomes'].values()) == 4669
         and sum(plan['items'][i]['disposition'] == 'income' for i in manifest['selected100']) == 6
         and sum(plan['items'][i]['disposition'] == 'nonposting' for i in manifest['selected100']) == 94)
-    for source, generation in [('bank_pdf_drive', 45), ('production_run', 1290)]:
+    for source, generation in [('bank_pdf_drive', 47), ('production_run', 1293)]:
         require(record['states'][source]['generation_before'] == generation
             and record['states'][source]['generation_required_after'] == generation + 1)
     return expected_imports(plan, manifest)
 
 
 def raw_tables(db):
+    if hasattr(db, 'get_raw_ranges'):
+        return dict(zip(TABLES, db.get_raw_ranges(RANGES), strict=True))
     return {name: db.get_raw(rng) for name, rng in zip(TABLES, RANGES)}
 
 
@@ -193,7 +203,7 @@ def release(operation, record, manifest, plan, transports, bindings, guard, obse
         require(not bank_done and not parent_done)
         source = 'bank_pdf_drive'
     elif operation == 'release_parent':
-        require(bank_done and not parent_done and bank['generation'] == 46 and bank['phase'] == 'ready')
+        require(bank_done and not parent_done and bank['generation'] == 48 and bank['phase'] == 'ready')
         source = 'production_run'
     else:
         report.update(success=True, bank_generation=bank['generation'], parent_generation=parent['generation'],
@@ -281,13 +291,14 @@ def execute(plan, batch, *, db, state, policy, pdf_bytes, rules, resolver, now,
     summary = dict(run_id=str(uuid4()), source_window_start=now.isoformat(), source_window_end=now.isoformat(),
         status='fixed_backfill_pending', fixed_plan=fixed.digest(plan), fixed_batch=0,
         reconciliation_reference=RECORD_SHA256, partial_origin_run=FAILED_RUN,
+        import_origin_run=IMPORT_ORIGIN_RUN,
         existing_imports_reconciled=100, imported_rows_sha256=manifest['imports_sha256'])
     state.record(summary, advance_checkpoint=False)
     def guard():
         runtime_guard()
         fixed.validate_live(plan, db, pdf_bytes, plan['policy_sha256'], rules, resolver)
         content(db, manifest, imports, completed=False)
-    guarded = fixed.FixedWriteDB(db, manifest['selected100'], imports, incomes, guard)
+    guarded = fixed.FixedWriteDB(db, manifest['selected100'], imports, incomes, guard, before_write=runtime_guard)
     append_evidence = IncomeAppendEvidence(guarded, state, summary, meaning_resolver=resolver)
     append_evidence.require_existing_history()
     class IncomeOnly:

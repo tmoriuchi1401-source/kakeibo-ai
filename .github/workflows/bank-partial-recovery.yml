@@ -14,7 +14,7 @@ on:
         type: string
         required: true
       recovery_capsule:
-        description: New encrypted proof for partial run 40590186305 only
+        description: New encrypted proof for read-quota failure 40671398177 only
         type: string
         required: true
       bank_backfill_plan:

@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import re
 import time
+import math
 from googleapiclient.errors import HttpError
 from .google_clients import sheets_service
 from .category_navigation import representative_summary_formula, inline_scope
@@ -123,23 +124,30 @@ HEADERS={
 
 class SheetsReadPacer:
     """Optional shared per-account read spacing for lengthy verification jobs."""
-    def __init__(self, *, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, *, clock=time.monotonic, sleep=time.sleep, interval=1.1):
+        if not math.isfinite(interval) or interval < 1.1:
+            raise ValueError("sheets_read_interval_too_short")
         self.clock, self.sleep, self.next_read = clock, sleep, 0.0
+        self.interval = interval
 
     def __call__(self):
         delay = self.next_read - self.clock()
         if delay > 0:
             self.sleep(delay)
-        self.next_read = self.clock() + 1.1
+        self.next_read = self.clock() + self.interval
 
 
 class SheetsDB:
     def __init__(self, spreadsheet_id:str, service=None, *, read_sleeper=time.sleep, projection_journal=None,
-                 read_pacer=None, read_retry_base=1):
+                 read_pacer=None, read_retry_base=1, read_retry_attempts=4, read_retry_jitter=None):
+        if type(read_retry_attempts) is not int or not 1 <= read_retry_attempts <= 5:
+            raise ValueError("sheets_read_retry_limit_invalid")
         self.sid=spreadsheet_id; self.svc=service or sheets_service()
         self._read_sleeper=read_sleeper
         self._read_pacer=read_pacer
         self._read_retry_base=read_retry_base
+        self._read_retry_attempts=read_retry_attempts
+        self._read_retry_jitter=read_retry_jitter or (lambda: 0.0)
         self._sheet_metadata_cache=None
         self._sheet_read_metrics={"logical":0,"attempts":0,"retries":0}
         self._projection_journal=projection_journal
@@ -175,7 +183,8 @@ class SheetsDB:
     def _execute_sheet_read(self, request_factory):
         """Retry only Sheets read-quota responses; never wrap writes."""
         metrics=self._read_metrics(); metrics["logical"] += 1
-        for attempt in range(4):
+        attempts=getattr(self,"_read_retry_attempts",4)
+        for attempt in range(attempts):
             try:
                 pacer=getattr(self,"_read_pacer",None)
                 if pacer is not None:pacer()
@@ -183,10 +192,14 @@ class SheetsDB:
                 return request_factory().execute()
             except HttpError as exc:
                 status=int(getattr(getattr(exc, "resp", None), "status", 0) or 0)
-                if status != 429 or attempt == 3:
+                if status != 429 or attempt == attempts - 1:
                     raise
                 metrics["retries"] += 1
-                getattr(self, "_read_sleeper", time.sleep)(min(60, getattr(self,"_read_retry_base",1) * (2 ** attempt)))
+                jitter=getattr(self,"_read_retry_jitter",lambda: 0.0)()
+                if not 0 <= jitter <= 1:
+                    raise ValueError("sheets_read_retry_jitter_invalid")
+                delay=min(60, getattr(self,"_read_retry_base",1) * (2 ** attempt) + jitter)
+                getattr(self, "_read_sleeper", time.sleep)(delay)
         raise RuntimeError("sheets_read_retry_exhausted")
 
     def _sheet_metadata(self):
@@ -232,6 +245,15 @@ class SheetsDB:
         return self._execute_sheet_read(lambda:self.svc.spreadsheets().values().get(
             spreadsheetId=self.sid,range=rng,valueRenderOption="UNFORMATTED_VALUE",
             dateTimeRenderOption="SERIAL_NUMBER")).get("values",[])
+    def get_raw_ranges(self, ranges):
+        """One fresh literal read of related ranges; never cached across writes."""
+        result=self._execute_sheet_read(lambda:self.svc.spreadsheets().values().batchGet(
+            spreadsheetId=self.sid,ranges=list(ranges),valueRenderOption="UNFORMATTED_VALUE",
+            dateTimeRenderOption="SERIAL_NUMBER"))
+        values=result.get("valueRanges",[])
+        if len(values) != len(ranges):
+            raise RuntimeError("sheets_batch_read_range_count_mismatch")
+        return [item.get("values",[]) for item in values]
     def append(self, sheet:str, rows:list[list]):
         if not rows:return
         self._invalidate_expense_projection(sheet,append=True)
