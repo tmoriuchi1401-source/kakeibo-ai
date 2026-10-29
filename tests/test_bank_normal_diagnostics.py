@@ -158,10 +158,15 @@ def test_old_pdf_preserves_191_imports_and_withholds_117_unknown_ids(tmp_path, m
     assert all(t.source_row_identity not in {r[0] for r in rig.db.tables['取込データ']} for t in held)
 
 
-def test_cross_pdf_duplicate_guard_reports_fixed_code_without_resolving_overlap(monkeypatch):
+def test_cross_pdf_content_collision_reports_fixed_code_without_private_values(monkeypatch):
+    from dataclasses import replace
     from test_bank_review_source import rig as source_rig
     db, drive, reader, parsed = source_rig(monkeypatch)
     drive.items.append({**drive.items[0], 'id':'second_synthetic_pdf'})
+    reader.download = lambda file_id: file_id.encode()
+    changed = replace(parsed, transactions=(replace(parsed.transactions[0], signed_amount=501),))
+    monkeypatch.setattr('app.bank_review_source.BankPdfPipeline.parse',
+        lambda self, path, **kwargs: changed if path.read_bytes() == b'second_synthetic_pdf' else parsed)
     with pytest.raises(ValueError) as caught: reader()
     diagnostic = bank_failure_diagnostic(caught.value, 'bank_review_refresh')
     assert diagnostic['failure_code'] == 'bank_review_cross_pdf_identity_collision'

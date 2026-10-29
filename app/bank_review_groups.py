@@ -46,7 +46,15 @@ def group_key(group):
 
 
 def member_proof(row):
-    return {key: row.get(key, "") for key in MEMBER_FIELDS}
+    proof = {key: row.get(key, "") for key in MEMBER_FIELDS}
+    if "originals" in row:
+        proof["originals"] = deepcopy(row["originals"])
+    return proof
+
+
+def member_originals(row):
+    """All bound originals, with legacy single-original proof compatibility."""
+    return row.get("originals", [{key: row[key] for key in ("file_id", "pdf_sha256", "page", "row")}])
 
 
 def snapshot(group):
@@ -56,6 +64,18 @@ def snapshot(group):
 
 
 def _validate(row):
+    if "originals" in row:
+        originals = row["originals"]
+        fields = {"file_id", "pdf_sha256", "page", "row"}
+        if (not isinstance(originals, list) or not 2 <= len(originals) <= 20
+                or any(not isinstance(item, dict) or set(item) != fields
+                    or not isinstance(item["file_id"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", item["file_id"])
+                    or not isinstance(item["pdf_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["pdf_sha256"])
+                    or any(type(item[key]) is not int or item[key] < 1 for key in ("page", "row"))
+                    for item in originals)
+                or [item["file_id"] for item in originals] != sorted({item["file_id"] for item in originals})
+                or originals[0] != {key: row.get(key) for key in fields}):
+            raise ValueError("bank_review_originals_invalid")
     if row.get("direction") not in {"incoming", "outgoing"}:
         raise ValueError("bank_review_direction_invalid")
     amount = row.get("signed_amount")

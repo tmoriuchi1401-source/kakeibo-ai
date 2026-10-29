@@ -4,9 +4,11 @@ Source refresh and immediately-before-save evaluation both use the same PDF
 parser, classifiers and exact ledger proofs. No snapshot from the visible UI
 is used as the authoritative current source.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections import defaultdict
+from datetime import date
 import hashlib
+import re
 from pathlib import Path
 import tempfile
 
@@ -22,6 +24,32 @@ from .reconciliation import parse_import_rows
 MAX_FILES = 20
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_TRANSACTIONS = 2000
+
+
+def same_transaction_content(first, other):
+    """Compare every normalized field except PDF coordinates.
+
+    The parser's full source hash also commits the original closing balance.
+    Document-local occurrence suffixes cannot prove cross-document identity.
+    """
+    if not all(isinstance(value, str) and value.strip() for value in (
+            first.source, first.account_alias, first.transaction_date, first.description,
+            first.source_row_identity, first.source_row_hash)):
+        return False
+    try:
+        if date.fromisoformat(first.transaction_date).isoformat() != first.transaction_date:
+            return False
+    except (TypeError, ValueError):
+        return False
+    namespace = BANK_NAMESPACES.get(first.source)
+    return bool(namespace and first.account_alias and first.description
+        and re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", first.account_alias)
+        and type(first.signed_amount) is int and first.signed_amount != 0
+        and first.review_status == "accepted"
+        and first.transaction_kind == ("deposit" if first.signed_amount > 0 else "withdrawal")
+        and re.fullmatch(r"[0-9a-f]{64}", first.source_row_hash)
+        and first.source_row_identity == f"bankpdf:{namespace}:{first.account_alias}:{first.source_row_hash[:24]}"
+        and replace(first, source_page=other.source_page, source_row=other.source_row) == other)
 
 
 @dataclass(frozen=True)
@@ -73,7 +101,8 @@ class BankReviewSourceReader:
         class SnapshotDB:
             def get(self, rng):
                 return ledgers["incomes"] if rng == "収入明細!A2:J" else ledgers["expenses"] if rng == "支出明細!A2:M" else ledgers["imports"]
-        candidates, transactions, incomes, sources = [], {}, [], []
+        candidates, transactions, incomes, sources = {}, {}, {}, []
+        originals = defaultdict(list)
         accounts = set(self.extra_accounts)
         with tempfile.TemporaryDirectory(prefix="bank-review-") as directory:
             for number, item in enumerate(files):
@@ -105,26 +134,41 @@ class BankReviewSourceReader:
                     existing = by_id.get(tx.source_row_identity, [])
                     if existing and not import_matches(tx, existing):
                         raise ValueError("bank_review_existing_import_mismatch")
-                    if tx.source_row_identity in transactions:
-                        # Overlapping documents need separate provenance
-                        # handling; never choose a representative arbitrarily.
+                    prior = transactions.get(tx.source_row_identity)
+                    if prior is not None and not same_transaction_content(prior, tx):
                         raise ValueError("bank_review_cross_pdf_identity_collision")
-                    transactions[tx.source_row_identity] = tx
+                    # Files are sorted by immutable file ID: the first original
+                    # is deterministic. Keep every PDF and coordinate separately.
+                    transactions.setdefault(tx.source_row_identity, tx)
+                    originals[tx.source_row_identity].append(dict(file_id=item["id"],
+                        pdf_sha256=sha, page=tx.source_page, row=tx.source_row))
                     accounts.add((BANK_NAMESPACES[tx.source], tx.account_alias))
                 if len(transactions) > MAX_TRANSACTIONS:
                     raise ValueError("bank_review_transaction_bound_exceeded")
-                candidates.extend(rows)
-                incomes.extend(decision for decision in deposits if decision.outcome == "confirmed_income")
+                for row in rows:
+                    prior = candidates.get(row["identity"])
+                    if prior is not None and any(prior[key] != value for key, value in row.items()
+                            if key not in {"file_id", "pdf_sha256", "page", "row"}):
+                        raise ValueError("bank_review_cross_pdf_identity_collision")
+                    candidates.setdefault(row["identity"], row)
+                for decision in deposits:
+                    if decision.outcome == "confirmed_income":
+                        incomes.setdefault(decision.transaction.source_row_identity, decision)
                 sources.append({"file_id": item["id"], "pdf_sha256": sha, "parsed": parsed,
                     "modifiedTime": item.get("modifiedTime", ""), "completed_postings": completed})
         if self._files() != files or self._ledgers() != ledgers:
             raise ValueError("bank_review_source_changed_during_read")
+        for identity, row in candidates.items():
+            if len(originals[identity]) > 1:
+                # Optional for compatibility with existing single-PDF proofs.
+                row["originals"] = originals[identity]
         serialized = {key: sorted(list(value)) for key, value in self.legacy_rules.items()}
         fingerprint = digest({"files": [{key: value for key, value in source.items()
             if key not in {"parsed", "completed_postings"}} for source in sources],
+            "originals": dict(originals),
             "ledgers": ledgers, "legacy": serialized})
-        return BankReviewSource(make_groups(candidates), transactions, frozenset(accounts),
-            self.legacy_rules, serialized, tuple(sources), tuple(incomes),
+        return BankReviewSource(make_groups(candidates.values()), transactions, frozenset(accounts),
+            self.legacy_rules, serialized, tuple(sources), tuple(incomes.values()),
             ledgers["imports"], ledgers["incomes"], ledgers["expenses"], fingerprint)
 
 

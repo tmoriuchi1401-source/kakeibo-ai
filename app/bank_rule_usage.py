@@ -7,6 +7,7 @@ import re
 from .bank_income import INCOME_CATEGORIES
 from .bank_meaning_rules import RULE_SHEET, MEANINGS, _integer
 from .bank_review_groups import digest, safe_alias, safe_bank_reference
+from .bank_review_source import same_transaction_content
 
 USAGE_SHEET = "銀行ルール適用履歴"
 USAGE_HEADERS = ["application ID", "rule ID", "初回revision", "transaction identity",
@@ -118,7 +119,9 @@ def plan_applications(source, resolver, master, *, applied_at):
             for tx in file["parsed"].transactions:
                 identity = tx.source_row_identity
                 if identity in originals:
-                    raise ValueError("bank_rule_application_original_collision")
+                    if not same_transaction_content(originals[identity][0], tx):
+                        raise ValueError("bank_rule_application_original_collision")
+                    continue
                 originals[identity] = (tx, sha)
     additions = []
     for identity, tx, meaning in sorted(candidates, key=lambda row: row[0]):

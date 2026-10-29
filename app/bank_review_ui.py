@@ -63,6 +63,14 @@ def build_rows(groups, prior_rows=()):
             if old_sender and old_sender[8] == "sender" and old_sender[10] == sender[10]:
                 sender[2:5] = deepcopy(old_sender[2:5])
         elif old:
+            # Preserve unsent values for an overlapping original scope change,
+            # but require a fresh explicit checkbox for the new membership.
+            old_proof = validate_snapshot(old[11], old[6], old[10])
+            if any("originals" in member for member in [*old_proof["members"], *group["members"]]):
+                primary[2:5] = deepcopy(old[2:5])
+                old_sender = prior.get(sender[6])
+                if old_sender:
+                    sender[2:4] = deepcopy(old_sender[2:4])
             primary[1] += "\n対象変更・以前の入力は未反映"
         output.extend((primary, sender))
     return output

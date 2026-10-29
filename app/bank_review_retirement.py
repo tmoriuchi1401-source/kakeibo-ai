@@ -3,7 +3,7 @@ from datetime import datetime
 import hashlib
 import re
 
-from .bank_review_groups import digest, validate_snapshot
+from .bank_review_groups import digest, validate_snapshot, member_originals
 from .bank_review_source import MAX_FILES, MAX_FILE_BYTES
 from .bank_review_ui import PURPOSES, checked, validate_rows
 from .drive_receipts import normalize_folder_id
@@ -39,7 +39,7 @@ class BankReviewRetirementReader:
                     or PURPOSES.get(primary[2]) not in {"transfer", "reimbursement", "other_nonwrite"}):
                 continue
             proof = validate_snapshot(primary[11], primary[6], primary[10])
-            for member in proof["members"]:
+            for member in (original for row in proof["members"] for original in member_originals(row)):
                 file_id, sha = member["file_id"], member["pdf_sha256"]
                 if (not isinstance(file_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", file_id)
                         or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)
