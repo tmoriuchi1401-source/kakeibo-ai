@@ -1,0 +1,82 @@
+name: One-time bank apply read-only assessment
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact current main and validated SHA
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      vars.KAKEIBO_SCHEDULE_ENABLED == 'false' &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && inputs.expected_sha == github.sha &&
+      github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Reject debug or checkout mismatch before private bindings
+        env:
+          DEBUG_ENABLED: ${{ runner.debug }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          test "$DEBUG_ENABLED" != '1'
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Assess fixed five PDFs through GET-only services
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
+          BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
+          BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
+          BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+          BANK_INCOME_WRITE_ENABLED: ${{ vars.BANK_INCOME_WRITE_ENABLED }}
+          BANK_REVIEW_ENABLED: ${{ vars.BANK_REVIEW_ENABLED }}
+          BANK_PDF_PROCESSED_DRIVE_FOLDER_ID: ${{ vars.BANK_PDF_PROCESSED_DRIVE_FOLDER_ID }}
+          KAKEIBO_AUTHORITY_RECIPIENT: "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsHsr2o0aNrXSGI2WFwXmvHkYhoODqLpwkafc8GC7qBFE9+1uOx5ymjMFHUm4Bi9EQxeUmaYExfiWVvQ7Zd+CpCKbin7cFBPOt//nlQzty9oi5t5ZHcabn7IOP9Ir1T1+hVUtajdjDbqSQwpbKK1mA3gD7C3KEPPPgOmvg2o2paELUfO0ky9CB8fhi3FB5iO8UdwaMQb7sViHLbvODk2Oo39gJur+pHLr0BJruOeGPbUQYxLiNbAcWmlIoyvl6SrZJsUCpbgSRQVb4Pj86WoL5aRR8tIH+NYrdFFNNIxdih2NdJxkyggKzJ228ClEdHzgMYvyJc4tgYomjxHdk3kp/c/AGUlLzGDOPEyeak6RFhHV5EdBv1A06Xv6UCKzTgQHJHR6FVv7B2bsocDcTgJW4AwqUy+F0I+Cu22WSo2IZU9QgAkkK9RBUvBERMTO8IsO6tBxO1+QNGCoY3nYYZ9uq4fyJCyi66e48NDYJpwRc7665eEcfngZY47zk+Q+0kunAgMBAAE="
+          FIXED_PLAN_WRAPPED_ID: "rsa-oaep-sha256-v1:iAPJmyRkGe27eMjjMvR9frr/tRPT6Nf4g9NhX83JNd7fp1naDDT8FllwedZZvj9RveLp1ZD1hJpiUnYsD8+qEXFONik1+qtO4tC9Vvl5HlrEbqZHp0OBfpnzJ2gIwSbph9xGLhiCcmFJrngjF3iYEMYz6ODUQwJQxKIcvWItoWXulIBi8F277Ble19N7ThqJAcxOtTh6qxqLno4xEX360ZoIwkyEh7oAxPIEeddyRIXIbc1k/kbvACS04yH35xvO67VeJvpk+LXj5cvowm86ftakmssEevoqrZyUgiKVjUCXfGSRsk5koWeAY81UUOfVCOHlUDQWUYImBNFFVGHk+w=="
+          EXPECTED_PLAN_SHA256: "8f64ac790aafb03c605c270a9540db5826ad248630b0eb2db36a26cc05d99135"
+          EXPECTED_PDFS_SHA256: "909b20ec0dd723baacd34a3a5ff220fbd1c1a057f5d12e9dc0e2794aa2106860"
+          EXPECTED_RAW_FINANCIAL_SHA256: "0832939f8f64e3373fee76cf4a853c09cdf7fa5e462a46f01392b1eb740e8f3e"
+          EXPECTED_BANK_SHA256: "68e6570a10cdc4d3c5b9d7bf363ca7b24c7213b97ef9e7343570c8844599a81e"
+          EXPECTED_PARENT_SHA256: "5ad11d956819ba94d924dfe1980e8d858f1b75965941c33a3250aa031c4fd1e7"
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python -m app.bank_apply_readonly_inspect
+      - name: Upload encrypted assessment only
+        uses: actions/upload-artifact@v4
+        with:
+          name: authority-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/kakeibo-authority-delivery/authority-report.enc.json
+          if-no-files-found: error
+          retention-days: 1
