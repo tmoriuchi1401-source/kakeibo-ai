@@ -114,6 +114,17 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
         raise StateError('source_command_timed_out') from None
     if result.returncode != 0:
         if source == "bank":
+            from .production_run import SourceFailure, bank_diagnostic_fields, SAFE_SOURCE_ERRORS
+            try:
+                failure = json.loads(result.stdout)
+            except (ValueError, TypeError):
+                failure = {}
+            if isinstance(failure, dict):
+                diagnostic = bank_diagnostic_fields(failure)
+                code = failure.get('error')
+                if isinstance(code, str) and code in SAFE_SOURCE_ERRORS and diagnostic.get('stage'):
+                    raise SourceFailure(code, diagnostic['stage'], failure,
+                                        bank_diagnostics=diagnostic)
             # The legacy CLI can raise before it prints JSON. Only an exact,
             # allowlisted terminal error code may cross this private boundary.
             from .production_run import SAFE_SOURCE_ERRORS
@@ -358,11 +369,14 @@ def main():
     parser.add_argument("--receipt-operation", choices=("reanalyze","replay"), default="reanalyze")
     parser.add_argument("--receipt-limit", type=int, choices=(1,2,3), default=1)
     args = parser.parse_args()
+    report = None
+    bank_stage = 'bank_parent_setup'
     try:
         env = dict(os.environ)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
         verify_execution_boundary(env, head)
         from .private_state_bindings import decode_environment
+        bank_stage = 'bank_parent_bindings'
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
         validate_scope(args)
         if env.get("BANK_FIXED_BACKFILL_BATCH") and not env.get("BANK_FIXED_BACKFILL_PLAN"):
@@ -436,6 +450,7 @@ def main():
         ledger_binding = StateBinding("production_run", env.get("SPREADSHEET_ID", ""),
                                        env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get("KAKEIBO_RUN_LEDGER_FILE_ID", ""))
         ledger_service = drive_service() if args.mode == "apply" else read_only_drive_service()
+        bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
         daily_counts={}
@@ -448,6 +463,7 @@ def main():
             # accounting stages. Their ledger/checkpoint gates are unchanged.
             daily_counts=run_daily_requests(env,apply=args.mode=="apply")
         with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
+            bank_stage = 'bank_parent_sources'
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
                                ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary")
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
@@ -456,6 +472,7 @@ def main():
                                     selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope),
                                     require_omitted_ready=args.scope == "core")
             if args.mode == "preview":
+                bank_stage = 'bank_parent_authority'
                 report["authority"] = preview_authority_summary(Path(directory), report["sources"], env)
         if report["success"] and args.mode == "apply" and needs_ledger_order(
                 args.scope, report, bank_apply=args.bank_apply):
@@ -463,18 +480,23 @@ def main():
         # Re-read after ambiguous responses instead of reporting stale in-memory
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True
+        bank_stage = 'bank_parent_readback'
         try:
             ledger = ProductionLedger(ledger.transport, ledger_binding)
-        except Exception:
+        except Exception as error:
             ledger_confirmed = False
             report["success"] = False
             report["error"] = "ledger_final_read_failed"
+            if args.scope == 'drive_bank' and not env.get('BANK_FIXED_BACKFILL_PLAN'):
+                from .production_run import bank_failure_diagnostic
+                report.update(bank_failure_diagnostic(error, bank_stage))
         # Success means a completed source operation, including bank preview.
         # bank_mode and written counts distinguish preview/no-op/new writes.
         for source, outcome in report["sources"].items():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
         from .bank_review_refresh import refresh_bank_review_after_sources
+        bank_stage = 'bank_review_refresh'
         category_counts.update(refresh_bank_review_after_sources(
             env, scope=args.scope, source_success=report["success"],
             apply=args.mode == "apply"))
@@ -485,7 +507,13 @@ def main():
         report["scope"] = args.scope
         report["bank_mode"] = ("apply" if args.bank_apply else "preview") if "bank" in report["sources"] else "not_run"
     except Exception as exc:
-        report = {"schema": 1, "success": False, "error": "production_preflight_failed"}
+        # Keep completed, already-sanitized source counts if a later bank stage fails.
+        normal_bank = args.scope == 'drive_bank' and not os.environ.get('BANK_FIXED_BACKFILL_PLAN')
+        report = {**(report if normal_bank and isinstance(report, dict) else {}),
+                  "schema": 1, "success": False, "error": "production_preflight_failed"}
+        if normal_bank:
+            from .production_run import bank_failure_diagnostic
+            report.update(bank_failure_diagnostic(exc, bank_stage))
         if os.environ.get("BANK_FIXED_BACKFILL_PLAN"):
             from .bank_fixed_backfill import failure_diagnostic
             report.update(failure_diagnostic(exc))
