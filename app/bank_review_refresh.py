@@ -9,7 +9,7 @@ from .bank_review_decisions import DECISION_SHEET
 from .bank_review_store import BankReviewStore
 from .bank_review_ui import BANK_LABELS, BANK_UI_HEADERS, PURPOSES, build_rows, checked, validate_rows
 from .bank_review_groups import digest
-from .bank_review_groups import validate_snapshot
+from .bank_review_groups import validate_snapshot, member_originals
 from .bank_pdf_pipeline import NormalizedBankTransaction
 from .bank_rule_usage import plan_applications
 from datetime import datetime, timezone
@@ -134,7 +134,8 @@ def build_view(source, resolver, prior_rows=(), *, retired_originals=None):
                       and saved.get(tx.source_row_identity) == meaning["classification"])
                      or (meaning["classification"] in {"transfer", "reimbursement", "other_nonwrite"}
                          and tx.source_row_identity not in nonposting
-                         and retired_originals.get(member["file_id"], {}).get("pdf_sha256") == member["pdf_sha256"]))
+                         and all(retired_originals.get(original["file_id"], {}).get("pdf_sha256") == original["pdf_sha256"]
+                                 for original in member_originals(member))))
                 and (meaning["classification"] != "income" or income_row_matches(
                     incomes.get(income_id(tx.source_row_identity)),
                     classify_deposit(tx, **source.legacy_rules, meaning_resolver=resolver).row(), approved_meaning=True))
