@@ -207,12 +207,19 @@ def refresh_bank_review_after_sources(env, *, scope, source_success, apply=False
     from .drive_run_state import StateError
     from .production_flow import verify_execution_boundary
     verify_execution_boundary(env, env.get("GITHUB_SHA", ""))
-    db = SheetsDB(env.get("SPREADSHEET_ID", ""),
-        service=sheets_service() if apply else read_only_sheets_service(),
-        read_pacer=SheetsReadPacer(), read_retry_base=20)
-    if CATEGORY_REQUEST_SHEET not in db.sheet_titles():
-        raise StateError("bank_review_submit_surface_required")
-    return run_bank_review_refresh(db, env, apply=apply)
+    db = None
+    try:
+        db = SheetsDB(env.get("SPREADSHEET_ID", ""),
+            service=sheets_service() if apply else read_only_sheets_service(),
+            read_pacer=SheetsReadPacer(interval=1.25), read_retry_base=20, read_retry_attempts=5)
+        if CATEGORY_REQUEST_SHEET not in db.sheet_titles():
+            raise StateError("bank_review_submit_surface_required")
+        return run_bank_review_refresh(db, env, apply=apply)
+    except Exception as error:
+        from .production_run import SourceFailure, bank_failure_diagnostic
+        diagnostic = bank_failure_diagnostic(error, 'bank_review_refresh', db)
+        raise SourceFailure(diagnostic['failure_code'], diagnostic['stage'],
+                            bank_diagnostics=diagnostic) from None
 
 
 def run_bank_review_refresh(db, env, *, apply=False):

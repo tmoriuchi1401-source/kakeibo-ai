@@ -709,6 +709,9 @@ def run_bank_pdf_recurring(
             reason = type(exc).__name__
         summary.update({"status": "failed", "failure": 1, "failure_reason": reason})
         state.record(summary, advance_checkpoint=False)
+        # Diagnostics supplement the returned result only, never another state write.
+        from .production_run import bank_failure_diagnostic
+        summary.update(bank_failure_diagnostic(exc, 'bank_cli_execution', db))
         return summary
 
 

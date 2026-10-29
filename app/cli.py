@@ -136,6 +136,85 @@ def print_drive_receipt_results(results):
         else:
             print(name,res)
 
+def bank_recurring_cli(args):
+    """Existing bank runner with bounded reads and a sanitized child result."""
+    from random import random
+    from .sheets import SheetsReadPacer
+    from .production_run import bank_failure_diagnostic, bank_read_metrics
+    db, stage = None, 'bank_cli_setup'
+    try:
+        if not args.state_dir:
+            raise RuntimeError("bank_recurring_state_dir_required")
+        if not args.authority_file:
+            raise RuntimeError("bank_recurring_authority_file_required")
+        repo_root=Path(__file__).resolve().parents[1]
+        stage = "bank_cli_settings"
+        s=Settings(); s.validate(need_sheet=True)
+        stage = "bank_cli_clients"
+        db=SheetsDB(
+            s.spreadsheet_id,
+            service=read_only_sheets_service() if args.dry_run else None,
+            read_pacer=SheetsReadPacer(interval=1.25), read_retry_base=20,
+            read_retry_attempts=5, read_retry_jitter=random,
+        )
+        stage = "bank_cli_authority"
+        provider=ProtectedBankRecurringAuthorityProvider(
+            args.authority_file, repo_root=repo_root,
+        )
+        authority=provider.load()
+        if s.bank_pdf_drive_folder_id and normalize_folder_id(
+            s.bank_pdf_drive_folder_id
+        ) != normalize_folder_id(authority.expected_drive_folder_id):
+            raise RuntimeError("bank_recurring_drive_folder_mismatch")
+        stage = "bank_cli_state"
+        state=SqliteRecurringRunState(
+            Path(args.state_dir).expanduser().resolve() / "bank-recurring.sqlite3",
+            repo_root=repo_root,
+        )
+        now=(
+            datetime.fromisoformat(args.now)
+            if args.now else datetime.now(ZoneInfo("UTC"))
+        )
+        cursor_value = os.getenv("BANK_PREVIEW_CURSOR_EPOCH", "") if args.dry_run else ""
+        if cursor_value and not cursor_value.isdecimal():
+            raise ValueError("bank_recurring_preview_cursor_invalid")
+        stage = "bank_classification"
+        from .bank_meaning_resolver import from_environment as bank_meaning_from_environment
+        bank_meanings = bank_meaning_from_environment(db, legacy_rules=dict(
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications()))
+        stage = "bank_cli_execution"
+        result=(run_bank_pdf_catch_up_preview if args.dry_run else run_bank_pdf_recurring)(
+            **({"preview_cursor_epoch": int(cursor_value) if cursor_value else None}
+               if args.dry_run else {}),
+            drive_service=(
+                read_only_drive_service() if args.dry_run else drive_service()
+            ),
+            db=db,
+            state=state,
+            authority_provider=provider,
+            repo_root=repo_root,
+            now=now,
+            dry_run=args.dry_run,
+            audit_key_file=args.audit_key_file or None,
+            income_write_enabled=os.getenv("BANK_INCOME_WRITE_ENABLED", "false") == "true",
+            processed_folder_id=s.bank_pdf_processed_drive_folder_id,
+            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
+            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
+            **({"meaning_resolver": bank_meanings} if bank_meanings is not None else {}),
+        )
+        metrics = bank_read_metrics(db)
+        metrics['http_429_seen'] |= int(result.get('http_429_seen') == 1)
+        result.update(metrics)
+        result.pop('failure_reason', None)  # Legacy private reason never crosses stdout.
+        if result.get('failure'):
+            result['error'] = result.get('failure_code', 'bank_cli_failed')
+        return result
+    except Exception as error:
+        diagnostic = bank_failure_diagnostic(error, stage, db)
+        return dict(diagnostic, failure=1, status='failed', error=diagnostic['failure_code'])
+
+
 def main():
     p=argparse.ArgumentParser(description="家計簿AI")
     sub=p.add_subparsers(dest="cmd",required=True)
@@ -750,59 +829,10 @@ def main():
             ensure_ascii=False,sort_keys=True,
         ))
     elif args.cmd=="bank-pdf-recurring":
-        if not args.state_dir:
-            raise RuntimeError("bank_recurring_state_dir_required")
-        if not args.authority_file:
-            raise RuntimeError("bank_recurring_authority_file_required")
-        repo_root=Path(__file__).resolve().parents[1]
-        s=Settings(); s.validate(need_sheet=True)
-        db=SheetsDB(
-            s.spreadsheet_id,
-            service=read_only_sheets_service() if args.dry_run else None,
-        )
-        provider=ProtectedBankRecurringAuthorityProvider(
-            args.authority_file, repo_root=repo_root,
-        )
-        authority=provider.load()
-        if s.bank_pdf_drive_folder_id and normalize_folder_id(
-            s.bank_pdf_drive_folder_id
-        ) != normalize_folder_id(authority.expected_drive_folder_id):
-            raise RuntimeError("bank_recurring_drive_folder_mismatch")
-        state=SqliteRecurringRunState(
-            Path(args.state_dir).expanduser().resolve() / "bank-recurring.sqlite3",
-            repo_root=repo_root,
-        )
-        now=(
-            datetime.fromisoformat(args.now)
-            if args.now else datetime.now(ZoneInfo("UTC"))
-        )
-        cursor_value = os.getenv("BANK_PREVIEW_CURSOR_EPOCH", "") if args.dry_run else ""
-        if cursor_value and not cursor_value.isdecimal():
-            raise ValueError("bank_recurring_preview_cursor_invalid")
-        from .bank_meaning_resolver import from_environment as bank_meaning_from_environment
-        bank_meanings = bank_meaning_from_environment(db, legacy_rules=dict(
-            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
-            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications()))
-        result=(run_bank_pdf_catch_up_preview if args.dry_run else run_bank_pdf_recurring)(
-            **({"preview_cursor_epoch": int(cursor_value) if cursor_value else None}
-               if args.dry_run else {}),
-            drive_service=(
-                read_only_drive_service() if args.dry_run else drive_service()
-            ),
-            db=db,
-            state=state,
-            authority_provider=provider,
-            repo_root=repo_root,
-            now=now,
-            dry_run=args.dry_run,
-            audit_key_file=args.audit_key_file or None,
-            income_write_enabled=os.getenv("BANK_INCOME_WRITE_ENABLED", "false") == "true",
-            processed_folder_id=s.bank_pdf_processed_drive_folder_id,
-            confirmed_internal_transfers=s.bank_confirmed_internal_transfers(),
-            confirmed_non_own_classifications=s.bank_confirmed_non_own_classifications(),
-            **({"meaning_resolver": bank_meanings} if bank_meanings is not None else {}),
-        )
-        print(json.dumps(result,ensure_ascii=False,sort_keys=True))
+        result = bank_recurring_cli(args)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        if result.get('failure'):
+            raise SystemExit(1)
     elif args.cmd=="init":
         s,db,_=make(False); db.ensure_schema(load_categories()); print("Sheets初期化/検証完了")
     elif args.cmd=="general-receipt-preview":

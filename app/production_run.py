@@ -48,6 +48,9 @@ SAFE_SOURCE_ERRORS = frozenset({
     'bank_recurring_authority_expired_or_not_started', 'bank_recurring_target_mismatch',
     'bank_recurring_window_exceeds_authority', 'bank_recurring_file_bound_exceeded',
     'bank_recurring_preview_cursor_invalid',
+    'bank_cli_failed', 'bank_pdf_parse_failed', 'bank_review_cross_pdf_identity_collision',
+    'bank_review_pdf_parse_unresolved', 'bank_review_existing_import_mismatch',
+    'bank_review_submit_surface_required',
     'processed_folder_is_inbox',
     'receipt_result_changed', 'receipt_result_write_unknown', 'receipt_result_readback_mismatch',
     'pdf_intake_drive_unavailable', 'pdf_intake_drive_deadline',
@@ -123,7 +126,14 @@ SOURCE_STAGES = frozenset({'receipt_preflight', 'receipt_processing',
                            'receipt_archive', 'receipt_projection', 'pdf_page_intake',
                            'confirmation_context', 'confirmation_source_read',
                            'pdf_registration', 'confirmation_apply', 'confirmation_ui'})
-FAILURE_CLASSES=frozenset({'StateError','RuntimeError','HttpError','SSLError','SSLEOFError',
+BANK_STAGES = frozenset({'bank_parent_setup', 'bank_parent_bindings', 'bank_parent_ledger',
+    'bank_parent_sources', 'bank_parent_authority', 'bank_parent_readback', 'bank_review_refresh',
+    'bank_cli_setup', 'bank_cli_settings', 'bank_cli_authority', 'bank_cli_clients',
+    'bank_cli_state', 'bank_cli_execution', 'bank_sheets_read', 'bank_drive_read',
+    'bank_pdf_parse', 'bank_classification'})
+BANK_READ_COUNTS = frozenset({'sheets_reads', 'sheets_read_attempts', 'sheets_read_retries', 'http_429_seen'})
+SOURCE_STAGES = SOURCE_STAGES | BANK_STAGES
+FAILURE_CLASSES=frozenset({'StateError','RuntimeError','HttpError','BankPdfError','SSLError','SSLEOFError',
     'TimeoutError','ValueError','KeyError','TypeError','AttributeError','OSError','OtherError'})
 FAILURE_FILES=frozenset({'receipt_confirmation_production.py','pdf_intake_production.py',
     'pdf_intake_runner.py','pdf_intake_registry.py','pdf_intake_proof_client.py',
@@ -140,13 +150,81 @@ def failure_diagnostic(error):
     return {'failure_class':kind if kind in FAILURE_CLASSES else 'OtherError','failure_site':site}
 
 
+def bank_diagnostic_fields(value):
+    """Validate the bank child's untrusted, count-only diagnostic envelope."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    if isinstance(value.get('stage'), str) and value['stage'] in BANK_STAGES:
+        result['stage'] = value['stage']
+    if isinstance(value.get('failure_class'), str) and value['failure_class'] in FAILURE_CLASSES:
+        result['failure_class'] = value['failure_class']
+    if isinstance(value.get('failure_code'), str) and value['failure_code'] in SAFE_SOURCE_ERRORS:
+        result['failure_code'] = value['failure_code']
+    status = value.get('failure_http_status')
+    if type(status) is int and status in {400,401,403,404,409,429,500,502,503,504}:
+        result['failure_http_status'] = status
+    for key in ('sheets_reads', 'sheets_read_attempts', 'sheets_read_retries', 'http_429_seen'):
+        count = value.get(key)
+        if type(count) is int and 0 <= count <= (1 if key == 'http_429_seen' else 1_000_000):
+            result[key] = count
+    return result
+
+
+def bank_read_metrics(db):
+    getter = getattr(db, 'sheet_read_metrics', None)
+    metrics = getter() if callable(getter) else {}
+    if not isinstance(metrics, dict): metrics = {}
+    retries = metrics.get('retries', 0)
+    return bank_diagnostic_fields(dict(sheets_reads=metrics.get('logical', 0),
+        sheets_read_attempts=metrics.get('attempts', 0), sheets_read_retries=metrics.get('retries', 0),
+        http_429_seen=int(type(retries) is int and retries > 0)))
+
+
+def bank_failure_diagnostic(error, stage, db=None):
+    """No exception text, Google response, child output or caller-supplied site."""
+    from googleapiclient.errors import HttpError
+    result = dict(bank_read_metrics(db), stage=stage, failure_class=type(error).__name__)
+    code = safe_source_error(error)
+    if isinstance(error, (ValueError, RuntimeError, StateError)) and str(error) in SAFE_SOURCE_ERRORS:
+        code = str(error)
+    if isinstance(error, HttpError):
+        status = getattr(error.resp, 'status', None)
+        result['failure_http_status'] = status
+        result['http_429_seen'] |= int(status == 429)
+        code = ('google_api_quota_rejected' if status == 429 else 'google_api_auth_rejected'
+                if status in {401,403} else 'google_api_request_failed')
+    elif isinstance(error, StateError) and code.startswith('state_drive_read_failed_'):
+        result['failure_http_status'] = int(code.rsplit('_', 1)[1])
+        result['http_429_seen'] |= int(result['failure_http_status'] == 429)
+        result['stage'] = 'bank_drive_read'
+    result['failure_code'] = code
+    sites = {('sheets.py','_execute_sheet_read'): 'bank_sheets_read',
+             ('bank_pdf_recurring.py','list_bounded_bank_pdfs'): 'bank_drive_read',
+             ('bank_review_source.py','_files'): 'bank_drive_read',
+             ('bank_meaning_source_guard.py','require_unchanged'): 'bank_drive_read',
+             ('google_clients.py','download_drive_file'): 'bank_drive_read'}
+    tb = error.__traceback__
+    while tb:
+        filename = Path(tb.tb_frame.f_code.co_filename)
+        if filename.resolve().parent == Path(__file__).resolve().parent:
+            site = sites.get((filename.name, tb.tb_frame.f_code.co_name))
+            if filename.name == 'bank_pdf_pipeline.py': site = 'bank_pdf_parse'
+            if filename.name in {'bank_meaning_resolver.py', 'bank_reconciliation.py', 'bank_income.py'}:
+                site = 'bank_classification'
+            if site: result['stage'] = site
+        tb = tb.tb_next
+    result.update(getattr(error, 'bank_diagnostics', {}))
+    return bank_diagnostic_fields(result)
+
+
 class SourceFailure(StateError):
     """Only fixed codes and completed-result counts may cross the child boundary.
 
     Counts are a lower bound after a failed/unknown write, never permission to
     replay or clear the durable pending marker.
     """
-    def __init__(self, code, stage='', counts=None, *, failure_class='',failure_site=''):
+    def __init__(self, code, stage='', counts=None, *, failure_class='',failure_site='', bank_diagnostics=None):
         super().__init__(code if isinstance(code, str) and code in SAFE_SOURCE_ERRORS
                          else 'source_execution_failed')
         self.stage = stage if isinstance(stage, str) and stage in SOURCE_STAGES else ''
@@ -154,6 +232,7 @@ class SourceFailure(StateError):
         import re
         match=re.fullmatch(r'([a-z_]+\.py):([1-9][0-9]{0,3})',failure_site) if isinstance(failure_site,str) else None
         self.failure_site=failure_site if match and match[1] in FAILURE_FILES else ''
+        self.bank_diagnostics = bank_diagnostic_fields(bank_diagnostics)
         self.counts = {key: value for key, value in (counts or {}).items()
                        if key in COUNT_KEYS and type(value) is int and value >= 0}
 
@@ -161,7 +240,8 @@ class SourceFailure(StateError):
         return {**self.counts, 'failure': 1, 'error': str(self),
                 **({'stage': self.stage} if self.stage else {}),
                 **({'failure_class':self.failure_class} if self.failure_class else {}),
-                **({'failure_site':self.failure_site} if self.failure_site else {})}
+                **({'failure_site':self.failure_site} if self.failure_site else {}),
+                **self.bank_diagnostics}
 
 
 def require_success(result: Mapping) -> None:
@@ -236,8 +316,9 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                     raise StateError("source_runner_missing")
                 result = runners[source]()
                 require_success(result)
+                count_keys = COUNT_KEYS | BANK_READ_COUNTS if source == 'bank' else COUNT_KEYS
                 counts = {key: value for key, value in result.items()
-                          if key in COUNT_KEYS and type(value) is int and value >= 0}
+                          if key in count_keys and type(value) is int and value >= 0}
                 outcome.update(status="success", error="", counts=counts)
                 if source == "bank":
                     from .bank_pdf_status import safe_file_statuses
@@ -255,7 +336,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                     if error.failure_class:outcome['failure_class']=error.failure_class
                     if error.failure_site:outcome['failure_site']=error.failure_site
                     outcome['counts'] = {key: value for key, value in outcome['counts'].items()
-                                         if key in COUNT_KEYS}
+                                         if key in (COUNT_KEYS | BANK_READ_COUNTS if source == 'bank' else COUNT_KEYS)}
+                    outcome.update(error.bank_diagnostics)
         outcome["duration_seconds"] = round(monotonic() - started, 3)
         outcomes[source] = outcome
     return {"schema": 1, "success": all(item["status"] == "success" for item in outcomes.values()),
