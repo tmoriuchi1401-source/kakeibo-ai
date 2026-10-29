@@ -42,9 +42,10 @@ def test_unrecognized_exception_name_is_not_published():
 
 
 @pytest.mark.parametrize('fixed_plan', [False, True])
-def test_parent_failure_stays_failed_and_diagnostics_are_fixed_only(monkeypatch, capsys, fixed_plan):
+@pytest.mark.parametrize('scope', ['drive_bank', 'core'])
+def test_parent_failure_stays_failed_and_bank_diagnostics_are_allowlisted(monkeypatch, capsys, fixed_plan, scope):
     from app import production_flow, private_state_bindings
-    monkeypatch.setattr('sys.argv', ['production_flow', '--scope', 'drive_bank'])
+    monkeypatch.setattr('sys.argv', ['production_flow', '--scope', scope])
     monkeypatch.setattr(production_flow.subprocess, 'check_output', lambda *a, **k: 'a' * 40)
     monkeypatch.delenv('GITHUB_STEP_SUMMARY', raising=False)
     if fixed_plan:
@@ -60,5 +61,15 @@ def test_parent_failure_stays_failed_and_diagnostics_are_fixed_only(monkeypatch,
     rendered = capsys.readouterr().out
     result = json.loads(rendered)
     assert result['error'] == 'production_preflight_failed' and result['success'] is False
-    assert ('failure_class' in result) is fixed_plan
+    assert ('failure_class' in result) is (fixed_plan or scope == 'drive_bank')
+    if fixed_plan:
+        assert set(result) == {'schema', 'success', 'error', 'failure_class', 'failure_sites'}
+    elif scope == 'drive_bank':
+        assert result['stage'] == 'bank_parent_setup'
+        assert result['failure_code'] == 'source_execution_failed'
+        assert result['failure_class'] == 'ValueError'
+        assert set(result) == {'schema', 'success', 'error', 'stage', 'failure_code', 'failure_class',
+                               'sheets_reads', 'sheets_read_attempts', 'sheets_read_retries', 'http_429_seen'}
+    else:
+        assert set(result) == {'schema', 'success', 'error'}
     assert 'private' not in rendered
