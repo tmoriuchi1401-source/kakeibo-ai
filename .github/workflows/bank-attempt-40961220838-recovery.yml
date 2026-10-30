@@ -1,0 +1,87 @@
+name: Bound state-only recovery for bank attempt 40961220838
+run-name: bank40961220838-${{ inputs.operation_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect only by default; release requires separate operator authorization
+        type: choice
+        options: [dry_run, release]
+        default: dry_run
+        required: true
+      expected_sha:
+        description: Exact reviewed and validated main SHA
+        type: string
+        required: true
+      operation_id:
+        description: Fresh 32-hex operation nonce bound by the signed capsule
+        type: string
+        required: true
+      recovery_capsule:
+        description: Encrypted fixed proof and fresh signed exclusion attestation
+        type: string
+        required: true
+      confirm:
+        description: RELEASE_40961220838 only for separately authorized state release
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == 'tmoriuchi1401-source' &&
+      github.triggering_actor == 'tmoriuchi1401-source' &&
+      github.run_attempt == 1 &&
+      github.sha == inputs.expected_sha &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
+      vars.KAKEIBO_SCHEDULE_ENABLED == 'false' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true' &&
+      vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'false' &&
+      (inputs.mode == 'dry_run' || (inputs.mode == 'release' && inputs.confirm == 'RELEASE_40961220838'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Refuse debug logging before loading private evidence
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Validate or release only the two fixed state payloads
+        env:
+          RECOVERY_MODE: ${{ inputs.mode }}
+          RECOVERY_OPERATION: ${{ inputs.operation_id }}
+          RECOVERY_CONFIRM: ${{ inputs.confirm }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RECOVERY_CAPSULE: ${{ inputs.recovery_capsule }}
+          GH_TOKEN: ${{ github.token }}
+          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+          KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+          KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+          CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED: ${{ vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+        run: python -m app.bank_attempt_recovery
