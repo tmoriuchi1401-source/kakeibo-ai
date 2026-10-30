@@ -35,8 +35,10 @@ TABLES = ('取込データ', '収入明細', '支出明細', '_手入力受付')
 RANGES = ("'取込データ'!A:L", "'収入明細'!A:J", "'支出明細'!A:M", "'_手入力受付'!A:F")
 PDF_FIELDS = 'id,name,mimeType,createdTime,modifiedTime,parents,appProperties,properties,version,md5Checksum,size'
 CHECKS = frozenset({'ENV_SHA', 'SA_CREDENTIALS', 'CAPSULE', 'FIXED_EVIDENCE', 'DRIVE_BINDINGS',
-    'GITHUB_API', 'GITHUB_VARIABLES', 'GITHUB_CONTROLS', 'RUNS', 'CLOUD_503',
+    'GITHUB_API', 'GITHUB_VARIABLES', 'CONTROL_VARIABLES', 'GITHUB_CONTROLS', 'RUNS', 'CLOUD_503',
     'FINANCIAL_READ', 'FINANCIAL_MATCH', 'PDF_MATCH', 'SQLITE_CHECKPOINT', 'STATE_MATCH'})
+CONTROL_VARIABLES = ('KAKEIBO_VALIDATED_MAIN_SHA', 'KAKEIBO_SCHEDULE_ENABLED',
+    'KAKEIBO_LEGACY_DISABLED', 'CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED')
 
 
 @contextmanager
@@ -335,11 +337,20 @@ def controls(env, attestation, repo, *, get=None, head=None, now=None):
                 response.raise_for_status()
                 return response.json()
     require(get('branches/main')['commit']['sha'] == env['GITHUB_SHA'])
-    variables = get('actions/variables?per_page=100')
-    require(variables['total_count'] <= 100)
-    current_vars = {x['name']: x['value'] for x in variables['variables']}
-    require(all(current_vars.get(k) == env[k] for k in ('KAKEIBO_VALIDATED_MAIN_SHA', 'KAKEIBO_SCHEDULE_ENABLED',
-        'KAKEIBO_LEGACY_DISABLED', 'CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED')))
+    with checking('CONTROL_VARIABLES'):
+        if policy == 'nonexclusive':
+            # GITHUB_TOKEN has no Variables permission. Require a fresh signed
+            # operator GET snapshot, matching Actions' native vars context.
+            # This is a bounded observation, not a lock against later changes.
+            require(attestation['control_variables_source'] == 'operator_GET_actions_variables'
+                and 0 <= stamp - attestation['controls_observed_at_epoch'] <= 900
+                and attestation['controls_observed_at_epoch'] <= attestation['at_epoch'])
+            require(attestation['control_variables'] == {k: env[k] for k in CONTROL_VARIABLES})
+        else:
+            variables = get('actions/variables?per_page=100')
+            require(variables['total_count'] <= 100)
+            current_vars = {x['name']: x['value'] for x in variables['variables']}
+            require(all(current_vars.get(k) == env[k] for k in CONTROL_VARIABLES))
     run = get('actions/runs/' + env['GITHUB_RUN_ID'])
     require(run['path'] == WORKFLOW and run['head_sha'] == env['GITHUB_SHA']
         and run['run_attempt'] == 1 and run['status'] == 'in_progress' and run['event'] == 'workflow_dispatch'
@@ -373,7 +384,8 @@ def main():
         env, repo = dict(os.environ), Path(__file__).resolve().parents[1]
         with checking('ENV_SHA'):
             boundary(env)
-            require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip() == env['GITHUB_SHA'])
+            require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True,
+                stderr=subprocess.PIPE).strip() == env['GITHUB_SHA'])
         report.update(execution_policy=env.get('RECOVERY_EXECUTION_POLICY', 'strict'),
                       exclusive_execution_claimed=env.get('RECOVERY_EXECUTION_POLICY', 'strict') == 'strict')
         from .settings import service_account_source

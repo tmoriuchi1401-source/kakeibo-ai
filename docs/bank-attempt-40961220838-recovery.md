@@ -88,6 +88,23 @@ neither automatic continuation nor another release is permitted. Lost responses
 must be independently inspected without resend or rollback. Normal apply and the
 old first window remain unapproved and must not be started after recovery.
 
+Nonexclusive control variables use a signed operator GET observation because
+the Actions `GITHUB_TOKEN` lacks the Variables repository permission (diagnostic
+run 41144690212 returned403 at that API; earlier checks all passed). No token
+permissions or credentials are expanded. The signature must bind
+`control_variables_source=operator_GET_actions_variables`,
+`controls_observed_at_epoch` (not after the signature timestamp and <=15 minutes
+old), and `control_variables` containing exactly the validated SHA and three
+stop flags named above. These values must match the Actions native `vars`
+context in the running job. Missing, stale, future or mismatched evidence fails;
+there is no exception fallback. Strict mode retains its live Variables API GET.
+
+The operator independently GETs current variables immediately before signing
+each capsule and verifies them again after execution. This observation and the
+Actions job context do not lock later configuration changes; the nonexclusive
+mode accepts that remaining race. Live main/run/nonce/competing-run checks still
+execute at every boundary, and observed inconsistencies still stop execution.
+
 Ready state does not dispatch anything here. Normal apply is disabled externally
 before release, remains disabled afterwards, and there is no workflow_run,
 repository_dispatch, schedule, reusable-workflow or accounting invocation in

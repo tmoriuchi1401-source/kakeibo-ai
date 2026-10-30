@@ -320,13 +320,39 @@ def nonexclusive_rig(control_rig):
         del s.att[key]
     s.att.update(execution_policy='nonexclusive', nonexclusive_authorized=True,
         residual_risk=r.NONEXCLUSIVE_RISK, target_run_id=r.FAILED_RUN, target_run_attempt=1,
-        normal_apply_resume_authorized=False)
+        normal_apply_resume_authorized=False, control_variables_source='operator_GET_actions_variables',
+        controls_observed_at_epoch=999, control_variables={k:s.env[k] for k in r.CONTROL_VARIABLES})
     s.data['actions/workflows?per_page=100']['workflows'][0]['state'] = 'active'
     return s
 
 
 def test_nonexclusive_explicit_approval_without_false_freeze(nonexclusive_rig):
     nonexclusive_rig.run()
+
+
+def test_nonexclusive_uses_signed_get_snapshot_not_unsupported_token(nonexclusive_rig):
+    s = nonexclusive_rig
+    del s.data['actions/variables?per_page=100']
+    s.run()
+
+
+@pytest.mark.parametrize('change', ['missing', 'source', 'stale', 'future', 'unsigned_time', 'extra_key', *r.CONTROL_VARIABLES])
+def test_nonexclusive_config_proof_must_be_fresh_exact_and_bound(nonexclusive_rig, change):
+    s = nonexclusive_rig
+    if change == 'missing': s.att['control_variables'] = {}
+    elif change == 'source': s.att['control_variables_source'] = 'unverified'
+    elif change == 'stale': s.att['controls_observed_at_epoch'] = 0
+    elif change == 'future': s.att['controls_observed_at_epoch'] = 1200
+    elif change == 'unsigned_time': s.att['controls_observed_at_epoch'] = 1001
+    elif change == 'extra_key': s.att['control_variables']['unexpected'] = 'false'
+    else: s.att['control_variables'][change] = 'changed'
+    with pytest.raises(StateError): s.run()
+
+
+def test_strict_mode_retains_live_variables_check(control_rig):
+    s = control_rig
+    s.data['actions/variables?per_page=100']['variables'][0]['value'] = 'changed'
+    with pytest.raises(StateError): s.run()
 
 
 @pytest.mark.parametrize('change', ['approval', 'risk', 'target_run', 'target_attempt', 'policy',
