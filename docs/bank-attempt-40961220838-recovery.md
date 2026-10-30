@@ -1,9 +1,9 @@
 # Bound recovery: bank53 / parent1300
 
-Status: Draft implementation. **Production release is NO-GO until separately
-reviewed, authorized, and all exclusion conditions are independently established.**
-No merge, workflow dispatch, state change, schedule/flag change or accounting run
-is authorized by this document or by passing synthetic tests.
+Production release requires user authorization, reviewed main/validated SHA,
+successful CI and a production dry-run. Passing synthetic tests is not approval.
+Strict execution remains the default. A signed, explicitly approved nonexclusive
+execution policy is available only for this fixed run/attempt and state pair.
 
 ## Fixed evidence and operation
 
@@ -40,7 +40,7 @@ update, then compare the read-back. The interval from the last GET to PATCH is
 **not atomic**. Neither an additional GET nor `ReleaseOnlyTransport` fixes that.
 The two files also are not a single atomic transaction.
 
-This entry therefore requires *all* of the following for the entire operation:
+The default `execution_policy=strict` requires *all* of the following for the entire operation:
 
 * Owner actor/triggering actor, workflow_dispatch on reviewed main=validated,
   attempt1, no debug; shared `kakeibo-production`, cancel=false, queue=max.
@@ -59,8 +59,34 @@ This entry therefore requires *all* of the following for the entire operation:
 The signed freeze is an operational exclusion assumption, not remote proof that
 no credential holder can violate it. A noncooperating API writer can still race
 an unconditional Drive PATCH. Synthetic tests demonstrate this limit; production
-is NO-GO if the exclusive maintenance interval cannot actually be established.
+is NO-GO in strict mode if the exclusive maintenance interval cannot actually be established.
 No speculative ETag support or new distributed lock is claimed or introduced.
+
+### Explicit nonexclusive execution (this run/attempt only)
+
+`execution_policy=nonexclusive` retains the fixed evidence, all raw hashes,
+run/attempt/generations, owner/main/validated/nonce/freshness checks, common
+Actions lock, Cloud503 and existing legacy stops. At every boundary it still
+rejects any other active/queued/waiting/pending/requested Actions run. It requires
+`KAKEIBO_SCHEDULE_ENABLED=false`, `CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED=false`
+and `KAKEIBO_LEGACY_DISABLED=true`. It does not require disabling all 22 workflows,
+enumerating external writers or proving an external freeze/local Task stop.
+
+The signed attestation must add `execution_policy=nonexclusive`,
+`nonexclusive_authorized=true`, `target_run_id=40961220838`,
+`target_run_attempt=1`, `normal_apply_resume_authorized=false`, and
+`residual_risk=non_atomic_CAS_external_writer_race_accepted`. Its execution policy
+must match the workflow input. Omit `writers`, `external_writers_frozen` and
+`no_dispatch_until_explicit_resume`; an assertion `external_writers_frozen=true`
+is rejected in this mode. These fields document user approval and the accepted
+residual race, not proof of exclusivity. A writer can still enter between the last
+GET and unconditional PATCH, and the two updates are not atomic together.
+
+All integrity and one-attempt write controls are identical in both policies.
+Any observed conflict or mismatch stops immediately. After a partial release,
+neither automatic continuation nor another release is permitted. Lost responses
+must be independently inspected without resend or rollback. Normal apply and the
+old first window remain unapproved and must not be started after recovery.
 
 Ready state does not dispatch anything here. Normal apply is disabled externally
 before release, remains disabled afterwards, and there is no workflow_run,
@@ -72,9 +98,12 @@ separate instruction. The recovery does not restore workflow/flag settings.
 
 1. Review/merge only after separate approval and successful CI. Separately align
    reviewed main/validated. Keep the original bank53/parent1300 record unchanged.
-2. With explicit permission, establish the maintenance exclusion above. Record
+2. Select the explicitly authorized execution policy. For strict mode, establish
+   the maintenance exclusion above. Record
    the disabled workflow inventory, stopped Cloud/local writers and dispatch
-   freeze. Do not use old capsules or assert UNKNOWN requests were never sent.
+   freeze. For nonexclusive mode, retain the stop flags and check competing runs;
+   use the risk-acceptance fields above without a freeze claim. Do not use old
+   capsules or assert UNKNOWN requests were never sent.
 3. Seal the fixed private record and a fresh signed attestation with the existing
    SA RSA/AES capsule format. Attestation keys are `at_epoch`, `record_sha256`,
    `main_sha`, `operation_id` (fresh 32-hex nonce), `mode`, `release_authorized`,
@@ -89,8 +118,9 @@ separate instruction. The recovery does not restore workflow/flag settings.
    ID. The entry requires exactly one dispatch with that name and verifies the
    actual run ID/path/head/actor/event/attempt through GET. A reused nonce or a
    rerun is rejected. A release requires a new nonce and fresh signed capsule.
-5. After exclusion conditions and synthetic/CI review are satisfied, authorize
-   release separately. Confirm `RELEASE_40961220838`, then A prerequisites
+5. After the selected policy controls, dry-run and synthetic/CI review succeed,
+   use explicit user release authorization (which may already cover this sequence).
+   Confirm `RELEASE_40961220838`, then A prerequisites
    -> B bank54 -> C independent GET -> D parent1301 -> E independent GET, followed
    by an independent financial/PDF/SQLite/checkpoint observation and stop. If any
    boundary fails, keep the partial/unknown evidence and do not rerun release.
@@ -113,5 +143,6 @@ negative proof of the existing CAS limitation, not a race-safety pass.
 A local controller dry-run against the pinned saved record also passed with
 zero write attempts. It did not exercise live exclusion controls, re-download
 PDFs, dispatch Actions or invoke production recovery. The existing production
-and UI files are unchanged. Required workflow disablement/external freeze has
-not been performed: **production release remains NO-GO**.
+and UI files were unchanged. Strict workflow disablement/external freeze was
+not performed in that validation. Nonexclusive execution does not represent
+those conditions as established.

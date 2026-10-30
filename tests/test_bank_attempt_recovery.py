@@ -262,7 +262,7 @@ def test_noncooperating_writer_race_is_not_fixed_by_reread(rig):
     s.transports[r.SOURCES[0]].before_write = race
     s.run()
     assert intrusions and s.transports[r.SOURCES[0]].payload == s.after[r.SOURCES[0]]
-    # Thus exclusivity must be independently true; GET alone is insufficient.
+    # GET alone is insufficient; nonexclusive approval must accept this risk.
 
 
 def context():
@@ -310,6 +310,59 @@ def control_rig(tmp_path):
 
 def test_exclusive_controls(control_rig):
     control_rig.run()
+
+
+@pytest.fixture
+def nonexclusive_rig(control_rig):
+    s = control_rig
+    s.env['RECOVERY_EXECUTION_POLICY'] = 'nonexclusive'
+    for key in ('external_writers_frozen', 'no_dispatch_until_explicit_resume', 'writers'):
+        del s.att[key]
+    s.att.update(execution_policy='nonexclusive', nonexclusive_authorized=True,
+        residual_risk=r.NONEXCLUSIVE_RISK, target_run_id=r.FAILED_RUN, target_run_attempt=1,
+        normal_apply_resume_authorized=False)
+    s.data['actions/workflows?per_page=100']['workflows'][0]['state'] = 'active'
+    return s
+
+
+def test_nonexclusive_explicit_approval_without_false_freeze(nonexclusive_rig):
+    nonexclusive_rig.run()
+
+
+@pytest.mark.parametrize('change', ['approval', 'risk', 'target_run', 'target_attempt', 'policy',
+    'false_freeze', 'normal_apply', 'schedule', 'category', 'legacy', 'competing_run', 'failed_attempt'])
+def test_nonexclusive_rejects_unapproved_or_unsafe_context(nonexclusive_rig, change):
+    s = nonexclusive_rig
+    if change == 'approval': s.att['nonexclusive_authorized'] = False
+    if change == 'risk': s.att['residual_risk'] = ''
+    if change == 'target_run': s.att['target_run_id'] += 1
+    if change == 'target_attempt': s.att['target_run_attempt'] = 2
+    if change == 'policy': s.att['execution_policy'] = 'strict'
+    if change == 'false_freeze': s.att['external_writers_frozen'] = True
+    if change == 'normal_apply': s.att['normal_apply_resume_authorized'] = True
+    if change == 'schedule': s.env['KAKEIBO_SCHEDULE_ENABLED'] = 'true'
+    if change == 'category': s.env['CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED'] = 'true'
+    if change == 'legacy': s.env['KAKEIBO_LEGACY_DISABLED'] = 'false'
+    if change == 'competing_run':
+        s.data['actions/runs?status=in_progress&per_page=100'] = {'total_count': 1, 'workflow_runs': [{'id': 999}]}
+    if change == 'failed_attempt': s.data['actions/runs/' + str(r.FAILED_RUN)]['run_attempt'] = 2
+    with pytest.raises(StateError): s.run()
+
+
+@pytest.mark.parametrize('failure', ['', 'bank_after', 'parent_after', 'state_mismatch'])
+def test_nonexclusive_order_and_failure_boundaries(rig, nonexclusive_rig, failure):
+    s = rig
+    if failure == 'bank_after': s.transports[r.SOURCES[0]].fail = 'after'
+    if failure == 'parent_after': s.transports[r.SOURCES[1]].fail = 'after'
+    if failure == 'state_mismatch': s.transports[r.SOURCES[0]].payload = b'changed'
+    if failure:
+        with pytest.raises((ConnectionError, StateError)): s.run(guard=nonexclusive_rig.run)
+        expected = [] if failure == 'state_mismatch' else list(r.SOURCES[:1 if failure == 'bank_after' else 2])
+        assert writes(s) == expected
+        assert s.report['automatic_retry'] is False and s.report['rollback'] is False
+    else:
+        assert s.run(guard=nonexclusive_rig.run)['outcome'] == 'released_stop'
+        assert writes(s) == list(r.SOURCES)
 
 
 @pytest.mark.parametrize('change', ['active_workflow', 'queued_run', 'external', 'dispatch', 'expired',

@@ -1,8 +1,8 @@
 """Release ONLY run40961220838's bank53/parent1300; never run accounting.
 
-Existing CAS is not atomic: the production concurrency lock and exclusion of
-ALL other credential-bearing workflows/external writers are mandatory. A fresh
-GET is an integrity check, not a lock. Interrupted releases are inspection-only
+Existing CAS is not atomic. Strict mode requires exclusion of all writers;
+the target-only nonexclusive mode requires signed acceptance of that race risk.
+A fresh GET is an integrity check, not a lock. Interrupted releases are inspection-only
 on re-entry; there is no automatic resume, rollback, or source retry.
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ WORKFLOW = '.github/workflows/bank-attempt-40961220838-recovery.yml'
 FAILED_RUN = 40961220838
 FAILED_HEAD = '6f114abac3d8c3a537febeeea9fdfc07ff9716d9'
 RECORD_SHA256 = '21046b4101e6f2948ec7282b4998225af6753ab267348384a907495dd5325d87'
+NONEXCLUSIVE_RISK = 'non_atomic_CAS_external_writer_race_accepted'
 SOURCES = ('bank_pdf_drive', 'production_run')
 TABLES = ('取込データ', '収入明細', '支出明細', '_手入力受付')
 RANGES = ("'取込データ'!A:L", "'収入明細'!A:J", "'支出明細'!A:M", "'_手入力受付'!A:F")
@@ -138,7 +139,7 @@ def recover(record, transports, bindings, guard, observation, independent_read, 
     require(not any(done.values()))
     for source in SOURCES:
         report['stage'] = source + '_before_write'
-        guard()  # Actual exclusion gates, NOT just the subsequent GET.
+        guard()  # Recheck the selected policy and competing runs at every boundary.
         observation()
         require(all(transports[s].read() == old[s] for s in SOURCES))
         entry = record['states'][source]
@@ -230,6 +231,7 @@ def boundary(env):
         and env.get('KAKEIBO_SCHEDULE_ENABLED') == 'false' and env.get('KAKEIBO_LEGACY_DISABLED') == 'true'
         and env.get('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED') == 'false' and env.get('RUNNER_DEBUG') != '1'
         and env.get('RECOVERY_MODE') in {'dry_run', 'release'})
+    require(env.get('RECOVERY_EXECUTION_POLICY', 'strict') in {'strict', 'nonexclusive'})
     require(re.fullmatch('[0-9a-f]{32}', env.get('RECOVERY_OPERATION', '')))
     if env['RECOVERY_MODE'] == 'release':
         require(env.get('RECOVERY_CONFIRM') == 'RELEASE_40961220838')
@@ -264,11 +266,7 @@ def stopped_workflows(repo):
 
 
 def controls(env, attestation, repo, *, get=None, head=None, now=None):
-    """Shared workflow lock + disabled other entries + signed external freeze.
-
-    This is conditional exclusion, NOT an atomic Drive CAS. Credential holders
-    violating the signed freeze remain a residual risk; never claim otherwise.
-    """
+    """Strict exclusion or signed target-only nonexclusive risk acceptance."""
     import requests
     boundary(env)
     stamp = datetime.now(timezone.utc).timestamp() if now is None else now
@@ -278,12 +276,21 @@ def controls(env, attestation, repo, *, get=None, head=None, now=None):
         and attestation['operation_id'] == env['RECOVERY_OPERATION']
         and attestation['mode'] == env['RECOVERY_MODE']
         and attestation['release_authorized'] is (env['RECOVERY_MODE'] == 'release')
-        and attestation['external_writers_frozen'] is True
-        and attestation['no_dispatch_until_explicit_resume'] is True
         and attestation['configuration_unchanged'] is True)
-    writers = attestation['writers']
-    require(writers['KnownWriterCount'] == 0 and writers['Tasks']
-        and all(t['State'] == 'Disabled' for t in writers['Tasks']))
+    policy = env.get('RECOVERY_EXECUTION_POLICY', 'strict')
+    require(attestation.get('execution_policy', 'strict') == policy)
+    if policy == 'strict':
+        require(attestation['external_writers_frozen'] is True
+            and attestation['no_dispatch_until_explicit_resume'] is True)
+        writers = attestation['writers']
+        require(writers['KnownWriterCount'] == 0 and writers['Tasks']
+            and all(t['State'] == 'Disabled' for t in writers['Tasks']))
+    else:
+        require(attestation['nonexclusive_authorized'] is True
+            and attestation['residual_risk'] == NONEXCLUSIVE_RISK
+            and attestation['target_run_id'] == FAILED_RUN and attestation['target_run_attempt'] == 1
+            and attestation['normal_apply_resume_authorized'] is False
+            and attestation.get('external_writers_frozen') is not True)
     if get is None:
         session = requests.Session()
         session.headers.update(Authorization='Bearer ' + env['GH_TOKEN'], Accept='application/vnd.github+json')
@@ -309,10 +316,11 @@ def controls(env, attestation, repo, *, get=None, head=None, now=None):
     failed = get('actions/runs/' + str(FAILED_RUN))
     require(failed['head_sha'] == FAILED_HEAD and failed['run_attempt'] == 1
         and failed['status'] == 'completed' and failed['conclusion'] == 'failure')
-    workflows = get('actions/workflows?per_page=100')
-    require(workflows['total_count'] <= 100)
-    states = {x['path']: x['state'] for x in workflows['workflows']}
-    require(stopped_workflows(repo) and all(states.get(p) == 'disabled_manually' for p in stopped_workflows(repo)))
+    if policy == 'strict':
+        workflows = get('actions/workflows?per_page=100')
+        require(workflows['total_count'] <= 100)
+        states = {x['path']: x['state'] for x in workflows['workflows']}
+        require(stopped_workflows(repo) and all(states.get(p) == 'disabled_manually' for p in stopped_workflows(repo)))
     for status in ('in_progress', 'queued', 'waiting', 'pending', 'requested'):
         runs = get('actions/runs?status=' + status + '&per_page=100')
         require(runs['total_count'] <= 100 and all(str(r['id']) == env['GITHUB_RUN_ID'] for r in runs['workflow_runs']))
@@ -326,6 +334,8 @@ def main():
     try:
         env, repo = dict(os.environ), Path(__file__).resolve().parents[1]
         boundary(env)
+        report.update(execution_policy=env.get('RECOVERY_EXECUTION_POLICY', 'strict'),
+                      exclusive_execution_claimed=env.get('RECOVERY_EXECUTION_POLICY', 'strict') == 'strict')
         require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip() == env['GITHUB_SHA'])
         from .settings import service_account_source
         from cryptography.hazmat.primitives import serialization
@@ -340,7 +350,7 @@ def main():
         from .google_clients import read_only_drive_service, read_only_sheets_service
         from .bank_apply_readonly_inspect import GetOnly
         readonly, sheets = GetOnly(read_only_drive_service()), GetOnly(read_only_sheets_service())
-        # The write client is not constructed until exclusion/evidence pass.
+        # The write client is not constructed until signed controls/evidence pass.
         guard = lambda: controls(env, attestation, repo)
         guard()
         if env['RECOVERY_MODE'] == 'release':

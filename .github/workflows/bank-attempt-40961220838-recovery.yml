@@ -10,6 +10,12 @@ on:
         options: [dry_run, release]
         default: dry_run
         required: true
+      execution_policy:
+        description: Nonexclusive requires signed target-only authorization accepting the non-atomic CAS race
+        type: choice
+        options: [strict, nonexclusive]
+        default: strict
+        required: true
       expected_sha:
         description: Exact reviewed and validated main SHA
         type: string
@@ -19,7 +25,7 @@ on:
         type: string
         required: true
       recovery_capsule:
-        description: Encrypted fixed proof and fresh signed exclusion attestation
+        description: Encrypted fixed proof and fresh signed execution authorization
         type: string
         required: true
       confirm:
@@ -68,6 +74,7 @@ jobs:
       - name: Validate or release only the two fixed state payloads
         env:
           RECOVERY_MODE: ${{ inputs.mode }}
+          RECOVERY_EXECUTION_POLICY: ${{ inputs.execution_policy }}
           RECOVERY_OPERATION: ${{ inputs.operation_id }}
           RECOVERY_CONFIRM: ${{ inputs.confirm }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
