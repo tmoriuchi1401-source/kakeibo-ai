@@ -547,5 +547,35 @@ def test_main_fails_closed_without_printing_private_exception(monkeypatch, capsy
     with pytest.raises(SystemExit): r.main()
     output = capsys.readouterr().out
     assert 'synthetic-private-financial-body' not in output
-    report = json.loads(output)
+    report = json.loads(output.splitlines()[-1])
     assert report['success'] is False and report['bank_write_attempts'] == report['parent_write_attempts'] == 0
+
+
+@pytest.mark.parametrize('name', sorted(r.CHECKS))
+def test_diagnostic_labels_never_print_private_exception(name, capsys):
+    with pytest.raises(RuntimeError):
+        with r.checking(name):
+            raise RuntimeError('private-id-token-financial-body')
+    assert capsys.readouterr().out.splitlines() == [
+        'RECOVERY_CHECK ' + name + ' BEGIN', 'RECOVERY_CHECK ' + name + ' FAIL']
+
+
+@pytest.mark.parametrize('status,code', [(401,'HTTP_401'),(403,'HTTP_403'),(404,'HTTP_404'),
+    (429,'HTTP_429'),(503,'HTTP_503'),(418,'FAIL')])
+def test_diagnostic_http_codes_are_allowlisted(status, code, capsys):
+    import requests
+    response = requests.Response()
+    response.status_code = status
+    response._content = b'private-api-body'
+    with pytest.raises(requests.HTTPError):
+        with r.checking('GITHUB_VARIABLES'):
+            raise requests.HTTPError('private-url-token', response=response)
+    assert capsys.readouterr().out.splitlines() == [
+        'RECOVERY_CHECK GITHUB_VARIABLES BEGIN', 'RECOVERY_CHECK GITHUB_VARIABLES ' + code]
+
+
+def test_diagnostic_name_cannot_be_private_input(capsys):
+    with pytest.raises(StateError):
+        with r.checking('private-token'):
+            pass
+    assert capsys.readouterr().out == ''
