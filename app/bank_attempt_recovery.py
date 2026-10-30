@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -34,8 +34,31 @@ SOURCES = ('bank_pdf_drive', 'production_run')
 TABLES = ('取込データ', '収入明細', '支出明細', '_手入力受付')
 RANGES = ("'取込データ'!A:L", "'収入明細'!A:J", "'支出明細'!A:M", "'_手入力受付'!A:F")
 PDF_FIELDS = 'id,name,mimeType,createdTime,modifiedTime,parents,appProperties,properties,version,md5Checksum,size'
+CHECKS = frozenset({'ENV_SHA', 'SA_CREDENTIALS', 'CAPSULE', 'FIXED_EVIDENCE', 'DRIVE_BINDINGS',
+    'GITHUB_API', 'GITHUB_VARIABLES', 'GITHUB_CONTROLS', 'RUNS', 'CLOUD_503',
+    'FINANCIAL_READ', 'FINANCIAL_MATCH', 'PDF_MATCH', 'SQLITE_CHECKPOINT', 'STATE_MATCH'})
 
 
+@contextmanager
+def checking(name):
+    """Only allowlisted labels/statuses; never stringify an exception or body."""
+    require(name in CHECKS)
+    print('RECOVERY_CHECK ' + name + ' BEGIN', flush=True)
+    try:
+        yield
+    except Exception as error:
+        from requests.exceptions import HTTPError
+        code = 'FAIL'
+        if isinstance(error, HTTPError) and error.response is not None:
+            status = error.response.status_code
+            if status in {401, 403, 404, 429, 500, 502, 503, 504}:
+                code = 'HTTP_' + str(status)
+        print('RECOVERY_CHECK ' + name + ' ' + code, flush=True)
+        raise
+    print('RECOVERY_CHECK ' + name + ' OK', flush=True)
+
+
+@checking('FIXED_EVIDENCE')
 def evidence(record):
     require(sha(encode(record)) == RECORD_SHA256
         and record['kind'] == 'bank40961220838_state_release_only'
@@ -61,6 +84,7 @@ def evidence(record):
         and record['states'][SOURCES[0]]['file_id'] != record['states'][SOURCES[1]]['file_id'])
 
 
+@checking('SQLITE_CHECKPOINT')
 def verify_sqlite(bank, record):
     native = base64.b64decode(bank['files']['bank-recurring.sqlite3']['data'], validate=True)
     require(sha(native) == record['sqlite_sha256'])
@@ -89,6 +113,7 @@ def verify_sqlite(bank, record):
     require(not pending)
 
 
+@checking('STATE_MATCH')
 def inspect(record, transports, bindings):
     raw, values, done = {}, {}, {}
     for source in SOURCES:
@@ -174,6 +199,7 @@ def recover(record, transports, bindings, guard, observation, independent_read, 
     return report
 
 
+@checking('FINANCIAL_MATCH')
 def verify_financial(raw, record):
     require(sha(encode(raw)) == record['raw_financial_sha256'])
     ids = set(record['transaction_ids'])
@@ -191,11 +217,17 @@ def verify_financial(raw, record):
 
 def observe(record, drive, sheets):
     """Read-only clients only. Hashes cover ALL cells, including other IDs."""
-    response = sheets.spreadsheets().values().batchGet(spreadsheetId=record['states'][SOURCES[0]]['spreadsheet_id'],
-        ranges=list(RANGES), valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=0)
+    with checking('FINANCIAL_READ'):
+        response = sheets.spreadsheets().values().batchGet(spreadsheetId=record['states'][SOURCES[0]]['spreadsheet_id'],
+            ranges=list(RANGES), valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=0)
     require(len(response['valueRanges']) == 4)
     raw = dict(zip(TABLES, (x.get('values', []) for x in response['valueRanges']), strict=True))
     verify_financial(raw, record)
+    verify_pdfs(record, drive, raw)
+
+
+@checking('PDF_MATCH')
+def verify_pdfs(record, drive, raw):
     inbox = drive.files().list(q=f"'{record['inbox_folder']}' in parents and trashed=false and mimeType='application/pdf'",
         fields='files(id),nextPageToken', pageSize=6, supportsAllDrives=True, includeItemsFromAllDrives=True).execute(num_retries=0)
     require(not inbox.get('nextPageToken') and {p['id'] for p in inbox['files']} == {p['metadata']['id'] for p in record['pdfs']})
@@ -265,6 +297,7 @@ def stopped_workflows(repo):
                 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_GMAIL_TOKEN_JSON', 'GOOGLE_DRIVE_BACKUP_TOKEN_JSON'))}
 
 
+@checking('GITHUB_CONTROLS')
 def controls(env, attestation, repo, *, get=None, head=None, now=None):
     """Strict exclusion or signed target-only nonexclusive risk acceptance."""
     import requests
@@ -295,9 +328,12 @@ def controls(env, attestation, repo, *, get=None, head=None, now=None):
         session = requests.Session()
         session.headers.update(Authorization='Bearer ' + env['GH_TOKEN'], Accept='application/vnd.github+json')
         def get(path):
-            response = session.get('https://api.github.com/repos/' + REPOSITORY + '/' + path, timeout=30)
-            response.raise_for_status()
-            return response.json()
+            name = ('GITHUB_VARIABLES' if path.startswith('actions/variables') else
+                'RUNS' if path.startswith('actions/runs') or '/runs?' in path else 'GITHUB_API')
+            with checking(name):
+                response = session.get('https://api.github.com/repos/' + REPOSITORY + '/' + path, timeout=30)
+                response.raise_for_status()
+                return response.json()
     require(get('branches/main')['commit']['sha'] == env['GITHUB_SHA'])
     variables = get('actions/variables?per_page=100')
     require(variables['total_count'] <= 100)
@@ -321,11 +357,13 @@ def controls(env, attestation, repo, *, get=None, head=None, now=None):
         require(workflows['total_count'] <= 100)
         states = {x['path']: x['state'] for x in workflows['workflows']}
         require(stopped_workflows(repo) and all(states.get(p) == 'disabled_manually' for p in stopped_workflows(repo)))
-    for status in ('in_progress', 'queued', 'waiting', 'pending', 'requested'):
-        runs = get('actions/runs?status=' + status + '&per_page=100')
-        require(runs['total_count'] <= 100 and all(str(r['id']) == env['GITHUB_RUN_ID'] for r in runs['workflow_runs']))
+    with checking('RUNS'):
+        for status in ('in_progress', 'queued', 'waiting', 'pending', 'requested'):
+            runs = get('actions/runs?status=' + status + '&per_page=100')
+            require(runs['total_count'] <= 100 and all(str(r['id']) == env['GITHUB_RUN_ID'] for r in runs['workflow_runs']))
     head = head or requests.head
-    require(head('https://hga-auth-synthetic-efekwfyq3q-an.a.run.app', timeout=30, allow_redirects=False).status_code == 503)
+    with checking('CLOUD_503'):
+        require(head('https://hga-auth-synthetic-efekwfyq3q-an.a.run.app', timeout=30, allow_redirects=False).status_code == 503)
 
 
 def main():
@@ -333,20 +371,25 @@ def main():
                   bank_write_attempts=0, parent_write_attempts=0, automatic_retry=False, rollback=False)
     try:
         env, repo = dict(os.environ), Path(__file__).resolve().parents[1]
-        boundary(env)
+        with checking('ENV_SHA'):
+            boundary(env)
+            require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip() == env['GITHUB_SHA'])
         report.update(execution_policy=env.get('RECOVERY_EXECUTION_POLICY', 'strict'),
                       exclusive_execution_claimed=env.get('RECOVERY_EXECUTION_POLICY', 'strict') == 'strict')
-        require(subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip() == env['GITHUB_SHA'])
         from .settings import service_account_source
         from cryptography.hazmat.primitives import serialization
-        path, info = service_account_source()
-        info = info or json.loads(Path(path).read_bytes())
-        record, attestation = decode_capsule(env['RECOVERY_CAPSULE'],
-            serialization.load_pem_private_key(info['private_key'].encode(), password=None))
+        with checking('SA_CREDENTIALS'):
+            path, info = service_account_source()
+            info = info or json.loads(Path(path).read_bytes())
+            key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
+        with checking('CAPSULE'):
+            record, attestation = decode_capsule(env['RECOVERY_CAPSULE'], key)
         from .private_state_bindings import decode_environment
-        env, _ = decode_environment(env)
-        bindings = {s: StateBinding(s, env['SPREADSHEET_ID'], env['KAKEIBO_STATE_FOLDER_ID'], env[name])
-            for s, name in [(SOURCES[0], 'BANK_STATE_FILE_ID'), (SOURCES[1], 'KAKEIBO_RUN_LEDGER_FILE_ID')]}
+        with checking('DRIVE_BINDINGS'):
+            env, _ = decode_environment(env)
+            bindings = {s: StateBinding(s, env['SPREADSHEET_ID'], env['KAKEIBO_STATE_FOLDER_ID'], env[name])
+                for s, name in [(SOURCES[0], 'BANK_STATE_FILE_ID'), (SOURCES[1], 'KAKEIBO_RUN_LEDGER_FILE_ID')]}
+            require(all(bindings[s].reference == record['states'][s]['binding_reference'] for s in SOURCES))
         from .google_clients import read_only_drive_service, read_only_sheets_service
         from .bank_apply_readonly_inspect import GetOnly
         readonly, sheets = GetOnly(read_only_drive_service()), GetOnly(read_only_sheets_service())
