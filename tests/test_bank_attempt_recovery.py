@@ -458,6 +458,27 @@ def test_pdf5_parser497_and_financial_observer_is_read_only(observer_rig):
     observer_rig.observe()
 
 
+def test_observer_constructs_four_separate_sheets_ranges(observer_rig, monkeypatch):
+    # Exercise the real discovery serializer offline: tuples become ONE invalid
+    # A1 range in googleapiclient, while repeated parameters require a list.
+    from urllib.parse import parse_qs, urlparse
+    from google.auth.credentials import AnonymousCredentials
+    from googleapiclient.discovery import build
+    from googleapiclient.http import HttpRequest
+    o = observer_rig
+    sheets = build('sheets', 'v4', credentials=AnonymousCredentials(), static_discovery=True)
+    seen = []
+    def execute(request, **kwargs):
+        assert request.method == 'GET' and kwargs == {'num_retries': 0}
+        ranges = parse_qs(urlparse(request.uri).query)['ranges']
+        assert ranges == list(r.RANGES)
+        seen.append(ranges)
+        return {'valueRanges': [{'values': o.s.raw[name]} for name in r.TABLES]}
+    monkeypatch.setattr(HttpRequest, 'execute', execute)
+    r.observe(o.s.record, o.Drive(), sheets)
+    assert len(seen) == 1
+
+
 @pytest.mark.parametrize('mutation', ['metadata', 'content', 'missing_pdf', 'parsed_IDs', 'financial', 'new6_posting'])
 def test_observer_rejects_each_persistent_mismatch(observer_rig, mutation):
     o = observer_rig

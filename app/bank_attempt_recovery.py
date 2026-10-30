@@ -192,7 +192,7 @@ def verify_financial(raw, record):
 def observe(record, drive, sheets):
     """Read-only clients only. Hashes cover ALL cells, including other IDs."""
     response = sheets.spreadsheets().values().batchGet(spreadsheetId=record['states'][SOURCES[0]]['spreadsheet_id'],
-        ranges=RANGES, valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=0)
+        ranges=list(RANGES), valueRenderOption='UNFORMATTED_VALUE').execute(num_retries=0)
     require(len(response['valueRanges']) == 4)
     raw = dict(zip(TABLES, (x.get('values', []) for x in response['valueRanges']), strict=True))
     verify_financial(raw, record)
