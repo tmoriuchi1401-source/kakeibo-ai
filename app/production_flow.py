@@ -35,6 +35,7 @@ DRIVE_SCHEDULE_SCOPES = {
     "drive_paypay": frozenset({"paypay"}),
     "drive_bank": frozenset({"bank"}),
 }
+MANUAL_SOURCE_SCOPES = {"amazon_catchup": frozenset({"amazon"})}
 
 
 def verify_execution_boundary(env: dict, head: str) -> None:
@@ -46,7 +47,10 @@ def verify_execution_boundary(env: dict, head: str) -> None:
         raise StateError("production_main_boundary_required")
 
 
-def command(source: str, *, apply: bool, canary_target: str = "", money_canary: bool = False) -> list[str]:
+def command(source: str, *, apply: bool, canary_target: str = "", money_canary: bool = False,
+            amazon_catchup: bool = False) -> list[str]:
+    if amazon_catchup and (source != "amazon" or canary_target or money_canary):
+        raise StateError("amazon_catchup_scope_other_source_forbidden")
     if canary_target and (source not in {"amazon","aupay_card"} or not apply or
                           not re.fullmatch(r"AM-[0-9a-f]{32}", canary_target)):
         raise StateError("amazon_canary_target_invalid")
@@ -61,6 +65,7 @@ def command(source: str, *, apply: bool, canary_target: str = "", money_canary: 
     cli = [sys.executable, "-m", "app.cli"]
     if source == "amazon":
         args = cli + ["amazon-gmail-recurring", "--apply" if apply else "--dry-run"]
+        if amazon_catchup:args.append("--catch-up")
         if canary_target:
             args += ["--apply-limit", "1", "--approved-target", canary_target]
         return args
@@ -74,7 +79,8 @@ def command(source: str, *, apply: bool, canary_target: str = "", money_canary: 
     return cli + [(COMMON_COMMANDS if apply else COMMON_PREVIEWS)[source]]
 
 
-def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", money_canary: bool = False) -> dict:
+def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", money_canary: bool = False,
+           amazon_catchup: bool = False) -> dict:
     if source=='receipts' and apply and env.get('GITHUB_ACTIONS')=='true' and not env.get('RECEIPT_CONFIRMATION_BINDING'):
         raise StateError('receipt_confirmation_binding_required')
     if source=='receipts' and apply and env.get('RECEIPT_CONFIRMATION_BINDING') and not env.get('RECEIPT_SCAN_PLAN'):
@@ -108,7 +114,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
             source == "receipt_reimport" and env.get("RECEIPT_REIMPORT_OPERATION") == "replay"):
         child_env.pop("GEMINI_API_KEY", None)
     try:
-        result = subprocess.run(command(source, apply=apply, canary_target=canary_target,money_canary=money_canary), cwd=REPO, env=child_env,
+        result = subprocess.run(command(source, apply=apply, canary_target=canary_target,money_canary=money_canary,
+            **({"amazon_catchup":True} if amazon_catchup else {})), cwd=REPO, env=child_env,
                                 capture_output=True, text=True, encoding="utf-8", timeout=900)
     except subprocess.TimeoutExpired:
         raise StateError('source_command_timed_out') from None
@@ -245,7 +252,8 @@ def source_environment(source: str, directory: Path, env: dict) -> dict:
 
 
 def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
-             ledger: ProductionLedger | None = None, canary_target: str = "", canary_source: str = "amazon", money_canary: bool = False) -> dict:
+             ledger: ProductionLedger | None = None, canary_target: str = "", canary_source: str = "amazon", money_canary: bool = False,
+             amazon_catchup: bool = False) -> dict:
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and not money_canary):raise StateError("money_canary_source_invalid")
     if money_canary and apply and not canary_target:raise StateError("money_canary_target_required")
     if canary_target:
@@ -273,6 +281,7 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
         state_env = {"amazon": "AMAZON_STATE_DIR", "aupay_card": "AUPAY_CARD_STATE_DIR", "bank": "BANK_PDF_STATE_DIR"}[source]
         prepared[state_env] = str(local)
         extra = ({"canary_target": canary_target,"money_canary":True} if source==canary_source and (canary_target or money_canary) else {})
+        if amazon_catchup and source == "amazon":extra["amazon_catchup"]=True
         return run_durable_source(store, local, lambda _path: invoke(source, apply=effective_apply, env=prepared, **extra), apply=effective_apply)
     def run(source):
         if not apply:
@@ -301,6 +310,10 @@ def validate_scope(args) -> None:
     canary_source=getattr(args,"canary_source","amazon")
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and args.scope!="amazon_canary"):
         raise StateError("money_canary_source_invalid")
+    if args.scope == "amazon_catchup" and (args.bank_apply or args.amazon_target
+            or getattr(args,"receipt_store","") or getattr(args,"receipt_manifest","")
+            or getattr(args,"projection_bootstrap",False)):
+        raise StateError("amazon_catchup_scope_other_source_forbidden")
     if args.scope in {"daily", "ledger_order", "categories"}:
         if (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
                 or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)):
@@ -347,7 +360,7 @@ def finish_ledger_updates(env, result, *, apply):
 
 def needs_ledger_order(scope: str, report: dict, *, bank_apply: bool) -> bool:
     """Only accounting writes from an isolated Drive run need the final sort."""
-    if scope == "drive_paypay":
+    if scope in {"drive_paypay", "amazon_catchup"}:
         return False  # Intake rows are handled by the next existing core run.
     if scope == "drive_bank":
         return bank_apply and report["sources"]["bank"]["counts"].get("written", 0) > 0
@@ -360,7 +373,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("preview", "apply"), default="preview")
     parser.add_argument("--bank-apply", action="store_true")
-    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories", *DRIVE_SCHEDULE_SCOPES), default="all")
+    parser.add_argument("--scope", choices=("all", "amazon_canary", "receipt_reimport", "receipt_confirmation", "receipts", "projection", "daily", "ledger_order", "categories", *DRIVE_SCHEDULE_SCOPES, *MANUAL_SOURCE_SCOPES), default="all")
     parser.add_argument("--projection-bootstrap", action="store_true")
     parser.add_argument("--amazon-target", default="")
     parser.add_argument("--canary-source",choices=("amazon","aupay_card"),default="amazon")
@@ -375,6 +388,8 @@ def main():
         env = dict(os.environ)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
         verify_execution_boundary(env, head)
+        if args.scope == "amazon_catchup" and env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+            raise StateError("amazon_catchup_manual_required")
         from .private_state_bindings import decode_environment
         bank_stage = 'bank_parent_bindings'
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
@@ -453,6 +468,8 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
+        if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
+            raise StateError("source_reconciliation_required")
         daily_counts={}
         category_counts={}
         if args.scope == "all":
@@ -465,12 +482,14 @@ def main():
         with tempfile.TemporaryDirectory(prefix="kakeibo-production-") as directory:
             bank_stage = 'bank_parent_sources'
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
-                               ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary")
+                               ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary",
+                               **({"amazon_catchup":True} if args.scope=="amazon_catchup" else {}))
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
                                     amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,
                                     receipts_only=args.scope == "receipts",
-                                    selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope),
-                                    require_omitted_ready=args.scope == "core")
+                                    selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope, MANUAL_SOURCE_SCOPES.get(args.scope)),
+                                    require_omitted_ready=args.scope == "core",
+                                    **({"allow_amazon_partial":True} if args.scope=="amazon_catchup" else {}))
             if args.mode == "preview":
                 bank_stage = 'bank_parent_authority'
                 report["authority"] = preview_authority_summary(Path(directory), report["sources"], env)

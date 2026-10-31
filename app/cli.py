@@ -298,6 +298,7 @@ def main():
     agr.add_argument("--authority-file",default=os.getenv("AMAZON_RECURRING_AUTHORITY_FILE", ""))
     agr.add_argument("--apply-limit",type=int)
     agr.add_argument("--now")
+    agr.add_argument("--catch-up",action="store_true")
     agr.add_argument("--approved-target")
     agr.add_argument("--expected-event-rows",type=int)
     agr.add_argument("--expected-header-rows",type=int)
@@ -1058,6 +1059,8 @@ def main():
         ),ensure_ascii=False,sort_keys=True))
     elif args.cmd=="amazon-gmail-recurring":
         try:
+            if args.catch_up and args.now:
+                raise RuntimeError("amazon_catchup_clock_override_forbidden")
             from .amazon_money_runtime import money_enabled
             if not money_enabled():raise RuntimeError("amazon_money_migration_required")
             s=Settings(); s.validate(need_gmail=True,need_sheet=True)
@@ -1087,6 +1090,7 @@ def main():
                 approved_reference=args.approved_target,
                 expected_event_rows=args.expected_event_rows,
                 expected_header_rows=args.expected_header_rows,
+                **({"catch_up":True} if args.catch_up else {}),
             )
         except Exception as exc:
             result={

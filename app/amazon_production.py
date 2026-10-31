@@ -172,6 +172,7 @@ def build_incremental_amazon_window(
     policy: AmazonRecurringAuthority,
     state: SqliteRecurringRunState,
     now: datetime,
+    *, catch_up: bool = False,
 ) -> FixedSourceWindow:
     policy.validate()
     end = now.astimezone(JST).replace(microsecond=0)
@@ -180,12 +181,16 @@ def build_incremental_amazon_window(
     start = boundary - timedelta(seconds=policy.overlap_seconds)
     if start >= end:
         raise RuntimeError("amazon_incremental_window_not_started")
+    if catch_up:
+        end = min(end, start + timedelta(seconds=policy.max_window_seconds))
+        if end <= boundary:
+            raise RuntimeError("amazon_checkpoint_did_not_advance")
     if (end - start).total_seconds() > policy.max_window_seconds:
         raise RuntimeError("amazon_incremental_window_exceeds_authority")
     return fixed_amazon_window(start, end)
 
 
-def fetch_bounded_amazon_messages(service, window: FixedSourceWindow, max_messages: int):
+def fetch_bounded_amazon_messages(service, window: FixedSourceWindow, max_messages: int, *, strict=False):
     if not (1 <= max_messages <= MAX_AUTHORITY_MESSAGES):
         raise ValueError("amazon_max_messages_invalid")
     api = service.users().messages()
@@ -193,12 +198,19 @@ def fetch_bounded_amazon_messages(service, window: FixedSourceWindow, max_messag
         userId="me", q=window.query_representation, maxResults=max_messages,
     ).execute()
     items = response.get("messages", [])
+    if strict and (response.get("nextPageToken") or len(items) > max_messages
+                   or any(not isinstance(item.get("id"), str) or not item["id"].strip()
+                          or item["id"].strip() != item["id"] for item in items)
+                   or len({item["id"] for item in items}) != len(items)):
+        return [], False
     messages = []
     for item in items:
         message_id = str(item.get("id") or "")
         if not message_id:
             continue
         raw = api.get(userId="me", id=message_id, format="raw").execute()
+        if strict and (not raw.get("raw") or raw.get("id", message_id) != message_id):
+            raise RuntimeError("amazon_gmail_collection_incomplete")
         from .amazon_gmail_preview import _raw_bytes
         messages.append(GmailRawMessage(
             gmail_message_id=message_id,
@@ -473,17 +485,23 @@ def run_amazon_recurring(
     approved_reference: str | None = None,
     expected_event_rows: int | None = None,
     expected_header_rows: int | None = None,
+    catch_up: bool = False,
 ) -> dict[str, object]:
     policy = authority_provider.load()
     if not (policy.valid_from <= now < policy.expires_at):
         raise RuntimeError("amazon_authority_expired_or_not_started")
     if db.sid != policy.expected_spreadsheet_id:
         raise RuntimeError("amazon_target_spreadsheet_mismatch")
-    window = build_incremental_amazon_window(policy, state, now)
-    messages, complete = fetch_bounded_amazon_messages(
-        gmail_service, window, policy.max_messages,
-    )
     from .amazon_money_runtime import money_enabled,money_writer,run_amazon_money_messages
+    if catch_up and (not money_enabled() or approved_reference is not None
+                     or expected_event_rows is not None or expected_header_rows is not None
+                     or policy.max_window_seconds > 72 * 3600 or policy.max_purchases > 3):
+        raise RuntimeError("amazon_catchup_authority_invalid")
+    boundary = state.successful_window_end() or policy.initial_start
+    window = build_incremental_amazon_window(policy, state, now, **({"catch_up": True} if catch_up else {}))
+    messages, complete = fetch_bounded_amazon_messages(
+        gmail_service, window, policy.max_messages, **({"strict": True} if catch_up else {}),
+    )
     if money_enabled():
         if not complete:raise RuntimeError("amazon_gmail_collection_incomplete")
         if any(v is not None for v in (expected_event_rows,expected_header_rows)):
@@ -491,12 +509,17 @@ def run_amazon_recurring(
         if apply_limit is not None and not 1<=apply_limit<=policy.max_purchases:
             raise RuntimeError("amazon_apply_limit_exceeds_authority")
         result=run_amazon_money_messages(money_writer(db),messages,dry_run=dry_run,
-            limit=apply_limit or policy.max_purchases,canary_target=approved_reference)
+            limit=apply_limit or policy.max_purchases,canary_target=approved_reference,
+            **({"catch_up": True} if catch_up else {}))
         advance=not dry_run and approved_reference is None
         summary={"schema_version":1,"run_id":str(uuid4()),"source_window_start":window.start.isoformat(),
                  "source_window_end":window.end.isoformat(),"source_timezone":window.timezone_name,
                  "found":len(messages),"fetched":len(messages),"checkpoint_advanced":advance,**result}
+        if catch_up:
+            summary["catch_up_pending"] = int(window.end < now.astimezone(JST).replace(microsecond=0))
         state.record(summary,advance_checkpoint=advance)
+        if catch_up and advance and (state.successful_window_end() != window.end or window.end <= boundary):
+            raise RuntimeError("amazon_checkpoint_did_not_advance")
         return summary
     plan = build_amazon_write_plan(messages, db, window=window, collection_complete=complete)
     original_purchase_count = len(plan.purchases)

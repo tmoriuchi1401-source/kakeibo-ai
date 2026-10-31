@@ -277,7 +277,7 @@ def run_durable_source(store: DurableState, directory: Path,
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
                    preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False,
                    canary_source: str = "amazon", selected_sources: frozenset[str] | None = None,
-                   require_omitted_ready: bool = False) -> dict:
+                   require_omitted_ready: bool = False, allow_amazon_partial: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -290,6 +290,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                                          or amazon_canary or receipts_only):
         raise StateError('invalid_source_scope')
     if require_omitted_ready and selected_sources is None:
+        raise StateError('invalid_source_scope')
+    if allow_amazon_partial and selected_sources != frozenset({"amazon"}):
         raise StateError('invalid_source_scope')
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and not amazon_canary):raise StateError("money_canary_source_invalid")
     outcomes = {}
@@ -325,6 +327,8 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                     outcome["file_statuses"] = safe_file_statuses(result.get("file_statuses", []))
                 if source == "bank" and counts.get("catch_up_pending"):
                     outcome.update(status="partial", error="bank_catch_up_pending")
+                if source == "amazon" and counts.get("catch_up_pending") and not preview:
+                    outcome.update(status="partial", error="" if allow_amazon_partial else "amazon_catch_up_pending")
                 if not preview:
                     outcome["last_success"] = datetime.now(timezone.utc).isoformat()
             except Exception as error:
@@ -340,5 +344,7 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                     outcome.update(error.bank_diagnostics)
         outcome["duration_seconds"] = round(monotonic() - started, 3)
         outcomes[source] = outcome
-    return {"schema": 1, "success": all(item["status"] == "success" for item in outcomes.values()),
+    return {"schema": 1, "success": all(item["status"] == "success" or (
+                allow_amazon_partial and name == "amazon" and item["status"] == "partial" and not item["error"])
+                for name, item in outcomes.items()),
             "sources": outcomes}
