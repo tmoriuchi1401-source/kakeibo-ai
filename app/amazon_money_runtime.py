@@ -12,11 +12,11 @@ def money_enabled(env=None):
     return value=="confirmed-v1"
 
 
-def money_writer(db,env=None):
+def money_writer(db,env=None,*,preview_only=False):
     from .projection_store import store_from_environment
     env=os.environ if env is None else env
     if not money_enabled(env):return None
-    store=store_from_environment(db.sid,env)
+    store=store_from_environment(db.sid,env,**({"read_only":True} if preview_only else {}))
     if store is None:raise MoneyError("money_projection_binding_required")
     validate_book(store.read("money"))
     from .monthly_projection_sheets import SheetsLedgerReader
@@ -79,15 +79,20 @@ def _catchup_batch(writer, records, limit):
     return list(unique.values()),duplicates
 
 
-def run_money_records(writer,records,*,dry_run,limit,reject_pending=False):
+def run_money_records(writer,records,*,dry_run,limit,reject_pending=False,aggregate_preview=False):
+    if aggregate_preview and not dry_run:raise MoneyError("money_aggregation_requires_preview")
     # Preview also uses the pinned migration book. No bootstrap by normal runs.
     if reject_pending:_require_closed_money(writer._book())
     if dry_run:
         decisions=writer.preview(records)
-        return {"money_eligible":sum(d.action in {"post","resume"} for d in decisions),
+        result = {"money_eligible":sum(d.action in {"post","resume"} for d in decisions),
                 "money_review":sum(d.action=="review" for d in decisions),
                 "money_supplement":sum(d.action=="supplement" for d in decisions),
                 "money_posted":0,"expense_rows_written":0,"import_rows_written":0}
+        if aggregate_preview:
+            from .aupay_card_preview_totals import money_totals
+            result["money_aggregation"] = money_totals(decisions)
+        return result
     if records and hasattr(writer,"prepare"):writer.prepare()
     book=writer._book()
     if reject_pending:_require_closed_money(book)
