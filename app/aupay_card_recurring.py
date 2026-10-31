@@ -302,6 +302,7 @@ def run_recurring_ingestion(
             sleeper=sleeper, request_interval=0 if sleeper is not None else 0.25,
             **money_args,
         )
+        money_input_count = len(money_records)
         summary.update(found=collection["found"], fetched=collection["fetched"])
         if (not collection["collection_complete"] or (strict is not None and (
                 strict.listed != strict.fetched or collection["found"] != len(strict.listed)
@@ -314,7 +315,8 @@ def run_recurring_ingestion(
             state.record(summary,advance_checkpoint=False)
             return summary
         existing = db.get("取込データ!A2:L")
-        plan = build_canonical_apply_plan(collection, reconcile_transactions(transactions, existing))
+        reconciliation = reconcile_transactions(transactions, existing)
+        plan = build_canonical_apply_plan(collection, reconciliation)
         statuses, amazon_review = _classify_candidates(plan, db)
         summary.update(
             new_eligible=len(statuses),
@@ -337,7 +339,13 @@ def run_recurring_ingestion(
         if monetary is not None:
             from .amazon_money_notices import save_notices
             summary.update(save_notices(monetary.store,money_notices,dry_run=dry_run))
-            summary.update(run_money_records(monetary,money_records,dry_run=dry_run,limit=policy.max_batch_size))
+            summary.update(run_money_records(monetary,money_records,dry_run=dry_run,limit=policy.max_batch_size,
+                **({"aggregate_preview":True} if preview_window is not None else {})))
+        if preview_window is not None:
+            from .aupay_card_preview_totals import build_totals
+            summary["aggregation"] = build_totals(plan, reconciliation, statuses, collection,
+                money=summary.pop("money_aggregation", None), money_input_count=money_input_count,
+                money_notice_count=summary.get("money_notice_review", 0))
         if not statuses:
             summary["status"] = "dry_run_noop" if dry_run else "noop"
             if dry_run and summary.get("money_eligible",0):summary["status"]="dry_run_ready"

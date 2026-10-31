@@ -224,7 +224,14 @@ def checked_preview(observation, execute):
     require(all(type(v) is int and v >= 0 for v in counts.values())
             and counts["found"] == counts["fetched"] <= 500
             and counts["new_eligible"] + counts["money_eligible"] <= 100, "summary_limits_invalid")
-    return {"counts": counts, "before": before, "after": after,
+    from .aupay_card_preview_totals import public_totals
+    try:
+        aggregation = public_totals(result.get("aggregation"))
+    except Exception:
+        raise Stop("preview_aggregation_invalid") from None
+    require(aggregation["ordinary"]["new"]["count"] == counts["new_eligible"]
+            and aggregation["money"]["new"]["count"] == counts["money_eligible"], "preview_aggregation_count_mismatch")
+    return {"counts": counts, "aggregation": aggregation, "before": before, "after": after,
             "financial_write_requests": 0, "checkpoint_updates": 0,
             "persistent_state_saves": 0, "other_source_executions": 0,
             "local_preview_history": "one summary in disposable SQLite only; discarded"}

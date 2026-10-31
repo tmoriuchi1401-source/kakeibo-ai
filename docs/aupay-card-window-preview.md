@@ -228,3 +228,43 @@ separately in the PR checks; no extra production workflow was dispatched.
 
 This Draft update performs no merge, validated change, workflow enable or
 production dispatch. NO-GO and core Apply prohibition remain in effect.
+
+## Preview集計出力（本番実行前の補完）
+
+`aggregation`は、既存のcanonical候補分類と同じ金銭Preview判断結果から作る
+純粋な集計である。分類器の再実行、追加のGmail/Sheets取得、writer/Apply呼出し、
+checkpoint更新は集計に使わない。金銭判断は既存の`preview`呼出し1回の結果を
+再利用する。既存の通常run/Apply出力は変更せず、明示窓Previewだけに追加する。
+
+- `candidates`は分類済みcanonical取引＋一意な金銭recordの件数・合計金額。
+  同一入力や再送を足し直さず、解析できなかったメールを含む総額とは扱わない。
+  `candidate_basis`にこの範囲を出力する。
+- `by_classification`は新規`new`、既存重複`duplicate`、保留`held`、
+  対象外`excluded`、既存金融への照合`linked`、振替`transfer`、補足`supplement`の
+  互いに重ならない分類ごとの件数・金額。`ordinary`と`money`には内訳を出力する。
+  金額は全て整数円、購入を正・返金を負とする符号付き合計で、絶対額へ変換しない。
+- `planned_financial_writes.transactions`は新規分類の予定取引件数・金額。
+  `import_rows`/`expense_rows`は既存判断から投影できる予定対象行数・金額であり、
+  Apply時の再読取りで判明する実際の不足行数やHTTP要求数を保証しない。
+  通常カード候補は取込行のみで、共通stageの後続支出生成はこのPreviewに含まない。
+  金銭取引では同じ金額が取込行と支出行に現れるため、行数合計`all_rows.count`と
+  取引金額を分ける。テーブル横断の行金額は足さず、`all_rows.amount_yen=null`と
+  `overlapping_table_amounts_not_additive`を示す。
+- 予定HTTP write要求数`requests`は既存分類だけから算出せず、`count=null`、
+  理由`request_count_requires_write_readback`を出力する。writerを起動して数えない。
+- `actual_financial_writes`はPreviewの実要求数・実行数・金額を0として区別する。
+  出力前に既存の実writeカウンタ0、writer未起動、state/金融データ前後一致を要求する。
+  これは金融書込みをしないPreviewであり、予定件数が正でも反映成功を意味しない。
+- `unquantified`には解析保留・拒否・identity衝突・入力重複・非canonical再送・
+  金銭通知保留等の既存件数を出力する。対応金額が分類結果に残らない場合は
+  `amount_yen=null`、`classification_amount_not_available`とし、0円と推測しない。
+  メール数・行数・再送数には重なりがあるので、この欄は候補総数へ加算しない。
+  金銭resumeの残り行数はintentの照合なしに出せず、
+  `resume_requires_intent_readback`とする（明示窓入口は既存pendingを先に拒否する）。
+  支出配分が判断結果にない場合は`expense_allocation_not_in_preview`とする。
+
+公開直前に閉じたschema、整数型、既知の理由code、分類合計・予定値の整合性を
+検証し、任意の追加keyや自由文を拒否する。店舗名・本文・取引ID・個別金額の一覧、
+元の判断理由文字列は出力しない。集計が欠落/不正なら成功結果として公開しない。
+集計テストは新規・重複の混在、保留・負額、金銭分割行、未算出理由、公開CLI全体の
+詳細非出力と金融/ストア/checkpoint非更新を合成データで確認する。
