@@ -52,8 +52,36 @@ def money_writer(db,env=None):
     return writer
 
 
-def run_money_records(writer,records,*,dry_run,limit):
+def _require_closed_money(book):
+    if any(item.get("state") not in {"posted","linked","transfer","supplement","review"}
+           for item in book["records"].values()):
+        raise MoneyError("money_reconciliation_required")
+
+
+def _catchup_batch(writer, records, limit):
+    """Freeze identities and reject overflow/unknown intents before any write."""
+    book=writer._book();_require_closed_money(book)
+    unique={};duplicates=0
+    for record in records:
+        record.validate()
+        previous=unique.get(record.money_id)
+        if previous is not None:
+            if previous.fingerprint!=record.fingerprint:raise MoneyError("money_identity_conflict")
+            duplicates+=1
+        else:unique[record.money_id]=record
+    pending=[]
+    for record in unique.values():
+        if decide(record,book).action=="duplicate":
+            duplicates+=1
+            if book["records"][record.money_id]["state"]=="posted":writer.verify_posted(record)
+        else:pending.append(record)
+    if len(pending)>limit:raise MoneyError("money_batch_limit_exceeded")
+    return list(unique.values()),duplicates
+
+
+def run_money_records(writer,records,*,dry_run,limit,reject_pending=False):
     # Preview also uses the pinned migration book. No bootstrap by normal runs.
+    if reject_pending:_require_closed_money(writer._book())
     if dry_run:
         decisions=writer.preview(records)
         return {"money_eligible":sum(d.action in {"post","resume"} for d in decisions),
@@ -62,6 +90,7 @@ def run_money_records(writer,records,*,dry_run,limit):
                 "money_posted":0,"expense_rows_written":0,"import_rows_written":0}
     if records and hasattr(writer,"prepare"):writer.prepare()
     book=writer._book()
+    if reject_pending:_require_closed_money(book)
     pending=[r for r in records if decide(r,book).action!="duplicate"]
     return writer.apply(pending,limit=limit)
 
@@ -90,7 +119,7 @@ def run_money_canary(writer,records,*,dry_run,target=""):
     return {**result,"money_canary_selected":1,"money_canary_verified":1,"money_canary_replay":int(posted)}
 
 
-def run_amazon_money_messages(writer,messages,*,dry_run,limit,canary_target=None):
+def run_amazon_money_messages(writer,messages,*,dry_run,limit,canary_target=None,catch_up=False):
     from .amazon_money_mail import amazon_money_outcome
     from .amazon_money_notices import save_notices
     records=[];notices=[]
@@ -98,9 +127,13 @@ def run_amazon_money_messages(writer,messages,*,dry_run,limit,canary_target=None
         record,notice=amazon_money_outcome(message.raw_mime,gmail_id=message.gmail_message_id)
         if record is not None:records.append(record)
         if notice is not None:notices.append(notice)
+    if catch_up:
+        records,duplicates=_catchup_batch(writer,records,limit)
     notice_counts=save_notices(writer.store,notices,dry_run=dry_run or canary_target is not None)
     result=(run_money_canary(writer,records,dry_run=dry_run,target=canary_target)
-            if canary_target is not None else run_money_records(writer,records,dry_run=dry_run,limit=limit))
+            if canary_target is not None else run_money_records(writer,records,dry_run=dry_run,limit=limit,
+                **({"reject_pending":True} if catch_up else {})))
+    if catch_up:result["money_duplicate"]=duplicates
     return {**result,**notice_counts,"event_rows_written":0,"header_rows_written":0,
             "status":"dry_run_ready" if dry_run else "complete","failure":0}
 

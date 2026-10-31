@@ -23,7 +23,7 @@ on:
       scope:
         description: All stages, scheduled-source scopes, or isolated maintenance
         type: choice
-        options: [all, core, drive_receipts, drive_paypay, drive_bank, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
+        options: [all, core, drive_receipts, drive_paypay, drive_bank, amazon_catchup, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
         default: all
         required: true
       amazon_target:
