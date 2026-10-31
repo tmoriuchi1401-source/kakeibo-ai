@@ -248,6 +248,8 @@ def main():
     cgr.add_argument("--audit-key-file",default=os.getenv("AUPAY_CARD_AUDIT_KEY_FILE", ""))
     cgr.add_argument("--authority-file",default=os.getenv("AUPAY_CARD_RECURRING_AUTHORITY_FILE", ""))
     cgr.add_argument("--dry-run",action="store_true")
+    cgr.add_argument("--preview-window-start",default="")
+    cgr.add_argument("--preview-window-end",default="")
     cgr.add_argument("--money-canary",action="store_true")
     cgr.add_argument("--money-target",default="")
     acp=sub.add_parser("aupay-csv-preview"); acp.add_argument("csv")
@@ -904,6 +906,17 @@ def main():
         ))
     elif args.cmd=="card-gmail-recurring":
         try:
+            preview_window = None
+            if args.preview_window_start or args.preview_window_end:
+                if not args.dry_run:
+                    raise RuntimeError("explicit_card_window_requires_preview")
+                if not (args.preview_window_start and args.preview_window_end):
+                    raise RuntimeError("preview_window_both_bounds_required")
+                if args.money_canary or args.money_target:
+                    raise RuntimeError("explicit_card_window_canary_forbidden")
+                preview_window = tuple(datetime.fromisoformat(value) for value in (
+                    args.preview_window_start, args.preview_window_end,
+                ))
             if args.money_target and not args.money_canary:raise RuntimeError("money_target_requires_canary")
             s=Settings(); s.validate(need_gmail=True,need_sheet=True)
             if not args.state_dir or not args.audit_key_file or not args.authority_file:
@@ -927,6 +940,7 @@ def main():
                 authority_provider=authority_provider,state_dir=state_dir,
                 repo_root=repo_root,now=datetime.now(ZoneInfo("Asia/Tokyo")),
                 dry_run=args.dry_run,
+                **({"preview_window":preview_window} if preview_window is not None else {}),
                 **({"money_canary":True,"money_target":args.money_target} if args.money_canary else {}),
             )
         except Exception as exc:

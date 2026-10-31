@@ -12,11 +12,11 @@ def money_enabled(env=None):
     return value=="confirmed-v1"
 
 
-def money_writer(db,env=None):
+def money_writer(db,env=None,*,preview_only=False):
     from .projection_store import store_from_environment
     env=os.environ if env is None else env
     if not money_enabled(env):return None
-    store=store_from_environment(db.sid,env)
+    store=store_from_environment(db.sid,env,**({"read_only":True} if preview_only else {}))
     if store is None:raise MoneyError("money_projection_binding_required")
     validate_book(store.read("money"))
     from .monthly_projection_sheets import SheetsLedgerReader

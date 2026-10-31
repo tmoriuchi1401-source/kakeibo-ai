@@ -1,6 +1,7 @@
 """Bounded, new-item-only recurring production flow for au PAY card Gmail."""
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -52,7 +53,7 @@ class SqliteRecurringRunState:
         else:
             raise RuntimeError("recurring_state_must_be_outside_repository")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS recurring_checkpoint (
                     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -74,7 +75,7 @@ class SqliteRecurringRunState:
             """)
 
     def successful_window_end(self) -> datetime | None:
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             row = connection.execute(
                 "SELECT successful_window_end FROM recurring_checkpoint WHERE singleton=1"
             ).fetchone()
@@ -82,7 +83,7 @@ class SqliteRecurringRunState:
 
     def record(self, summary: Mapping[str, object], *, advance_checkpoint: bool) -> None:
         payload = json.dumps(dict(summary), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "INSERT INTO recurring_runs VALUES (?,?,?,?,?,?)",
@@ -115,6 +116,87 @@ def build_incremental_window(
     window = FixedSourceWindow(start, end, "Asia/Tokyo", query)
     window.validate()
     return window
+
+
+def build_explicit_preview_window(
+    policy: RecurringAuthorityPolicy, state: SqliteRecurringRunState,
+    now: datetime, start: datetime, end: datetime,
+) -> FixedSourceWindow:
+    """Validate one checkpoint-anchored historical window against real now."""
+    policy.validate()
+    if any(value.tzinfo is None or value.utcoffset() is None for value in (now, start, end)):
+        raise RuntimeError("preview_window_timezone_required")
+    if not (policy.valid_from <= now < policy.expires_at):
+        raise RuntimeError("recurring_authority_expired_or_not_started")
+    if start.microsecond or end.microsecond:
+        raise RuntimeError("preview_window_second_precision_required")
+    checkpoint = state.successful_window_end()
+    if checkpoint is None:
+        raise RuntimeError("preview_window_checkpoint_required")
+    if checkpoint.tzinfo is None or checkpoint.utcoffset() is None:
+        raise RuntimeError("preview_window_checkpoint_timezone_required")
+    start, end = start.astimezone(JST), end.astimezone(JST)
+    boundary = checkpoint.astimezone(JST)
+    if start != boundary - timedelta(seconds=policy.overlap_seconds):
+        raise RuntimeError("preview_window_checkpoint_mismatch")
+    if not start < end or end <= boundary:
+        raise RuntimeError("preview_window_does_not_advance_coverage")
+    if end > now.astimezone(JST).replace(microsecond=0):
+        raise RuntimeError("preview_window_in_future")
+    if (end - start).total_seconds() > policy.max_window_seconds:
+        raise RuntimeError("incremental_window_exceeds_authority")
+    query = f"{SOURCE_QUERY} after:{int(start.timestamp())} before:{int(end.timestamp())}"
+    window = FixedSourceWindow(start, end, "Asia/Tokyo", query)
+    window.validate()
+    return window
+
+
+class _StrictPreviewGmail:
+    """Read-only request surface; never silently drop an overfull listing."""
+
+    def __init__(self, service, limit):
+        self.api = service.users().messages()
+        self.limit = limit
+        self.listed = set()
+        self.fetched = set()
+
+    def users(self): return self
+    def messages(self): return self
+
+    @staticmethod
+    def _request(request, check):
+        class Request:
+            def execute(self):
+                response = request.execute()
+                check(response)
+                return response
+        return Request()
+
+    def list(self, **kwargs):
+        requested = kwargs["maxResults"]
+        def check(response):
+            items = response.get("messages", [])
+            if (not isinstance(items, list) or len(items) > requested
+                    or len(self.listed) + len(items) > self.limit
+                    or (not items and response.get("nextPageToken"))):
+                raise RuntimeError("incremental_gmail_collection_incomplete")
+            for item in items:
+                identity = item.get("id") if isinstance(item, dict) else None
+                if (not isinstance(identity, str) or not identity or identity != identity.strip()
+                        or identity in self.listed):
+                    raise RuntimeError("incremental_gmail_collection_incomplete")
+                self.listed.add(identity)
+        return self._request(self.api.list(**kwargs), check)
+
+    def get(self, **kwargs):
+        identity = kwargs["id"]
+        if identity not in self.listed or identity in self.fetched:
+            raise RuntimeError("incremental_gmail_collection_incomplete")
+        def check(response):
+            if response.get("id") != identity or not response.get("raw"):
+                raise RuntimeError("incremental_gmail_collection_incomplete")
+            self.fetched.add(identity)
+        return self._request(self.api.get(**kwargs), check)
 
 
 def _batch_reader(db) -> Callable[[tuple[str, ...]], Mapping[str, tuple[tuple, ...]]]:
@@ -177,8 +259,14 @@ def run_recurring_ingestion(
     state_dir, repo_root, now: datetime, dry_run: bool = False,
     sleeper: Callable[[float], None] | None = None,
     money_canary: bool = False, money_target: str = "",
+    preview_window: tuple[datetime, datetime] | None = None,
 ) -> dict[str, object]:
     """Collect, plan, and optionally apply exactly one bounded fresh batch."""
+    if preview_window is not None:
+        if not dry_run:
+            raise RuntimeError("explicit_card_window_requires_preview")
+        if money_canary or money_target:
+            raise RuntimeError("explicit_card_window_canary_forbidden")
     policy = authority_provider.load()
     if not (policy.valid_from <= now < policy.expires_at):
         raise RuntimeError("recurring_authority_expired_or_not_started")
@@ -188,7 +276,8 @@ def run_recurring_ingestion(
     binding = TargetBinding(expected_spreadsheet_id=policy.expected_spreadsheet_id)
     inspector = ReadOnlySheetsTargetInspector(db)
     validate_target_binding(binding, inspector.inspect(binding.expected_worksheet))
-    window = build_incremental_window(policy, state, now)
+    window = (build_incremental_window(policy, state, now) if preview_window is None else
+              build_explicit_preview_window(policy, state, now, *preview_window))
     run_id = str(uuid4())
     summary = _base_summary(run_id, window)
     state_path = Path(state_dir)
@@ -198,18 +287,25 @@ def run_recurring_ingestion(
     execution = None
     try:
         from .amazon_money_runtime import money_enabled,money_writer,run_money_records
-        monetary=money_writer(db) if money_enabled() else None
+        monetary=(money_writer(db, **({"preview_only":True} if preview_window is not None else {}))
+                  if money_enabled() else None)
+        if preview_window is not None and monetary is not None:
+            from .amazon_money_runtime import _require_closed_money
+            _require_closed_money(monetary._book())
         if money_target and not money_canary:raise RuntimeError("money_target_requires_canary")
         if money_canary and monetary is None:raise RuntimeError("money_canary_migration_required")
         money_records=[];money_notices=[]
         money_args={"money_records":money_records,"money_notices":money_notices} if monetary is not None else {}
+        strict = _StrictPreviewGmail(gmail_service, policy.max_messages) if preview_window is not None else None
         transactions, collection = AuPayCardMailPipeline._collect(
-            gmail_service, window.query_representation, policy.max_messages,
+            strict if strict is not None else gmail_service, window.query_representation, policy.max_messages,
             sleeper=sleeper, request_interval=0 if sleeper is not None else 0.25,
             **money_args,
         )
         summary.update(found=collection["found"], fetched=collection["fetched"])
-        if not collection["collection_complete"]:
+        if (not collection["collection_complete"] or (strict is not None and (
+                strict.listed != strict.fetched or collection["found"] != len(strict.listed)
+                or collection["fetched"] != len(strict.fetched)))):
             raise RuntimeError("incremental_gmail_collection_incomplete")
         if money_canary:
             from .amazon_money_runtime import run_money_canary
@@ -230,6 +326,14 @@ def run_recurring_ingestion(
         )
         if len(statuses) > policy.max_batch_size:
             raise RuntimeError("new_eligible_exceeds_bounded_batch")
+        if preview_window is not None and not set(statuses.values()).issubset(policy.allowed_statuses):
+            raise RuntimeError("recurring_authority_scope_mismatch")
+        if preview_window is not None and monetary is not None:
+            from .amazon_money_runtime import _catchup_batch
+            money_records, duplicates = _catchup_batch(
+                monetary, money_records, policy.max_batch_size - len(statuses),
+            )
+            summary["money_duplicate"] = duplicates
         if monetary is not None:
             from .amazon_money_notices import save_notices
             summary.update(save_notices(monetary.store,money_notices,dry_run=dry_run))
