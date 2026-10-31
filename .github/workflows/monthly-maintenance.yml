@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   maintain:
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

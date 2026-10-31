@@ -100,7 +100,9 @@ jobs:
       (github.event_name != 'workflow_dispatch' || inputs.authority_recipient == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'workflow_dispatch' || inputs.bank_backfill_plan == '' || (github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (inputs.bank_partial_recovery == '' || (vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED == 'true' && inputs.bank_backfill_plan != '' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
-      (github.event_name != 'schedule' || vars.KAKEIBO_SCHEDULE_ENABLED == 'true') &&
+      (github.event_name != 'schedule' ||
+        (github.event.schedule == '47 21 * * *' && vars.KAKEIBO_BANK_SCHEDULE_ENABLED == 'true') ||
+        (github.event.schedule != '47 21 * * *' && vars.KAKEIBO_SCHEDULE_ENABLED == 'true')) &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
     timeout-minutes: 90
