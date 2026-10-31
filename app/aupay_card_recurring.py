@@ -1,6 +1,7 @@
 """Bounded, new-item-only recurring production flow for au PAY card Gmail."""
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
@@ -52,7 +53,7 @@ class SqliteRecurringRunState:
         else:
             raise RuntimeError("recurring_state_must_be_outside_repository")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS recurring_checkpoint (
                     singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -74,7 +75,7 @@ class SqliteRecurringRunState:
             """)
 
     def successful_window_end(self) -> datetime | None:
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             row = connection.execute(
                 "SELECT successful_window_end FROM recurring_checkpoint WHERE singleton=1"
             ).fetchone()
@@ -82,7 +83,7 @@ class SqliteRecurringRunState:
 
     def record(self, summary: Mapping[str, object], *, advance_checkpoint: bool) -> None:
         payload = json.dumps(dict(summary), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "INSERT INTO recurring_runs VALUES (?,?,?,?,?,?)",
@@ -286,7 +287,8 @@ def run_recurring_ingestion(
     execution = None
     try:
         from .amazon_money_runtime import money_enabled,money_writer,run_money_records
-        monetary=money_writer(db) if money_enabled() else None
+        monetary=(money_writer(db, **({"preview_only":True} if preview_window is not None else {}))
+                  if money_enabled() else None)
         if preview_window is not None and monetary is not None:
             from .amazon_money_runtime import _require_closed_money
             _require_closed_money(monetary._book())

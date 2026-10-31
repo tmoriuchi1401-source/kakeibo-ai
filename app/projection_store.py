@@ -191,11 +191,18 @@ class ProjectionJournal:
         replace_document(self.store, "journal", before, after)
 
 
-def store_from_environment(spreadsheet_id, env=None):
+class ReadOnlyProjectionStore:
+    """Preview readers cannot turn a helper call into a persistent save."""
+    def __init__(self, backing): self.backing = backing
+    def read(self, key): return self.backing.read(key)
+    def write(self, key, value): raise ProjectionError("preview_projection_write_forbidden")
+
+
+def store_from_environment(spreadsheet_id, env=None, *, read_only=False):
     """Use the existing SA credential; fixed folder ID is encrypted in Actions."""
     import os
     from pathlib import Path
-    from .google_clients import drive_service
+    from .google_clients import drive_service, read_only_drive_service
     from .private_state_bindings import unwrap
     from .settings import service_account_source
     env = os.environ if env is None else env
@@ -211,4 +218,6 @@ def store_from_environment(spreadsheet_id, env=None):
     info = info or json.loads(Path(path).read_bytes())
     folder_id = unwrap("KAKEIBO_PROJECTION_FOLDER_ID", value, info["private_key"])
     from .projection_cache import RollingProjectionStore
-    return RollingProjectionStore(DriveProjectionStore(drive_service(), folder_id, spreadsheet_id,precreated=True))
+    service = read_only_drive_service() if read_only else drive_service()
+    store = RollingProjectionStore(DriveProjectionStore(service, folder_id, spreadsheet_id,precreated=True))
+    return ReadOnlyProjectionStore(store) if read_only else store
