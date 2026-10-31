@@ -1,12 +1,17 @@
-name: One-time bank apply read-only assessment
+name: One-time au PAY card authority read-only inspection
 
 on:
   workflow_dispatch:
     inputs:
-      expected_sha:
-        description: Exact current main and validated SHA
-        type: string
+      reviewed_commit:
+        description: Exact commit approved for one diagnostic dispatch
         required: true
+        type: string
+      confirm:
+        description: READ_ONLY after reviewing this exact commit
+        required: true
+        type: choice
+        options: [READ_ONLY]
 
 permissions:
   contents: read
@@ -15,68 +20,395 @@ permissions:
 concurrency:
   group: kakeibo-production
   cancel-in-progress: false
-  queue: max
 
 jobs:
   inspect:
     if: >-
       github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
-      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/review/aupay-authority-readonly-20261031' &&
+      github.sha == inputs.reviewed_commit &&
+      github.workflow_sha == inputs.reviewed_commit &&
+      inputs.confirm == 'READ_ONLY' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      github.run_attempt == 1 &&
+      vars.KAKEIBO_PRODUCTION_ENABLED == 'true' &&
+      vars.KAKEIBO_VALIDATED_MAIN_SHA == '62a7503878a4947a66f1e0ca12485e36c8f1962d' &&
+      vars.KAKEIBO_BANK_SCHEDULE_ENABLED == 'true' &&
       vars.KAKEIBO_SCHEDULE_ENABLED == 'false' &&
-      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA && inputs.expected_sha == github.sha &&
-      github.run_attempt == 1
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+      vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED == 'false' &&
+      vars.KAKEIBO_LEGACY_DISABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.reviewed_commit }}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Reject debug or checkout mismatch before private bindings
+          submodules: false
+          lfs: false
+      - name: Verify only the diagnostic workflow differs from validated main
         env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
           DEBUG_ENABLED: ${{ runner.debug }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        shell: bash
         run: |
+          set +x
           set -euo pipefail
           test "$DEBUG_ENABLED" != '1'
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-      - uses: actions/setup-python@v5
+          test "$(git rev-parse HEAD)" = "$REVIEWED_COMMIT"
+          git merge-base --is-ancestor 62a7503878a4947a66f1e0ca12485e36c8f1962d HEAD
+          test "$(git diff --name-only 62a7503878a4947a66f1e0ca12485e36c8f1962d HEAD)" = '.github/workflows/bank-apply-readonly-inspect.yml'
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - name: Assess fixed five PDFs through GET-only services
+          python-version: '3.12.12'
+          architecture: x64
+          check-latest: false
+      - name: Materialize reviewed diagnostic and complete dependency lock
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          umask 077
+          cat > "$RUNNER_TEMP/card-authority-readonly.py" <<'PY'
+          """Review-only source; embedded verbatim in the proposed manual workflow."""
+          import base64, contextlib, hashlib, io, json, math, os, re, signal, sqlite3, sys, tempfile, time
+          import urllib.parse as urlparse
+          import urllib.request as urlrequest
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          from types import SimpleNamespace
+
+          BASE = '62a7503878a4947a66f1e0ca12485e36c8f1962d'
+          REPO = 'tmoriuchi1401-source/kakeibo-ai'
+          WORKFLOW = 'bank-apply-readonly-inspect.yml'
+          PREFIX = f'https://api.github.com/repos/{REPO}/'
+          FAILURES = frozenset('environment_invalid http_failed http_redirect_forbidden http_request_forbidden http_size_limit request_limit main_mismatch competing_run already_attempted authority_json_invalid worksheet_mismatch window_stride_invalid authority_policy_invalid source_mismatch spreadsheet_mismatch authority_period_inactive state_binding_invalid state_pending native_pending checkpoint_invalid state_changed target_worksheet_missing timeout inspection_failed'.split())
+
+          class Stop(Exception):
+              pass
+
+          def require(condition, reason):
+              if not condition:
+                  raise Stop(reason)
+
+          class NoRedirect(urlrequest.HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  raise Stop('http_redirect_forbidden')
+
+          class ReadNetwork:
+              """No discovery, proxies, redirects, pagination loops, retries or general write API."""
+              def __init__(self):
+                  self.opener = urlrequest.build_opener(urlrequest.ProxyHandler({}), NoRedirect())
+                  self.allowed = set()
+                  self.calls = 0
+                  self.token = ''
+
+              def request(self, method, url, token='', data=None):
+                  require((method, url) in self.allowed, 'http_request_forbidden')
+                  self.calls += 1
+                  require(self.calls <= 40, 'request_limit')
+                  headers = {'Accept': 'application/json', 'User-Agent': 'kakeibo-card-authority-readonly'}
+                  if token:
+                      headers['Authorization'] = 'Bearer ' + token
+                  if data is not None:
+                      headers['Content-Type'] = 'application/x-www-form-urlencoded'
+                  try:
+                      req = urlrequest.Request(url, data=data, headers=headers, method=method)
+                      with self.opener.open(req, timeout=15) as response:
+                          require(response.status == 200, 'http_failed')
+                          result = response.read(64 * 1024 * 1024 + 1)
+                      require(len(result) <= 64 * 1024 * 1024, 'http_size_limit')
+                      return result
+                  except Stop:
+                      raise
+                  except Exception:
+                      raise Stop('http_failed') from None
+
+              def json(self, method, url, token='', data=None):
+                  return json.loads(self.request(method, url, token, data))
+
+              def controls(self):
+                  sha, rid = os.environ['REVIEWED_COMMIT'], int(os.environ['CURRENT_RUN_ID'])
+                  require(re.fullmatch('[0-9a-f]{40}', sha) is not None and rid > 0, 'environment_invalid')
+                  urls = [PREFIX + 'branches/main', PREFIX + f'actions/workflows/{WORKFLOW}/runs?head_sha={sha}&event=workflow_dispatch&per_page=100']
+                  urls += [PREFIX + f'actions/runs?status={s}&per_page=100' for s in ('in_progress','queued','waiting','pending','requested')]
+                  self.allowed.update(('GET', u) for u in urls)
+                  token = os.environ['GH_TOKEN']
+                  require(self.json('GET', urls[0], token)['commit']['sha'] == BASE, 'main_mismatch')
+                  runs = self.json('GET', urls[1], token)
+                  require(runs['total_count'] == 1 and len(runs['workflow_runs']) == 1 and runs['workflow_runs'][0]['id'] == rid and runs['workflow_runs'][0]['run_attempt'] == 1, 'already_attempted')
+                  for url in urls[2:]:
+                      page = self.json('GET', url, token)
+                      require(page['total_count'] <= 100 and all(r['id'] == rid for r in page['workflow_runs']), 'competing_run')
+
+              def google(self, info, spreadsheet, ids):
+                  from cryptography.hazmat.primitives import hashes, serialization
+                  from cryptography.hazmat.primitives.asymmetric import padding
+                  self.oauth = 'https://oauth2.googleapis.com/token'
+                  self.allowed.add(('POST', self.oauth))
+                  for fid in ids:
+                      require(re.fullmatch('[A-Za-z0-9_-]{10,150}', fid) is not None, 'state_binding_invalid')
+                      base = 'https://www.googleapis.com/drive/v3/files/' + fid
+                      self.allowed.add(('GET', base + '?supportsAllDrives=true&fields=id,parents,trashed,mimeType,version,md5Checksum,size'))
+                      self.allowed.add(('GET', base + '?supportsAllDrives=true&alt=media'))
+                  require(re.fullmatch('[A-Za-z0-9_-]{10,150}', spreadsheet) is not None, 'state_binding_invalid')
+                  self.sheet_url = 'https://sheets.googleapis.com/v4/spreadsheets/' + spreadsheet + '?fields=sheets(properties(title))'
+                  self.allowed.add(('GET', self.sheet_url))
+                  def b64(value):
+                      return base64.urlsafe_b64encode(value).rstrip(b'=')
+                  stamp = int(time.time())
+                  claims = dict(iss=info['client_email'], scope='https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/spreadsheets.readonly', aud=self.oauth, iat=stamp, exp=stamp+300)
+                  unsigned = b64(b'{"alg":"RS256","typ":"JWT"}') + b'.' + b64(json.dumps(claims,separators=(',',':')).encode())
+                  key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
+                  signed = unsigned + b'.' + b64(key.sign(unsigned,padding.PKCS1v15(),hashes.SHA256()))
+                  body = urlparse.urlencode(dict(grant_type='urn:ietf:params:oauth:grant-type:jwt-bearer',assertion=signed.decode())).encode()
+                  self.token = self.json('POST', self.oauth, data=body)['access_token']
+
+              def state(self, binding, validator):
+                  base = 'https://www.googleapis.com/drive/v3/files/' + binding.file_id
+                  meta = self.json('GET', base + '?supportsAllDrives=true&fields=id,parents,trashed,mimeType,version,md5Checksum,size', self.token)
+                  require(meta['id'] == binding.file_id and not meta.get('trashed') and meta.get('parents') == [binding.folder_id] and meta.get('mimeType') == 'application/json', 'state_binding_invalid')
+                  raw = self.request('GET', base + '?supportsAllDrives=true&alt=media', self.token)
+                  require(hashlib.md5(raw).hexdigest() == meta.get('md5Checksum') and len(raw) == int(meta['size']), 'state_changed')
+                  return validator(raw,binding), (hashlib.sha256(raw).hexdigest(),meta)
+
+          def load_policy(root, expected_sheet):
+              from app.aupay_card_batch import ProtectedRecurringAuthorityProvider
+              try:
+                  raw = json.loads(os.environ['AUPAY_CARD_RECURRING_AUTHORITY_JSON'])
+                  require(isinstance(raw,dict), 'authority_json_invalid')
+                  require(raw.get('expected_worksheet','取込データ') == '取込データ', 'worksheet_mismatch')
+                  w,o = raw.get('max_window_seconds'),raw.get('overlap_seconds')
+                  require(type(w) is int and type(o) is int and o >= 0 and w > o, 'window_stride_invalid')
+                  require(raw.get('source') == 'au_pay_card_gmail', 'source_mismatch')
+                  require(raw.get('expected_spreadsheet_id') == expected_sheet, 'spreadsheet_mismatch')
+                  with tempfile.TemporaryDirectory(prefix='card-authority-',dir='/dev/shm') as td:
+                      path = Path(td)/'authority.json'
+                      with os.fdopen(os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600),'w') as f:
+                          f.write(os.environ['AUPAY_CARD_RECURRING_AUTHORITY_JSON'])
+                      policy = ProtectedRecurringAuthorityProvider(path,repo_root=root).load()
+                  require(policy.expected_worksheet == '取込データ', 'worksheet_mismatch')
+                  return policy
+              except Stop:
+                  raise
+              except (KeyError,ValueError,TypeError):
+                  raise Stop('authority_json_invalid') from None
+              except Exception:
+                  raise Stop('authority_policy_invalid') from None
+
+          def checkpoint(value):
+              require(value['phase']=='ready' and not value['attempt'], 'state_pending')
+              cps=[]
+              for name,item in value['files'].items():
+                  if not name.endswith('.sqlite3'):
+                      continue
+                  con=sqlite3.connect(':memory:')
+                  try:
+                      con.deserialize(base64.b64decode(item['data'],validate=True))
+                      con.execute('PRAGMA trusted_schema=OFF');con.execute('PRAGMA query_only=ON')
+                      tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                      if 'recurring_checkpoint' in tables:
+                          rows=con.execute('SELECT successful_window_end,run_id FROM recurring_checkpoint WHERE singleton=1').fetchall()
+                          require(len(rows)==1,'checkpoint_invalid')
+                          cp,rid=rows[0]
+                          last=con.execute('SELECT status,window_end FROM recurring_runs WHERE run_id=?',(rid,)).fetchone()
+                          require(last and last[0] in ('noop','complete') and last[1]==cp,'checkpoint_invalid')
+                          cps.append(datetime.fromisoformat(cp))
+                      if 'writer_leases' in tables:
+                          require(con.execute('SELECT COUNT(*) FROM writer_leases').fetchone()[0]==0,'native_pending')
+                      for table in ('batch_capabilities','production_capabilities'):
+                          if table in tables:
+                              require(con.execute('SELECT COUNT(*) FROM '+table+" WHERE state!='sealed'").fetchone()[0]==0,'native_pending')
+                      for table,fields in [('batch_events',('run_id','attempt_id')),('journal_events',('run_id','canonical_identity','attempt_id'))]:
+                          if table in tables:
+                              cur=con.execute('SELECT * FROM '+table+' ORDER BY seq')
+                              rows=[dict(zip([d[0] for d in cur.description],r)) for r in cur]
+                              latest={tuple(r[k] for k in fields):r for r in rows}
+                              require(all(r['stage']=='final' and r['state'] in ('confirmed','write_confirmed') for r in latest.values()),'native_pending')
+                  finally:
+                      con.close()
+              require(len(cps)==1 and cps[0].tzinfo is not None,'checkpoint_invalid')
+              return cps[0]
+
+          def inspect():
+              root=Path(os.environ['GITHUB_WORKSPACE']).resolve()
+              sys.path.insert(0,str(root))
+              from app.aupay_card_recurring import build_incremental_window
+              from app.private_state_bindings import unwrap
+              from app.drive_run_state import StateBinding,validate
+              from app.production_ledger import validate_ledger
+              net=ReadNetwork();net.controls()
+              expected=os.environ['SPREADSHEET_ID']
+              policy=load_policy(root,expected)
+              now=datetime.now(timezone(timedelta(hours=9))).replace(microsecond=0)
+              require(policy.valid_from<=now<policy.expires_at,'authority_period_inactive')
+              info=json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT_JSON'])
+              decoded={n:unwrap(n,os.environ[n],info['private_key']) for n in ('KAKEIBO_STATE_FOLDER_ID','AUPAY_CARD_STATE_FILE_ID','KAKEIBO_RUN_LEDGER_FILE_ID')}
+              card=StateBinding('au_pay_card_gmail',expected,decoded['KAKEIBO_STATE_FOLDER_ID'],decoded['AUPAY_CARD_STATE_FILE_ID'])
+              parent=StateBinding('production_run',expected,decoded['KAKEIBO_STATE_FOLDER_ID'],decoded['KAKEIBO_RUN_LEDGER_FILE_ID'])
+              net.google(info,expected,[card.file_id,parent.file_id])
+              titles=net.json('GET',net.sheet_url,net.token)
+              require(any(s['properties']['title']=='取込データ' for s in titles['sheets']),'target_worksheet_missing')
+              cv,cb=net.state(card,validate);pv,pb=net.state(parent,validate_ledger)
+              require(all(x['phase']=='ready' and not x['attempt'] and not x['error'] for x in pv['sources'].values()),'state_pending')
+              require(pv['sources']['amazon']['counts'].get('catch_up_pending')==0,'state_pending')
+              cp=checkpoint(cv);require(cp<=now,'checkpoint_invalid')
+              start=cp-timedelta(seconds=policy.overlap_seconds)
+              outcome='within_authority'
+              try:
+                  window=build_incremental_window(policy,SimpleNamespace(successful_window_end=lambda:cp),now)
+                  require(window.start==start and window.end==now,'checkpoint_invalid')
+              except RuntimeError as e:
+                  if str(e)!='incremental_window_exceeds_authority':
+                      raise Stop('inspection_failed') from None
+                  outcome='exceeds_authority'
+              _,ca=net.state(card,validate);_,pa=net.state(parent,validate_ledger)
+              require(cb==ca and pb==pa,'state_changed')
+              net.controls()
+              seconds=int((now-start).total_seconds())
+              stride=policy.max_window_seconds-policy.overlap_seconds
+              elapsed=max(0,int((now-cp).total_seconds()))
+              return dict(success=True,outcome=outcome,observed_at=now.isoformat(),authority_origin='Actions repository secret AUPAY_CARD_RECURRING_AUTHORITY_JSON',source_matches=True,spreadsheet_matches=True,worksheet_matches=True,period_active=True,valid_from=policy.valid_from.isoformat(),expires_at=policy.expires_at.isoformat(),overlap_seconds=policy.overlap_seconds,max_window_seconds=policy.max_window_seconds,max_messages=policy.max_messages,max_batch_size=policy.max_batch_size,checkpoint=cp.isoformat(),required_start=start.isoformat(),required_end=now.isoformat(),required_seconds=seconds,excess_seconds=max(0,seconds-policy.max_window_seconds),estimated_windows=max(1,(elapsed+stride-1)//stride),state_unchanged=True,gmail_requests=0,financial_write_requests=0,source_executions=0,preview_executions=0)
+
+          def main():
+              def timeout_handler(*_):
+                  raise Stop('timeout')
+              signal.signal(signal.SIGALRM,timeout_handler);signal.signal(signal.SIGTERM,timeout_handler)
+              signal.alarm(120)
+              try:
+                  # Suppress dependency output, raw tracebacks, warnings and exception payloads.
+                  with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
+                      if len(sys.argv)==2 and sys.argv[1]=='guard':
+                          ReadNetwork().controls();result=dict(success=True,guard=True)
+                      else:
+                          result=inspect()
+                  signal.alarm(0)
+                  print(json.dumps(result,ensure_ascii=True,sort_keys=True));return 0
+              except Exception as e:
+                  reason=str(e) if type(e) is Stop and str(e) in FAILURES else 'inspection_failed'
+                  print(json.dumps(dict(success=False,reason=reason,no_retry=True),sort_keys=True));return 1
+
+          if __name__=='__main__':
+              raise SystemExit(main())
+          PY
+          cat > "$RUNNER_TEMP/card-authority-readonly.lock" <<'LOCK'
+          annotated-types==0.8.0 --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
+          anyio==4.15.1 --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101
+          certifi==2026.10.23 --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+          cffi==2.1.1 --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
+          charset-normalizer==3.5.2 --hash=sha256:3d31298449090ab8d47b7b1b2a555ff73cac7ed438a08b7ac160980c7ebed649
+          colorama==0.4.6 --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+          cryptography==50.0.2 --hash=sha256:9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079
+          distro==1.9.0 --hash=sha256:7bffd925d65168f85027d8da9af6bddab658135b840670a223589bc0c8ef02b2
+          google-api-core==2.43.2 --hash=sha256:5a9d21baab97fd3c0547ccfc186a9e64f4227d8d7026f393835316400b29a6d4
+          google-api-python-client==2.201.0 --hash=sha256:2d9bf1ba3f12eee8ed3d0f1791ce0605d163432f496baa72d3677faa2cf097d6
+          google-auth-httplib2==0.4.4 --hash=sha256:bbe5d7b2401bb3a4017f4720e1e91bd273ab9a2bb60b84e65edbc0de127852da
+          google-auth-oauthlib==1.5.0 --hash=sha256:71625fdea21c6c03217eb9ff13741c3096e6d257ebca0ad084dbd6e9f4aa4ef4
+          google-auth==2.62.0 --hash=sha256:4ff4319aeb4ad128409759d397a9fcafad126d0031d241cc0dd6b9a00b43e3f3
+          google-genai==2.34.0 --hash=sha256:a4cb02aebc4c357f863d2938132f0e3f7967fc5e00b8a4078673f68aad340665
+          googleapis-common-protos==1.76.0 --hash=sha256:59e13344a9f3651aa201a03e2bee815a3bf43a4baf1f9ff8a9b62a840ce25fac
+          h11==0.16.0 --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+          httpcore==1.0.9 --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55
+          httplib2==0.32.1 --hash=sha256:82e7a6ab08fcb27879864ddf63dbb529fb032ca336c331cb1597d6dd8b47c92e
+          httpx==0.28.1 --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
+          idna==3.20 --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+          iniconfig==2.3.1 --hash=sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7
+          numpy==2.5.4 --hash=sha256:fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a
+          oauthlib==4.0.0 --hash=sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd
+          opentelemetry-api==1.45.2 --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34
+          packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+          pandas==3.1.0 --hash=sha256:9433b5dc2f26ef9d9b56daaf4d41d078bf4372c5d88c42ed5b397a6eea80de16
+          pdfminer.six==20260107 --hash=sha256:366585ba97e80dffa8f00cebe303d2f381884d8637af4ce422f1df3ef38111a9
+          pdfplumber==0.11.10 --hash=sha256:7741ea81bf165b474b153e6789d10d18e06b6ddcf3ec84289c3ef2fed6802580
+          pillow==13.0.0 --hash=sha256:42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca
+          pillow_heif==1.8.1 --hash=sha256:3811fa95ad29d6abd37a72c88c8c682dd1ff41d51fddf4899255328bfccbe358
+          pluggy==1.7.0 --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec
+          proto-plus==1.29.0 --hash=sha256:8acd070469a7aaf43f440b022ef9757c8cac1a9f866e933f59ae98669ddc6c8b
+          protobuf==7.36.2 --hash=sha256:89f23aa53c24553a2416fd4fd1ec06f74fa42b14b546d8883128813f775bbfd2
+          pyasn1==0.6.5 --hash=sha256:4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587
+          pyasn1_modules==0.4.2 --hash=sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a
+          pycparser==3.12 --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e
+          pydantic==2.14.2 --hash=sha256:7efbf7507b937931cd32a5755acb00ea1cf5ccb1d4e8067a5850d5069e382118
+          pydantic_core==2.50.2 --hash=sha256:9667637665acba166a7dbbc786f14c50512d3a01f7199e0e1a13b929e92d7c7a
+          Pygments==2.21.0 --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9
+          pyparsing==3.3.3 --hash=sha256:ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4
+          pypdf==6.21.4 --hash=sha256:33e4fb41ca352810eb4e9838aa0d82d6888a5f8bf682f43e99cce5faa666255c
+          pypdfium2==5.14.0 --hash=sha256:11f281613fa22313d9c7ab89947665e84eccf8ebe40e1198a84a88352305648d
+          pytesseract==0.3.13 --hash=sha256:7a99c6c2ac598360693d83a416e36e0b33a67638bb9d77fdcac094a3589d4b34
+          pytest==9.2.0 --hash=sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588
+          python-dateutil==3.0.0 --hash=sha256:3c79630202e4152c6add678446984236efe4f57e84d8e892aab0637bab82e9fd
+          python-dotenv==1.2.4 --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc
+          requests-oauthlib==2.0.0 --hash=sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36
+          requests==2.34.2 --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+          six==1.17.0 --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+          sniffio==1.3.1 --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2
+          tenacity==9.1.4 --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55
+          typing-inspection==0.4.4 --hash=sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147
+          typing_extensions==4.16.0 --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+          tzdata==2026.6 --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
+          uritemplate==4.2.0 --hash=sha256:962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686
+          urllib3==2.8.0 --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+          websockets==17.4 --hash=sha256:9ae1429ee9e52b139167ed0169757806a27ed7307e942e8c62037a9184e9843b
+          LOCK
+          printf '%s  %s\n' '35edbc534ea164cba7e61afcce68db6272b74118b36d312ad750d87e3b120228' "$RUNNER_TEMP/card-authority-readonly.py" | sha256sum -c -
+          printf '%s  %s\n' '93e6152fe9e2287447f75ef69ac84e8fa543d41b65a9c9e95ada2dc0f962e322' "$RUNNER_TEMP/card-authority-readonly.lock" | sha256sum -c -
+      - name: Reject previous dispatches or competing runs before Google Secrets
         env:
           GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          ulimit -c 0
+          python -I -B "$RUNNER_TEMP/card-authority-readonly.py" guard 2>/dev/null
+      - name: Fetch only hash-pinned wheels, then install without network
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          test "$(python -c 'import platform; print(platform.python_version())')" = '3.12.12'
+          python -m venv "$RUNNER_TEMP/card-authority-venv"
+          "$RUNNER_TEMP/card-authority-venv/bin/python" -m pip --isolated --disable-pip-version-check download --retries 0 --no-cache-dir --only-binary=:all: --require-hashes --index-url https://pypi.org/simple --dest "$RUNNER_TEMP/card-authority-wheels" -r "$RUNNER_TEMP/card-authority-readonly.lock"
+          "$RUNNER_TEMP/card-authority-venv/bin/python" -m pip --isolated --disable-pip-version-check install --no-index --only-binary=:all: --require-hashes --find-links "$RUNNER_TEMP/card-authority-wheels" -r "$RUNNER_TEMP/card-authority-readonly.lock"
+          "$RUNNER_TEMP/card-authority-venv/bin/python" -m pip --isolated --disable-pip-version-check check
+      - name: Reverify reviewed files after dependency installation
+        env:
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          git diff --exit-code "$REVIEWED_COMMIT"
+          test -z "$(git status --porcelain --untracked-files=all --ignored)"
+          SCRIPT_HASH="$(sha256sum "$RUNNER_TEMP/card-authority-readonly.py" | cut -d ' ' -f 1)"
+          LOCK_HASH="$(sha256sum "$RUNNER_TEMP/card-authority-readonly.lock" | cut -d ' ' -f 1)"
+          test "$SCRIPT_HASH" = 35edbc534ea164cba7e61afcce68db6272b74118b36d312ad750d87e3b120228
+          test "$LOCK_HASH" = 93e6152fe9e2287447f75ef69ac84e8fa543d41b65a9c9e95ada2dc0f962e322
+      - name: Inspect only; no Gmail, writer, checkpoint update or artifact
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          BANK_PDF_RECURRING_AUTHORITY_JSON: ${{ secrets.BANK_PDF_RECURRING_AUTHORITY_JSON }}
-          BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON: ${{ secrets.BANK_CONFIRMED_INTERNAL_TRANSFERS_JSON }}
-          BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON: ${{ secrets.BANK_CONFIRMED_NON_OWN_CLASSIFICATIONS_JSON }}
-          BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON: ${{ secrets.BANK_CONFIRMED_DOCOMO_SMTB_RULES_JSON }}
-          KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
-          KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+          AUPAY_CARD_RECURRING_AUTHORITY_JSON: ${{ secrets.AUPAY_CARD_RECURRING_AUTHORITY_JSON }}
           KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
-          AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
           AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
-          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
           KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
-          BANK_INCOME_WRITE_ENABLED: ${{ vars.BANK_INCOME_WRITE_ENABLED }}
-          BANK_REVIEW_ENABLED: ${{ vars.BANK_REVIEW_ENABLED }}
-          BANK_PDF_PROCESSED_DRIVE_FOLDER_ID: ${{ vars.BANK_PDF_PROCESSED_DRIVE_FOLDER_ID }}
-          KAKEIBO_AUTHORITY_RECIPIENT: "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAsHsr2o0aNrXSGI2WFwXmvHkYhoODqLpwkafc8GC7qBFE9+1uOx5ymjMFHUm4Bi9EQxeUmaYExfiWVvQ7Zd+CpCKbin7cFBPOt//nlQzty9oi5t5ZHcabn7IOP9Ir1T1+hVUtajdjDbqSQwpbKK1mA3gD7C3KEPPPgOmvg2o2paELUfO0ky9CB8fhi3FB5iO8UdwaMQb7sViHLbvODk2Oo39gJur+pHLr0BJruOeGPbUQYxLiNbAcWmlIoyvl6SrZJsUCpbgSRQVb4Pj86WoL5aRR8tIH+NYrdFFNNIxdih2NdJxkyggKzJ228ClEdHzgMYvyJc4tgYomjxHdk3kp/c/AGUlLzGDOPEyeak6RFhHV5EdBv1A06Xv6UCKzTgQHJHR6FVv7B2bsocDcTgJW4AwqUy+F0I+Cu22WSo2IZU9QgAkkK9RBUvBERMTO8IsO6tBxO1+QNGCoY3nYYZ9uq4fyJCyi66e48NDYJpwRc7665eEcfngZY47zk+Q+0kunAgMBAAE="
-          FIXED_PLAN_WRAPPED_ID: "rsa-oaep-sha256-v1:iAPJmyRkGe27eMjjMvR9frr/tRPT6Nf4g9NhX83JNd7fp1naDDT8FllwedZZvj9RveLp1ZD1hJpiUnYsD8+qEXFONik1+qtO4tC9Vvl5HlrEbqZHp0OBfpnzJ2gIwSbph9xGLhiCcmFJrngjF3iYEMYz6ODUQwJQxKIcvWItoWXulIBi8F277Ble19N7ThqJAcxOtTh6qxqLno4xEX360ZoIwkyEh7oAxPIEeddyRIXIbc1k/kbvACS04yH35xvO67VeJvpk+LXj5cvowm86ftakmssEevoqrZyUgiKVjUCXfGSRsk5koWeAY81UUOfVCOHlUDQWUYImBNFFVGHk+w=="
-          EXPECTED_PLAN_SHA256: "8f64ac790aafb03c605c270a9540db5826ad248630b0eb2db36a26cc05d99135"
-          EXPECTED_PDFS_SHA256: "909b20ec0dd723baacd34a3a5ff220fbd1c1a057f5d12e9dc0e2794aa2106860"
-          EXPECTED_RAW_FINANCIAL_SHA256: "0832939f8f64e3373fee76cf4a853c09cdf7fa5e462a46f01392b1eb740e8f3e"
-          EXPECTED_BANK_SHA256: "68e6570a10cdc4d3c5b9d7bf363ca7b24c7213b97ef9e7343570c8844599a81e"
-          EXPECTED_PARENT_SHA256: "5ad11d956819ba94d924dfe1980e8d858f1b75965941c33a3250aa031c4fd1e7"
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-        run: python -m app.bank_apply_readonly_inspect
-      - name: Upload encrypted assessment only
-        uses: actions/upload-artifact@v4
-        with:
-          name: authority-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/kakeibo-authority-delivery/authority-report.enc.json
-          if-no-files-found: error
-          retention-days: 1
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          ulimit -c 0
+          umask 077
+          timeout --signal=TERM --kill-after=5s 125s "$RUNNER_TEMP/card-authority-venv/bin/python" -I -B "$RUNNER_TEMP/card-authority-readonly.py" 2>/dev/null
