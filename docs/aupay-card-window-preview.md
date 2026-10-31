@@ -91,7 +91,7 @@ complete, the exact successful checkpoint, and compares:
 - Existing money, money-migration, money-notices and journal document digests
   when projection binding exists. These reads execute no Amazon source.
 
-Only numeric aggregate counts, safe digests, fixed provenance and locally
+Only aggregate counts/integer-yen totals, safe digests, fixed provenance and locally
 authored error codes are public. No raw candidate list, mail, credential,
 authority JSON, IDs, API exception, child stdout/stderr or original state is
 uploaded, logged or cached. This entry creates no private Drive destination.
