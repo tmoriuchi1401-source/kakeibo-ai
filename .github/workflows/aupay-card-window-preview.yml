@@ -51,7 +51,7 @@ jobs:
       github.sha == inputs.expected_commit && github.sha == github.workflow_sha &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
       vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       EXPECTED_COMMIT: ${{ inputs.expected_commit }}
