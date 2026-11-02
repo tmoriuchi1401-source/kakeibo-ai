@@ -18,6 +18,11 @@ def money_writer(db,env=None,*,preview_only=False):
     if not money_enabled(env):return None
     store=store_from_environment(db.sid,env,**({"read_only":True} if preview_only else {}))
     if store is None:raise MoneyError("money_projection_binding_required")
+    return _configured_writer(db,store,env)
+
+
+def _configured_writer(db,store,env,*,ledger=None):
+    """Shared decision configuration; the production factory retains its guard."""
     validate_book(store.read("money"))
     from .monthly_projection_sheets import SheetsLedgerReader
     from .projection_refresh import ProjectionRefresh
@@ -46,10 +51,27 @@ def money_writer(db,env=None,*,preview_only=False):
                     return True
         return False
     from .amazon_money_products import SavedProducts
-    writer=MoneyWriter(store,MoneyLedger(db),possible_duplicates=possible,
+    writer=MoneyWriter(store,ledger if ledger is not None else MoneyLedger(db),possible_duplicates=possible,
         product_details=SavedProducts(db,auto_apply=env.get("CATEGORY_RULE_AUTO_APPLY_ENABLED","false").strip().lower() in {"1","true","yes","on"}))
     writer.prepare=prepare
     return writer
+
+
+def money_reader(db,store,env):
+    """Operator audit: an already verified read-only store, no Apply surface.
+
+    Unlike store_from_environment this does not pretend a local operator is an
+    Actions job. The caller verifies the live encrypted binding independently.
+    """
+    from types import SimpleNamespace
+    from .projection_store import ReadOnlyProjectionStore
+    if not isinstance(store,ReadOnlyProjectionStore) or not money_enabled(env):
+        raise MoneyError("money_readonly_binding_required")
+    class Ledger(MoneyLedger):
+        def append(self,*_args,**_kwargs):raise MoneyError("audit_financial_write_forbidden")
+    writer=_configured_writer(db,store,env,ledger=Ledger(db))
+    return SimpleNamespace(store=store,preview=writer.preview,_book=writer._book,
+                           verify_posted=writer.verify_posted)
 
 
 def _require_closed_money(book):

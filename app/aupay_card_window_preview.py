@@ -105,7 +105,7 @@ def controls(env, head, github):
             and previous["workflow_runs"][0]["id"] == current, "previous_dispatch")
 
 
-def checkpoint(value):
+def checkpoint(value, expected=CHECKPOINT):
     require(value["phase"] == "ready" and not value["attempt"], "card_pending")
     checkpoints = []
     for name, item in value["files"].items():
@@ -133,8 +133,8 @@ def checkpoint(value):
                 latest = {(r[0], r[1]): r[2:] for r in cur}
                 require(all(r[0] == "final" and r[1] in ("confirmed", "write_confirmed") for r in latest.values()),
                         "card_native_pending")
-    require(checkpoints == [CHECKPOINT], "checkpoint_changed")
-    return CHECKPOINT
+    require(checkpoints == [expected], "checkpoint_changed")
+    return expected
 
 
 class ReadOnlyState:

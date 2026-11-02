@@ -121,14 +121,20 @@ class MoneyWriter:
                 or any(r[1]!=record.day or r[10]!=record.money_id or r[12] not in {"","active"} for r in rows.values())):
             raise MoneyError("money_canary_expense_changed")
 
-    def apply(self,records,*,limit):
+    def apply(self,records,*,limit,review_only=False):
         if not 1<=limit<=100:raise MoneyError("money_batch_limit_invalid")
         if len(records)>limit:raise MoneyError("money_batch_limit_exceeded")
+        # The fixed card recovery entry may persist reviews, never post/resume.
+        # Validate the whole batch before saving even the first review.
+        if review_only and any(d.action!="review" for d in self.preview(records)):
+            raise MoneyError("money_review_only_required")
         stats={"money_posted":0,"money_linked":0,"money_review":0,"money_duplicate":0,
                "money_supplement":0,"money_transfer":0,"expense_rows_written":0,"import_rows_written":0}
         for record in records:
             before=self._book()
             decision=self._decision(record,before)
+            if review_only and decision.action!="review":
+                raise MoneyError("money_review_only_required")
             if decision.action=="duplicate":stats["money_duplicate"]+=1;continue
             previous=before["records"].get(record.money_id)
             if (decision.action=="review" and previous and previous.get("state")=="review"
