@@ -49,44 +49,9 @@ from .aupay_mail_pipeline import AuPayCardMailPipeline
 from .transaction_plan import reconcile_transactions, normalize_card_transaction
 from .aupay_card_executor import ExistingCanonicalRecord, SheetsCanonicalIdentityReader
 
-WORKFLOW = "aupay-card-first-window-apply.yml"
-CONFIRM = "APPLY_FIRST_WINDOW_33_149218_ONCE"
+from .aupay_card_first_window_guard import WORKFLOW, CONFIRM, controls
+
 JST = ZoneInfo("Asia/Tokyo")
-
-
-def controls(env, head, github):
-    """Real main, first attempt and first dispatch across ALL code revisions."""
-    require(len(head) == 40 and all(c in "0123456789abcdef" for c in head), "commit_invalid")
-    require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPO
-            and env.get("GITHUB_REF") == "refs/heads/main"
-            and env.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "manual_main_required")
-    require(head == env.get("GITHUB_SHA") == env.get("WORKFLOW_SHA")
-            == env.get("EXPECTED_COMMIT") == env.get("KAKEIBO_VALIDATED_MAIN_SHA"), "commit_mismatch")
-    require(env.get("WORKFLOW_REF") == f"{REPO}/.github/workflows/{WORKFLOW}@refs/heads/main",
-            "workflow_mismatch")
-    require(env.get("GITHUB_ACTOR") == env.get("GITHUB_TRIGGERING_ACTOR") == REPO.split("/")[0]
-            and env.get("GITHUB_RUN_ATTEMPT") == "1" and env.get("CONFIRM") == CONFIRM,
-            "owner_once_approval_required")
-    require(env.get("PREVIEW_SOURCE") == SOURCE and env.get("PREVIEW_START") == START
-            and env.get("PREVIEW_END") == END and env.get("EXPECTED_CHECKPOINT") == CHECKPOINT,
-            "fixed_window_mismatch")
-    require(env.get("RUNNER_DEBUG", "0") != "1" and not env.get("ACTIONS_STEP_DEBUG")
-            and not env.get("ACTIONS_RUNNER_DEBUG"), "debug_forbidden")
-    require(all(env.get(k) == v for k, v in FLAGS.items()), "production_flags_mismatch")
-    require(github.get("git/ref/heads/main")["object"]["sha"] == head, "main_changed")
-    current = int(env["GITHUB_RUN_ID"])
-    run = github.get(f"actions/runs/{current}")
-    require(run["head_sha"] == head and run["run_attempt"] == 1
-            and run["event"] == "workflow_dispatch" and run["path"] == ".github/workflows/" + WORKFLOW,
-            "run_identity_mismatch")
-    for status in ("in_progress", "queued", "waiting", "pending", "requested"):
-        runs = github.get(f"actions/runs?status={status}&per_page=100")
-        require(runs["total_count"] <= 100 and len(runs["workflow_runs"]) == runs["total_count"],
-                "run_inventory_incomplete")
-        require(all(r["id"] == current for r in runs["workflow_runs"]), "competing_run")
-    prior = github.get(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&per_page=100")
-    require(prior["total_count"] == len(prior["workflow_runs"]) == 1
-            and prior["workflow_runs"][0]["id"] == current, "previous_dispatch_no_retry")
 
 
 class ReviewLedger(MoneyLedger):
@@ -493,12 +458,8 @@ def main():
             env = dict(os.environ)
             head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
             github = GitHub(env)
-            if sys.argv[1:] == ["guard"]:
-                controls(env, head, github)
-                result = dict(success=True, guard=True)
-            else:
-                require(not sys.argv[1:], "arguments_forbidden")
-                result = dict(success=True, **run(env, head, github))
+            require(not sys.argv[1:], "arguments_forbidden")
+            result = dict(success=True, **run(env, head, github))
     except BaseException:
         result = dict(success=False, error="first_window_apply_stopped_no_retry",
             automatic_retry=False, rollback=False)
