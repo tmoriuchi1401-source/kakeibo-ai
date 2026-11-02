@@ -24,7 +24,7 @@
 
 `.github/workflows/aupay-card-first-window-apply.yml` → `python -B -m app.aupay_card_first_window_apply`。
 
-1. ownerの手動main dispatch、attempt 1、expected SHA＝workflow SHA＝validated SHA、実mainを検証。既存の `kakeibo-production` concurrencyを共有し、他のactive/queued/waiting runを拒否する。このworkflowの全revisionを通じて最初のdispatchだけを許可する。
+1. ownerの手動main dispatch、attempt 1、expected SHA＝workflow SHA＝validated SHA、実mainを検証。既存の `kakeibo-production` concurrencyを共有し、他のactive/queued/waiting runを拒否する。このworkflowの全revisionの履歴を照合する。固定した認証前失敗run #41543799949だけについて、旧SHA・attempt 1・guard failure・依存導入とApply stepのskippedを独立GETで検証し、別承認された代替dispatchを1回だけ許可する。履歴がそれ以外に増えた場合は停止する。
 2. 既存の暗号化binding、Drive native state、親ledger、金融表、MoneyReviewsをGETする。checkpointや未解決intent、queued/pending review要求の変化で停止する。authorityは実時刻で検証し、時刻偽装・期限や14日上限の拡張を行わない。
 3. `CapturedGmail` と既存strict collectorを使用し、全list/getの対応、raw・Gmail ID・internalDate・RFC Message-ID・source IDを確認する。原本はメモリ中に保持し、原本hashとURLを照合する。欠落、期間外、上限超過、未解析、未知分類で停止する。API例外を再送しない。
 4. canonical planを既存行と再照合し、公開集計を完全一致で比較する。全canonical候補を既存full-plan bindingへ固定し、新規33件のみを既存batch projectionへ選ぶ。
@@ -42,14 +42,14 @@
 1. Draftをレビューし、明示的に承認された場合にマージする。PR #182のマージや別の調査runは不要。
 2. マージ後mainの既存CIの全3job成功を確認し、その正確なmain SHAへ既存 `KAKEIBO_VALIDATED_MAIN_SHA` を承認の下で更新する。authority、Secrets、scope、scheduleの変更は不要。
 3. 本番金融writeについて、固定窓・新規33件149,218円・保留4件review保存・checkpoint更新を一体で1回実行する最終承認を得る。
-4. 他のrunがない時に上記workflowをmainから1回だけdispatchする。`expected_commit` は手順2のSHA、source/window/checkpointは既定値のまま、`confirm` は `APPLY_FIRST_WINDOW_33_149218_ONCE` とする。
+4. 他のrunがない時に上記workflowをmainから1回だけdispatchする。`expected_commit` は手順2のSHA、source/window/checkpointは既定値のまま、`confirm` は `APPLY_FIRST_WINDOW_33_149218_REPLACEMENT_ONCE` とする。
 5. 公開結果の `success=true`, `written=33`, `amount_yen=149218`, `held_protected=4`, `expense_rows_written=0`, `checkpoint=2026-10-27T08:55:56+09:00`, `parent_ledger=complete` を確認する。個人情報・原本・個別IDを公開ログ、artifact、cache、step summaryに出さない。
 
 ## 失敗と残るリスク
 
 - この文書と合成テストは本番4件の保存状態や理由を既に確認した証跡ではない。実際の4件が完全取得・照合条件を満たすかは承認後の1回の実行内で初めて確認する。相違があれば金融write前に停止する。
 - 外部Sheets・Driveは単一トランザクションではない。途中停止でreviewだけ保存済み、金融行だけ追加済み、checkpoint更新済みで親ledger pending、あるいは最後のGETだけ不明という状態はあり得る。自動再実行・rollback・pending解除はしない。次の操作には保護された実状態による個別照合と別承認が必要。
-- 最初のdispatchはguardで失敗しても消費される。rerun attempt 2や別SHAでの再dispatchも拒否する。削除したrun履歴を復旧手段として扱わない。既存checkpoint・pending stateも独立して再実行を拒否する。
+- 代替dispatchはguardで失敗しても消費される。rerun attempt 2や別SHAでの追加dispatchも拒否する。例外は固定run #41543799949の認証前失敗だけであり、UNKNOWN・金融step実行済み・他run・変更された履歴は例外にできない。削除したrun履歴を復旧手段として扱わない。既存checkpoint・pending stateも独立して再実行を拒否する。
 - 既存GITHUB_TOKENはrepository Variablesのlive read権限を持たない。validatedとflagsはjob開始時snapshotを使用し、mainと競合runは繰返しlive GETで確認する。実行中にownerがvalidated・flags・bindingを変更しない運用が前提。新PATや新設定は追加しない。
 - concurrencyは同じworkflow groupを使う処理の排他であり、ユーザーの直接Sheet編集をロックしない。直前再照合と全金融表の事後差分検証で検出するが、外部編集との原子的排他は保証しない。
 - 支出明細への反映はこのApplyに含まない。既存coreのcanonicalカードauto_expense除外を変更しない。
@@ -58,3 +58,13 @@
 ## 検証
 
 ネットワークを禁止した合成mail・fake Sheets/Driveと実際のSQLite manifest/capability/journal/leaseを使用する。既存writerを差し替えた成功スタブだけの試験ではない。成功、既存review保持、missing raw、終了境界、集計差、同額別同一性、既存行変化、review要求競合、post/resume選択、review保存UNKNOWN、append UNKNOWN、欠落・改変行、禁止支出差分、checkpointと親ledger、実行入口全体、workflow境界と公開ログ抑制を検証する。
+
+## 認証前停止 #41543799949 と代替実行の再承認
+
+最初の本番dispatch（main `df36c40f6ef00a44392a6173c82b749a20067145`、attempt 1）は、依存物導入前のguardで `googleapiclient` をeager importして停止した。job #125614231722のstep 5がfailure、step 6（依存導入）とstep 7（Google credentialsを注入するApply）がskippedだった。このrunによる金融write、review保存、checkpoint更新は0件。マージとvalidated更新は完了済みであり、自動rollbackは行わない。
+
+修正はguardを標準ライブラリだけの `app.aupay_card_first_window_guard` へ分離する。workflowの認証前stepは `python -B -m app.aupay_card_first_window_guard` とし、Google依存物が必要なApplyモジュールは既存のhash-pinned install成功後だけ起動する。`python -S` によるsite-packagesなしの子プロセス起動と、ネットワーク禁止のfake GitHubで実際のguard mainまで成功する回帰テストを追加する。
+
+停止したrunをrerun・削除しない。例外対象のrun ID、job ID、旧SHAをコードに固定し、実行時にGitHubから独立GETして認証前・金融step未実行を再証明する。代替run自身はattempt 1、履歴は固定失敗runと代替runの計2件だけを許可する。以前の確認文字列では実行できない。
+
+修正PRのマージ、マージ後CI成功、validated更新後に、**代替の本番Apply 1回**について新たなユーザー承認が必要。新しい確認文字列は `APPLY_FIRST_WINDOW_33_149218_REPLACEMENT_ONCE`。固定窓、保留4件の保護、33件149,218円の上限、支出禁止、UNKNOWN停止、checkpoint後置、独立readbackの金融安全条件は変更しない。

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import aupay_card_first_window_apply as apply
+from app import aupay_card_first_window_guard as guard
 from app.amazon_money import decide, MoneyError
 from app.amazon_money_writer import MoneyWriter
 from app.aupay_card_apply_plan import build_canonical_apply_plan
@@ -224,12 +225,23 @@ def environment():
 class GitHub:
     def __init__(self): self.previous, self.competing = False, False
     def get(self, path):
+        if path == f"actions/runs/{guard.FAILED_PREFLIGHT_RUN}":
+            return dict(id=guard.FAILED_PREFLIGHT_RUN, head_sha=guard.FAILED_PREFLIGHT_SHA, run_attempt=1,
+                status="completed", conclusion="failure", event="workflow_dispatch", path=".github/workflows/"+apply.WORKFLOW)
+        if path == f"actions/runs/{guard.FAILED_PREFLIGHT_RUN}/jobs?per_page=100":
+            return dict(total_count=1, jobs=[dict(id=guard.FAILED_PREFLIGHT_JOB, name="apply", status="completed",
+                conclusion="failure", steps=[dict(number=n, name=name, status="completed", conclusion=conclusion)
+                    for n, name, conclusion in (
+                        (5, "Live main and run guard with job-start validated and flags", "failure"),
+                        (6, "Install reviewed hash-pinned wheels before Google credentials", "skipped"),
+                        (7, "One fixed Apply with protected reviews and exact readback", "skipped"))])])
         if path == "git/ref/heads/main": return {"object": {"sha": "a"*40}}
         if path == "actions/runs/17": return dict(head_sha="a"*40, run_attempt=1,
             event="workflow_dispatch", path=".github/workflows/" + apply.WORKFLOW)
         if "actions/workflows/" in path:
             assert "head_sha" not in path
-            return dict(total_count=2 if self.previous else 1, workflow_runs=[{"id": 17}])
+            return dict(total_count=3 if self.previous else 2,
+                workflow_runs=[{"id": 17}, {"id": guard.FAILED_PREFLIGHT_RUN}])
         return dict(total_count=int(self.competing), workflow_runs=[{"id": 99}] if self.competing else [])
 
 
@@ -301,6 +313,9 @@ def test_workflow_is_manual_locked_pinned_and_has_no_artifact_or_other_source_cr
         assert "continue-on-error" not in step
     assert not {"BANK_STATE_FILE_ID", "AMAZON_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
     assert all("upload-artifact" not in s.get("uses", "") and "actions/cache" not in s.get("uses", "") for s in steps)
+    guard_step = next(s for s in steps if s.get("name") == "Live main and run guard with job-start validated and flags")
+    assert guard_step["run"] == "python -B -m app.aupay_card_first_window_guard"
+    assert steps.index(guard_step) < next(i for i, s in enumerate(steps) if "pip install" in s.get("run", ""))
 
 
 def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(monkeypatch, tmp_path):

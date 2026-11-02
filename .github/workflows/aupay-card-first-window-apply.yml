@@ -27,7 +27,7 @@ on:
         default: '2026-10-15T08:55:56+09:00'
         required: true
       confirm:
-        description: Type APPLY_FIRST_WINDOW_33_149218_ONCE after final production approval
+        description: Type APPLY_FIRST_WINDOW_33_149218_REPLACEMENT_ONCE after final production approval
         type: string
         required: true
 
@@ -47,7 +47,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
       github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
-      github.run_attempt == 1 && inputs.confirm == 'APPLY_FIRST_WINDOW_33_149218_ONCE' &&
+      github.run_attempt == 1 && inputs.confirm == 'APPLY_FIRST_WINDOW_33_149218_REPLACEMENT_ONCE' &&
       github.sha == inputs.expected_commit && github.sha == github.workflow_sha &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
       vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true'
@@ -82,7 +82,7 @@ jobs:
       - name: Live main and run guard with job-start validated and flags
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python -B -m app.aupay_card_first_window_apply guard
+        run: python -B -m app.aupay_card_first_window_guard
       - name: Install reviewed hash-pinned wheels before Google credentials
         shell: bash
         run: |
