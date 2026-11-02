@@ -1,0 +1,50 @@
+name: Card Preview runtime compatibility (no credentials)
+
+on:
+  push:
+    branches: [validation/card-preview-python31212-ubuntu2404]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    if: github.repository == 'tmoriuchi1401-source/kakeibo-ai' && github.ref == 'refs/heads/validation/card-preview-python31212-ubuntu2404'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: a328943550821a9b2bf6bd814074d5a2a9bef456
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.12'
+      - name: Verify exact reviewed checkout, Python and unchanged lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 'a328943550821a9b2bf6bd814074d5a2a9bef456'
+          python -c "import platform; assert platform.python_version() == '3.12.12'; print(platform.python_version(), platform.machine())"
+          echo '93e6152fe9e2287447f75ef69ac84e8fa543d41b65a9c9e95ada2dc0f962e322  requirements-card-preview.lock' | sha256sum --check
+          test "$(grep -cE '^[A-Za-z0-9_.-]+==' requirements-card-preview.lock)" = 57
+      - name: Download and offline-install the same 57 hash-pinned wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip download --require-hashes --only-binary=:all: -r requirements-card-preview.lock -d "$RUNNER_TEMP/card-wheels"
+          test "$(find "$RUNNER_TEMP/card-wheels" -maxdepth 1 -type f -name '*.whl' | wc -l)" = 57
+          python -m pip install --no-index --find-links "$RUNNER_TEMP/card-wheels" --require-hashes -r requirements-card-preview.lock
+          python -m pip check
+          python - <<'PY'
+          from importlib.metadata import version
+          from pathlib import Path
+          requirements = [line.split()[0] for line in Path("requirements-card-preview.lock").read_text().splitlines() if line and not line.startswith("#")]
+          assert len(requirements) == 57
+          for requirement in requirements:
+              name, expected = requirement.split("==")
+              assert version(name) == expected
+          print("All 57 pinned package versions verified; no application source executed.")
+          PY
+          test -z "$(git status --porcelain --untracked-files=no)"
+
