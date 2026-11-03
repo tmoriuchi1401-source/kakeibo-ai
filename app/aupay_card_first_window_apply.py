@@ -395,11 +395,12 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
 
 def run(env, head, github, *, incremental=False):
     started_at = datetime.now(JST).replace(microsecond=0)
+    scheduled = incremental and env.get("GITHUB_EVENT_NAME") == "schedule"
     boundary = controls
     if incremental:
         from .aupay_card_incremental_guard import controls as boundary
     recovered_failure = boundary(env, head, github)
-    expected_cp = env["EXPECTED_CHECKPOINT"] if incremental else CHECKPOINT
+    expected_cp = (None if scheduled else env["EXPECTED_CHECKPOINT"]) if incremental else CHECKPOINT
     require(env.get("KAKEIBO_AMAZON_MONEY_MODE") == "confirmed-v1", "money_mode_required")
     from .amazon_gmail_preview import gmail_readonly_service
     from .drive_run_state import DurableState, StateBinding, DriveStateTransport, validate
@@ -420,6 +421,20 @@ def run(env, head, github, *, incremental=False):
     card_binding = StateBinding(SOURCE, sid, folder, decoded["AUPAY_CARD_STATE_FILE_ID"])
     parent_binding = StateBinding("production_run", sid, folder, decoded["KAKEIBO_RUN_LEDGER_FILE_ID"])
     card_ro, parent_ro = ReadOnlyState(ro_drive, card_binding), ReadOnlyState(ro_drive, parent_binding)
+    if incremental:
+        # Complete protected-state validation before even assembling the money
+        # writer/reader or starting Gmail. The scheduled checkpoint stays local.
+        from .aupay_card_incremental_recovery import successful_checkpoint, verify_reconciled_state
+        native_raw, parent_raw = card_ro.read(), parent_ro.read()
+        native_before = validate(native_raw, card_binding)
+        initial_parent = validate_ledger(parent_raw, parent_binding)
+        if scheduled:
+            expected_cp = successful_checkpoint(native_before)
+            recovered_failure = boundary(env, head, github, expected_checkpoint=expected_cp)
+        require(all(v["phase"] == "ready" and not v["attempt"] and not v["error"]
+                    for v in initial_parent["sources"].values()), "parent_pending")
+        if recovered_failure:
+            verify_reconciled_state(native_before, initial_parent, expected_cp)
     backing = store_from_environment(sid, env)
     readback_store = store_from_environment(sid, env, read_only=True)
     require(backing is not None and readback_store is not None, "money_binding_required")
@@ -428,9 +443,8 @@ def run(env, head, github, *, incremental=False):
     reader = _configured_writer(db, observed, env, ledger=ReviewLedger(db))
     before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp)
     parent_before = validate_ledger(parent_ro.read(), parent_binding)
-    if incremental and recovered_failure:
-        from .aupay_card_incremental_recovery import verify_reconciled_state
-        verify_reconciled_state(validate(card_ro.read(), card_binding), parent_before, expected_cp)
+    if incremental:
+        require(card_ro.read() == native_raw and parent_ro.read() == parent_raw, "preparation_native_changed")
     with tempfile.TemporaryDirectory(prefix="card-first-apply-", dir=env["RUNNER_TEMP"]) as temp:
         private = Path(temp)
         authority = ProtectedRecurringAuthorityProvider(_secret_file(private, "authority.json",
@@ -446,7 +460,10 @@ def run(env, head, github, *, incremental=False):
         state = SqliteRecurringRunState(path / "recurring.sqlite3", repo_root=ROOT)
 
         def guard():
-            boundary(env, head, github)
+            if scheduled:
+                boundary(env, head, github, expected_checkpoint=expected_cp)
+            else:
+                boundary(env, head, github)
             now = datetime.now(JST)
             require(authority.load() == policy and policy.valid_from <= now < policy.expires_at,
                     "authority_changed_or_expired")

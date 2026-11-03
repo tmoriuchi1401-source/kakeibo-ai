@@ -1,6 +1,8 @@
 name: au PAY card checkpoint Apply once
 
 on:
+  schedule:
+    - cron: '23 0 * * *' # 09:23 JST; job remains disabled unless card flag is true.
   workflow_dispatch:
     inputs:
       expected_commit:
@@ -35,21 +37,26 @@ jobs:
     if: >-
       github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
       github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' &&
-      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
-      github.run_attempt == 1 && inputs.confirm == 'APPLY_CHECKPOINT_FRESH_PLAN_ONCE' &&
-      github.sha == inputs.expected_commit && github.sha == github.workflow_sha &&
+      github.run_attempt == 1 &&
+      ((github.event_name == 'workflow_dispatch' &&
+        github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+        inputs.confirm == 'APPLY_CHECKPOINT_FRESH_PLAN_ONCE' && github.sha == inputs.expected_commit) ||
+       (github.event_name == 'schedule' && github.event.schedule == '23 0 * * *' &&
+        vars.KAKEIBO_CARD_SCHEDULE_ENABLED == 'true')) &&
+      github.sha == github.workflow_sha &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
       vars.KAKEIBO_PRODUCTION_ENABLED == 'true' && vars.KAKEIBO_LEGACY_DISABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      EXPECTED_COMMIT: ${{ github.event_name == 'schedule' && github.sha || inputs.expected_commit }}
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       WORKFLOW_REF: ${{ github.workflow_ref }}
-      PREVIEW_SOURCE: ${{ inputs.source }}
+      PREVIEW_SOURCE: ${{ github.event_name == 'schedule' && 'au_pay_card_gmail' || inputs.source }}
       EXPECTED_CHECKPOINT: ${{ inputs.expected_checkpoint }}
       CONFIRM: ${{ inputs.confirm }}
+      SCHEDULE_CRON: ${{ github.event.schedule }}
+      KAKEIBO_CARD_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_CARD_SCHEDULE_ENABLED || 'false' }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
