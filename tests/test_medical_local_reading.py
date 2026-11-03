@@ -180,7 +180,7 @@ def test_intake_keeps_medical_manual_only_even_with_legacy_flags(monkeypatch,tmp
         p=proof();p['document_binding']['source_sha256']=source['sha256']
         return dict(source=source,status='local_ready',fields=fields(),local_provenance=p,local_parsed=parsed().model_dump()),None
     prepare=Mock(side_effect=AssertionError('Medical extraction prohibited'));monkeypatch.setattr(prep,'prepare',prepare)
-    env={'MEDICAL_PREPARE_DIR':str(tmp_path),'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(b'synthetic').decode(),'MEDICAL_DERIVED_AI_POLICY':'auto-v1:free'}
+    env={'MEDICAL_PREPARE_DIR':str(tmp_path),'MEDICAL_CROP_ATTESTATION_KEY':base64.b64encode(b'synthetic').decode(),'MEDICAL_DERIVED_AI_POLICY':'auto-v1:free','RECEIPT_INTAKE_LIMIT':'2'}
     result=runtime.execute(env,True)
     assert result['written']==result['medical_local_written']==0
     assert not db.rows['支出明細'] and result['medical_pending']==2
