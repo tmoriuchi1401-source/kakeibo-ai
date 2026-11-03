@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from .aupay_card_window_preview import END, FLAGS, REPO, ROOT, SOURCE, GitHub, require
+from .aupay_card_incremental_recovery import FAILED_RUN, FAILED_SHA, RECOVERED_CHECKPOINT, verify_failed_run
 
 WORKFLOW = "aupay-card-incremental-apply.yml"
 CONFIRM = "APPLY_CHECKPOINT_FRESH_PLAN_ONCE"
@@ -49,8 +50,10 @@ def controls(env, head, github):
         require(all(r["id"] == current for r in runs["workflow_runs"]), "competing_run")
     # All revisions and all pages. A dispatch after the approved checkpoint
     # consumes that checkpoint even if it failed before credential injection.
-    # Only completed successes older than a newer checkpoint allow daily reuse.
+    # Completed successes older than a newer checkpoint allow daily reuse. The
+    # one pinned reconciled failure additionally mandates protected state proof.
     seen, page, total = set(), 1, None
+    recovered_failure = False
     while True:
         result = github.get(f"actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}")
         if total is None:
@@ -64,6 +67,14 @@ def controls(env, head, github):
             if prior["id"] == current:
                 require(prior["head_sha"] == head and prior["run_attempt"] == 1, "run_identity_mismatch")
                 continue
+            if prior["id"] == FAILED_RUN:
+                require(cp >= datetime.fromisoformat(RECOVERED_CHECKPOINT), "reconciled_checkpoint_regression")
+                require(prior["head_sha"] == FAILED_SHA and prior["run_attempt"] == 1
+                        and prior["status"] == "completed" and prior["conclusion"] == "failure",
+                        "reconciled_run_identity_unproven")
+                verify_failed_run(github)
+                recovered_failure = True
+                continue
             require(prior["status"] == "completed" and prior["conclusion"] == "success"
                     and prior["run_attempt"] == 1
                     and datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) < cp,
@@ -72,6 +83,10 @@ def controls(env, head, github):
             break
         page += 1
     require(current in seen, "run_inventory_incomplete")
+    if cp >= datetime.fromisoformat(RECOVERED_CHECKPOINT):
+        require(recovered_failure, "reconciled_history_missing")
+    # True mandates protected native/parent proof before any prepare or writer.
+    return recovered_failure
 
 
 def main():
