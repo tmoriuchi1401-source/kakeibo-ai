@@ -70,9 +70,11 @@ class ObservedStore(ReadOnlyProjectionStore):
 
 class CapturedGmail:
     """Add private provenance to the existing strict collector, not a parser fork."""
-    def __init__(self, service):
+    def __init__(self, service, *, window=None):
         self.api = service.users().messages()
         self.inventory = []
+        self.start = window.start if window else datetime.fromisoformat(START)
+        self.end = window.end if window else datetime.fromisoformat(END)
 
     def users(self): return self
     def messages(self): return self
@@ -82,6 +84,7 @@ class CapturedGmail:
         from .aupay_mail_pipeline import parse_aupay_card_raw_partial
         request = self.api.get(**kwargs)
         inventory = self.inventory
+        start, end = self.start, self.end
         identity = kwargs["id"]
         class Request:
             def execute(self):
@@ -92,8 +95,8 @@ class CapturedGmail:
                                            altchars=b"-_", validate=True)
                     stamp = response["internalDate"]
                     require(isinstance(stamp, str) and stamp.isdecimal(), "evidence_gmail_timestamp_invalid")
-                    require(int(datetime.fromisoformat(START).timestamp()) * 1000 <= int(stamp)
-                            < int(datetime.fromisoformat(END).timestamp()) * 1000, "evidence_gmail_outside_window")
+                    require(int(start.timestamp()) * 1000 <= int(stamp)
+                            < int(end.timestamp()) * 1000, "evidence_gmail_outside_window")
                     message_id = str(BytesParser(policy=email_policy.default).parsebytes(raw)["Message-ID"] or "")
                     require(bool(message_id), "evidence_gmail_message_id_missing")
                     parsed = parse_aupay_card_raw_partial(raw)

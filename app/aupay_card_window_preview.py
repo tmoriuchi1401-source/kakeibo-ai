@@ -186,11 +186,11 @@ def financial_snapshot(service, sid):
                      for t, rows in zip(titles, observations["UNFORMATTED_VALUE"])}}
 
 
-def observe(card, parent, sheets, sid, money_store):
+def observe(card, parent, sheets, sid, money_store, *, expected_checkpoint=CHECKPOINT):
     from .drive_run_state import validate
     from .production_ledger import validate_ledger
     raw, card_proof = card.observe()
-    cp = checkpoint(validate(raw, card.binding))
+    cp = checkpoint(validate(raw, card.binding), expected_checkpoint)
     raw, parent_proof = parent.observe()
     ledger = validate_ledger(raw, parent.binding)
     require(all(v["phase"] == "ready" and not v["attempt"] and not v["error"]

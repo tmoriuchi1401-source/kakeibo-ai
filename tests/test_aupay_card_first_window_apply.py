@@ -318,7 +318,8 @@ def test_workflow_is_manual_locked_pinned_and_has_no_artifact_or_other_source_cr
     assert steps.index(guard_step) < next(i for i, s in enumerate(steps) if "pip install" in s.get("run", ""))
 
 
-def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(monkeypatch, tmp_path):
+@pytest.mark.parametrize("incremental", [False, True])
+def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(monkeypatch, tmp_path, incremental):
     import app.google_clients as google
     import app.private_state_bindings as bindings
     import app.projection_store as projections
@@ -326,7 +327,12 @@ def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(
     import app.sheets as sheets
     import app.amazon_gmail_preview as gmail_module
     import app.aupay_card_window_preview as preview
-    p = fixture(tmp_path)
+    if incremental:
+        from test_aupay_card_incremental_apply import followup, env as incremental_env, GitHub as IncrementalGitHub
+        p = followup(tmp_path)
+        p.gmail = p.args["gmail"]
+    else:
+        p = fixture(tmp_path)
     parent = json.loads(p.ledger.transport.payload)
     parent["sources"]["amazon"]["counts"]["catch_up_pending"] = 0
     p.ledger.transport.payload = json.dumps(parent).encode()
@@ -361,13 +367,14 @@ def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(
         @classmethod
         def now(cls, tz): return NOW.astimezone(tz)
     monkeypatch.setattr(apply, "datetime", CurrentClock)
-    values = dict(environment() | ENV, RUNNER_TEMP=str(tmp_path), SPREADSHEET_ID=p.db.sid,
+    values = dict((incremental_env() if incremental else environment()) | ENV, RUNNER_TEMP=str(tmp_path), SPREADSHEET_ID=p.db.sid,
         GOOGLE_SERVICE_ACCOUNT_JSON=json.dumps({"private_key": "synthetic"}), GOOGLE_GMAIL_TOKEN_JSON="synthetic",
         KAKEIBO_STATE_FOLDER_ID="folder", AUPAY_CARD_STATE_FILE_ID="card-file", KAKEIBO_RUN_LEDGER_FILE_ID="parent-file",
         AUPAY_CARD_AUDIT_KEY_JSON=p.execution["key_provider"]._path.read_text("utf-8"),
         AUPAY_CARD_RECURRING_AUTHORITY_JSON=p.execution["authority_provider"].path.read_text("utf-8"))
     p.gmail.gets.clear()
-    result = apply.run(values, "a"*40, GitHub())
-    assert result["written"] == 33 and result["expense_rows_written"] == 0
-    assert len(p.gmail.gets) == 22 and p.db.write_calls == 1
+    result = (apply.run(values, "a"*40, IncrementalGitHub(), incremental=True) if incremental
+              else apply.run(values, "a"*40, GitHub()))
+    assert result["written"] == (2 if incremental else 33) and result["expense_rows_written"] == 0
+    assert len(p.gmail.gets) == (25 if incremental else 22) and p.db.write_calls == 1
     assert not list(tmp_path.glob("card-first-apply-*"))
