@@ -68,6 +68,15 @@ def _rows(native, file, table):
         return [dict(r) for r in con.execute("SELECT * FROM " + table)]
 
 
+def successful_checkpoint(native):
+    """Resolve coverage from the protected native object, memory/GET only."""
+    from .aupay_card_window_preview import checkpoint
+
+    rows = _rows(native, "recurring.sqlite3", "recurring_checkpoint")
+    require(len(rows) == 1, "checkpoint_invalid")
+    return checkpoint(native, rows[0]["successful_window_end"])
+
+
 def verify_reconciled_state(native, parent, expected_checkpoint):
     """Before prepare/pending/write, require the exact completed native proof."""
     from .production_run import COUNT_KEYS

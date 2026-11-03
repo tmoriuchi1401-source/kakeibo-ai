@@ -244,14 +244,16 @@ def test_guard_imports_without_site_packages():
     assert result.returncode == 0 and not result.stdout and not result.stderr
 
 
-def test_manual_workflow_has_no_schedule_extra_secrets_or_unpinned_install():
+def test_daily_workflow_preserves_manual_inputs_secrets_and_pinned_install():
     workflow = yaml.load((Path(apply.ROOT)/".github/workflows"/guard.WORKFLOW).read_text("utf-8"), Loader=yaml.BaseLoader)
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]) == {"workflow_dispatch", "schedule"}
+    assert workflow["on"]["schedule"] == [{"cron": "23 0 * * *"}]
     assert "window_start" not in workflow["on"]["workflow_dispatch"]["inputs"]
     assert "window_end" not in workflow["on"]["workflow_dispatch"]["inputs"]
     assert workflow["permissions"] == dict(contents="read", actions="read")
     assert workflow["concurrency"]["group"] == "kakeibo-production"
     steps = workflow["jobs"]["apply"]["steps"]
+    assert "vars.KAKEIBO_CARD_SCHEDULE_ENABLED == 'true'" in workflow["jobs"]["apply"]["if"]
     assert all("secrets." not in json.dumps(s) for s in steps[:-1])
     assert not {"BANK_STATE_FILE_ID", "AMAZON_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
     for step in steps:
