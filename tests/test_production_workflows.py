@@ -70,7 +70,7 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     parent = workflows()["kakeibo-production.yml"]
     assert parent["on"]["schedule"] == [
         {"cron": "23 20 * * *"}, {"cron": "31 22 * * *"},
-        {"cron": "47 21 * * *"},
+        {"cron": "47 21 * * *"}, {"cron": "11 23 * * *"},
     ]
     inputs = parent["on"]["workflow_dispatch"]["inputs"]
     assert inputs["mode"]["default"] == "preview"
@@ -89,9 +89,12 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     assert "vars.KAKEIBO_SCHEDULE_ENABLED" not in job["if"]
     assert "vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED == 'true'" in job["if"]
     assert "vars.KAKEIBO_CORE_SCHEDULE_ENABLED == 'true'" in job["if"]
+    assert "vars.KAKEIBO_PAYPAY_SCHEDULE_ENABLED == 'true'" in job["if"]
+    assert job["env"]["KAKEIBO_PAYPAY_SCHEDULE_ENABLED"] == "${{ vars.KAKEIBO_PAYPAY_SCHEDULE_ENABLED || 'false' }}"
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job["if"]
     script = next(step["run"] for step in job["steps"] if step.get("name") == "Execute sources and dependent accounting serially")
-    for cron, scope in [("23 20 * * *", "core"), ("31 22 * * *", "drive_receipts")]:
+    for cron, scope in [("23 20 * * *", "core"), ("31 22 * * *", "drive_receipts"),
+                        ("11 23 * * *", "drive_paypay")]:
         assert f"'{cron}') scope={scope} ;;" in script
     assert "'47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;" in script
     assert 'args+=(--scope "$scope")' in script

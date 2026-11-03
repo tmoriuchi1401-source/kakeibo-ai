@@ -1,4 +1,4 @@
-# 一般レシート・coreの日次再開（有効化前）
+# 一般レシート・core・PayPayの日次再開（有効化前）
 
 既存 unified production の経路を再利用する。新writer・authority・Secretsは追加しない。本PRはscheduleの本番有効化、金融Apply、原本移動、外部AI送信の実行承認ではない。
 
@@ -7,9 +7,10 @@
 | core | 05:23 / `23 20 * * *` | `KAKEIBO_CORE_SCHEDULE_ENABLED` |
 | 銀行（既存どおり） | 06:47 / `47 21 * * *` | `KAKEIBO_BANK_SCHEDULE_ENABLED` |
 | 一般レシート | 07:31 / `31 22 * * *` | `KAKEIBO_RECEIPT_SCHEDULE_ENABLED` |
+| PayPay | 08:11 / `11 23 * * *` | `KAKEIBO_PAYPAY_SCHEDULE_ENABLED` |
 | カード（PR #187の既存専用経路） | 09:23 / `23 0 * * *` | `KAKEIBO_CARD_SCHEDULE_ENABLED` |
 
-新しい専用flagは未設定/falseで停止する。全体 `KAKEIBO_SCHEDULE_ENABLED=false` は維持。PayPayのschedule入口を削除し、全体flagをtrueにしても起動しない。legacyは停止のまま。手動の既存入口と確認条件は維持する。
+新しい専用flagは未設定/falseで停止する。全体 `KAKEIBO_SCHEDULE_ENABLED=false` は維持。PayPayは専用flagの既存 `drive_paypay` 経路でのみ起動し、全体flagをtrueにしても起動しない。legacyは停止のまま。手動の既存入口と確認条件は維持する。
 
 ## 最小変更
 
@@ -37,8 +38,15 @@
 4. 一般レシートは `preview / drive_receipts / receipt_limit=1`、続いて最終承認済み `apply / drive_receipts / confirm=APPLY / receipt_limit=1`。一般原本のみ通常AIに入り、新規/重複/保留・review保存・原本残置/移動・親ledger readyを確認。必要な場合だけ次回2～3件へ。timeout後の無条件再実行は禁止。
 5. `preview / core`、最終承認済み `apply / core / confirm=APPLY` を確認。Amazon窓がoverlap込み72時間以内、残高既存IDの追加登録0、カード/銀行/PayPay/レシート起動0、必要な後続処理成功を確認。
 6. カードはPR #187の手順で既存authority、native checkpoint、復旧証拠、14日窓を確認。手動Apply時のexpected_checkpointはその場で最新値を必須入力する。
-7. 初回結果を確認後、`KAKEIBO_RECEIPT_SCHEDULE_ENABLED=true` → `KAKEIBO_CORE_SCHEDULE_ENABLED=true` → `KAKEIBO_CARD_SCHEDULE_ENABLED=true` を個別に有効化し、各初回runを確認する。全体flag、銀行flag、PayPay、医療、Secrets/authorityは変更しない。問題時は該当専用flagのみfalseへ戻し、pending/UNKNOWNを解除しない。
+7. 初回結果を確認後、`KAKEIBO_RECEIPT_SCHEDULE_ENABLED=true` → `KAKEIBO_CORE_SCHEDULE_ENABLED=true` → `KAKEIBO_PAYPAY_SCHEDULE_ENABLED=true` → `KAKEIBO_CARD_SCHEDULE_ENABLED=true` を個別に有効化し、各初回runを確認する。全体flag、銀行flag、医療、Secrets/authorityは変更しない。問題時は該当専用flagのみfalseへ戻し、pending/UNKNOWNを解除しない。
 
 ## 検証の範囲
 
 合成データとネットワーク禁止の既存テストで、1～3件のplan制限、未走査review保持、重複、医療/給与/unknown遮断、timeout非retry、coreのsource分離、UNKNOWN後の停止、各専用flag false、main/validated不一致、native/親pending停止、Amazon72時間とcatch-up重複、残高重複、銀行回帰を確認する。実データの新規金融write、AI送信、原本移動、schedule有効化は本作業で実行しない。
+
+## PayPay再開（別PRで追記）
+
+- 新規日次入口は既存 `drive_paypay`、08:11 JST、`KAKEIBO_PAYPAY_SCHEDULE_ENABLED=true` 時のみ実行。専用flagは未設定で無効。
+- 既存CSV・重複ID・移動先・会計writerを変更しない。停止期間の遡及ファイル再投入や無理な再取込はしない。
+- 初回は `preview / drive_paypay` で新規CSV 0件を期待し、確認後に既存 `apply / drive_paypay` を1回だけ実行する。対象外の新規CSVが見つかったら止めて報告する。
+- 本番有効化前に親ledger全source・native3種ready、main=validated、実行競合なしをread-only確認。UNKNOWN時の再送禁止。
