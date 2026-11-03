@@ -40,6 +40,7 @@ SCHEDULE_SCOPES = {
     "23 20 * * *": ("core", "KAKEIBO_CORE_SCHEDULE_ENABLED"),
     "31 22 * * *": ("drive_receipts", "KAKEIBO_RECEIPT_SCHEDULE_ENABLED"),
     "47 21 * * *": ("drive_bank", "KAKEIBO_BANK_SCHEDULE_ENABLED"),
+    "11 23 * * *": ("drive_paypay", "KAKEIBO_PAYPAY_SCHEDULE_ENABLED"),
 }
 
 
@@ -500,7 +501,7 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
-        if args.scope in {"core", "drive_receipts"}:
+        if args.scope in {"core", "drive_receipts", "drive_paypay"}:
             verify_source_readiness(env, history)
         if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
             raise StateError("source_reconciliation_required")
