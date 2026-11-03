@@ -383,7 +383,7 @@ def test_production_scan_persists_medical_to_ui_and_passes_only_normal_bytes(mon
     monkeypatch.setattr(runtime,'sync_review_visibility',lambda review:None)
     gate=Mock(side_effect=lambda payload,*a,**kw:SimpleNamespace(classification='sensitive_unknown' if payload==b'unknown' else payload.decode(),gemini_allowed=payload==b'normal'))
     monkeypatch.setattr(runtime,'evaluate_receipt_privacy',gate)
-    env={'RECEIPT_CONFIRMATION_BINDING':json.dumps({'file':'cipher','manifest':'synthetic'}),'KAKEIBO_STATE_FOLDER_ID':'synthetic-folder','RECEIPT_SCAN_PLAN':str(tmp_path/'plan.json')}
+    env={'RECEIPT_CONFIRMATION_BINDING':json.dumps({'file':'cipher','manifest':'synthetic'}),'KAKEIBO_STATE_FOLDER_ID':'synthetic-folder','RECEIPT_SCAN_PLAN':str(tmp_path/'plan.json'),'RECEIPT_INTAKE_LIMIT':'3'}
     result=runtime.execute(env,True)
     assert result['medical_detected']==result['medical_pending']==result['blocked']==1
     assert len(db.rows[TITLE])==2 and all(row[7:15]==['']*8 for row in db.rows[TITLE])

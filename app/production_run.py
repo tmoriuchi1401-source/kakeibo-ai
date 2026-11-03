@@ -277,7 +277,8 @@ def run_durable_source(store: DurableState, directory: Path,
 def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Mapping | None = None,
                    preview: bool = False, amazon_canary: bool = False, receipts_only: bool = False,
                    canary_source: str = "amazon", selected_sources: frozenset[str] | None = None,
-                   require_omitted_ready: bool = False, allow_amazon_partial: bool = False) -> dict:
+                   require_omitted_ready: bool = False, allow_amazon_partial: bool = False,
+                   stop_on_failure: bool = False) -> dict:
     """Run fixed existing stages serially and expose only count/status metadata.
 
     Independent sources continue after a failure. Each dependent stage is skipped
@@ -306,13 +307,13 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
         previous = (history or {}).get(source, {})
         outcome = {"status": "skipped", "error": "dependency_failed", "counts": {},
                    "last_success": previous.get("last_success"), "duration_seconds": 0.0}
-        if amazon_canary or all(
+        if not (stop_on_failure and any(x['status'] != 'success' for x in outcomes.values())) and (amazon_canary or all(
                 outcomes[name]["status"] == "success" if name in outcomes
                 else not require_omitted_ready or (
                     (history or {}).get(name, {}).get("phase") == "ready"
                     and (name != "bank" or not (history or {}).get(name, {}).get("counts", {}).get("catch_up_pending"))
                 )
-                for name in dependencies):
+                for name in dependencies)):
             try:
                 if source not in runners:
                     raise StateError("source_runner_missing")

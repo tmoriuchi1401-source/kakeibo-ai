@@ -30,12 +30,43 @@ COMMON_PREVIEWS = {"review_apply": "review-apply-preview", "reconcile": "reconci
 # The existing production ledger and source runners remain the single authority.
 # A scheduled Drive run selects only its own source and its needed downstream steps.
 DRIVE_SCHEDULE_SCOPES = {
-    "core": frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank"},
+    "core": frozenset(DEPENDENCIES) - {"receipts", "paypay", "bank", "aupay_card"},
     "drive_receipts": frozenset({"receipts"}),
     "drive_paypay": frozenset({"paypay"}),
     "drive_bank": frozenset({"bank"}),
 }
 MANUAL_SOURCE_SCOPES = {"amazon_catchup": frozenset({"amazon"})}
+SCHEDULE_SCOPES = {
+    "23 20 * * *": ("core", "KAKEIBO_CORE_SCHEDULE_ENABLED"),
+    "31 22 * * *": ("drive_receipts", "KAKEIBO_RECEIPT_SCHEDULE_ENABLED"),
+    "47 21 * * *": ("drive_bank", "KAKEIBO_BANK_SCHEDULE_ENABLED"),
+}
+
+
+def verify_schedule(env: dict, *, scope: str, mode: str) -> None:
+    if env.get("GITHUB_EVENT_NAME") != "schedule":
+        return
+    event = json.loads(Path(env["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+    expected = SCHEDULE_SCOPES.get(event.get("schedule"))
+    if (expected is None or scope != expected[0] or mode != "apply"
+            or env.get(expected[1]) != "true"
+            or env.get("GITHUB_RUN_ATTEMPT") != "1"
+            or env.get("WORKFLOW_SHA") != env.get("GITHUB_SHA")
+            or env.get("WORKFLOW_REF") != "tmoriuchi1401-source/kakeibo-ai/.github/workflows/kakeibo-production.yml@refs/heads/main"):
+        raise StateError("production_schedule_disabled_or_mismatched")
+
+
+def verify_source_readiness(env: dict, history: dict) -> None:
+    if any(item["phase"] != "ready" or item["attempt"] or item["error"] for item in history.values()):
+        raise StateError("source_reconciliation_required")
+    from .google_clients import read_only_drive_service
+    # Inspect omitted native dependencies without running their writers.
+    for source, origin in STATE_SOURCES.items():
+        binding = StateBinding(origin, env.get("SPREADSHEET_ID", ""),
+            env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
+        native = DurableState(DriveStateTransport(read_only_drive_service(), binding), binding)
+        if native.inspect()["phase"] != "ready":
+            raise StateError("source_reconciliation_required")
 
 
 def verify_execution_boundary(env: dict, head: str) -> None:
@@ -388,6 +419,7 @@ def main():
         env = dict(os.environ)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
         verify_execution_boundary(env, head)
+        verify_schedule(env, scope=args.scope, mode=args.mode)
         if args.scope == "amazon_catchup" and env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
             raise StateError("amazon_catchup_manual_required")
         from .private_state_bindings import decode_environment
@@ -468,6 +500,8 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
+        if args.scope in {"core", "drive_receipts"}:
+            verify_source_readiness(env, history)
         if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
             raise StateError("source_reconciliation_required")
         daily_counts={}
@@ -489,6 +523,7 @@ def main():
                                     receipts_only=args.scope == "receipts",
                                     selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope, MANUAL_SOURCE_SCOPES.get(args.scope)),
                                     require_omitted_ready=args.scope == "core",
+                                    stop_on_failure=args.scope == "core",
                                     **({"allow_amazon_partial":True} if args.scope=="amazon_catchup" else {}))
             if args.mode == "preview":
                 bank_stage = 'bank_parent_authority'

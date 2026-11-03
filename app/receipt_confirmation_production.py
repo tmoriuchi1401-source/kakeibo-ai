@@ -122,6 +122,8 @@ def sync_review_visibility(review):
 def execute(env,apply,diagnostic=lambda _:None):
     diagnostic('confirmation_context')
     if env.get('GEMINI_API_KEY'):raise StateError('medical_process_must_not_receive_ai_key')
+    from .drive_receipts import receipt_batch
+    receipt_batch([],env.get('RECEIPT_INTAKE_LIMIT','1'))
     from .google_clients import read_only_drive_service,download_drive_file
     settings,store,db,metadata=open_context(env,apply)
     reader=read_only_drive_service()
@@ -170,7 +172,17 @@ def execute(env,apply,diagnostic=lambda _:None):
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
     plans=[];multipage_plans=[];pdf_context=None;blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
-    for f in result.get('files',[]):
+    files=result.get('files',[])
+    # Existing unchanged holds already have a durable review row. Do not let
+    # them monopolize the bounded scan; owner answers are still processed.
+    held={(x['source']['source_id'],x['source']['version']) for x in review.items.values()
+          if x['kind']=='medical' or (x['kind']=='intake' and x['status']=='waiting' and not any(x['inputs']))}
+    excluded={f['id'] for f in files if (f['id'],f.get('version')) in held}
+    batch=receipt_batch(files,env.get('RECEIPT_INTAKE_LIMIT','1'),excluded=excluded)
+    selected={f['id'] for f in batch}
+    # A partial scan must never close a review for an unexamined original.
+    blocked_sources.update(f['id'] for f in files if f['id'] not in selected)
+    for f in batch:
         diagnostic('confirmation_source_read')
         if not is_supported_receipt_mime(f['mimeType']):continue
         counts['found']+=1

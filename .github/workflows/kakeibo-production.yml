@@ -2,12 +2,11 @@ name: Kakeibo unified production
 
 on:
   schedule:
-    # Existing Gmail and general accounting cadence: 06:17 / 18:17 JST.
-    - cron: '17 9,21 * * *'
+    # Amazon, balance and existing dependent accounting: 05:23 JST.
+    - cron: '23 20 * * *'
     # Drive intake uses separate runs under the same production lock and ledger.
-    - cron: '31 */3 * * *'  # Receipt: every three hours, 00:31 through 21:31 UTC.
+    - cron: '31 22 * * *'   # General receipts: 07:31 JST, one source per run.
     - cron: '47 21 * * *'   # Bank recurring apply: 06:47 JST.
-    - cron: '11 23 * * *'   # PayPay: 08:11 JST.
   workflow_dispatch:
     inputs:
       mode:
@@ -102,7 +101,9 @@ jobs:
       (inputs.bank_partial_recovery == '' || (vars.KAKEIBO_BANK_PARTIAL_RECOVERY_ENABLED == 'true' && inputs.bank_backfill_plan != '' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner)) &&
       (github.event_name != 'schedule' ||
         (github.event.schedule == '47 21 * * *' && vars.KAKEIBO_BANK_SCHEDULE_ENABLED == 'true') ||
-        (github.event.schedule != '47 21 * * *' && vars.KAKEIBO_SCHEDULE_ENABLED == 'true')) &&
+        (github.event.schedule == '31 22 * * *' && vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED == 'true') ||
+        (github.event.schedule == '23 20 * * *' && vars.KAKEIBO_CORE_SCHEDULE_ENABLED == 'true')) &&
+      (github.event_name != 'schedule' || (github.run_attempt == 1 && github.sha == github.workflow_sha)) &&
       github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -119,6 +120,11 @@ jobs:
       CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED: ${{ vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED }}
       BANK_FIXED_BACKFILL_APPROVAL_JSON: ${{ vars.BANK_FIXED_BACKFILL_APPROVAL_JSON }}
       KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+      KAKEIBO_BANK_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_BANK_SCHEDULE_ENABLED || 'false' }}
+      KAKEIBO_RECEIPT_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED || 'false' }}
+      KAKEIBO_CORE_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_CORE_SCHEDULE_ENABLED || 'false' }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
       KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
       KAKEIBO_DAILY_SPREADSHEET_ID: ${{ vars.KAKEIBO_DAILY_SPREADSHEET_ID }}
       KAKEIBO_DAILY_CORRECTIONS_MODE: ${{ vars.KAKEIBO_DAILY_CORRECTIONS_MODE }}
@@ -196,7 +202,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Install existing OCR runtime
-        if: ${{ (github.event_name == 'schedule' && github.event.schedule == '31 */3 * * *') || (github.event_name != 'schedule' && (inputs.scope == 'all' || inputs.scope == 'receipts' || inputs.scope == 'drive_receipts' || inputs.scope == 'receipt_reimport' || inputs.scope == 'receipt_confirmation')) }}
+        if: ${{ (github.event_name == 'schedule' && github.event.schedule == '31 22 * * *') || (github.event_name != 'schedule' && (inputs.scope == 'all' || inputs.scope == 'receipts' || inputs.scope == 'drive_receipts' || inputs.scope == 'receipt_reimport' || inputs.scope == 'receipt_confirmation')) }}
         run: |
           pip install -r requirements-local-ocr.txt
           sudo apt-get update
@@ -227,10 +233,9 @@ jobs:
           if [[ "$EVENT_NAME" == schedule ]]; then
             mode=apply
             case "$EVENT_SCHEDULE" in
-              '17 9,21 * * *') scope=core ;;
-              '31 */3 * * *') scope=drive_receipts ;;
+              '23 20 * * *') scope=core ;;
+              '31 22 * * *') scope=drive_receipts ;;
               '47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;
-              '11 23 * * *') scope=drive_paypay ;;
               *) echo 'Unrecognized production schedule'; exit 1 ;;
             esac
             args+=(--scope "$scope")
@@ -252,6 +257,7 @@ jobs:
               exit 1
             fi
           fi
+          export RECEIPT_INTAKE_LIMIT="$RECEIPT_LIMIT"
           python -m app.production_flow --mode "$mode" "${args[@]}"
       - name: Upload encrypted Authority report only
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && inputs.mode == 'preview' && inputs.scope == 'drive_bank' && inputs.authority_recipient != '' }}
