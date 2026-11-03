@@ -16,6 +16,7 @@ from app.production_run import DEPENDENCIES, execute_serial
     ('23 20 * * *','core','KAKEIBO_CORE_SCHEDULE_ENABLED'),
     ('31 22 * * *','drive_receipts','KAKEIBO_RECEIPT_SCHEDULE_ENABLED'),
     ('47 21 * * *','drive_bank','KAKEIBO_BANK_SCHEDULE_ENABLED'),
+    ('11 23 * * *','drive_paypay','KAKEIBO_PAYPAY_SCHEDULE_ENABLED'),
 ])
 def test_independent_schedule_flags_and_payload(tmp_path,cron,scope,flag):
     event=tmp_path/'event.json';event.write_text(json.dumps({'schedule':cron}))
@@ -30,7 +31,7 @@ def test_independent_schedule_flags_and_payload(tmp_path,cron,scope,flag):
         with pytest.raises(StateError):flow.verify_schedule(env|changes,scope=scope,mode='apply')
     with pytest.raises(StateError):flow.verify_schedule(env,scope='all',mode='apply')
     with pytest.raises(StateError):flow.verify_schedule(env,scope=scope,mode='preview')
-    event.write_text(json.dumps({'schedule':'11 23 * * *'}))
+    event.write_text(json.dumps({'schedule':'0 0 * * *'}))
     with pytest.raises(StateError):flow.verify_schedule(env|{'KAKEIBO_SCHEDULE_ENABLED':'true'},scope=scope,mode='apply')
 
 
