@@ -16,7 +16,6 @@ on:
         required: true
       expected_checkpoint:
         type: string
-        default: '2026-10-27T08:55:56+09:00'
         required: true
       confirm:
         description: Type APPLY_CHECKPOINT_FRESH_PLAN_ONCE after final production approval

@@ -276,4 +276,6 @@ def test_daily_workflow_flag_defaults_off_and_preserves_existing_manual_conditio
     env=w["jobs"]["apply"]["env"]
     assert "|| 'false'" in env["KAKEIBO_CARD_SCHEDULE_ENABLED"]
     assert env["EXPECTED_CHECKPOINT"] == "${{ inputs.expected_checkpoint }}"
+    checkpoint = w["on"]["workflow_dispatch"]["inputs"]["expected_checkpoint"]
+    assert checkpoint["required"] == "true" and "default" not in checkpoint
     assert all("GITHUB_ENV" not in s.get("run","") for s in w["jobs"]["apply"]["steps"])
