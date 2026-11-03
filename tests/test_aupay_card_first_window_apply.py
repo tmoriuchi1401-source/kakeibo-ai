@@ -318,8 +318,8 @@ def test_workflow_is_manual_locked_pinned_and_has_no_artifact_or_other_source_cr
     assert steps.index(guard_step) < next(i for i, s in enumerate(steps) if "pip install" in s.get("run", ""))
 
 
-@pytest.mark.parametrize("incremental", [False, True])
-def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(monkeypatch, tmp_path, incremental):
+@pytest.mark.parametrize("incremental,recovery_result", [(False, None), (True, None), (True, True), (True, False)])
+def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(monkeypatch, tmp_path, incremental, recovery_result):
     import app.google_clients as google
     import app.private_state_bindings as bindings
     import app.projection_store as projections
@@ -372,9 +372,27 @@ def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(
         KAKEIBO_STATE_FOLDER_ID="folder", AUPAY_CARD_STATE_FILE_ID="card-file", KAKEIBO_RUN_LEDGER_FILE_ID="parent-file",
         AUPAY_CARD_AUDIT_KEY_JSON=p.execution["key_provider"]._path.read_text("utf-8"),
         AUPAY_CARD_RECURRING_AUTHORITY_JSON=p.execution["authority_provider"].path.read_text("utf-8"))
+    verified = []
+    if recovery_result is not None:
+        import app.aupay_card_incremental_guard as incremental_guard
+        import app.aupay_card_incremental_recovery as recovery
+        monkeypatch.setattr(incremental_guard, "controls", lambda *args: True)
+        def proof(native, parent, expected_checkpoint):
+            assert native["phase"] == parent["sources"]["aupay_card"]["phase"] == "ready"
+            assert expected_checkpoint == apply.END
+            verified.append(True)
+            if not recovery_result: raise RuntimeError("synthetic_recovery_proof_rejected")
+        monkeypatch.setattr(recovery, "verify_reconciled_state", proof)
     p.gmail.gets.clear()
+    if recovery_result is False:
+        with pytest.raises(RuntimeError, match="synthetic_recovery_proof_rejected"):
+            apply.run(values, "a"*40, IncrementalGitHub(), incremental=True)
+        assert verified == [True] and not p.gmail.gets and p.db.write_calls == 0
+        assert p.durable.inspect()["phase"] == "ready"
+        return
     result = (apply.run(values, "a"*40, IncrementalGitHub(), incremental=True) if incremental
               else apply.run(values, "a"*40, GitHub()))
     assert result["written"] == (2 if incremental else 33) and result["expense_rows_written"] == 0
     assert len(p.gmail.gets) == (25 if incremental else 22) and p.db.write_calls == 1
+    assert verified == ([True] if recovery_result else [])
     assert not list(tmp_path.glob("card-first-apply-*"))

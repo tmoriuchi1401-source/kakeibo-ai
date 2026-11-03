@@ -398,7 +398,7 @@ def run(env, head, github, *, incremental=False):
     boundary = controls
     if incremental:
         from .aupay_card_incremental_guard import controls as boundary
-    boundary(env, head, github)
+    recovered_failure = boundary(env, head, github)
     expected_cp = env["EXPECTED_CHECKPOINT"] if incremental else CHECKPOINT
     require(env.get("KAKEIBO_AMAZON_MONEY_MODE") == "confirmed-v1", "money_mode_required")
     from .amazon_gmail_preview import gmail_readonly_service
@@ -428,6 +428,9 @@ def run(env, head, github, *, incremental=False):
     reader = _configured_writer(db, observed, env, ledger=ReviewLedger(db))
     before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp)
     parent_before = validate_ledger(parent_ro.read(), parent_binding)
+    if incremental and recovered_failure:
+        from .aupay_card_incremental_recovery import verify_reconciled_state
+        verify_reconciled_state(validate(card_ro.read(), card_binding), parent_before, expected_cp)
     with tempfile.TemporaryDirectory(prefix="card-first-apply-", dir=env["RUNNER_TEMP"]) as temp:
         private = Path(temp)
         authority = ProtectedRecurringAuthorityProvider(_secret_file(private, "authority.json",
