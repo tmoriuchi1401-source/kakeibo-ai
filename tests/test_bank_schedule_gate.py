@@ -14,14 +14,16 @@ def workflow(name):
     return yaml.load((ROOT / '.github/workflows' / name).read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
 
 
-def context(*, event='schedule', cron=BANK_CRON, bank='', general='false'):
+def context(*, event='schedule', cron=BANK_CRON, bank='', general='false', receipt='', core=''):
     return {
         'github.repository': 'tmoriuchi1401-source/kakeibo-ai', 'github.ref': 'refs/heads/main',
         'github.event_name': event, 'github.event.schedule': cron,
         'github.actor': 'owner', 'github.triggering_actor': 'owner', 'github.repository_owner': 'owner',
         'github.sha': 'a' * 40, 'vars.KAKEIBO_VALIDATED_MAIN_SHA': 'a' * 40,
+        'github.workflow_sha': 'a' * 40, 'github.run_attempt': 1,
         'vars.KAKEIBO_PRODUCTION_ENABLED': 'true', 'vars.KAKEIBO_LEGACY_DISABLED': 'true',
         'vars.KAKEIBO_BANK_SCHEDULE_ENABLED': bank, 'vars.KAKEIBO_SCHEDULE_ENABLED': general,
+        'vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED': receipt, 'vars.KAKEIBO_CORE_SCHEDULE_ENABLED': core,
         'vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED': 'false',
     }
 
@@ -40,14 +42,15 @@ def parent_allowed(values):
     return allowed(workflow('kakeibo-production.yml')['jobs']['production']['if'], values)
 
 
-@pytest.mark.parametrize('general,bank', tuple(product(('', 'false', 'true'), repeat=2)))
-def test_each_integrated_cron_uses_its_own_flag(general, bank):
+@pytest.mark.parametrize('general,bank,receipt,core', tuple(product(('', 'false', 'true'), repeat=4)))
+def test_each_integrated_cron_uses_its_own_flag(general, bank, receipt, core):
     scheduled = workflow('kakeibo-production.yml')['on']['schedule']
-    assert len(scheduled) == 4
+    assert len(scheduled) == 3
+    flags={BANK_CRON:bank,'31 22 * * *':receipt,'23 20 * * *':core}
     for item in scheduled:
         cron = item['cron']
-        assert parent_allowed(context(cron=cron, bank=bank, general=general)) is (
-            (bank if cron == BANK_CRON else general) == 'true')
+        assert parent_allowed(context(cron=cron, bank=bank, general=general,receipt=receipt,core=core)) is (flags[cron]=='true')
+    assert not parent_allowed(context(cron='11 23 * * *',bank=bank,general=general,receipt=receipt,core=core))
 
 
 def test_bank_only_enables_exactly_0647_and_preserves_scope():
@@ -71,6 +74,7 @@ def test_manual_dispatch_does_not_depend_on_schedule_flags(general, bank, mode):
 
 @pytest.mark.parametrize('field,value', [
     ('github.ref', 'refs/heads/unvalidated'), ('github.sha', 'b' * 40),
+    ('github.workflow_sha','b'*40), ('github.run_attempt',2),
     ('vars.KAKEIBO_PRODUCTION_ENABLED', 'false'), ('vars.KAKEIBO_LEGACY_DISABLED', 'false')])
 def test_bank_flag_does_not_bypass_existing_guards(field, value):
     values = context(bank='true'); values[field] = value

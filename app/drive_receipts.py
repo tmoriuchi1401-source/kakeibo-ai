@@ -27,6 +27,14 @@ def is_supported_receipt_mime(mime_type: str) -> bool:
     return mime_type.startswith("image/") or mime_type == "application/pdf"
 
 
+def receipt_batch(files, limit="1", *, excluded=()):
+    """Bound expensive production scans; unselected originals stay in the inbox."""
+    if limit not in {"1", "2", "3"}:
+        raise RuntimeError("receipt_intake_limit_invalid")
+    return [f for f in files if is_supported_receipt_mime(f["mimeType"])
+            and f["id"] not in excluded][:int(limit)]
+
+
 def process_inbox(folder_id:str,pipeline:ReceiptPipeline,processed_folder_id:str="", *,
                   known_source_classification: Classification | None = None, approved_sources=None,
                   progress=None):

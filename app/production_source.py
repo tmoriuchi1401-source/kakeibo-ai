@@ -111,7 +111,11 @@ def receipts(settings, *, apply: bool) -> dict:
         raise RuntimeError("receipt_inbox_collection_incomplete")
     identities = db.import_ids()
     counts["new_eligible"] = 0
-    for file in response.get("files", []):
+    from .drive_receipts import receipt_batch
+    files=response.get("files", [])
+    existing={f['id'] for f in files if f"receipt:{f['id']}" in identities}
+    counts['unchanged']=len(existing)
+    for file in receipt_batch(files,os.environ.get('RECEIPT_INTAKE_LIMIT','1'),excluded=existing):
         if not is_supported_receipt_mime(file["mimeType"]):
             continue
         counts["found"] += 1

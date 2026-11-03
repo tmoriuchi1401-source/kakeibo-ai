@@ -69,8 +69,8 @@ def test_bank_diagnostic_branch_is_read_only_and_fixed_to_validated_baseline():
 def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     parent = workflows()["kakeibo-production.yml"]
     assert parent["on"]["schedule"] == [
-        {"cron": "17 9,21 * * *"}, {"cron": "31 */3 * * *"},
-        {"cron": "47 21 * * *"}, {"cron": "11 23 * * *"},
+        {"cron": "23 20 * * *"}, {"cron": "31 22 * * *"},
+        {"cron": "47 21 * * *"},
     ]
     inputs = parent["on"]["workflow_dispatch"]["inputs"]
     assert inputs["mode"]["default"] == "preview"
@@ -86,11 +86,12 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     job = parent["jobs"]["production"]
     assert "vars.KAKEIBO_PRODUCTION_ENABLED == 'true'" in job["if"]
     assert "vars.KAKEIBO_LEGACY_DISABLED == 'true'" in job["if"]
-    assert "vars.KAKEIBO_SCHEDULE_ENABLED == 'true'" in job["if"]
+    assert "vars.KAKEIBO_SCHEDULE_ENABLED" not in job["if"]
+    assert "vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED == 'true'" in job["if"]
+    assert "vars.KAKEIBO_CORE_SCHEDULE_ENABLED == 'true'" in job["if"]
     assert "github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA" in job["if"]
     script = next(step["run"] for step in job["steps"] if step.get("name") == "Execute sources and dependent accounting serially")
-    for cron, scope in [("17 9,21 * * *", "core"), ("31 */3 * * *", "drive_receipts"),
-                        ("11 23 * * *", "drive_paypay")]:
+    for cron, scope in [("23 20 * * *", "core"), ("31 22 * * *", "drive_receipts")]:
         assert f"'{cron}') scope={scope} ;;" in script
     assert "'47 21 * * *') scope=drive_bank; args+=(--bank-apply) ;;" in script
     assert 'args+=(--scope "$scope")' in script
@@ -108,7 +109,7 @@ def test_parent_is_disabled_by_default_and_only_runs_validated_main():
     guard = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("Bind verified"))
     assert 'test "$(git rev-parse HEAD)" = "$KAKEIBO_VALIDATED_MAIN_SHA"' in guard
     ocr=next(step for step in job["steps"] if step.get("name")=="Install existing OCR runtime")
-    assert "github.event.schedule == '31 */3 * * *'" in ocr["if"]
+    assert "github.event.schedule == '31 22 * * *'" in ocr["if"]
     assert "inputs.scope == 'drive_receipts'" in ocr["if"]
 
 
@@ -116,11 +117,12 @@ def test_drive_schedule_jst_times_and_receipt_period():
     jst = timezone(timedelta(hours=9))
     bank = datetime(2026, 9, 23, 21, 47, tzinfo=timezone.utc).astimezone(jst)
     paypay = datetime(2026, 9, 23, 23, 11, tzinfo=timezone.utc).astimezone(jst)
-    receipt_hours = [datetime(2026, 9, 24, hour, 31, tzinfo=timezone.utc).astimezone(jst).hour
-                     for hour in range(0, 24, 3)]
+    receipt = datetime(2026, 9, 24, 22, 31, tzinfo=timezone.utc).astimezone(jst)
+    core = datetime(2026, 9, 24, 20, 23, tzinfo=timezone.utc).astimezone(jst)
     assert (bank.hour, bank.minute) == (6, 47)
     assert (paypay.hour, paypay.minute) == (8, 11)
-    assert receipt_hours == [9, 12, 15, 18, 21, 0, 3, 6]
+    assert (receipt.hour, receipt.minute) == (7, 31)
+    assert (core.hour, core.minute) == (5, 23)
 
 
 def test_legacy_daily_entries_stop_before_new_entry_can_start():

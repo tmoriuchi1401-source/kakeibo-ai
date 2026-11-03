@@ -219,7 +219,8 @@ def integrated(monkeypatch, tmp_path):
     csv = ("取引日,出金金額（円）,入金金額（円）,海外出金金額,通貨,変換レート（円）,利用国,取引内容,取引先,取引方法,支払い区分,利用者,取引番号\n"
            "2026/09/13 12:34,900,,,,,,支払い,合成PayPay店舗,PayPay残高,一回払い,本人,TX-SYNTHETIC\n")
     add_file("paypay-fixture", PAYPAY, "text/csv", csv.encode("utf-8-sig"), "fixture.csv")
-    env = {"SPREADSHEET_ID": SID, "KAKEIBO_STATE_FOLDER_ID": STATE,"KAKEIBO_AMAZON_MONEY_MODE":"confirmed-v1"}
+    env = {"SPREADSHEET_ID": SID, "KAKEIBO_STATE_FOLDER_ID": STATE,"KAKEIBO_AMAZON_MONEY_MODE":"confirmed-v1",
+           "RECEIPT_INTAKE_LIMIT":"3"}
     from app.amazon_money import empty_book
     from app.amazon_money_writer import MoneyWriter,MoneyLedger
     from test_projection_refresh import Store
@@ -311,14 +312,31 @@ def integrated(monkeypatch, tmp_path):
         return SimpleNamespace(returncode=code, stdout=output.getvalue(), stderr=error.getvalue())
     monkeypatch.setattr(flow.subprocess, "run", child)
 
-    def run(apply, *, canary=False, target="",canary_source="amazon"):
+    def run(apply, *, canary=False, target="",canary_source="amazon",scope=None):
         directory = tmp_path / f"run-{len(calls)}"; directory.mkdir()
         ledger = ProductionLedger(DriveStateTransport(drive if apply else ro_drive, ledger_binding), ledger_binding)
         runners = flow.assemble(env, directory, apply=apply, bank_apply=False, ledger=ledger, canary_target=target,canary_source=canary_source,money_canary=canary)
-        return execute_serial(runners, history=ledger.value["sources"], preview=not apply, amazon_canary=canary,canary_source=canary_source)
+        return execute_serial(runners, history=ledger.value["sources"], preview=not apply, amazon_canary=canary,canary_source=canary_source,
+            selected_sources=flow.DRIVE_SCHEDULE_SCOPES.get(scope),require_omitted_ready=scope=='core',stop_on_failure=scope=='core')
     return SimpleNamespace(run=run, rows=rows, payloads=payloads, metadata=metadata,
                            swrites=swrites, dwrites=dwrites, calls=calls, failures=failures,
                            ai_calls=ai_calls, bindings=bindings, sheets=sheets)
+
+
+def test_core_existing_writers_replay_without_balance_duplicates_or_other_sources(integrated):
+    f=integrated
+    first=f.run(True,scope='core')
+    assert first['success'],(first,f.failures)
+    assert first['sources']['aupay_balance']['counts']['new']==1
+    before=deepcopy(f.rows['取込データ'])
+    first_count=len(f.calls)
+    second=f.run(True,scope='core')
+    assert second['success'],(second,f.failures)
+    assert second['sources']['aupay_balance']['counts']['new']==0
+    assert second['sources']['aupay_balance']['counts']['unchanged']==1
+    assert f.rows['取込データ']==before
+    assert set(f.calls[first_count:])==flow.DRIVE_SCHEDULE_SCOPES['core']
+    assert not f.ai_calls
 
 
 def test_shared_transport_cli_preview_apply_and_replay(integrated):

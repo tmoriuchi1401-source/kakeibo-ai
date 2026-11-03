@@ -41,8 +41,8 @@ def test_preview_commands_never_select_apply():
 
 def test_scheduled_scopes_keep_gmail_cadence_and_drive_sources_independent():
     scopes = flow.DRIVE_SCHEDULE_SCOPES
-    assert {"amazon", "aupay_card", "aupay_balance"} <= scopes["core"]
-    assert not {"receipts", "paypay", "bank"} & scopes["core"]
+    assert {"amazon", "aupay_balance"} <= scopes["core"]
+    assert not {"receipts", "paypay", "bank", "aupay_card"} & scopes["core"]
     assert scopes["drive_receipts"] == {"receipts"}
     assert scopes["drive_bank"] == {"bank"}
     assert scopes["drive_paypay"] == {"paypay"}
