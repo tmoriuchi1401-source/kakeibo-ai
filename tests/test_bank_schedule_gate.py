@@ -14,7 +14,7 @@ def workflow(name):
     return yaml.load((ROOT / '.github/workflows' / name).read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
 
 
-def context(*, event='schedule', cron=BANK_CRON, bank='', general='false', receipt='', core=''):
+def context(*, event='schedule', cron=BANK_CRON, bank='', general='false', receipt='', core='', paypay=''):
     return {
         'github.repository': 'tmoriuchi1401-source/kakeibo-ai', 'github.ref': 'refs/heads/main',
         'github.event_name': event, 'github.event.schedule': cron,
@@ -24,6 +24,7 @@ def context(*, event='schedule', cron=BANK_CRON, bank='', general='false', recei
         'vars.KAKEIBO_PRODUCTION_ENABLED': 'true', 'vars.KAKEIBO_LEGACY_DISABLED': 'true',
         'vars.KAKEIBO_BANK_SCHEDULE_ENABLED': bank, 'vars.KAKEIBO_SCHEDULE_ENABLED': general,
         'vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED': receipt, 'vars.KAKEIBO_CORE_SCHEDULE_ENABLED': core,
+        'vars.KAKEIBO_PAYPAY_SCHEDULE_ENABLED': paypay,
         'vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED': 'false',
     }
 
@@ -42,15 +43,25 @@ def parent_allowed(values):
     return allowed(workflow('kakeibo-production.yml')['jobs']['production']['if'], values)
 
 
-@pytest.mark.parametrize('general,bank,receipt,core', tuple(product(('', 'false', 'true'), repeat=4)))
-def test_each_integrated_cron_uses_its_own_flag(general, bank, receipt, core):
+@pytest.mark.parametrize('general,bank,receipt,core,paypay', tuple(product(('', 'false', 'true'), repeat=5)))
+def test_each_integrated_cron_uses_its_own_flag(general, bank, receipt, core, paypay):
     scheduled = workflow('kakeibo-production.yml')['on']['schedule']
-    assert len(scheduled) == 3
-    flags={BANK_CRON:bank,'31 22 * * *':receipt,'23 20 * * *':core}
+    assert len(scheduled) == 4
+    flags={BANK_CRON:bank,'31 22 * * *':receipt,'23 20 * * *':core,'11 23 * * *':paypay}
     for item in scheduled:
         cron = item['cron']
-        assert parent_allowed(context(cron=cron, bank=bank, general=general,receipt=receipt,core=core)) is (flags[cron]=='true')
-    assert not parent_allowed(context(cron='11 23 * * *',bank=bank,general=general,receipt=receipt,core=core))
+        assert parent_allowed(context(cron=cron, bank=bank, general=general,receipt=receipt,core=core,paypay=paypay)) is (flags[cron]=='true')
+    assert not parent_allowed(context(cron='13 23 * * *',bank=bank,general=general,receipt=receipt,core=core,paypay=paypay))
+
+
+def test_paypay_only_0811_and_existing_source_scope():
+    parent = workflow('kakeibo-production.yml')
+    crons = [item['cron'] for item in parent['on']['schedule']]
+    assert [cron for cron in crons if parent_allowed(context(cron=cron,paypay='true'))] == ['11 23 * * *']
+    execute = next(s for s in parent['jobs']['production']['steps'] if s.get('name') == 'Execute sources and dependent accounting serially')
+    assert "'11 23 * * *') scope=drive_paypay ;;" in execute['run']
+    from app.production_flow import DRIVE_SCHEDULE_SCOPES
+    assert DRIVE_SCHEDULE_SCOPES['drive_paypay'] == frozenset({'paypay'})
 
 
 def test_bank_only_enables_exactly_0647_and_preserves_scope():
