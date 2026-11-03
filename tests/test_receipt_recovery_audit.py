@@ -51,3 +51,25 @@ def test_duplicate_fixed_ids_reject_the_audit(table):
     rows.append(deepcopy(rows[0]))
     with pytest.raises(StateError, match="identity_invalid"):
         audit_rows(raw, receipts, confirmation, ledger)
+
+
+
+def test_accounting_audit_ignores_ui_columns_beyond_finance_bounds():
+    """A:T reads include N's category return link; finance ends at M/L."""
+    raw, receipts, confirmation, ledger = fixture()
+    baseline = audit_rows(raw, receipts, confirmation, ledger)
+    decorated = deepcopy(raw)
+    decorated["expenses"][0] += [""] * (13 - len(decorated["expenses"][0]))
+    decorated["expenses"][0] += ['=LET(id,INDEX($A:$A,ROW()),"カテゴリ操作へ戻る")', "UI only"]
+    decorated["imports"][0] += [""] * (12 - len(decorated["imports"][0]))
+    decorated["imports"][0] += ["display-only value"]
+    # A row with only an N-column UI formula is not a financial identity.
+    decorated["expenses"].append([""] * 13 + ["=LET(id,INDEX($A:$A,ROW()),...)"])
+    before = deepcopy(decorated)
+    report = audit_rows(decorated, receipts, confirmation, ledger)
+    assert report == baseline
+    assert decorated == before
+
+    # A genuine financial change in A:M still changes the audit evidence.
+    decorated["expenses"][0][4] = 1235
+    assert audit_rows(decorated, receipts, confirmation, ledger)["evidence_sha256"] != baseline["evidence_sha256"]
