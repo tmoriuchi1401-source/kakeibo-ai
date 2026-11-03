@@ -16,6 +16,11 @@ from .receipt_reimport_production import ReimportStore, ResultBinding
 
 
 def audit_rows(raw, receipt_rows, confirmation, ledger):
+    # The receipt UI reads A:T, but finance owns only A:M (expenses) and
+    # A:L (imports). N onward includes the category return-link formula.
+    # Ignore UI-only cells without changing the source rows or finance digest.
+    raw = {**raw, "expenses": [list(row[:13]) for row in raw["expenses"]],
+           "imports": [list(row[:12]) for row in raw["imports"]]}
     def unique(rows):
         result = {}
         for row in rows:
