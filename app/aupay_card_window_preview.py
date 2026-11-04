@@ -186,7 +186,44 @@ def financial_snapshot(service, sid):
                      for t, rows in zip(titles, observations["UNFORMATTED_VALUE"])}}
 
 
-def observe(card, parent, sheets, sid, money_store, *, expected_checkpoint=CHECKPOINT):
+def amazon_completion(ledger, amazon, parent_binding):
+    """A missing catch-up count needs the current protected native result."""
+    from .drive_run_state import validate
+    from .production_run import COUNT_KEYS
+    from .aupay_card_incremental_recovery import _rows
+
+    item = ledger["sources"]["amazon"]
+    if "catch_up_pending" in item["counts"]:
+        require(type(item["counts"]["catch_up_pending"]) is int
+                and item["counts"]["catch_up_pending"] == 0, "amazon_catchup_pending")
+        return None
+    require(amazon is not None and amazon.binding.source == "amazon_gmail"
+            and amazon.binding.spreadsheet_id == parent_binding.spreadsheet_id
+            and amazon.binding.folder_id == parent_binding.folder_id, "amazon_completion_unproven")
+    raw, proof = amazon.observe()
+    native = validate(raw, amazon.binding)
+    require(native["phase"] == "ready" and not native["attempt"], "amazon_native_pending")
+    checkpoints = _rows(native, "recurring.sqlite3", "recurring_checkpoint")
+    require(len(checkpoints) == 1, "amazon_checkpoint_unproven")
+    cp = checkpoints[0]
+    results = [r for r in _rows(native, "recurring.sqlite3", "recurring_runs") if r["run_id"] == cp["run_id"]]
+    require(len(results) == 1, "amazon_result_unproven")
+    row = results[0]
+    result = json.loads(row["summary_json"])
+    counts = {k: v for k, v in result.items() if k in COUNT_KEYS and type(v) is int and v >= 0}
+    require(row["status"] == result.get("status") == "complete"
+            and row["window_end"] == result.get("source_window_end") == cp["successful_window_end"]
+            and result.get("run_id") == cp["run_id"]
+            and type(result.get("failure")) is int and result["failure"] == 0
+            and ("catch_up_pending" not in result or type(result["catch_up_pending"]) is int
+                 and result["catch_up_pending"] == 0)
+            and counts == item["counts"]
+            and datetime.fromisoformat(item["last_success"]) >= datetime.fromisoformat(row["recorded_at"]),
+            "amazon_parent_native_mismatch")
+    return proof
+
+
+def observe(card, parent, sheets, sid, money_store, *, expected_checkpoint=CHECKPOINT, amazon=None):
     from .drive_run_state import validate
     from .production_ledger import validate_ledger
     raw, card_proof = card.observe()
@@ -195,9 +232,9 @@ def observe(card, parent, sheets, sid, money_store, *, expected_checkpoint=CHECK
     ledger = validate_ledger(raw, parent.binding)
     require(all(v["phase"] == "ready" and not v["attempt"] and not v["error"]
                 for v in ledger["sources"].values()), "parent_pending")
-    require(ledger["sources"]["amazon"]["counts"].get("catch_up_pending") == 0, "amazon_catchup_pending")
+    amazon_proof = amazon_completion(ledger, amazon, parent.binding)
     money = {key: money_store.read(key) for key in ("money", "money-migration", "money-notices", "journal")} if money_store else {}
-    return {"card": card_proof, "parent": parent_proof, "checkpoint": cp,
+    return {"card": card_proof, "parent": parent_proof, "checkpoint": cp, "amazon": amazon_proof,
             "financial": financial_snapshot(sheets, sid), "money_digest": digest(money)}
 
 
@@ -211,6 +248,7 @@ def checked_preview(observation, execute):
         after = observation()
         for field in ("card", "parent", "checkpoint", "financial", "money_digest"):
             require(before[field] == after[field], "after_" + field + "_changed")
+        require(before.get("amazon") == after.get("amazon"), "after_amazon_changed")
     require(isinstance(result, dict) and result.get("status") in {"dry_run_ready", "dry_run_noop"}
             and result.get("failure") == 0, "card_preview_failed")
     require(result.get("source_window_start") == START and result.get("source_window_end") == END,

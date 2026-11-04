@@ -421,6 +421,10 @@ def run(env, head, github, *, incremental=False):
     card_binding = StateBinding(SOURCE, sid, folder, decoded["AUPAY_CARD_STATE_FILE_ID"])
     parent_binding = StateBinding("production_run", sid, folder, decoded["KAKEIBO_RUN_LEDGER_FILE_ID"])
     card_ro, parent_ro = ReadOnlyState(ro_drive, card_binding), ReadOnlyState(ro_drive, parent_binding)
+    amazon_ro = None
+    if env.get("AMAZON_STATE_FILE_ID"):
+        amazon_id = unwrap("AMAZON_STATE_FILE_ID", env["AMAZON_STATE_FILE_ID"], info["private_key"])
+        amazon_ro = ReadOnlyState(ro_drive, StateBinding("amazon_gmail", sid, folder, amazon_id))
     if incremental:
         # Complete protected-state validation before even assembling the money
         # writer/reader or starting Gmail. The scheduled checkpoint stays local.
@@ -441,7 +445,12 @@ def run(env, head, github, *, incremental=False):
     observed = ObservedStore(readback_store)
     db = SheetsDB(sid, service=ro_sheets, read_retry_attempts=1)
     reader = _configured_writer(db, observed, env, ledger=ReviewLedger(db))
-    before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp)
+    before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro)
+    if incremental:
+        from .aupay_card_incremental_recovery import NO_WRITE_CHECKPOINT, verify_no_write_state
+        if datetime.fromisoformat(expected_cp) >= datetime.fromisoformat(NO_WRITE_CHECKPOINT):
+            verify_no_write_state(native_before, initial_parent, expected_cp,
+                financial=lambda: financial_data(ro_sheets, sid), money=readback_store)
     parent_before = validate_ledger(parent_ro.read(), parent_binding)
     if incremental:
         require(card_ro.read() == native_raw and parent_ro.read() == parent_raw, "preparation_native_changed")
@@ -474,7 +483,7 @@ def run(env, head, github, *, incremental=False):
         prepared = prepare(gmail=GetOnly(gmail_readonly_service(env["GOOGLE_GMAIL_TOKEN_JSON"]), deadline),
             db=db, writer=reader, policy=policy, state=state, now=started_at, key=audit_key,
             expected_checkpoint=expected_cp, incremental=incremental)
-        require(observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp) == before, "prewrite_state_changed")
+        require(observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro) == before, "prewrite_state_changed")
         observed.verify()
         writer = _configured_writer(db, backing, env, ledger=ReviewLedger(db))
         initial_book = deepcopy(observed.observed["money"])

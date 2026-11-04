@@ -18,6 +18,7 @@ from app.production_run import COUNT_KEYS
 from app.projection_store import ReadOnlyProjectionStore
 from test_aupay_card_incremental_apply import followup, env, ENV, NOW
 from test_aupay_card_incremental_recovery import ReconciledGitHub
+from test_aupay_card_resume_recovery import NoWriteGitHub
 
 
 def schedule_env(tmp_path):
@@ -29,7 +30,7 @@ def schedule_env(tmp_path):
         CONFIRM="", EXPECTED_CHECKPOINT="untrusted-manual-input-is-ignored")
 
 
-class DailyGitHub(ReconciledGitHub):
+class DailyGitHub(NoWriteGitHub):
     def __init__(self):
         super().__init__()
         self.competing = False
@@ -279,3 +280,42 @@ def test_daily_workflow_flag_defaults_off_and_preserves_existing_manual_conditio
     checkpoint = w["on"]["workflow_dispatch"]["inputs"]["expected_checkpoint"]
     assert checkpoint["required"] == "true" and "default" not in checkpoint
     assert all("GITHUB_ENV" not in s.get("run","") for s in w["jobs"]["apply"]["steps"])
+
+
+@pytest.mark.parametrize('scheduled', [False, True])
+@pytest.mark.parametrize('stop_proof', [False, True])
+def test_resume_proofs_precede_gmail_and_writer_for_both_events(monkeypatch, tmp_path, scheduled, stop_proof):
+    from test_aupay_card_resume_recovery import amazon_proof
+    p = setup_entry(monkeypatch, tmp_path)
+    parent, amazon, _ = amazon_proof(p.db.sid, 'folder')
+    value = json.loads(p.ledger.transport.payload)
+    value['sources']['amazon'] = dict(parent['sources']['amazon'], duration_seconds=0)
+    p.ledger.transport.payload = json.dumps(value).encode()
+    original_remote = apply.ReadOnlyState
+    monkeypatch.setattr(apply, 'ReadOnlyState', lambda drive,binding:
+        amazon if binding.file_id == 'synthetic-amazon' else original_remote(drive,binding))
+    p.env['AMAZON_STATE_FILE_ID'] = 'synthetic-amazon'
+    if not scheduled:
+        p.env.update(GITHUB_EVENT_NAME='workflow_dispatch', EXPECTED_CHECKPOINT=apply.END)
+    monkeypatch.setattr(guard, 'controls', lambda *a, **kw:True)
+    monkeypatch.setattr(recovery, 'NO_WRITE_CHECKPOINT', apply.END)
+    checked = []
+    def fixed_proof(native,parent,cp,*,financial,money):
+        assert native['phase'] == parent['sources']['aupay_card']['phase'] == 'ready'
+        assert cp == apply.END and not p.gmail_starts and p.db.write_calls == 0
+        assert financial() and money.read('money') == p.store.data['money']
+        checked.append(True)
+        if stop_proof: raise RuntimeError('synthetic_fixed_proof_rejected')
+    monkeypatch.setattr(recovery, 'verify_no_write_state', fixed_proof)
+    if stop_proof:
+        with pytest.raises(RuntimeError, match='synthetic_fixed_proof_rejected'):
+            apply.run(p.env, 'a'*40, object(), incremental=True)
+        assert not p.gmail_starts and p.db.write_calls == 0
+        assert p.durable.inspect()['phase'] == 'ready'
+    else:
+        result = apply.run(p.env, 'a'*40, object(), incremental=True)
+        assert result['written'] == 2 and p.db.write_calls == 1
+        with pytest.raises(RuntimeError):
+            apply.execute_fixed(**p.execution)
+        assert p.db.write_calls == 1
+    assert checked == [True]

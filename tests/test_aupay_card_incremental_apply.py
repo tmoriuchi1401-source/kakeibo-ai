@@ -255,7 +255,8 @@ def test_daily_workflow_preserves_manual_inputs_secrets_and_pinned_install():
     steps = workflow["jobs"]["apply"]["steps"]
     assert "vars.KAKEIBO_CARD_SCHEDULE_ENABLED == 'true'" in workflow["jobs"]["apply"]["if"]
     assert all("secrets." not in json.dumps(s) for s in steps[:-1])
-    assert not {"BANK_STATE_FILE_ID", "AMAZON_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
+    assert not {"BANK_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
+    assert steps[-1]["env"]["AMAZON_STATE_FILE_ID"] == "${{ vars.AMAZON_STATE_FILE_ID }}"
     for step in steps:
         if "uses" in step: assert len(step["uses"].split("@")[1]) == 40
     assert any(s.get("run") == "python -B -m app.aupay_card_incremental_guard" for s in steps)
