@@ -12,6 +12,9 @@ import sys
 
 from .aupay_card_window_preview import END, FLAGS, REPO, ROOT, SOURCE, GitHub, require
 from .aupay_card_incremental_recovery import FAILED_RUN, FAILED_SHA, RECOVERED_CHECKPOINT, verify_failed_run
+from .aupay_card_incremental_recovery import (
+    NO_WRITE_RUN, NO_WRITE_SHA, NO_WRITE_CHECKPOINT, verify_no_write_run,
+)
 
 WORKFLOW = "aupay-card-incremental-apply.yml"
 CONFIRM = "APPLY_CHECKPOINT_FRESH_PLAN_ONCE"
@@ -87,6 +90,7 @@ def controls(env, head, github, *, expected_checkpoint=None):
     # one pinned reconciled failure additionally mandates protected state proof.
     seen, page, total = set(), 1, None
     recovered_failure = False
+    no_write_failure = False
     while True:
         result = github.get(f"actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}")
         if total is None:
@@ -109,6 +113,15 @@ def controls(env, head, github, *, expected_checkpoint=None):
                 verify_failed_run(github)
                 recovered_failure = True
                 continue
+            if prior["id"] == NO_WRITE_RUN:
+                require(cp is None or cp >= datetime.fromisoformat(NO_WRITE_CHECKPOINT),
+                        "no_write_checkpoint_regression")
+                require(prior["head_sha"] == NO_WRITE_SHA and prior["run_attempt"] == 1
+                        and prior["status"] == "completed" and prior["conclusion"] == "failure",
+                        "no_write_run_unproven")
+                verify_no_write_run(github)
+                no_write_failure = True
+                continue
             if prior["status"] == "completed" and prior["conclusion"] == "skipped":
                 require(prior["run_attempt"] == 1, "skipped_attempt_unproven")
                 verify_skipped_run(github, prior)
@@ -123,6 +136,8 @@ def controls(env, head, github, *, expected_checkpoint=None):
     require(current in seen, "run_inventory_incomplete")
     if scheduled or (cp is not None and cp >= datetime.fromisoformat(RECOVERED_CHECKPOINT)):
         require(recovered_failure, "reconciled_history_missing")
+    if cp is not None and cp >= datetime.fromisoformat(NO_WRITE_CHECKPOINT):
+        require(no_write_failure, "no_write_history_missing")
     # True mandates protected native/parent proof before any prepare or writer.
     return recovered_failure
 

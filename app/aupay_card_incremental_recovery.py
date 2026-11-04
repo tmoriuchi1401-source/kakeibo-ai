@@ -1,4 +1,4 @@
-"""Read-only proof of the single independently reconciled card failure.
+"""Read-only proof of the two independently reconciled, fixed card failures.
 
 Hashes bind existing private evidence without publishing transaction identities.
 This module cannot save a ledger, advance a checkpoint, or invoke a writer.
@@ -24,6 +24,20 @@ MANIFEST_SHA256 = "54b830424aa3032d7874fb3c3507de0cf66a463fe61f4438a3322436bc338
 JOURNAL_SHA256 = "2a3c48e0d17500b16f75b5451204785db49b61c64b64043b32f2ae306c36e5cf"
 CAPABILITY_SHA256 = "e2198cb76eb328323baa358458248d2c839deee0e8f5e634c8310c45505bfbcd"
 PARENT_CARD_SHA256 = "a3e7eb487d494b62176511b537ef416b517ab4255e9322243c89ea8b6929989e"
+
+# The later run stopped before persistence; it is not the older financial
+# completion above. Exact hashes bind the independent before/after GET audit.
+NO_WRITE_RUN = 41729101706
+NO_WRITE_JOB = 126241487787
+NO_WRITE_SHA = "22b0a374dcd7c6b344e092b414c096c067130431"
+NO_WRITE_CREATED = "2026-11-03T22:14:53Z"
+NO_WRITE_CHECKPOINT = "2026-11-03T14:45:43+09:00"
+NO_WRITE_NATIVE_SHA256 = "2ee8d898168d5db2ad59ed006944b2a8306316990c1c3df7ab5a2a62d5a44892"
+NO_WRITE_PARENT_SHA256 = "cdee51239e3fadf3a34dec4c4a76e4db64c65dd827d1127bfe3557f1c09c9c14"
+NO_WRITE_RESULT_SHA256 = "258c1adcfe85f2e799f4b63eca53534fc5787fec7ae67c91d455011db5894c4c"
+NO_WRITE_FINANCIAL_SHA256 = "4388e4c1abb0de1c14ef14adb7900d9c121c368db95676a249f893ca88c36d7a"
+NO_WRITE_MONEY_SHA256 = "58d87b362afc69e041de2c31e34e753c0959fb91146dc4518c1e58969c8224b2"
+NO_WRITE_MONEY_KEYS = ("money", "money-reviews", "money-migration", "money-notices", "journal")
 
 
 def _hash(value):
@@ -55,6 +69,78 @@ def verify_failed_run(github):
         require(len(steps) == 1 and steps[0]["name"] == name
                 and steps[0]["status"] == "completed" and steps[0]["conclusion"] == conclusion,
                 "reconciled_step_identity_unproven")
+
+
+def verify_no_write_run(github):
+    """Only this exact attempt/job/step history has the no-write audit."""
+    run = github.get(f"actions/runs/{NO_WRITE_RUN}")
+    require(run["id"] == NO_WRITE_RUN and run["head_sha"] == NO_WRITE_SHA
+            and run["head_branch"] == "main" and run["run_attempt"] == 1
+            and run["status"] == "completed" and run["conclusion"] == "failure"
+            and run["event"] == "workflow_dispatch" and run["created_at"] == NO_WRITE_CREATED
+            and run["path"] == ".github/workflows/aupay-card-incremental-apply.yml",
+            "no_write_run_unproven")
+    jobs = github.get(f"actions/runs/{NO_WRITE_RUN}/jobs?per_page=100")
+    require(jobs["total_count"] == len(jobs["jobs"]) == 1, "no_write_jobs_unproven")
+    job = jobs["jobs"][0]
+    require(job["id"] == NO_WRITE_JOB and job["run_id"] == NO_WRITE_RUN
+            and job["name"] == "apply" and job["status"] == "completed"
+            and job["conclusion"] == "failure", "no_write_job_unproven")
+    for number, name, conclusion in (
+        (5, "Live main and run guard with job-start validated and flags", "success"),
+        (6, "Install reviewed hash-pinned wheels before Google credentials", "success"),
+        (7, "One checkpoint Apply with protected reviews and exact readback", "failure"),
+    ):
+        steps = [s for s in job["steps"] if s["number"] == number]
+        require(len(steps) == 1 and steps[0]["name"] == name and steps[0]["status"] == "completed"
+                and steps[0]["conclusion"] == conclusion, "no_write_step_unproven")
+
+
+def financial_evidence(tables):
+    """Existing reader's complete financial columns, independent of UI/sort."""
+    result = {}
+    for title, width in (("支出明細", 13), ("取込データ", 12), ("収入明細", 10), ("レシート", 9)):
+        rows = tables[(title, "FORMULA")]
+        require(bool(rows), "no_write_financial_missing")
+        indexed = {}
+        for row in rows[1:]:
+            row = (list(row[:width]) + [""] * width)[:width]
+            if not any(v not in ("", None) for v in row):
+                continue
+            require(isinstance(row[0], str) and row[0] and row[0] not in indexed,
+                    "no_write_financial_identity")
+            indexed[row[0]] = row
+        result[title] = [rows[0][:width], indexed]
+    return _hash(result)
+
+
+def verify_no_write_state(native, parent, expected_checkpoint, *, financial, money):
+    """No state saves: first resume pins all audited data; daily reuse retains proof."""
+    from .aupay_card_window_preview import checkpoint
+
+    require(datetime.fromisoformat(expected_checkpoint) >= datetime.fromisoformat(NO_WRITE_CHECKPOINT),
+            "no_write_checkpoint_regression")
+    checkpoint(native, expected_checkpoint)  # Also rejects leases/unsealed/UNKNOWN journals.
+    verify_reconciled_state(native, parent, expected_checkpoint)  # Older proof is never replaced.
+    runs = _rows(native, "recurring.sqlite3", "recurring_runs")
+    baseline = [json.loads(r["summary_json"]) for r in runs
+                if _hash(json.loads(r["summary_json"])) == NO_WRITE_RESULT_SHA256]
+    require(len(baseline) == 1 and baseline[0]["source_window_end"] == NO_WRITE_CHECKPOINT
+            and baseline[0]["status"] == "noop" and baseline[0]["written"] == 0
+            and baseline[0]["write_requests"] == 0 and baseline[0]["failure"] == 0,
+            "no_write_baseline_unproven")
+    if expected_checkpoint == NO_WRITE_CHECKPOINT:
+        require(_hash(native) == NO_WRITE_NATIVE_SHA256
+                and _hash(parent["sources"]["aupay_card"]) == NO_WRITE_PARENT_SHA256,
+                "no_write_state_changed")
+        require(financial_evidence(financial()) == NO_WRITE_FINANCIAL_SHA256, "no_write_financial_changed")
+        require(_hash({k: money.read(k) for k in NO_WRITE_MONEY_KEYS}) == NO_WRITE_MONEY_SHA256,
+                "no_write_money_changed")
+    else:
+        # A later daily run must have actually advanced beyond the failed job,
+        # not just supplied some other older checkpoint to skip the first proof.
+        require(datetime.fromisoformat(expected_checkpoint) > datetime.fromisoformat(NO_WRITE_CREATED.replace("Z", "+00:00")),
+                "no_write_followup_unproven")
 
 
 def _rows(native, file, table):
