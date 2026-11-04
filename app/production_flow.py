@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from copy import deepcopy
 import json
 import os
 import re
@@ -43,6 +44,37 @@ SCHEDULE_SCOPES = {
     "11 23 * * *": ("drive_paypay", "KAKEIBO_PAYPAY_SCHEDULE_ENABLED"),
 }
 
+# Isolation is opt-in; the default remains the original all-source guard.
+CARD_ISOLATION_FLAG = "KAKEIBO_CARD_PENDING_ISOLATION_ENABLED"
+ISOLATED_CORE_INTAKE = frozenset({"amazon", "aupay_balance"})
+
+
+def card_pending_isolation(env: dict, history: dict, scope: str) -> bool:
+    if scope not in {"core", "drive_paypay"} or env.get(CARD_ISOLATION_FLAG) != "true":
+        return False
+    if env.get("KAKEIBO_CARD_SCHEDULE_ENABLED", "false") == "true":
+        raise StateError("source_reconciliation_required")
+    card = history["aupay_card"]
+    if card["phase"] == "ready":
+        return False
+    if card["phase"] != "pending" or not card["attempt"] or card["error"]:
+        raise StateError("source_reconciliation_required")
+    return True
+
+
+def selected_scheduled_sources(scope: str, *, isolate_card: bool):
+    if isolate_card and scope == "core":
+        # The common accounting/refresh stages depend on the unresolved card.
+        return ISOLATED_CORE_INTAKE
+    return DRIVE_SCHEDULE_SCOPES.get(scope, MANUAL_SOURCE_SCOPES.get(scope))
+
+
+def read_native_state(env: dict, source: str) -> dict:
+    from .google_clients import read_only_drive_service
+    binding = StateBinding(STATE_SOURCES[source], env.get("SPREADSHEET_ID", ""),
+        env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
+    return DurableState(DriveStateTransport(read_only_drive_service(), binding), binding).inspect()
+
 
 def verify_schedule(env: dict, *, scope: str, mode: str) -> None:
     if env.get("GITHUB_EVENT_NAME") != "schedule":
@@ -57,17 +89,25 @@ def verify_schedule(env: dict, *, scope: str, mode: str) -> None:
         raise StateError("production_schedule_disabled_or_mismatched")
 
 
-def verify_source_readiness(env: dict, history: dict) -> None:
-    if any(item["phase"] != "ready" or item["attempt"] or item["error"] for item in history.values()):
-        raise StateError("source_reconciliation_required")
-    from .google_clients import read_only_drive_service
-    # Inspect omitted native dependencies without running their writers.
-    for source, origin in STATE_SOURCES.items():
-        binding = StateBinding(origin, env.get("SPREADSHEET_ID", ""),
-            env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
-        native = DurableState(DriveStateTransport(read_only_drive_service(), binding), binding)
-        if native.inspect()["phase"] != "ready":
+def verify_source_readiness(env: dict, history: dict, *, isolate_card: bool = False) -> dict | None:
+    # All unrelated sources and native states must remain ready. Only the
+    # explicitly isolated card may retain a documented pending attempt.
+    for source, item in history.items():
+        if isolate_card and source == "aupay_card":
+            if item["phase"] != "pending" or not item["attempt"] or item["error"]:
+                raise StateError("source_reconciliation_required")
+        elif item["phase"] != "ready" or item["attempt"] or item["error"]:
             raise StateError("source_reconciliation_required")
+    card_native = None
+    for source in STATE_SOURCES:
+        value = read_native_state(env, source)
+        if isolate_card and source == "aupay_card":
+            if value["phase"] != "pending" or not value["attempt"]:
+                raise StateError("source_reconciliation_required")
+            card_native = value
+        elif value["phase"] != "ready":
+            raise StateError("source_reconciliation_required")
+    return card_native
 
 
 def verify_execution_boundary(env: dict, head: str) -> None:
@@ -501,8 +541,13 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
+        isolated = card_pending_isolation(env, history, args.scope)
+        card_native_before = None
+        parent_before = None
         if args.scope in {"core", "drive_receipts", "drive_paypay"}:
-            verify_source_readiness(env, history)
+            card_native_before = verify_source_readiness(env, history, isolate_card=isolated)
+            if isolated:
+                parent_before = deepcopy(history)
         if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
             raise StateError("source_reconciliation_required")
         daily_counts={}
@@ -519,17 +564,18 @@ def main():
             runners = assemble(env, Path(directory), apply=args.mode == "apply", bank_apply=args.bank_apply,
                                ledger=ledger, canary_target=args.amazon_target,canary_source=args.canary_source,money_canary=args.scope=="amazon_canary",
                                **({"amazon_catchup":True} if args.scope=="amazon_catchup" else {}))
+            selected = selected_scheduled_sources(args.scope, isolate_card=isolated)
             report = execute_serial(runners, history=history, preview=args.mode == "preview",
                                     amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,
                                     receipts_only=args.scope == "receipts",
-                                    selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope, MANUAL_SOURCE_SCOPES.get(args.scope)),
-                                    require_omitted_ready=args.scope == "core",
+                                    selected_sources=selected,
+                                    require_omitted_ready=args.scope == "core" and not isolated,
                                     stop_on_failure=args.scope == "core",
                                     **({"allow_amazon_partial":True} if args.scope=="amazon_catchup" else {}))
             if args.mode == "preview":
                 bank_stage = 'bank_parent_authority'
                 report["authority"] = preview_authority_summary(Path(directory), report["sources"], env)
-        if report["success"] and args.mode == "apply" and needs_ledger_order(
+        if report["success"] and args.mode == "apply" and not isolated and needs_ledger_order(
                 args.scope, report, bank_apply=args.bank_apply):
             report["ledger_order"] = finish_ledger_updates(env, {}, apply=True)
         # Re-read after ambiguous responses instead of reporting stale in-memory
@@ -545,6 +591,11 @@ def main():
             if args.scope == 'drive_bank' and not env.get('BANK_FIXED_BACKFILL_PLAN'):
                 from .production_run import bank_failure_diagnostic
                 report.update(bank_failure_diagnostic(error, bank_stage))
+        if isolated and ledger_confirmed:
+            if (any(ledger.value["sources"][name] != parent_before[name]
+                    for name in DEPENDENCIES if name not in selected)
+                    or read_native_state(env, "aupay_card") != card_native_before):
+                raise StateError("card_isolation_state_changed")
         # Success means a completed source operation, including bank preview.
         # bank_mode and written counts distinguish preview/no-op/new writes.
         for source, outcome in report["sources"].items():
@@ -556,6 +607,9 @@ def main():
             env, scope=args.scope, source_success=report["success"],
             apply=args.mode == "apply"))
         report["mode"] = args.mode
+        if isolated:
+            report["card_pending_isolation"] = 1
+            report["shared_postprocessing_deferred"] = int(args.scope == "core")
         if category_counts:report["category_operations"]=category_counts
         if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
             if key in COUNT_KEYS and type(value) is int and value>=0}
