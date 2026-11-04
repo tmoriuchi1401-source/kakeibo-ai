@@ -36,6 +36,9 @@ DRIVE_SCHEDULE_SCOPES = {
     "drive_bank": frozenset({"bank"}),
 }
 MANUAL_SOURCE_SCOPES = {"amazon_catchup": frozenset({"amazon"})}
+# Only this existing intake is eligible for the source-specific gate.
+# Do not reuse this allowlist for core, shared posting, or other source scopes.
+ISOLATED_INTAKE_SCOPES = {"drive_paypay": frozenset({"paypay"})}
 SCHEDULE_SCOPES = {
     "23 20 * * *": ("core", "KAKEIBO_CORE_SCHEDULE_ENABLED"),
     "31 22 * * *": ("drive_receipts", "KAKEIBO_RECEIPT_SCHEDULE_ENABLED"),
@@ -67,6 +70,32 @@ def verify_source_readiness(env: dict, history: dict) -> None:
             env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
         native = DurableState(DriveStateTransport(read_only_drive_service(), binding), binding)
         if native.inspect()["phase"] != "ready":
+            raise StateError("source_reconciliation_required")
+
+
+def verify_isolated_intake_readiness(env: dict, history: dict, *, scope: str) -> None:
+    selected = ISOLATED_INTAKE_SCOPES.get(scope)
+    if selected is None or DRIVE_SCHEDULE_SCOPES.get(scope) != selected:
+        raise StateError("source_reconciliation_required")
+    required, pending = set(), list(selected)
+    while pending:
+        source = pending.pop()
+        if source in required:
+            continue
+        if source not in DEPENDENCIES:
+            raise StateError("source_reconciliation_required")
+        required.add(source)
+        pending.extend(DEPENDENCIES[source])
+    for source in required:
+        item = history.get(source, {})
+        if item.get("phase") != "ready" or item.get("attempt") != "" or item.get("error") != "":
+            raise StateError("source_reconciliation_required")
+    for source in required & STATE_SOURCES.keys():
+        from .google_clients import read_only_drive_service
+        binding = StateBinding(STATE_SOURCES[source], env.get("SPREADSHEET_ID", ""),
+            env.get("KAKEIBO_STATE_FOLDER_ID", ""), env.get(STATE_ID_ENV[source], ""))
+        value = DurableState(DriveStateTransport(read_only_drive_service(), binding), binding).inspect()
+        if value["phase"] != "ready" or value["attempt"]:
             raise StateError("source_reconciliation_required")
 
 
@@ -501,7 +530,9 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
-        if args.scope in {"core", "drive_receipts", "drive_paypay"}:
+        if args.scope in ISOLATED_INTAKE_SCOPES:
+            verify_isolated_intake_readiness(env, history, scope=args.scope)
+        elif args.scope in {"core", "drive_receipts"}:
             verify_source_readiness(env, history)
         if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
             raise StateError("source_reconciliation_required")
@@ -536,8 +567,11 @@ def main():
         # markers. This is inspection only, never a retry of a source/write.
         ledger_confirmed = True
         bank_stage = 'bank_parent_readback'
+        intake_payload = ledger.payload if args.scope in ISOLATED_INTAKE_SCOPES else None
         try:
             ledger = ProductionLedger(ledger.transport, ledger_binding)
+            if intake_payload is not None and ledger.payload != intake_payload:
+                raise StateError("source_reconciliation_required")
         except Exception as error:
             ledger_confirmed = False
             report["success"] = False
@@ -550,11 +584,12 @@ def main():
         for source, outcome in report["sources"].items():
             outcome["last_success"] = ledger.value["sources"][source]["last_success"]
             outcome["confirmation_pending"] = (ledger.value["sources"][source]["phase"] == "pending") if ledger_confirmed else None
-        from .bank_review_refresh import refresh_bank_review_after_sources
-        bank_stage = 'bank_review_refresh'
-        category_counts.update(refresh_bank_review_after_sources(
-            env, scope=args.scope, source_success=report["success"],
-            apply=args.mode == "apply"))
+        if args.scope not in ISOLATED_INTAKE_SCOPES:
+            from .bank_review_refresh import refresh_bank_review_after_sources
+            bank_stage = 'bank_review_refresh'
+            category_counts.update(refresh_bank_review_after_sources(
+                env, scope=args.scope, source_success=report["success"],
+                apply=args.mode == "apply"))
         report["mode"] = args.mode
         if category_counts:report["category_operations"]=category_counts
         if daily_counts:report["daily_requests"]={key:value for key,value in daily_counts.items()
