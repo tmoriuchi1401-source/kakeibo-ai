@@ -104,7 +104,14 @@ def financial_evidence(tables):
         require(bool(rows), "no_write_financial_missing")
         indexed = {}
         for row in rows[1:]:
-            row = (list(row[:width]) + [""] * width)[:width]
+            row = list(row[:width])
+            # Saved range GETs represent internal blanks as null; the Sheets
+            # values API returns empty strings and omits trailing blanks.
+            # Retain the audited null/padding form and its original fixed hash.
+            while row and row[-1] in ("", None):
+                row.pop()
+            row = [None if value == "" else value for value in row]
+            row += [""] * (width - len(row))
             if not any(v not in ("", None) for v in row):
                 continue
             require(isinstance(row[0], str) and row[0] and row[0] not in indexed,
