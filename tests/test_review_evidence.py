@@ -54,7 +54,7 @@ def test_recorded_detail_total_links_only_its_exact_import_note_cell():
         imports_by_id={receipt.import_id: receipt}, expense_index={},
         has_amazon_candidates=False, drive=Drive(["processed"]))
     assert "原本を開く" in target
-    assert "判定時の解析候補1,230円とレシート1,368円" in comparison
+    assert "読取明細合計1,230円（各明細の和）／レシート支払総額1,368円（合計欄）" in comparison
     assert "gid=22&range=L2" in comparison
     assert "gid=33" not in comparison
 
