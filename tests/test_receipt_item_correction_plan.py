@@ -124,3 +124,26 @@ def test_mixed_categories_and_unallocated_tax_hold_even_if_amount_balances():
     assert res["item_total"] == 540
     assert any(issue.startswith("tax_discount_allocation_review") for issue in res["issues"])
     assert res["status"] == "needs_review"
+
+
+
+def test_saved_candidate_sum_must_match_recorded_import_note():
+    tx, rows = scenario([500, 730], 1368, categories=[("食費", "食品")])
+    mutated_note = parse_import_rows([[
+        tx.import_id, tx.imported_at, "receipt", SOURCE, tx.date, tx.merchant,
+        1368, "", "要確認", "", HASH, "明細合計999≠レシート合計1368",
+    ]])[0]
+    with pytest.raises(ValueError, match="note_mismatch"):
+        preview_item_corrections(mutated_note, rows, [], CATEGORIES,
+                                 total_confirmed=True)
+
+
+def test_edit_category_explicitly_but_never_post_from_preview():
+    tx, rows = scenario([500, 730], 1368, categories=[("食費", "食品")])
+    result = preview_item_corrections(
+        tx, rows, [edit(rows[1][1][0], amount=868, category="日用品｜洗剤")],
+        CATEGORIES, total_confirmed=True)
+    assert result["status"] == "preview_balanced"
+    assert [x["category"] for x in result["items"]] == [
+        ("食費", "食品"), ("日用品", "洗剤")]
+    assert result["financial_write_count"] == 0
