@@ -13,11 +13,11 @@ SOURCE = "f" * 33
 CATEGORIES = [("食費", "食品"), ("日用品", "洗剤"), ("その他", "未分類")]
 
 
-def scenario(amounts, total, *, categories=None):
+def scenario(amounts, total, *, categories=None, names=None):
     result = ReceiptResult(
         merchant="合成商店", date="2026-11-06", total=total,
         items=[ReceiptItem(
-            name=f"商品{i}", amount=amount,
+            name=(names[i-1] if names else f"商品{i}"), amount=amount,
             major_category=(categories or CATEGORIES)[min(i-1, len(categories or CATEGORIES)-1)][0],
             minor_category=(categories or CATEGORIES)[min(i-1, len(categories or CATEGORIES)-1)][1],
         ) for i, amount in enumerate(amounts, 1)],
@@ -117,8 +117,8 @@ def test_changed_candidate_hash_and_nonreceipt_source_are_rejected():
 
 def test_mixed_categories_and_unallocated_tax_hold_even_if_amount_balances():
     tx, rows = scenario([300, 200, 20], 540, categories=[
-        ("食費", "食品"), ("日用品", "洗剤"), ("食費", "食品")])
-    rows[2][1][4] = "外税"  # candidate hash is still for the same source; synthetic example
+        ("食費", "食品"), ("日用品", "洗剤"), ("食費", "食品")],
+        names=["食料品", "洗剤", "外税"])
     res = preview_item_corrections(tx, rows, [add("商品4", 20)], CATEGORIES,
                                    total_confirmed=True)
     assert res["item_total"] == 540
