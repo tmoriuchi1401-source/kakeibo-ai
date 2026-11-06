@@ -101,12 +101,21 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
         raise ValueError("correction_operations_invalid")
     valid_categories = set(map(tuple, categories))
     original, original_total = _original_rows(tx, indexed_rows)
+    # Bind the stored rejected candidate sum to the import decision itself.
+    recorded = re.findall(
+        r"(?:^|;\\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
+        tx.note,
+    )
+    if (len(recorded) != 1 or int(recorded[0][0]) != original_total
+            or int(recorded[0][1]) != tx.amount):
+        raise ValueError("receipt_candidate_note_mismatch")
     if tx.amount <= 0 or original_total == tx.amount:
         raise ValueError("receipt_not_mismatched")
     # Candidate rows are identity/hash checked by verified_candidate_range.
     items = {item["item_id"]: item for item in original}
     order = list(items)
     touched = set()
+    category_overrides = set()
     for operation in operations:
         if not isinstance(operation, dict):
             raise ValueError("correction_operation_invalid")
@@ -123,6 +132,8 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
             if not changes or set(changes) - {"name", "quantity", "amount", "category", "target_item_id"}:
                 raise ValueError("correction_edit_fields_invalid")
             items[key].update(changes)
+            if "category" in changes:
+                category_overrides.add(key)
         elif action == "remove":
             if key not in items or set(operation) != {"action", "item_id", "evidence"}:
                 raise ValueError("correction_remove_target_invalid")
@@ -136,6 +147,7 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
             items[key] = {field: operation[field] for field in
                           ("item_id", "name", "quantity", "amount", "kind", "category")}
             items[key]["target_item_id"] = ""
+            category_overrides.add(key)
             order.append(key)
         else:
             raise ValueError("correction_action_invalid")
@@ -163,7 +175,7 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
             if match.state == "conflict":
                 issues.append("category_rule_conflict:" + key)
             elif match.state == "matched":
-                if category and category != match.rule.category and key not in touched:
+                if category and category != match.rule.category and key not in category_overrides:
                     issues.append("candidate_rule_conflict:" + key)
                 elif not category:
                     category = match.rule.category
@@ -180,6 +192,7 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
                 note="correction_preview_only",
             ))
 
+    resolved_by_id = {item["item_id"]: item for item in resolved}
     product_categories = {tuple(i["category"]) for i in resolved
                           if i["kind"] == "product" and i["category"] is not None}
     for item in resolved:
@@ -187,7 +200,7 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
             continue
         target = item.get("target_item_id", "")
         if target:
-            product = items.get(target)
+            product = resolved_by_id.get(target)
             if (not product or product["kind"] != "product" or
                     item["category"] != product["category"]):
                 issues.append("tax_discount_target_conflict:" + item["item_id"])
