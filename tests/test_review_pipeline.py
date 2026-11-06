@@ -4,6 +4,7 @@ from app.review_pipeline import (
     is_reviewable_status,
     review_items,
     selected_category_pair,
+    receipt_amount_mismatch,
 )
 from app.sheets import combined_category_options
 
@@ -120,3 +121,27 @@ def test_paypay_unclassified_can_be_manually_recorded_as_expense():
     assert db.appended[0][8]=="PayPay"
     assert db.appended[0][10]=="paypay:test-1"
     assert db.updated["取込データ"][0][1][8]=="manual_expense"
+
+
+def test_receipt_mismatch_amounts_explain_sources_and_direction():
+    tx = parse_import_rows([[
+        "receipt:f", "", "receipt", "f", "2026-11-06", "店舗", 1368,
+        "", "要確認", "", "hash", "明細合計1230≠レシート合計1368",
+    ]])[0]
+    assert receipt_amount_mismatch(tx) == (1230, 1368, 138)
+    item = review_items([tx])[0]
+    assert "レシート支払総額1,368円" in item.recommendation
+    assert "読取明細合計1,230円" in item.recommendation
+    assert "差額138円不足" in item.recommendation
+
+
+def test_legacy_review_blocks_receipt_aggregate_even_with_valid_category():
+    db = FakeDB(source="receipt", status="要確認", import_id="receipt:synthetic")
+    outcome = ReviewApprovalPipeline(db).apply()
+    assert outcome["applied"] == 0 and outcome["held"] == 1
+    assert not db.appended
+    assert not db.updated.get("取込データ")
+    assert "商品別明細" in db.updated["要確認"][0][1][16]
+    # Approved payment imports still keep the previous behavior.
+    payment = FakeDB(source="PayPay", status="unclassified_paypay", import_id="paypay:test")
+    assert ReviewApprovalPipeline(payment).apply()["applied"] == 1

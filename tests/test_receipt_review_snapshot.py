@@ -92,8 +92,8 @@ def test_exact_candidate_lines_and_note_are_required_for_link():
     other = candidate_rows("receipt:" + "g" * 33, HASH, result([999], 999))
     assert verified_candidate_range(tx, list(enumerate(own, 2))) == (2, 3, 1230)
     assert "gid=44&range=A2:K3" in evidence(tx, own + other)
-    assert "解析候補1,230円の各行" in evidence(tx, own + other)
-    assert evidence(tx, other) == '=HYPERLINK("https://docs.google.com/spreadsheets/d/' + SID + '/edit#gid=22&range=L2","判定時の解析候補1,230円とレシート1,368円")'
+    assert "読取明細の内訳を見る（合計1,230円）" in evidence(tx, own + other)
+    assert evidence(tx, other) == '=HYPERLINK("https://docs.google.com/spreadsheets/d/' + SID + '/edit#gid=22&range=L2","読取明細合計1,230円（各明細の和）／レシート支払総額1,368円（合計欄）")'
     changed = deepcopy(own)
     changed[1][6] = 731
     assert evidence(tx, changed) == "解析候補の保存内容と判定記録が不整合"

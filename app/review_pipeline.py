@@ -59,16 +59,14 @@ def review_evidence_cells(tx: ImportTransaction, *, spreadsheet_id: str,
                       if len(row) > 1 and row[1] == tx.import_id]
     if own_candidates and tx.source == "receipt" and is_reviewable_status(tx.status):
         verified = verified_candidate_range(tx, own_candidates)
-        recorded = re.findall(
-            r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
-            tx.note)
-        if (verified and len(recorded) == 1 and unique_import_id
-                and int(recorded[0][0]) == verified[2]
-                and int(recorded[0][1]) == tx.amount
+        mismatch = receipt_amount_mismatch(tx)
+        if (verified and mismatch and unique_import_id
+                and mismatch[0] == verified[2]
+                and mismatch[1] == tx.amount
                 and RECEIPT_CANDIDATE_SHEET in sheet_ids and spreadsheet_id):
             first, last, total = verified
             comparison = ReviewResource(
-                label=f"判定時の解析候補{total:,}円の各行を見る", role="comparison",
+                label=f"読取明細の内訳を見る（合計{total:,}円）", role="comparison",
                 resource_type="sheet_range", spreadsheet_id=spreadsheet_id,
                 sheet_id=sheet_ids[RECEIPT_CANDIDATE_SHEET],
                 cell_range=f"A{first}:K{last}").formula()
@@ -133,6 +131,26 @@ def is_reviewable_status(status: str) -> bool:
     )
 
 
+def receipt_amount_mismatch(tx: ImportTransaction) -> tuple[int, int, int] | None:
+    """Return the source-bound note's item sum, receipt total and signed gap.
+
+    This is display evidence, never authority to post. The actual candidate
+    snapshot still needs its independent ID/hash/amount verification.
+    """
+    if tx.source != "receipt":
+        return None
+    matches = re.findall(
+        r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
+        tx.note,
+    )
+    if len(matches) != 1:
+        return None
+    item_sum, receipt_total = map(int, matches[0])
+    if receipt_total != tx.amount or item_sum == receipt_total:
+        return None
+    return item_sum, receipt_total, receipt_total - item_sum
+
+
 def selected_category_pair(major: str, minor: str) -> tuple[str, str]:
     major = major.strip()
     minor = minor.strip()
@@ -157,9 +175,17 @@ def review_items(transactions: list[ImportTransaction], *, money_mode=False) -> 
             elif status == "needs_review_transfer":
                 recommendation="チャージ・送金・資金移動かを確認"
             elif tx.source == "receipt":
-                recommendation=("原本と未計上の解析候補明細の合計を確認"
-                                if "明細合計" in tx.note else
-                                "レシート画像・合計・カテゴリを確認")
+                mismatch = receipt_amount_mismatch(tx)
+                if mismatch:
+                    item_sum, receipt_total, gap = mismatch
+                    direction = "不足" if gap > 0 else "超過"
+                    recommendation = (
+                        f"レシート支払総額{receipt_total:,}円（合計欄から抽出）／"
+                        f"読取明細合計{item_sum:,}円（各明細を合算）、"
+                        f"差額{abs(gap):,}円{direction}。商品別明細を確認・未記帳"
+                    )
+                else:
+                    recommendation = "レシート原本と商品別明細を確認（未記帳）"
             else:
                 recommendation="重複候補を確認し、統合先を選択"
         elif status == "amazon_unmatched":
@@ -536,6 +562,13 @@ class ReviewApprovalPipeline:
 
             target=""; new_status=""
             if action=="支出として計上":
+                if tx.source == "receipt":
+                    # Prevent aggregate manual_expense posting for a receipt.
+                    row[16] = ("未反映: レシートは商品別明細の修正・検証が必要です。"
+                               "この操作では総額1行の記帳になるため停止しました")
+                    stats["held"] += 1
+                    review_updates.append((row_num, row))
+                    continue
                 if (tx.source=="au PAYカード" and is_amazon(tx.merchant)
                         and tx.status=="amazon_unmatched"):
                     row[16]="未反映: Amazon注文と照合 または 保留 を選択してください"

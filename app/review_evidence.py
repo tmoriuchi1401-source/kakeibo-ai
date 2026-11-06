@@ -130,7 +130,8 @@ def recorded_detail_total_link(tx: ImportTransaction, *, spreadsheet_id: str,
     # comparison that originally failed.
     item_total, receipt_total = map(int, matches[0])
     return ReviewResource(
-        label=f"判定時の解析候補{item_total:,}円とレシート{receipt_total:,}円",
+        label=(f"読取明細合計{item_total:,}円（各明細の和）／"
+                f"レシート支払総額{receipt_total:,}円（合計欄）"),
         role="comparison", resource_type="sheet_range",
         spreadsheet_id=spreadsheet_id, sheet_id=sheet_id,
         cell_range=f"L{tx.row_num}",

@@ -106,14 +106,19 @@ def test_money_mode_retires_candidate_processing_and_preserves_pending_inputs(mo
 
 
 @pytest.mark.parametrize("action",["支出として計上","重複として除外","レシートと統合"])
-def test_money_mode_prevents_legacy_amazon_approval_but_keeps_other_receipts(monkeypatch,action):
-    db=MemoryDB();ReviewPipeline(db).refresh()
+def test_money_mode_keeps_receipt_itemwise_hold_and_other_payment_approval(monkeypatch,action):
+    db=MemoryDB()
+    db.sheets["取込データ"].append(import_row("paypay:other", "PayPay", "2026-08-19", 200,
+                                             "needs_review", merchant="別店舗"))
+    ReviewPipeline(db).refresh()
     review_row(db,"card:1")[11]=action
     receipt=review_row(db,"receipt:1");receipt[11]="支出として計上";receipt[13]="日用品｜雑貨"
+    other=review_row(db,"paypay:other");other[11]="支出として計上";other[13]="日用品｜雑貨"
     monkeypatch.setenv("KAKEIBO_AMAZON_MONEY_MODE","confirmed-v1")
     result=ReviewApprovalPipeline(db).apply()
-    assert result["held"]==1 and result["expenses_created"]==1
-    assert {r[10] for r in db.sheets["支出明細"]}=={"receipt:1"}
+    assert result["held"]==2 and result["expenses_created"]==1
+    assert {r[10] for r in db.sheets["支出明細"]}=={"paypay:other"}
+    assert "総額1行" in review_row(db,"receipt:1")[16]
     assert review_row(db,"card:1")[11]==action
 
 
