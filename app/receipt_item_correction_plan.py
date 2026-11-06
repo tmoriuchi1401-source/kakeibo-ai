@@ -19,7 +19,7 @@ from .receipt_review_snapshot import verified_candidate_range, yen
 from .receipt_validation import validate_receipt_result
 
 ADDED_ID = re.compile(r"^new:[a-zA-Z0-9_-]{8,64}$")
-FORBIDDEN_ADJUSTMENT = re.compile(r"差額補正|差額調整|架空|帳尻|^調整$")
+FORBIDDEN_ADJUSTMENT = re.compile(r"差額|架空|帳尻|^(調整|不足分|その他|adjustment|balance)$", re.I)
 CATEGORY_SEPARATOR = "｜"
 FALLBACK = ("その他", "未分類")
 
@@ -57,6 +57,8 @@ def _valid_item(item):
     _quantity(item["quantity"])
     if item["kind"] not in {"product", "tax", "discount"}:
         raise ValueError("item_kind_invalid")
+    if not isinstance(item.get("target_item_id", ""), str):
+        raise ValueError("item_adjustment_target_invalid")
     if (item["kind"] == "discount" and item["amount"] >= 0
             or item["kind"] != "discount" and item["amount"] <= 0):
         raise ValueError("item_sign_invalid")
@@ -70,7 +72,9 @@ def _original_rows(tx, indexed_rows):
                 if len(row) > 1 and row[1] == tx.import_id]
     original = []
     for row in selected:
-        qty = float(str(row[5])) if row[5] not in ("", None) else 1
+        if len(row) != 11 or isinstance(row[5], bool):
+            raise ValueError("receipt_candidate_shape_invalid")
+        qty = _quantity(float(str(row[5])))
         amount = yen(row[6])
         if amount is None:
             raise ValueError("receipt_candidate_amount_invalid")
@@ -99,11 +103,12 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
         raise ValueError("receipt_not_held_for_review")
     if not isinstance(operations, list) or len(operations) > 100:
         raise ValueError("correction_operations_invalid")
+    approved_product_rules = tuple(approved_product_rules)
     valid_categories = set(map(tuple, categories))
     original, original_total = _original_rows(tx, indexed_rows)
     # Bind the stored rejected candidate sum to the import decision itself.
     recorded = re.findall(
-        r"(?:^|;\\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
+        r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
         tx.note,
     )
     if (len(recorded) != 1 or int(recorded[0][0]) != original_total
@@ -112,10 +117,10 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
     if tx.amount <= 0 or original_total == tx.amount:
         raise ValueError("receipt_not_mismatched")
     # Candidate rows are identity/hash checked by verified_candidate_range.
-    items = {item["item_id"]: item for item in original}
+    items = {item["item_id"]: deepcopy(item) for item in original}
     order = list(items)
     touched = set()
-    category_overrides = set()
+    quantity_unconfirmed = set()
     for operation in operations:
         if not isinstance(operation, dict):
             raise ValueError("correction_operation_invalid")
@@ -126,33 +131,36 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
             raise ValueError("correction_evidence_or_identity_invalid")
         touched.add(key)
         if action == "edit":
-            if key not in items or not isinstance(operation.get("changes"), dict):
+            if (set(operation) != {"action", "item_id", "changes", "evidence"}
+                    or key not in items or not isinstance(operation.get("changes"), dict)):
                 raise ValueError("correction_edit_target_invalid")
             changes = operation["changes"]
             if not changes or set(changes) - {"name", "quantity", "amount", "category", "target_item_id"}:
                 raise ValueError("correction_edit_fields_invalid")
+            if "quantity" in changes and changes["quantity"] != items[key]["quantity"] and "amount" not in changes:
+                quantity_unconfirmed.add(key)
+            # A renamed product no longer has the old product's AI category.
+            if "name" in changes and changes["name"] != items[key]["name"] and "category" not in changes:
+                items[key]["category"] = None
             items[key].update(changes)
-            if "category" in changes:
-                category_overrides.add(key)
         elif action == "remove":
             if key not in items or set(operation) != {"action", "item_id", "evidence"}:
                 raise ValueError("correction_remove_target_invalid")
             del items[key]
             order.remove(key)
         elif action == "add":
+            required = {"action", "item_id", "name", "quantity", "amount", "kind", "category", "evidence"}
             if (not ADDED_ID.fullmatch(key) or key in items or
-                    set(operation) != {"action", "item_id", "name", "quantity", "amount",
-                                       "kind", "category", "evidence"}):
+                    not required <= set(operation) or set(operation) - required - {"target_item_id"}):
                 raise ValueError("correction_add_fields_invalid")
             items[key] = {field: operation[field] for field in
                           ("item_id", "name", "quantity", "amount", "kind", "category")}
-            items[key]["target_item_id"] = ""
-            category_overrides.add(key)
+            items[key]["target_item_id"] = operation.get("target_item_id", "")
             order.append(key)
         else:
             raise ValueError("correction_action_invalid")
 
-    issues = []
+    issues = ["quantity_line_amount_confirmation_required:" + key for key in sorted(quantity_unconfirmed)]
     parsed_items = []
     resolved = []
     for key in order:
@@ -172,10 +180,12 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
                 tx_item, valid_categories, product_name=item["name"],
                 aggregate_only=False,
             )
-            if match.state == "conflict":
+            if match.state == "held":
+                issues.append("category_rule_approval_not_applicable:" + key)
+            elif match.state == "conflict":
                 issues.append("category_rule_conflict:" + key)
             elif match.state == "matched":
-                if category and category != match.rule.category and key not in category_overrides:
+                if category and category != match.rule.category:
                     issues.append("candidate_rule_conflict:" + key)
                 elif not category:
                     category = match.rule.category
@@ -196,8 +206,12 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
     product_categories = {tuple(i["category"]) for i in resolved
                           if i["kind"] == "product" and i["category"] is not None}
     for item in resolved:
+        if item["kind"] == "product" and item.get("target_item_id"):
+            issues.append("product_adjustment_target_invalid:" + item["item_id"])
         if item["kind"] not in ("tax", "discount"):
             continue
+        if item["kind"] == "tax" and re.search("内税|税込|内消費税", item["name"]):
+            issues.append("included_tax_not_additive:" + item["item_id"])
         target = item.get("target_item_id", "")
         if target:
             product = resolved_by_id.get(target)
@@ -206,6 +220,8 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
                 issues.append("tax_discount_target_conflict:" + item["item_id"])
         elif len(product_categories) > 1:
             issues.append("tax_discount_allocation_review:" + item["item_id"])
+        elif not product_categories or tuple(item["category"] or ()) not in product_categories:
+            issues.append("tax_discount_category_conflict:" + item["item_id"])
 
     item_sum = sum(item["amount"] for item in resolved)
     difference = tx.amount - item_sum
@@ -225,13 +241,15 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
         issues.append("receipt_total_owner_confirmation_required")
     issues = list(dict.fromkeys(issues))
     canonical = json.dumps({
-        "import_id": tx.import_id, "source_hash": tx.row[10],
+        "import_row": tx.row, "candidate_rows": [row for _, row in indexed_rows
+                                                if len(row) > 1 and row[1] == tx.import_id],
         "receipt_total": tx.amount, "items": resolved, "operations": operations,
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return {
         "status": "preview_balanced" if not issues else "needs_review",
         "receipt_total": tx.amount, "original_item_total": original_total,
         "item_total": item_sum, "difference": difference, "items": resolved,
+        "original_items": deepcopy(original),
         "issues": issues, "snapshot_digest": sha256(canonical.encode()).hexdigest(),
         "posting_authority": False, "financial_write_count": 0,
     }
