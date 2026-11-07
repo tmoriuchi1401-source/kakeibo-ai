@@ -1,0 +1,93 @@
+<div id="receipt-cell-preview" class="viz-dotted-background">
+  <style>
+    #receipt-cell-preview{color-scheme:light dark;font-family:Arial,'Noto Sans JP',sans-serif;color:light-dark(#202124,#e8eaed)}
+    #receipt-cell-preview .phone{width:100%;max-width:430px;margin:auto;background:light-dark(#fff,#202124);border:1px solid light-dark(#dadce0,#5f6368);border-radius:16px;overflow:hidden}
+    #receipt-cell-preview .chrome{padding:16px;background:light-dark(#edf5ee,#24352a);display:flex;justify-content:space-between;gap:12px;align-items:center}
+    #receipt-cell-preview .chrome strong{font-size:18px;font-weight:500}
+    #receipt-cell-preview .chrome span{font-size:12px}
+    #receipt-cell-preview .summary{padding:12px 16px;display:flex;flex-wrap:wrap;gap:8px 16px;font-size:14px;border-bottom:1px solid light-dark(#dadce0,#5f6368)}
+    #receipt-cell-preview .summary output{font-variant-numeric:tabular-nums}
+    #receipt-cell-preview .scroll{overflow-x:auto}
+    #receipt-cell-preview table{border-collapse:collapse;white-space:nowrap;font-size:14px}
+    #receipt-cell-preview th,#receipt-cell-preview td{padding:8px;border:1px solid light-dark(#dadce0,#5f6368);text-align:left}
+    #receipt-cell-preview th{font-weight:500;background:light-dark(#f1f3f4,#303134)}
+    #receipt-cell-preview .case{position:sticky;left:0;z-index:2;min-width:62px;background:light-dark(#edf5ee,#24352a)}
+    #receipt-cell-preview input:not([type=checkbox]),#receipt-cell-preview select{box-sizing:border-box;min-height:44px;width:130px;padding:8px;font:inherit;font-size:16px;color:inherit;background:light-dark(#fff,#202124);border:1px solid light-dark(#bdc1c6,#5f6368);border-radius:4px}
+    #receipt-cell-preview input[type=number]{width:96px}
+    #receipt-cell-preview input[type=checkbox]{width:24px;height:24px;accent-color:light-dark(#188038,#81c995)}
+    #receipt-cell-preview label.tick{display:flex;align-items:center;gap:8px;min-height:44px;padding:0 6px}
+    #receipt-cell-preview .register{padding:12px 16px;border-top:1px solid light-dark(#dadce0,#5f6368)}
+    #receipt-cell-preview .register label{font-size:16px}
+    #receipt-cell-preview .status{padding:0 16px 16px;font-size:14px;min-height:22px}
+    #receipt-cell-preview .tab{padding:12px 18px;border-top:1px solid light-dark(#dadce0,#5f6368);color:light-dark(#137333,#81c995);font-size:14px}
+  </style>
+  <section class="phone" aria-label="Google Sheets 確認・合成操作例">
+    <div class="chrome"><strong>確認</strong><span>合成操作例・未適用</span></div>
+    <div class="summary">
+      <span>G901　支払 <output>1,368円</output></span>
+      <span>修正後 <output data-total>1,230円</output></span>
+      <span>差額 <output data-gap>138円</output></span>
+    </div>
+    <div class="scroll" aria-label="商品列・左右へスワイプ">
+      <table aria-label="1行1案件の商品別通常セル">
+        <thead><tr data-groups><th class="case" rowspan="2">案件</th></tr><tr data-headings></tr></thead>
+        <tbody><tr data-row><th class="case" scope="row">G901</th></tr></tbody>
+      </table>
+    </div>
+    <div class="register"><label class="tick"><input type="checkbox" data-register aria-label="修正内容を登録する"><span>修正内容を登録する</span></label></div>
+    <div class="status" data-status aria-live="polite">下書き・未登録　商品列を左右へスワイプ</div>
+    <div class="tab">確認</div>
+  </section>
+  <script>
+  (()=>{
+    const root=document.getElementById('receipt-cell-preview');
+    const baseline=[{name:'牛乳',quantity:1,amount:500,category:'食費／食品',kind:'商品',target:'指定なし',mode:'採用',confirmed:false},
+      {name:'食品',quantity:1,amount:730,category:'食費／食品',kind:'商品',target:'指定なし',mode:'採用',confirmed:false},
+      {name:'',quantity:'',amount:'',category:'食費／食品',kind:'商品',target:'指定なし',mode:'採用',confirmed:false}];
+    let items=JSON.parse(JSON.stringify(baseline)),registered=false,laterEdited=false;
+    const groups=root.querySelector('[data-groups]'),headings=root.querySelector('[data-headings]'),row=root.querySelector('[data-row]');
+    const register=root.querySelector('[data-register]'),status=root.querySelector('[data-status]');
+    const fields=[['name','商品名'],['quantity','数量'],['amount','行金額'],['category','カテゴリ'],['mode','扱い'],['confirmed','原本照合'],['kind','種類'],['target','帰属']];
+    const choices={category:['食費／食品','日用品／洗剤','その他／未分類'],mode:['採用','除外'],kind:['商品','外税','値引き'],target:['指定なし','商品1','商品2']};
+    function changed(i){return fields.some(([key])=>key!=='confirmed'&&String(items[i][key])!==String(baseline[i][key]));}
+    function update(){
+      const total=items.reduce((sum,item)=>sum+(item.mode==='採用'&&item.name?Number(item.amount)||0:0),0);
+      root.querySelector('[data-total]').textContent=total.toLocaleString('ja-JP')+'円';
+      root.querySelector('[data-gap]').textContent=(1368-total).toLocaleString('ja-JP')+'円';
+      const valid=items.every((item,i)=>!item.name&&i===2||
+        (item.mode==='除外'||(Number.isFinite(Number(item.amount))&&Number.isInteger(Number(item.amount))&&Number(item.quantity)>0&&
+        (item.kind==='値引き'?Number(item.amount)<0:Number(item.amount)>0)))&&(!changed(i)||item.confirmed));
+      register.disabled=registered||!valid;
+      if(registered)status.textContent=laterEdited?'受付中・未登録の変更あり（入力保持）':'受付済み（操作イメージ）・金融writeなし';
+      else status.textContent=valid?'下書き保存・登録準備済み（合成）':'変更した商品を原本照合してください';
+    }
+    function save(){
+      const state={modelContent:{preview:'通常セル編集',registered,laterEdited,total:items.reduce((s,i)=>s+(i.mode==='採用'&&i.name?Number(i.amount)||0:0),0)},privateContent:{items}};
+      if(window.openai?.setWidgetState)window.openai.setWidgetState(state).catch(()=>{});
+    }
+    items.forEach((item,i)=>{
+      const group=document.createElement('th');group.colSpan=fields.length;group.textContent=i===2?'追加商品欄':`商品${i+1}`;groups.appendChild(group);
+      fields.forEach(([key,label])=>{
+        const th=document.createElement('th');th.textContent=label;headings.appendChild(th);
+        const td=document.createElement('td');let input;
+        if(choices[key]){input=document.createElement('select');choices[key].forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value;input.appendChild(option);});}
+        else {input=document.createElement('input');input.type=key==='confirmed'?'checkbox':key==='quantity'||key==='amount'?'number':'text';if(key==='quantity'){input.min='0.001';input.step='0.001';}if(key==='amount')input.step='1';}
+        input.setAttribute('aria-label',`${i===2?'追加商品':`商品${i+1}`} ${label}`);
+        input.value=item[key];if(key==='confirmed')input.checked=item[key];
+        input.addEventListener('input',()=>{item[key]=key==='confirmed'?input.checked:input.value;
+          if(registered)laterEdited=true;
+          update();save();});
+        td.appendChild(input);row.appendChild(td);
+      });
+    });
+    function restore(state){if(!Array.isArray(state?.privateContent?.items)||state.privateContent.items.length!==3)return;
+      state.privateContent.items.forEach((value,i)=>{for(const [key] of fields)if(key in value)items[i][key]=value[key];});
+      registered=state.modelContent?.registered===true;
+      laterEdited=state.modelContent?.laterEdited===true;
+      const inputs=row.querySelectorAll('input,select');let n=0;items.forEach(item=>fields.forEach(([key])=>{const input=inputs[n++];input.value=item[key];if(key==='confirmed')input.checked=item[key];}));register.checked=registered;update();}
+    register.addEventListener('change',()=>{if(register.checked){registered=true;update();save();}});
+    update();restore(window.openai?.widgetState);
+    window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState)restore(event.detail.globals.widgetState);});
+  })();
+  </script>
+</div>
