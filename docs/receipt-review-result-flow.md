@@ -285,3 +285,36 @@ Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設�
 GitHub Actions RESTの読取専用GETで、リポジトリの`in_progress`／`queued`／`waiting`をそれぞれ問い合わせ、**観測時点の該当runは各0件**だった。APIの結果を受けただけでworkflow dispatch・再送・設定変更はしていない。
 
 **限定解釈**：この瞬間のGitHub Actionsの3状態に該当するrunが見つからないことだけを示す。過去の実行の完了性、GitHub外のCloud Run/CLI/SDK、別リポジトリのworker、private journal上のpending/UNKNOWN、金融SAの利用可能性や、将来のスケジュール起動まで否定しない。旧writerの収束・隔離の独立証明は引き続き未成立であり、NO-GO維持。
+
+## 独立検証ホストの成立性：実装閉包と再開判断（2026-11-07）
+
+**目的**：旧`hga-auth-synthetic`の手動スケーリング0を解除せずに、#199の認証済み一般レシート検証（金融writeなし）を動かす条件を、余分な機能実装・新規資源作成前に固定する。今回はソース／管理者提示構成の照合だけで、deployableバンドルの作成や既存ホストの復旧はしない。
+
+### 判明した差分と限界
+
+1. **既存Cloud Runの現在のimageとソース基準は異なる。** 管理者提供10/25のAudit Logで観測したコンテナimage digestは先頭`sha256:509b0a6...`、現revisionは`00019-xf7`。一方、GitHubの`auth-session/README.md`に記録された旧baseline imageは`sha256:f3a3ec1...`、revisionは`00015-6gg`。したがって旧ソースを読むだけで、**現在の動作コード・route／権限集合まで特定できたとは扱わない**。image差を単独で悪意・破損と判断しない。
+2. **#199は実hostに組み込まれていない。** `auth-session/baseline.json`のSHA固定Docker whitelistに`receipt_correction_registration.py`／`receipt_correction_io.py`／`receipt_correction_web.py`は存在しない。`run_receipt_registration_checks.py`はこれらを合成fixtureへコピーするテストランナーであり、`compose.py --output`の実行対象には加えない。
+3. **現在の合成HTTPテストは独立アプリの証明ではない。** `receipt_correction_flow_contracts.py`は既存`services.human_general.web.create_app`のtest clientを利用。`receipt_correction_web.py`も`.web`から`screen`・Cookie名をimportする。その既存web.pyには`/start`／`/oauth/callback`／`/confirm`／`/result`などの承認用経路がある。**旧appをそのまま別ホストへ複製しても「検証専用」にはならない**。別ホストの実装には本番authority／writer経路を除外した新たなモジュール閉包の査読が必要。
+4. リポジトリ現ブランチのファイルツリー（666エントリ）には、#199専用の独立Cloud Run/Cloud Functionsホストを示すDockerfile／cloudbuild／IaCの構成を確認できなかった。Google Cloud全プロジェクト／全リージョンに既存ホストがないと断定するものではない。
+5. GitHub Actionsの限定読取では`in_progress`・`queued`・`waiting`は観測時点で各0件。ただし、private pending/UNKNOWN、その他の実行主体・将来の起動が安全と証明されたわけではない。
+
+### 再開方法の選択（現時点ではどちらも実接続NO-GO）
+
+| 経路 | 利点 | 最小成立条件 | 現時点の判定 |
+|---|---|---|---|
+| **既存の別ホストを再利用** | Cloud資源新設不要 | 旧Cloud Runと物理/実行権限を分離済みのhost実在を、管理者の限定読取で特定。現稼働・サービスアカウント・OAuth callback・dedicated ACL/DBが確認でき、承認経路を含む旧appを載せない | **blocked：実在・IAM未確認** |
+| **検証専用の小規模hostを新規に設ける** | 旧host手動0を維持したまま新経路だけ実機検証が可能 | service identity・実行可能なread-only source credential・検証専用CAS/journal・OIDC callbackを限定し、承認・金融writer・dispatch・Gemini・医療処理をデプロイ閉包から完全除外。新Cloud資源／OAuth／IAM／課金の差分と停止方法を個別提示して事前承認 | **blocked：新規Cloud作成の承認なし** |
+
+**先に実施しないこと**：旧`hga-auth-synthetic`の手動0解除／タグURLの活用／旧appまるごと再展開／GitHub Actions手動dispatch／一般案件への既存限定canary grant流用／金銭write。検証画面はまだ実機未接続で、既存「確認」1タブとB方式の商品編集UIの変更も別承認の境界を維持する。
+
+### 最小承認単位と、承認が得られた場合だけの実施順序
+
+A. **管理者の読取のみ**：独立した既存hostの有無を対象project/regionで確認。旧hostの現在手動0・旧route/identity・private pending/UNKNOWNを限定読取する。リソース閲覧権限が不足した場合は、その証拠を記録して停止し、新IAMは付けない。
+
+B. 別ホストが見つからなければ、**新規host一件だけ**を「新規資源の目的、実行主体、公開範囲、OIDC callback、サービスアカウント、専用保存領域、費用上限、停止・削除手順、旧hostへの非接続」を含む個別変更計画として提示し、承認前は作らない。**同じ既存web.pyをコピーする方式は禁止**。
+
+C. hostが正式に決まった後に、まず**コードのみ**の最小検証専用appを独立Draftで合成テスト。旧`/confirm`等の承認route、authority factory、金融writer、workflow dispatchの実装や資格を含めず、別actor、失効、source/draft変更、CAS競合、UNKNOWN、期限後結果照会を検証する。旧Cloud Runを使った単なるネットワーク接続試験は行わない。
+
+D. Cloud資源／共有／OAuth／UI変更は各対象を明示した別承認後。実iPhoneの登録・結果照会が安全に完走しても金融writeは`NO-GO`のまま別工程。
+
+**現時点での正確な状態**：旧サービス停止維持、#199合成検証の成果保持、独立実ホスト未確認。安全な実行主体がないため実接続はblocked。金融writeなしの合成テスト成功を、実ホストの承認済み稼働・実OAuth・実iPhone成功と混同しない。
