@@ -241,3 +241,41 @@ Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設�
 原因を特定できた後に、必要な設定／コード／trafficの最小差分、影響範囲、変更前の割当／検証済み正常revisionへ戻す条件付きrollback、読取で確認する復旧判定を提示する。復旧操作は実施しない。現時点の成果は方法変更と取得手順の記録であり、障害診断完了ではない。設定変更・deploy・金融writeは0。NO-GO維持。
 
 手順の参照：[Revisionの一覧・詳細](https://docs.cloud.google.com/run/docs/managing/revisions)、[サービスのログ表示](https://docs.cloud.google.com/run/docs/logging)、[503等の切り分け](https://docs.cloud.google.com/run/docs/troubleshooting)。これらは取得・分析方法の根拠であり、当該サービスの実障害を証明する資料ではない。
+
+## 旧Cloud Run隔離と一般レシート検証専用経路の分離（2026-11-07）
+
+**判定：旧Cloud Runは手動スケーリング0のまま維持。#199の登録・検証機能のために旧サービスを再スケール／再デプロイしない。新機能の実ホスト接続もNO-GO。** これは既存の安全隔離方針を明文化する追補であり、旧サービス・新経路の有効化や金融writeの承認ではない。
+
+### 管理者提示の観測証拠（原本スクリーンショット・生ログは保存しない）
+
+- Cloud Runサービス：`hga-auth-synthetic`、`asia-northeast1`。管理画面で最新トラフィック先 `hga-auth-synthetic-00019-xf7` はReady表示、Traffic 100%。
+- 対象URL `/health` は `Service Unavailable / Service is disabled` と表示。サービスの「スケーリング」は**手動、インスタンス数0**。503の直接原因はこの停止設定と整合する。Ready/100%はHTTP処理可能を意味しない。
+- 管理者提供のCloud Audit Logs：**2026-10-25 20:00:02 JST** の `google.cloud.run.v1.Services.ReplaceService` 要求には、`run.googleapis.com/scalingMode=manual` と `run.googleapis.com/manualInstanceCount=0` が含まれ、更新権限の許可が記録されている。これは当該時点で0を含む構成が送信された証拠だが、**操作前から0だった可能性を排除せず、単独で差分・意図を証明しない**。
+- 10月25日の旧writer隔離方針と整合：旧経路は金融用資格に到達し得るため、進行中要求の収束・タグ等の別経路・CLI/SDK・保留/UNKNOWN照合が未証明の間、再スケール／再デプロイ／手動dispatchを凍結していた。今回それらの独立証明を得たとは扱わない。
+- 管理者の画像には運用情報が含まれるため、メールアドレス・IP・Secret参照の詳細・原本内容をこの文書へ転記しない。
+
+### 実装上の信頼境界：旧認証コンテナと#199は別物
+
+| 対象 | コード上で確認したこと | 禁止／残る検証 |
+|---|---|---|
+| 旧 `hga-auth-synthetic` | 既存の`auth-session/existing-service.patch`には `/confirm`、`/review` や登録・authority系の処理経路があり、`page_router.py`から実ページ／限定canary向けruntimeへ分岐する。現在のコンテナが純粋なread-onlyであると証明できない | 旧Cloud Run再稼働、既存hostへの#199 route単純追加は禁止。Cloud Run停止と、GitHub Actions等の独立writer停止を混同しない |
+| #199の検証専用adapter | `auth-session/receipt_correction_registration.py`の専用purpose `register_receipt_item_correction_validation_v1`。現時点では`posting_authority=False`、`financial_write_count=0`、検証結果は別scopeへ保存する契約 | 検証receiptを実記帳authorityに転用しない。OIDC/sessionの認証済みという事実だけで金融writeを認めない |
+| Deployable構成 | `auth-session/compose.py`はSHA固定の`baseline.json`と明示whitelistのみで構成する。`receipt_correction_{registration,io,web}.py`は**whitelist外**であり、`run_receipt_registration_checks.py`では合成fixtureにだけ追加される | #199をmergeしただけ／合成テスト成功だけで実host routeが利用可能だとは言わない。whitelistを無検証で増やさない |
+| 既存金融writer | GitHub Actions側の明示canary writer・既存receipt処理などは別の実行主体と権限を持つ | Cloud Run 503だけで実行中・pending・UNKNOWN・writer再開条件の成立とは扱わない |
+
+### 安全な再開のためのゲート（どれか未成立なら停止）
+
+1. **隔離を保持**：`hga-auth-synthetic`の手動0を、管理者の独立した最新読取で確認。旧サービスのrevision/tag URL、traffic、別の起動経路、進行中受付、金融書込み可能な資格・scopeをread-onlyで棚卸しする。過去のログやスクリーンショットのみで現在の完全隔離を断定しない。
+2. **旧writerの整合確認**：既存のpending／UNKNOWN／dispatching・台帳・journalの状態を、必要最小限の独立読取で照合。再送、取消、削除、旧受付claim、authority更新、停止中のwriter起動はしない。銀行等の独立した定期運用は変更しない。
+3. **新経路の実行主体を決める**：旧サービスを起動せず、検証専用の**独立した既存ホストが存在し、適切なACL/IAM・Secret非共有・専用保存領域を証明できる場合だけ**再利用候補とする。存在が確認できなければ実環境接続はblocked。新規Cloud資源が必要なら個別提案・個別承認とし、勝手に作成しない。
+4. **検証専用デプロイの機能限定**：使用できる別ホストが確定した後、旧writer/authority/手動dispatch/AI送信/金融サービスアカウントの依存を含まない最小のdeployableモジュール集合を新たに査読する。HTTP route、OAuth callback、DBの専用scope、強いCAS、結果期限後照会、別owner拒否、原本・候補・draft改変拒否、読戻しを合成→実接続の順に検証。**本番認証アプリの旧routeを再起動して置換する案は採用しない**。
+5. **UI境界**：既存「確認」1タブは維持。B方式（認証済み画面で商品編集）は**提案段階**であり、画面変更の事前個別承認があるまでは実装・接続しない。U22共有、private4ファイル、ホスト変更もそれぞれ個別承認前は停止。
+6. **導入と金融記帳は別判断**：すべての実接続・実iPhone試験は`financial_write=0`を維持。通常記帳は独立のauthority、重複照合、台帳read-back、NO-GO解除と明示承認がそろうまで禁止。限定canary承認を一般記帳へ流用しない。
+
+### 今回の到達点と次の具体的作業
+
+- **今回：ソース／設定履歴／管理者提供資料の読取と上記の境界・再開条件の固定のみ。** 新旧コードの本番分離、live writer停止の独立証明、実認証・実iPhone・独立hostでの検証は未完了。
+- **次に必要な最小証拠**：①旧Cloud Runの現在も手動0であることと旧実行資格・残存経路の管理者読取、②独立した既存read-onlyホストの実在と実行資格（なければ専用ホスト案への別承認）、③保留/UNKNOWN・旧writerの独立照合。画面の共有・作成・展開前にこれらを判定する。
+- **Rollback方針**：旧サービスは常時手動0を維持。検証専用経路を将来別ホストに導入する場合のみ、当該**別ホストだけ**を停止・ルート無効化できる構成を事前に確定し、旧サービスを起動するrollbackは認めない。
+
+この追補の追加時点では、Cloud Runスケーリング・revision/traffic、IAM、Secrets、GitHub Variables、validated SHA、main、Sheets/Drive資源、金融台帳、原本、writer、workflow dispatch、host deployは**一切変更していない**。NO-GO維持。
