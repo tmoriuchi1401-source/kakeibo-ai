@@ -1,0 +1,32 @@
+name: Receipt Sheets validation synthetic only
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/receipt_*correction*.py'
+      - 'app/receipt_sheet_*.py'
+      - 'tests/test_receipt_*correction*.py'
+      - 'tests/test_receipt_sheet_validation.py'
+      - 'apps-script/receipt-validation/**'
+      - '.github/workflows/receipt-validation-synthetic.yml'
+permissions:
+  contents: read
+jobs:
+  offline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements-test.txt
+      - name: Offline validation-only contracts (no credentials)
+        run: python -m pytest -q tests/test_receipt_sheet_validation.py tests/test_receipt_item_correction_plan.py
+      - run: node --test apps-script/receipt-validation/Code.test.cjs apps-script/category-submit/Code.test.cjs apps-script/manual-entry/Code.test.cjs
+      - run: git diff --check
