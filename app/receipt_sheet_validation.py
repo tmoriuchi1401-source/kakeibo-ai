@@ -13,9 +13,11 @@ from .drive_run_state import StateError
 from .page_receipt_model import digest
 from .receipt_item_correction_review import review, registration_plan
 from .receipt_sheet_draft import parse_draft
+from .receipt_sheet_cells import operations_from_cells
 
 PURPOSE = "receipt-sheet-validation-only-v1"
 STATES = {"受付済み", "検証中", "修正が必要", "保留", "検証済み・未記帳", "結果不明・照合待ち"}
+PREPARED = "下書き準備済み"  # Private ticket, not a registration or authority.
 FINAL = {"修正が必要", "保留", "検証済み・未記帳"}
 UNKNOWN = "結果不明・照合待ち"
 
@@ -85,6 +87,12 @@ class IndependentReceiptReader:
             if len(rows) != 1 or len(txs) != 1 or rows[0]["source"] != source:
                 raise ValueError()
             draft = rows[0]["draft"]
+            if isinstance(draft, dict) and "items" in draft:
+                base = review(txs[0], sheets["candidates"], source, [], sheets["categories"],
+                              total_confirmation=anchor["total_confirmation"],
+                              approved_product_rules=self.parse_rules(sheets["rules"]))
+                draft = dict(case_id=draft["case_id"], source=deepcopy(draft["source"]),
+                    operations=operations_from_cells(draft, base["preview"]["original_items"], sheets["categories"]))
             if isinstance(draft, str):
                 parsed = parse_draft(draft)
                 if parsed["context_digest"] != digest(anchor):
@@ -132,7 +140,7 @@ def validate_journal(value):
         for rid, r in value["requests"].items():
             request_uuid(rid)
             if (set(r) != {"request_id", "purpose", "snapshot", "state", "result"}
-                    or r["request_id"] != rid or r["purpose"] != PURPOSE or r["state"] not in STATES):
+                    or r["request_id"] != rid or r["purpose"] != PURPOSE or r["state"] not in STATES | {PREPARED}):
                 raise ValueError()
             s = deepcopy(r["snapshot"])
             claimed = s.pop("digest")
@@ -191,6 +199,8 @@ class ValidationJournal:
         if rid in value["requests"]:
             raise StateError("receipt_validation_replay_rejected")
         for old in value["requests"].values():
+            if old["state"] == PREPARED:
+                continue
             s = old["snapshot"]
             same_case = s["case_id"] == snapshot["case_id"]
             same_source = s["source"]["source_id"] == snapshot["source"]["source_id"]
@@ -200,6 +210,44 @@ class ValidationJournal:
         value["requests"][rid] = dict(deepcopy(request), state="受付済み", result=None)
         value["generation"] += 1
         self.save(value, tag)
+
+    def prepare(self, request):
+        """Freeze one draft BEFORE presenting its custom-value checkbox.
+
+        Single private-document CAS only; no Sheet update is part of this
+        transaction. A failed checkbox publication leaves an inert ticket.
+        """
+        request_uuid(request["request_id"])
+        if set(request) != {"request_id", "purpose", "snapshot"} or request["purpose"] != PURPOSE:
+            raise StateError("receipt_validation_purpose_invalid")
+        value, tag = self.load()
+        rid = request["request_id"]
+        if rid in value["requests"]:
+            raise StateError("receipt_validation_replay_rejected")
+        value["requests"][rid] = dict(deepcopy(request), state=PREPARED, result=None)
+        value["generation"] += 1
+        self.save(value, tag)
+
+    def accept_prepared(self, rid, snapshot_digest):
+        """Consume the private ticket once; no cross-resource atomicity."""
+        value, tag = self.load()
+        record = value["requests"][request_uuid(rid)]
+        if record["state"] != PREPARED or record["snapshot"]["digest"] != snapshot_digest:
+            raise StateError("receipt_validation_replay_rejected")
+        snapshot = record["snapshot"]
+        for key, old in value["requests"].items():
+            if key == rid or old["state"] == PREPARED:
+                continue
+            s = old["snapshot"]
+            same_case = s["case_id"] == snapshot["case_id"]
+            same_source = s["source"]["source_id"] == snapshot["source"]["source_id"]
+            if (same_source and not same_case or (same_source or same_case)
+                    and (old["state"] not in FINAL or s == snapshot)):
+                raise StateError("receipt_validation_duplicate_or_unresolved")
+        record["state"] = "受付済み"
+        value["generation"] += 1
+        self.save(value, tag)
+        return deepcopy(record)
 
     def transition(self, rid, state, result=None):
         value, tag = self.load()
@@ -262,11 +310,48 @@ def execute_request(request_id, *, requests, reader, journal):
     return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
 
 
+def execute_accepted_request(request_id, *, reader, journal):
+    """Preferred Actions entry: the private journal is the ONLY request record.
+
+    Registration already consumed the prepared ticket. CAS to 検証中 claims
+    the worker once; duplicate deliveries cannot validate or dispatch again.
+    Legacy execute_request remains an offline regression harness only.
+    """
+    request_uuid(request_id)
+    record = journal.query(request_id)
+    if record["state"] != "受付済み":
+        raise StateError("receipt_validation_replay_rejected")
+    try:
+        journal.transition(request_id, "検証中")
+    except Exception:
+        return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
+    try:
+        snapshot = record["snapshot"]
+        fresh = reader(snapshot["case_id"])
+        if fresh["request_snapshot"] != snapshot:
+            raise StateError("receipt_validation_captured_input_changed")
+        plan = registration_plan(fresh["snapshot"], fresh)
+        again = reader(snapshot["case_id"])
+        if again["snapshot"] != fresh["snapshot"] or again["request_snapshot"] != snapshot:
+            raise StateError("receipt_validation_concurrent_edit")
+        result = {k: deepcopy(plan[k]) for k in
+                  ("state", "issues", "snapshot_digest", "posting_authority", "financial_write_count")}
+        result["snapshot_digest"] = snapshot["digest"]
+    except Exception:
+        result = dict(state="保留", issues=["receipt_validation_source_or_input_changed"],
+                      snapshot_digest=record["snapshot"]["digest"], posting_authority=False, financial_write_count=0)
+    try:
+        journal.transition(request_id, result["state"], result)
+        return journal.query(request_id)
+    except Exception:
+        return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
+
+
 def project_result(rows, record):
     """#199 case/source/UUID-bound projection; never mutates an input or link.
 
-    A live writer must apply ONLY this result field with atomic row identity
-    checking. Sheets values.batchUpdate cannot supply that CAS; do not use it.
+    Logical render only. Live publication appends a self-keyed cache record,
+    never a row-coordinate update. The cache is NOT the authoritative journal.
     """
     validate_journal(dict(schema=PURPOSE, generation=0, requests={record["request_id"]: record}))
     snapshot = record["snapshot"]
@@ -275,12 +360,49 @@ def project_result(rows, record):
         raise StateError("receipt_result_case_missing_or_duplicate")
     i = found[0]
     row = rows[i]
-    if row["source"] != snapshot["source"] or row["submission"] != {
-            "request_id": record["request_id"], "snapshot_digest": snapshot["digest"]}:
+    if row["source"] != snapshot["source"] or ("submission" in row and row["submission"] != {
+            "request_id": record["request_id"], "snapshot_digest": snapshot["digest"]}):
         raise StateError("receipt_result_projection_stale")
     output = deepcopy(rows)
+    current = row["draft"]
+    unchanged = (isinstance(current, dict) and "operations" in current
+                 and current["operations"] == snapshot["operations"])
+    if isinstance(current, dict) and "items" in current:
+        # An independently rebuilt digest can accompany raw ordinary cells.
+        # Without it, do not claim the later draft still matches registration.
+        unchanged = row.get("draft_snapshot_digest") == snapshot["digest"]
     output[i]["result"] = dict(request_id=record["request_id"], state=record["state"],
         snapshot_digest=snapshot["digest"],
-        draft_notice="登録時の明細と一致" if row["draft"]["operations"] == snapshot["operations"] else "未登録の変更あり",
+        draft_notice="登録時の明細と一致" if unchanged else "未登録の変更あり",
         posting_authority=False, financial_write_count=0)
     return output
+
+
+def result_cache_entry(record):
+    """Append-only display record. No case row number or input values.
+
+    Publish the key and value together in one Sheets append request, then use
+    an exact-key lookup formula. No cross-service CAS or case-row write.
+    """
+    validate_journal(dict(schema=PURPOSE, generation=0, requests={record["request_id"]: record}))
+    if record["state"] not in FINAL | {UNKNOWN}:
+        raise StateError("receipt_result_display_pending")
+    snapshot = record["snapshot"]
+    key = digest([PURPOSE, record["request_id"], snapshot["case_id"],
+                  snapshot["source"], snapshot["digest"]])
+    return dict(key=key, request_id=record["request_id"], case_id=snapshot["case_id"],
+                source=deepcopy(snapshot["source"]), snapshot_digest=snapshot["digest"],
+                state=record["state"], posting_authority=False, financial_write_count=0)
+
+
+def cached_result(entries, record):
+    """Exact-key logical lookup; missing/conflicting cache never means success.
+
+    Identical duplicate appends are harmless; conflicting rows require fresh
+    private read. Cache publication failures never change journal state.
+    """
+    expected = result_cache_entry(record)
+    found = [entry for entry in entries if entry.get("key") == expected["key"]]
+    if not found or any(entry != expected for entry in found):
+        raise StateError("receipt_result_display_pending")
+    return deepcopy(expected)

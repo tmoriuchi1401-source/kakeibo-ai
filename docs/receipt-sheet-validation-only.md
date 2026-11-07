@@ -1,5 +1,7 @@
 # Sheets一般レシート検証専用経路（完全合成・本番未接続）
 
+> **後続改訂**：[private確定記録とiPhone通常セル編集](receipt-cas-iphone-revision.md)を優先する。本書は初回の合成証拠を保持する。旧reserveのprivate＋Sheets同時確定と1セル10項目入力は採用しない。
+
 2026-11-07。今回の上限は **検証済み・未記帳**。このブランチはmainから独立し、#195〜#199をmergeせず最小の純粋コードだけを再利用する。実Google Sheets/iPhoneで動作する完成版ではない。Cloud Run `hga-auth-synthetic` の手動0を変更・照会しない。実機の操作性は未検証。
 
 ## 実装と再利用

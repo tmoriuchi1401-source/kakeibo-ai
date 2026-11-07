@@ -17,7 +17,8 @@ from app.page_receipt_model import digest
 from app.reconciliation import parse_import_rows
 from app.receipt_sheet_draft import parse_draft
 from app.receipt_sheet_validation import (PURPOSE, UNKNOWN, IndependentReceiptReader,
-    ValidationJournal, empty_journal, execute_request, project_result, validate_journal)
+    ValidationJournal, empty_journal, execute_request, execute_accepted_request,
+    project_result, validate_journal, result_cache_entry, cached_result)
 from test_receipt_item_correction_plan import scenario, edit, add, SOURCE, CATEGORIES
 
 RID = "11111111-1111-4111-8111-111111111111"
@@ -417,3 +418,151 @@ def test_no_cloud_or_financial_entrypoints_in_new_module():
     value = w.journal.query(RID)
     value["result"]["financial_write_count"] = 1
     with pytest.raises(StateError): validate_journal(dict(schema=PURPOSE,generation=0,requests={RID:value}))
+
+
+def prepared_world():
+    w = World().corrected()
+    request = dict(request_id=RID, purpose=PURPOSE, snapshot=w.reader(w.case_id)["request_snapshot"])
+    before = deepcopy(w.sheet)
+    w.journal.prepare(request)
+    assert w.sheet == before  # private save does not require ANY Sheets write
+    return w, request
+
+
+def test_private_only_accept_and_worker_survive_absent_sheet_uuid_and_display_failure():
+    w, request = prepared_world()
+    receipt = w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    assert receipt["state"] == "受付済み" and "submission" not in w.row
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    assert result["state"] == "検証済み・未記帳"
+    writes = w.cas.writes
+    with pytest.raises(StateError, match="display_pending"):
+        cached_result([], result)  # Sheets publication failed, private result survives
+    assert w.journal.query(RID) == result and w.cas.writes == writes
+    entry = result_cache_entry(result)
+    assert cached_result([entry, deepcopy(entry)], result) == entry
+
+
+def test_private_prepared_ticket_is_not_a_registration_or_worker_permission():
+    w, request = prepared_world()
+    with pytest.raises(StateError, match="replay"):
+        execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    with pytest.raises(StateError, match="display_pending"):
+        result_cache_entry(w.journal.query(RID))
+    assert w.cas.writes == 1
+
+
+def test_same_uuid_worker_reexecution_refused_after_private_only_accept():
+    w, request = prepared_world()
+    w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    writes = w.cas.writes
+    for action in (lambda: w.journal.accept_prepared(RID, request["snapshot"]["digest"]),
+                   lambda: execute_accepted_request(RID, reader=w.reader, journal=w.journal)):
+        with pytest.raises(StateError, match="replay"):
+            action()
+    assert w.cas.writes == writes and result["result"]["financial_write_count"] == 0
+
+
+def test_competing_prepared_uuids_for_one_case_only_one_private_acceptance():
+    w, first = prepared_world()
+    second = dict(deepcopy(first), request_id=RID2)
+    second["snapshot"]["operations"][0]["changes"]["amount"] = 867
+    raw = deepcopy(second["snapshot"])
+    del raw["digest"]
+    second["snapshot"]["digest"] = digest(raw)
+    w.journal.prepare(second)
+    def accept(req):
+        try:
+            w.journal.accept_prepared(req["request_id"], req["snapshot"]["digest"])
+            return True
+        except StateError:
+            return False
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(accept, [first, second])).count(True) == 1
+    assert sum(r["state"] == "受付済み" for r in w.cas.value["requests"].values()) == 1
+
+
+def test_acceptance_response_loss_keeps_private_claim_and_never_reaccepts():
+    w, request = prepared_world()
+    w.cas.fault = "after"
+    with pytest.raises(TimeoutError):
+        w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    w.cas.fault = None
+    assert w.journal.query(RID)["state"] == "受付済み"
+    with pytest.raises(StateError, match="replay"):
+        w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    assert w.cas.writes == 2
+
+
+def test_worker_claim_response_loss_does_not_allow_a_second_worker():
+    w, request = prepared_world()
+    w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    w.cas.fault = "after"
+    assert execute_accepted_request(RID, reader=w.reader, journal=w.journal)["state"] == UNKNOWN
+    w.cas.fault = None
+    with pytest.raises(StateError, match="replay"):
+        execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    assert w.cas.writes == 3
+
+
+def test_result_cache_cannot_target_another_case_and_later_edits_survive():
+    w, request = prepared_world()
+    w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    entry = result_cache_entry(result)
+    wrong = dict(entry, case_id="another-case")
+    with pytest.raises(StateError, match="display_pending"):
+        cached_result([wrong], result)
+    w.row["draft"]["operations"] = []
+    w.row["note"] = "登録後のメモを保持"
+    before = deepcopy(w.sheet["cases"])
+    rendered = project_result(before, result)
+    assert w.sheet["cases"] == before
+    assert rendered[0]["note"] == "登録後のメモを保持"
+    assert rendered[0]["draft"]["operations"] == []
+    assert rendered[0]["result"]["draft_notice"] == "未登録の変更あり"
+
+
+def ordinary_cells(w):
+    base = w.reader(w.case_id)["preview"]["original_items"]
+    binding = digest([w.case_id, w.source])
+    return dict(case_id=w.case_id, source=deepcopy(w.source), items=[dict(
+        _item_id=i["item_id"], _binding=binding, name=i["name"], quantity=i["quantity"],
+        amount=i["amount"], category=list(i["category"]), kind=i["kind"],
+        target="", mode="採用", confirmed=False) for i in base])
+
+
+def test_ordinary_product_cells_need_no_typed_ids_hashes_or_delimiters():
+    w = World()
+    cells = ordinary_cells(w)
+    cells["items"][1].update(name="原本の商品名", quantity=2, amount=868, confirmed=True)
+    w.row["draft"] = cells
+    fresh = w.reader(w.case_id)
+    assert fresh["preview"]["item_total"] == 1368
+    assert fresh["preview"]["status"] == "preview_balanced"
+    assert fresh["request_snapshot"]["operations"][0]["changes"]["quantity"] == 2
+    candidate = dict(case_id=w.case_id, source=w.source, draft=cells,
+                     original_items=fresh["preview"]["original_items"], categories=CATEGORIES,
+                     context_digest=digest(w.anchor))
+    completed = subprocess.run(["node", str(ROOT / "apps-script/receipt-validation/Code.test.cjs"), "--capture"],
+        input=json.dumps(candidate, ensure_ascii=True), capture_output=True, text=True, encoding="utf-8", check=True)
+    assert json.loads(completed.stdout)["snapshot"] == fresh["request_snapshot"]
+    cells["items"][1]["_binding"] = digest("moved from another case")
+    with pytest.raises(StateError):
+        w.reader(w.case_id)
+
+
+@pytest.mark.parametrize("kind", ["product", "tax"])
+def test_ordinary_addition_and_exclusion_or_tax_target_use_automatic_ids(kind):
+    w = World((500,28),638) if kind == "product" else World()
+    cells = ordinary_cells(w)
+    if kind == "product":
+        cells["items"][1].update(mode="除外", confirmed=True)
+    cells["items"].append(dict(_item_id="new:autoslot1", _binding=digest([w.case_id,w.source]),
+        name="新しい商品" if kind == "product" else "外税", quantity=1, amount=138,
+        category=list(CATEGORIES[0]), kind=kind, target=1 if kind == "tax" else "",
+        mode="採用", confirmed=True))
+    w.row["draft"] = cells
+    fresh = w.reader(w.case_id)
+    assert fresh["preview"]["status"] == "preview_balanced"

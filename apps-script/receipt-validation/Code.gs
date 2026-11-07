@@ -1,8 +1,8 @@
 /** SYNTHETIC ONLY. No installer, trigger, token storage or live service calls.
- * reserve() MUST atomically create the immutable private request AND attach
- * UUID/snapshot digest to the same case/source row, rejecting busy/duplicates.
- * The port must not use hidden cells or read-then-write as a CAS substitute.
- * No such live port has been approved or implemented; fail closed without it.
+ * prepare/acceptPrepared operate ONLY on the private CAS journal. Sheets is
+ * an input/display projection, never half of a cross-service transaction.
+ * Custom checkbox values carry a previously prepared UUID in the edit event.
+ * No live port, installer, resource creation or credentials are provided.
  */
 const RECEIPT_VALIDATION_PURPOSE = 'receipt-sheet-validation-only-v1';
 
@@ -65,24 +65,102 @@ function receiptParseDraft_(text, hash) {
 function receiptValidationEdited(e, ports) {
   // e.user/effective user/trigger installer/PAT owner are NOT approval evidence.
   if (!ports) throw Error('receipt_validation_not_connected');
-  if (!e || e.value !== 'TRUE' || !ports.isRegisterCell(e.range)) return null;
-  const candidate = ports.readCaseAtEvent(e.range);
-  const snapshot = receiptParseDraft_(candidate.draft, ports.hash);
-  if (candidate.case_id !== snapshot.case_id || receiptCanonical_(candidate.source) !== receiptCanonical_(snapshot.source))
+  if (!e || !ports.isRegisterCell(e.range)) return null;
+  if (e.value === 'FALSE' || String(e.value).startsWith('ready:')) return null;
+  // TRUE and a row coordinate cannot identify the case BEFORE a delayed sort.
+  // Google documents custom checkbox values and single-cell e.value/oldValue.
+  const match = /^register:([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/.exec(e.value);
+  if (!match || e.oldValue !== 'ready:' + match[1]) throw Error('receipt_validation_event_identity_unproven');
+  const requestId = match[1];
+  const prepared = ports.readPrepared(requestId);
+  if (prepared.request_id !== requestId || prepared.purpose !== RECEIPT_VALIDATION_PURPOSE ||
+      prepared.state !== '下書き準備済み') throw Error('receipt_validation_replay_rejected');
+  // Never look up a case using the event row; it may now contain another case.
+  const candidate = ports.readCaseById(prepared.snapshot.case_id);
+  // Legacy delimited text remains an offline fixture only. The new raw-cell
+  // reader port compiles ordinary product cells to this logical draft object.
+  const snapshot = receiptSnapshot_(candidate, ports.hash);
+  if (candidate.case_id !== snapshot.case_id || receiptCanonical_(candidate.source) !== receiptCanonical_(snapshot.source) ||
+      receiptCanonical_(snapshot) !== receiptCanonical_(prepared.snapshot))
     throw Error('receipt_validation_case_mismatch');
-  const requestId = ports.uuid();
-  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(requestId))
-    throw Error('receipt_request_uuid_invalid');
-  const request = {request_id:requestId,purpose:RECEIPT_VALIDATION_PURPOSE,snapshot:snapshot};
-  // CAS against the exact observed draft and case identity. If it fails, no send.
-  ports.reserve(request, candidate);
+  let receipt;
+  try {
+    receipt = ports.acceptPrepared(requestId, snapshot.digest);
+  } catch (_) {
+    // The private save itself may have committed. No dispatch, rollback/retry.
+    return {request_id:requestId,state:'結果不明・照合待ち'};
+  }
+  let state = '結果不明・照合待ち';
   try {
     // Same UUID-only pattern as category-submit. No original, item or identity
     // data leaves private storage. No production dispatch is wired here.
     const status = ports.dispatch({inputs:{request_id:requestId}});
-    return {request_id:requestId,state:status === 204 ? '受付済み' : '結果不明・照合待ち'};
-  } catch (_) {
-    // Do not reset the checkbox/claim, resend, or roll back on ambiguous IO.
-    return {request_id:requestId,state:'結果不明・照合待ち'};
+    if (status === 204) state = '受付済み';
+  } catch (_) {} // A lost dispatch response must never cause another send.
+  let displayPending = false;
+  // Optional self-keyed cache publication, never update an input/case row.
+  try { if (ports.publishReceipt) ports.publishReceipt(receipt); }
+  catch (_) { displayPending = true; }
+  return {request_id:requestId,state:state,display_pending:displayPending};
+}
+
+function receiptSnapshot_(candidate, hash) {
+  if (typeof candidate.draft === 'string') return receiptParseDraft_(candidate.draft,hash);
+  const draft = candidate.draft;
+  const snapshot = JSON.parse(JSON.stringify(draft));
+  delete snapshot.digest;
+  if (Array.isArray(draft.items)) {
+    const originals = candidate.original_items;
+    const binding = hash(receiptCanonical_([draft.case_id,draft.source]));
+    const seen = new Set(), operations = [];
+    if (!Array.isArray(originals) || draft.items.length > 100) throw Error('receipt_cells_shape_invalid');
+    for (const cell of draft.items) {
+      const key=cell._item_id, old=originals.find(x=>x.item_id===key);
+      if (cell._binding!==binding || seen.has(key) || !['採用','除外'].includes(cell.mode) || typeof cell.confirmed!=='boolean')
+        throw Error('receipt_cells_identity_invalid');
+      seen.add(key);
+      if (!old && !/^new:[A-Za-z0-9_-]{8,64}$/.test(key)) throw Error('receipt_cells_item_invalid');
+      if (!old && cell.name==='' && ['quantity','amount','category','target'].every(k=>cell[k]===null || cell[k]==='')) continue;
+      const evidence='原本照合済み（入力者の申告・本人認証ではない）';
+      if (cell.mode==='除外') {
+        if (!old || !cell.confirmed) throw Error('receipt_cells_remove_unconfirmed');
+        operations.push({action:'remove',item_id:key,evidence});continue;
+      }
+      if (typeof cell.name!=='string' || !cell.name.trim() || !Number.isSafeInteger(cell.amount) ||
+          typeof cell.quantity!=='number' || !Number.isFinite(cell.quantity) || cell.quantity<=0 ||
+          !candidate.categories.some(c=>receiptCanonical_(c)===receiptCanonical_(cell.category)))
+        throw Error('receipt_cells_value_invalid');
+      let target=cell.target;
+      if (target) {
+        if (!Number.isInteger(target) || target<1 || target>draft.items.length) throw Error('receipt_cells_target_invalid');
+        target=draft.items[target-1]._item_id;
+      }
+      const values={name:cell.name.trim(),quantity:cell.quantity,amount:cell.amount,category:cell.category,target_item_id:target};
+      let op;
+      if (old) {
+        if (cell.kind!==old.kind) throw Error('receipt_cells_original_kind_changed');
+        const changes={};
+        for(const k of Object.keys(values)) if(receiptCanonical_(values[k])!==receiptCanonical_(old[k]===undefined?'':old[k])) changes[k]=values[k];
+        if (!Object.keys(changes).length) continue;
+        op={action:'edit',item_id:key,changes,evidence};
+      } else op={action:'add',item_id:key,kind:cell.kind,...values,evidence};
+      if(!cell.confirmed) throw Error('receipt_cells_original_check_required');
+      operations.push(op);
+    }
+    if(!originals.every(x=>seen.has(x.item_id))) throw Error('receipt_cells_missing_original_not_explicitly_excluded');
+    delete snapshot.items;
+    snapshot.operations=operations;
+    snapshot.context_digest=candidate.context_digest;
   }
+  snapshot.digest=hash(receiptCanonical_(snapshot));
+  return snapshot;
+}
+
+function receiptPrepareDraft(candidate, ports) {
+  // Background draft-save stage, NOT another user confirmation. No dispatch.
+  // Live publication of the returned checkbox rule requires separate approval.
+  const snapshot=receiptSnapshot_(candidate,ports.hash), rid=ports.uuid();
+  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(rid)) throw Error('receipt_request_uuid_invalid');
+  ports.prepare({request_id:rid,purpose:RECEIPT_VALIDATION_PURPOSE,snapshot});
+  return {checkedValue:'register:'+rid,uncheckedValue:'ready:'+rid};
 }
