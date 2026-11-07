@@ -202,3 +202,15 @@ SのACLとmetadataから、**別ファイルとして分離する配置は可能
 承認対象は上記の範囲に限定し、別ブック・追加Cloud基盤・本番原本・通常金融登録へ拡張しない。0の確認ができるまで復旧／deploy差分の確定は保留する。1〜3も今回は実行しない。承認後の検証は、新caseの本人／別ユーザー拒否、原本・draft変更、二重登録、期限、期限後結果、通信断/UNKNOWN、iPhone原本往復と保存済み入力の復元に絞る。金融writeは全経路0が条件。
 
 **今回確定したのはU22・共有1grant・S内4ファイルの分離案・B推奨・承認範囲。管理者によるhost現状確認と実接続の確定は未完了。** 新たな監査範囲は増やさず、その未確認点で停止する。文書差分／whitespace／秘密情報混入のみ検査し、コード・合成テストの再実行・実Google認証・iPhone実機検証は行っていない。main／本番Sheets／台帳／原本／authority／validated SHA／本番フラグは未変更。共有・資源作成・復旧・deploy・金融write・原本移動・医療AI送信は0。NO-GO維持。
+
+## Cloud Console管理者読取の再開試行（2026-11-07）
+
+ユーザーからWindows／Chrome／Google Cloud Consoleと対象プロジェクトの具体指定を受け、既存管理者アカウントによる読取専用調査を再開した。AGENTS.md・iPhone仕様全文を再確認。復旧・再deploy・IAM/OAuth変更・新規資源・Secret値/token閲覧は対象外とした。
+
+Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設定画面だった。`getApp` は現在のUIを読むため、自動承認レビューにより「Variables等のprivate内容へアクセスするおそれ」で拒否された。画面本文は取得していない。この拒否はCloud IAMの403や503原因とは別の、PC操作接続の安全ゲートである。
+
+ユーザーへ対象プロジェクトのCloud Run画面を手動で開くよう依頼し、待機後にwindow titleだけを再確認したが、対象外画面のままだった。拒否を別手段で回避せず、Cloud Consoleの管理者アカウント／対象projectの一致を確認できないため停止した。
+
+今回、service名・region・現revision・traffic・Ready状態・直近platform/appエラー・runtime service account・IAM・実OAuth callbackは**いずれもCloud Consoleで未確認**。既存資料・過去HTTP応答を現在の管理者観測に置き換えない。503の原因、復旧の具体変更、rollback先revisionは未特定のまま。推測によるIAM付与やredeploy案を確定事項として提示しない。
+
+再開条件は、指定プロジェクトのCloud ConsoleがChrome前面に表示され、その管理者接続を安全に取得できること。その後、当該既存サービスの構成・Ready/失敗理由・限定したエラーを読取り、Secret値を含まない根拠だけで最小復旧差分と現revision/trafficへ戻すrollbackを確定する。今回の保存はこの未接続記録のみで、コード／テスト／Cloud設定／権限／本番資源は変更していない。NO-GO維持。
