@@ -11,7 +11,7 @@
 | UUID受付 | category-submit/manual-entryの先行保存→UUIDだけ送信→UNKNOWN時非再送パターン | `Code.gs`は依存注入する合成core。installer、trigger、PAT保管、UrlFetchApp、ライブSheet書込みなし |
 | 結果journal | #199の専用scope・CAS/read-back・非TTL・状態遷移の考え方 | actor認証を流用しない専用schema。強ETag、server-side CAS、毎回のprivate ACL preflight、読戻しが必須。既存金融stateやhidden Sheetに接続しない |
 | 同案件結果投影 | #199のcase/source/UUID/snapshot照合を移植 | 純粋関数が結果欄だけ変更したコピーを返す。原本リンク・入力・メモを保持。ライブ更新は未実装 |
-| Actions | `receipt-validation-synthetic.yml` | main向けPRの合成テストだけ。workflow_dispatch/schedule/Secrets/Variables/環境承認/本番資格なし。既存workflowは一切変更しない |
+| Actions | 既存 `synthetic-tests.yml` にNodeテスト1 step追加 | 既存のSecretsなし合成CIを再利用。Pythonは既存pytest discoveryで実行。workflow_dispatch/schedule/Secrets/Variables/環境承認/本番資格を追加せず、本番workflowは一切変更しない |
 
 対象は#196が扱う**一般の買物画像・金額不一致で保留された案件**。修正後の合計が一致しても、カテゴリ競合、数量の行合計確認、税/値引きの帰属、候補と原本の整合を検証する。一般PDFや元から一致した別種類の案件への拡張は今回行わない。医療・給与・unknownは一般処理を拒否する。AI送信・原本移動なし。
 
@@ -64,9 +64,11 @@ node --test apps-script/receipt-validation/Code.test.cjs apps-script/category-su
 - 原本hash/version、解析候補/取込/ルール改変、総額確認欠落、medical拒否、行sort/列sort/同時編集/欠落/重複case、同UUID/別UUID重複、競合worker。
 - 受付前/後の通信断、終端保存後応答喪失、強CAS不足、終端CAS競合、読戻し失敗、UNKNOWNのread-only照合、後のwrite flag有効化でも再実行・記帳なし。
 - JS実captureの合成requestをPythonへ渡し、同じdraftのsnapshot/hashが一致し、独立検証まで動くことを3ケース確認。
-- 新CIはSecretsなしのPRテストのみ。CIとローカル結果、実接続・iPhone結果を区別する。
+- CIは既存のSecretsなし合成テストを再利用。CIとローカル結果、実接続・iPhone結果を区別する。
 
 初回head `da4866ad471e4638f9653df2f278770a2c854b47` の[専用CI](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/42366817614)は成功（Python62＋JavaScript15）。同headの既存全体CIは、`test_gemini_error_compat.py`の`import httpx`で両matrixが各1収集エラー。最新SDKの推移で直接依存の不足が表面化しており、#196の`requirements-test.txt`の2行だけも再利用して修正する。本番requirementsや既存テストの期待値・安全条件は変更しない。再実行の結果はPR本文へ記録する。
+
+中間head `60b6520` の全体CIは **4917成功・1失敗**（一般4201成功/1失敗、機微合成716成功）。失敗は新設合成workflowを既存production workflow監査が拒否したもの。新workflowを削除し、既存合成CIへNodeテスト1 stepだけを追加して解消する。監査テストのallowlistや期待値は緩めない。専用CIの成功は履歴として残し、最終headは既存全体CIで検証する。
 
 ## 本番接続の停止点と次の最小作業
 
@@ -81,4 +83,4 @@ node --test apps-script/receipt-validation/Code.test.cjs apps-script/category-su
 
 新経路の実装には金融writer引数・呼出し、Cloud API、OAuth/Flask/Firestore依存、ライブAPI client生成、Secrets読取りがない。新テストではsocket接続と金融SheetsDB構築を禁止し、結果の `posting_authority=False / financial_write_count=0` を検査する。合成private journalへの状態writeは行うが、金融・本番writeではない。
 
-この作業で行った外部操作は公開ソース/PRの読取、独立ブランチ/commit/Draft PR保存とSecretsなし合成CIだけ。本番/承認済み合成Sheets、Drive原本/台帳、IAM、Secrets、Variables、validated SHA、既存workflow、main、#195〜#199、旧Cloud Runには変更操作を行わない。これはこの作業の非変更証拠であり、他の実行主体や既存writerの停止・Cloud Runの現在の管理状態を監査したという意味ではない。
+この作業で行った外部操作は公開ソース/PRの読取、独立ブランチ/commit/Draft PR保存とSecretsなし合成CIだけ。本番/承認済み合成Sheets、Drive原本/台帳、IAM、Secrets、Variables、validated SHA、本番workflow、main、#195〜#199、旧Cloud Runには変更操作を行わない。これはこの作業の非変更証拠であり、他の実行主体や既存writerの停止・Cloud Runの現在の管理状態を監査したという意味ではない。

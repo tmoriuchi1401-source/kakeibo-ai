@@ -80,6 +80,8 @@ jobs:
         run: node --test apps-script/category-submit/Code.test.cjs
       - name: Check manual entry capture without credentials
         run: node --test apps-script/manual-entry/Code.test.cjs
+      - name: Check receipt validation capture without credentials
+        run: node --test apps-script/receipt-validation/Code.test.cjs
       - name: Compile and check whitespace
         run: |
           python -m compileall -q app tests
