@@ -1,6 +1,34 @@
-# PR #200：隔離合成試験の事前確認（2026-11-08）
+# PR #200：隔離合成試験の事前確認と単一JSON CAS実測（2026-11-08）
 
-**判定：UNKNOWNの最小修正は合成確認済み。資源作成・実API CAS・iPhone実機は未実施。登録経路はNO-GO。**
+**最新判定：承認された専用JSON 1件のDrive v2実API CASはPASS。iPhone実機は未実施。一般レシート登録・本番接続・金融writeは引き続きNO-GO。**
+
+## 承認範囲内の実測結果
+
+基準commit `a1c934591c5929ffef7357874082f028bc432f41`、Draft PR #200の実装・停止条件とローカル非公開承認計画を照合した。既存owner接続で承認済みprivateフォルダ直下の同名ファイルが0件であることを確認後、`receipt-validation-acceptance-20261108.json`を1件だけ作成した。別のowner metadata GETと既存service accountの直接GETで、返却された実ID・単一parent・MIME・trash=false・owner＋当該service account writerだけのACL・アクセス・初期bytesを照合した。権限追加・共有変更はしていない。
+
+| 確認項目 | 実測結果 |
+|---|---|
+| JSON作成 | 成功。完全合成の初期JSON 128 bytes、16 KiB以内。作成1件、削除0件 |
+| ID・ACL独立確認 | PASS。owner側の作成応答とは別のGETで照合し、service accountでもmetadata/mediaともHTTP 200 |
+| A：正常更新 | PASS。最新の強ETag T0でPUT 1回、実HTTP 200。独立GETでAの121 bytes完全一致と別の強ETag T1を確認 |
+| B：古いETag | PASS。T0で異なるBをPUT 1回、Googleの実HTTP 412。独立GETのbytesはAと完全一致、ETagもT1のまま |
+| C：並行更新 | PASS。最新ETagを独立取得し、同じETagで異なるC/Dを各1回並列PUT。C=412、D=200。独立GETは唯一の勝者Dの121 bytesと完全一致し、ETag更新 |
+| D：応答喪失 | PASS。PUT 1回後にアプリ側で応答を意図的に破棄。transport観測は200。その後PUTせずGETだけで意図した140 bytesと新しい強ETagを確認。**ローカル故障注入であり、実ネットワーク障害の実測ではない** |
+| 送信・読戻し | media PUT合計5回（A/B/C/D/応答破棄それぞれ1回）、自動再送0回。独立metadata GET 12回＋media GET 6回、すべて200。各media GET前後のmetadata一致とbytes完全一致を検査 |
+| 対象外write | Drive書込みは承認された新規JSONの作成1件と同じ実IDへのmedia PUT 5回だけ。対象外ファイルwrite 0件。親フォルダには承認どおり子が1件増えた |
+| 総合判定 | **単一JSON CAS試験PASS。本番GOではない** |
+
+PUTは`upload/drive/v2/files/<固定した新規ID>?uploadType=media&fields=id,etag`へ`If-Match`付きで送信した。既存`DriveRegistryIO.replace_versioned()`のclient側stale比較は使用せず、BもGoogleまで送信して実HTTP 412を取得した。HTTP adapter retry=0、redirect無効、事前取得token固定の通常Sessionを使い401時の暗黙再送を禁止し、resumable uploadも使用していない。一回性のローカルmarkerと固定ID照合を設け、別IDへのPUT経路は持たせていない。
+
+実ID・ACLメール・ETag値・bytesのhash・各HTTP応答と送信回数を含む詳細証跡は非公開ローカル記録に保持し、公開PR/CIには実ID・メール・資格情報・private JSON全文を保存しない。計測helperもローカル専用で、製品adapter・workflow・登録bindingは変更していない。試験用JSONは最終合成payloadのまま保持し、削除・再利用・本番接続しない。
+
+合成ブック・合成原本・Apps Script triggerの作成0、共有/権限/Secrets/Variables変更0、本番dispatch 0、AI送信0、原本移動0、Cloud Run操作0、金融write 0。main・validated SHAは非変更、PR #200はDraft・未mergeのまま。今回の差分はこの監査文書だけ。
+
+今回の承認範囲はここで終了する。iPhone実機は未実施。次の隔離合成試験は、下記の原本読取・adapter未接続の障害を含め、必要な資源・共有・変更範囲を別途提示して個別承認を待つ。今回のCAS合格を一般レシート登録機能の有効化に使わない。
+
+## 以下は今回の作成承認前の事前確認記録
+
+以下にある「未作成」「未実施」「作成前停止」は当時の記録。JSON作成とCAS実測の現在値は上記が優先する。合成ブック・原本・trigger・iPhone実機の未実施と本番NO-GOは現在も変わらない。
 
 ## 今回のコード差分
 
