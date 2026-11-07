@@ -1,5 +1,9 @@
 # 一般レシート：独立reader・登録画面・期限後結果照会（合成）
 
+
+> **方針変更（2026-11-07）：本PRのFlask/OIDC/Cloud Run経路は実装候補から除外。** ユーザーはCloud Run不要と決定。正式な今後の経路は**iPhone Google Sheets「確認」1タブ → 明示的なUUID付き登録要求 → GitHub Actionsの独立検証 → 同じSheetsで結果確認**。編集だけでは本人認証／記帳権限を意味しないため、検証結果は**「検証済み・未記帳」まで**とし、旧OIDC由来のactor authorityをSheets ACLに読み替えない。既存の旧Cloud Runは手動スケーリング0を維持、新ホストも作らない。下記のhost接続／B方式推奨／復旧条件は**歴史的な調査記録**として残し、実装指示として扱わない。今後の上位仕様は[第12節](iphone-receipt-review-mvp-spec.md)を参照。#195/#196の商品別検証ルールと#199の純粋な独立照合・結果CASだけ、依存分離した上で再利用を検討する。実Sheets・Actionsの接続は未完成、本番金融writeはNO-GO。
+
+
 2026-11-07。PR #195〜#198、AGENTS.md、iPhone確定仕様全文、商品別修正仕様を確認し、#198 `11509bf9bfc274b85dfb5b03b3e7de1d57345a03` から独立ブランチを作成した。
 
 **到達点は合成adapterと既存appのtest client上での、認証済み登録→独立検証→結果保存／再照会。iPhoneから実環境で利用できる完成版ではない。** 実データの承認済みbinding、1タブの具体的な列対応、既存hostへの新purposeのdeployは確認できないため、その実接続で停止し、検証済み部分だけDraft保存する。NO-GO維持。
