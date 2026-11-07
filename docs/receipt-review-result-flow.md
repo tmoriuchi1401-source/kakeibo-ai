@@ -123,3 +123,82 @@ Drive connectorのmetadata応答は正規化されversion/checksumが返らな�
 **停止判定**：実登録経路・private保存先・ACL・host稼働が未確定のため、接続実装へ進まない。今回の実測は資源読取と副作用のないHTTP確認のみ。#199の71件／既存認証363件／回帰67件は前回の合成結果で、今回再実行していない。実Google認証・iPhone実機・永続CAS成功・金融write成功の証拠にしない。今回の変更はMarkdownのみで、差分・whitespace・秘密情報混入を確認する。
 
 本番Sheets／台帳／原本・設定・Variables/Secrets・authority・validated SHA・mainは未変更。資源作成・権限変更・dispatch・金融write・原本移動・AI送信・host deployは0。NO-GO維持。
+
+## iPhone実機への接続候補と承認対象（2026-11-07追加）
+
+今回の対象を**U22＝10月22日の既存「登録接続・iPhone受入」合成ブック**に固定する。M/U17、本番原本、既存金融処理は対象外。PR #195〜#199はOPEN/Draft/未mergeのまま、#199 head `7f9fae209455f0ac3b0f6e036df9d56a215fa3ce` と既存コードを再確認した。以下は具体的な変更提案であり、実施承認や接続完了ではない。今回は文書のみ変更する。
+
+### 今回の限定再確認
+
+U22は「確認」1タブ、先頭1行・1列固定。ACLはownerのみ、接続アカウントは共有操作可能。Sも同じownerで、owner＋既存service account writerだけのACLを維持している。既存service account自身によるSのmetadata読取は200、`canAddChildren=true`、そのwriterが当該credentialと同一であることを値の出力なしで照合した。U22の一般合成行が参照するPNG原本もownerのみ。**既存原本の共有変更を伴わずに使える構成ではない**ので、下記の合成コピー案とする。
+
+既存設定originと過去資料URLの `/health` は今回もGoogle Frontendの503。既存service accountのCloud Run一覧読取は403。管理者経路として既存Chromeへ接続を試みたが、Computer Useのapp接続承認がタイムアウトし、Cloud Consoleを読めなかった。ローカルの通常PATHにgcloudはなく、標準の既存gcloud認証ディレクトリも見つからなかった。**管理者による現revision・503原因・runtime資格の確認は未実施**であり、403解消や復旧方法を特定したとは報告しない。Secret値の取得、別資格の作成、IAM付与、復旧・deployは行っていない。
+
+残す管理者調査はこの1サービスに限定する。既存管理者セッションで、Ready条件／traffic先revision、runtime service account、Secret参照名を含む設定metadataとorigin/callbackの対応、503に関係するplatformの起動・準備失敗理由を確認する。アプリの生ログやSecret payloadは取得しない。既存service accountへCloud管理権限を付与して403を消す案は採用しない。原因が未確定なので、復旧・deployを包括承認の対象にはしない。
+
+### 共有変更は1ブックへの1grant
+
+変更先はU22だけ。追加する相手は**Sの現writerと同一の、既存 `GOOGLE_SERVICE_ACCOUNT_FILE` の `client_email`**。ownerは維持し、親フォルダ・M・原本・他ユーザーの共有は変えない。
+
+Drive/Sheetsの読取APIだけならreaderが候補になるが、#199の `checked_metadata` はowner＋指定service accountの**writer**というexact ACLを要求する。コードをそのまま再利用する最小差分は、U22へこの1件のwriter grantを追加すること。閲覧者を付与しただけで合格とはしない。writerは合成ブック全体を編集できる強い権限なので、承認が必要。実行コードはSheets read-only scopeとし、Sheetsへの結果write・編集trigger・金融writerを持たせない。readerへの設計変更を希望する場合は別のコード／安全性レビューとなり、本提案では実施しない。
+
+hostのruntime service accountがこの既存資格と同一か、既存のDrive資格参照を使う構成かは管理者確認待ち。別のservice accountを同一扱いしたり、追加の共有者を黙って許容したりしない。共有後にexact ACL・version・metadata前後読取を再確認し、一致しなければ停止する。rollbackは今回追加したU22のgrantだけを除去する。
+
+### private分離：既存Sの中へ専用4ファイルを提案
+
+SのACLとmetadataから、**別ファイルとして分離する配置は可能な候補**と判定する。既存ファイル内へキーを追加する方式は、既存schema／generation／金融stateと競合するため採用しない。使ってよい空の専用ファイルは依然特定できていない。したがって新ファイル作成は承認前に行わない。提案するB方式の初回試験は、次の4ファイルに限定する（名前は未作成の提案名）。
+
+| 提案ファイル | 内容・境界 | 更新権限／保持 |
+|---|---|---|
+| `receipt-correction-synthetic-source-v1.png` | U22で確認した完全合成PNGのコピー1件。既存原本の内容・ACL・リンクを変更しない | ownerが既存接続でSへコピー。固定後はbackend読取のみ |
+| `receipt-correction-synthetic-cases-v1.json` | 新しい合成案件1件の表示ID→取込case ID、コピー原本ID/bytes hash/version/用途、保存済み候補・取込行のdigest、合成カテゴリ／商品ルール、同一版の総額確認記録 | 初期設定はowner。通常処理は読取のみ。Mの実データや限定canaryのanchorをコピーしない |
+| `receipt-correction-synthetic-drafts-v1.json` | Bの未登録商品修正だけ。case/source/登録者、revision、operationsをCASで保持 | 現在の認証済みowner＋編集用Origin/CSRF。書込みは専用draftのみで、金融許可を作らない |
+| `receipt-correction-synthetic-results-v1.json` | #199 `ResultJournal` の専用scope/envelope。UUID・actor・原本版・snapshot・検証状態 | 既存CAS／独立read-back、600秒後も保持、UNKNOWNは再送しない |
+
+作成主体は既存owner接続とし、service accountを新ownerにする作成方法は採らない。作成後は各ファイルのowner＋既存service account writer、S parent、MIME、trash、強ETagを検査する。新共有者・新フォルダは追加しない。この配置はまだ作成／書込／耐久性実証済みではない。既存Drive v2 If-Match/read-backと#199のportを接続し、PDF専用schemaや限定canary scopeを偽装して流用しない。既存Firestoreの短期request/ticket/loginはその用途を維持し、結果journalと混在させない。
+
+合成原本のコピーによりIDが変わるので、新規合成caseとしてanchorを作る。旧行の入力・総額確認・authorityを移植しない。U22の既存8案件を変更せず、新しい検証専用1案件を追加する承認案とする。新sourceのbytes/hash/version、候補・カテゴリ等はownerが合成fixtureから初期化し、独立readerが照合する。既存実原本の追加共有・移動・AI送信は不要。
+
+### 商品修正A/Bの最小変更比較
+
+ここでのBは**既存認証ホスト内の編集画面**であり、仕様書の旧「Apps Script B方式」を新設する案ではない。Sheets「確認」1タブを入口として維持するが、商品編集場所の変更は未承認。AGENTS.mdおよびiPhone仕様10.5に従い、実装前に承認を得る。
+
+| 観点 | A：Sheets内で商品明細編集 | B：Sheets入口→既存認証画面で編集・登録（推奨） |
+|---|---|---|
+| 最小UI差分 | 1行1案件を保つため、右側へ商品ID/名称/数量/金額/除外/税値引き根拠等の反復列と追加枠が必要。現在の19列に商品表はない | 既存8行と列配置を保持。新検証1行に入口リンクを設け、既存hostに商品フォームを追加。結果はhostで表示 |
+| backend差分 | Sheet→operations parser、可変商品枠・不足時hold、候補IDとの対応、前後再読取。#198の固定snapshot/POSTと#199のreader構造を最も直接再利用 | 認証済みprivate draft保存、draftの独立reader、編集後snapshotの再固定が追加で必要。#199のHTMLは現在表示専用で、入力保存は未実装 |
+| 操作見積り | 商品セル編集を除き、リンク→既存開始/続行→固定内容を登録＝3操作 | 商品入力を除き、リンク→既存開始/続行→修正内容を確認→固定内容を登録＝4操作。登録POSTは1回、previewが1操作増える |
+| iPhone入力 | 複数列のセル選択・横移動。商品追加／除外や数量の対応を見失いやすく、旧PDFカードの複数行UIをそのまま移植できない | 1商品ずつ縦に名称・数量・金額・除外を編集。根拠付き追加、税／値引き、商品別分類、合計・差額を同じ画面に置ける |
+| 入力保持 | Sheets同期を利用するが、同期済みの独立確認・ソート安全性は別途必要 | dedicated draftへCAS保存し、保存済み表示と再読取で復元。未保存／通信断／UNKNOWN時の原本遷移は止め、入力を画面に保持。未保存値の強制終了後復元は保証しない |
+| 安全性 | Sheet値は未信頼、row numberや編集者を本人証拠にしない。並替え／列ずれ／同時編集を独立検査 | browser値も未信頼。現在login/ownerと編集CSRFを確認して下書き保存し、登録時はprivate再読取と原本／候補を独立照合。行書戻し競合を除ける |
+| 共通再利用 | #196商品修正preview/税・値引き/商品分類、#198 OIDC/owner/session/Origin/CSRF/UUID/600秒、#199結果journal/照会を利用 | 同左。既存認証・金融writerを新設しない。登録purposeを記帳authorityへ昇格しない |
+
+操作数は既存開始画面を維持する設計見積りで、Google側のログイン操作・原本往復・商品ごとの入力は別。実機での測定値ではない。Aの初回private追加はsource/case/resultsの3ファイル、Bはdraftを加え4ファイル。Bがコード行数でも小さいとは主張しない。
+
+実装単位で比較すると、共通差分は実reader binding、既存runtime/profile/callbackとdeployment whitelist、結果照会の接続。A固有は「Sheetの商品列生成・入力規則」「列からoperationsへのparserと同時編集照合」の2単位。B固有は「商品フォーム／編集用POST」「private draftのCAS保存・独立reader」「previewでの新request再固定」の3単位を想定する。Bは `auth-session/receipt_correction_web.py` と `receipt_correction_io.py` を主な追加先とし、#196の修正validator・#198のOIDC/最終登録validatorは再利用する候補。両方式とも合成契約の追加は必要。未実装のため行数・工数の確約はしない。
+
+**推奨はB。** Aは認証コードの差分が少ないが、商品数に応じた横長の列・追加枠・入力規則を合成ブックへ新設する必要がある。Bは下書き保存とpreviewの追加を明示的に引き受け、既存1タブと入力・メモを保持しながら、可変商品をiPhoneで編集しやすい構成にできる。既存ブックのCのIF式をbackend結果と混同せず、初回はhostの結果照会だけにする。
+
+### Bで固定snapshotを維持する接続経路（未実装）
+
+`U22の新検証行リンク → 既存start/OIDCまたはshared login → 商品編集 → private draft保存 → 「修正内容を確認」POST → 新UUID/600秒の固定snapshot → #199の「この内容を登録」POST → #196検証 → private結果journal → 同じhostの結果／期限後照会`。
+
+初回認証は既存の対象を限定したprofile／署名付き要求を使い、登録前の編集権限と金融権限を分離する。公開の汎用seed endpointを新設しない。GETではrequest/CASや登録を開始しない。編集用CSRFは現在loginとcaseへ、最終登録CSRFは新UUIDと固定snapshotへそれぞれ結合する。別purposeのCSRFや古いactor証拠を転用しない。
+
+編集値のCAS保存後に、原本・候補・draft・分類を独立再読取し、previewから新しい#198 requestをprepareする。既存SharedLoginsで**新bindingへ**登録者証拠を結び直し、#199の固定内容画面へ移る。編集前の認証が変更後snapshotを承認したとはみなさない。長い編集を600秒の登録期限へ含めず、期限は固定後に開始。固定後の編集・別タブ・同時更新は登録を拒否し、新previewが必要。final POSTの現在の `csrf + snapshot_digest` 契約は維持し、そこへ商品編集値を直接追加しない。
+
+下書き保存は金融処理を呼ばず、UNKNOWNではCAS／登録を自動再送しない。Safariの原本往復前に保存成功を表示し、復帰時はcase/source/draft revisionを照合して復元する。Sheetの既存入力・O列メモは読み書きしない。今回のBの保存／再固定はまだ実装・合成テストされておらず、#198/#199の過去の71件で成功済みと扱わない。
+
+### 次に承認すべき操作と停止点
+
+| 順序 | 具体的な操作 | 影響・rollback／今回の状態 |
+|---|---|---|
+| 0 | 既存Chrome管理者接続を利用可能にして、上記1サービスのmetadata／platform失敗理由を読取 | 作業自体は今回依頼済み。app接続承認タイムアウトで未完了。新IAM・Secret値・修復を要求しない |
+| 1 | U22へSの現writerと同一の既存service accountをwriterとして1件追加 | U22だけに編集権限が増える。削除でrollback。未承認・未実施 |
+| 2 | S内に上記4ファイルをownerとして作成し、完全合成の新caseだけ初期化 | 既存private記録は非変更。解除は新bindingと入口の無効化、既存データを削除／上書きしない。未承認・未実施 |
+| 3 | Bの商品編集／draft保存／preview再固定をDraft上で実装・合成検証し、U22へ新検証1行の入口だけ追加 | 既存8行、列見出し・固定・メモ・原本リンク・C式・保留を保持。追加入口を無効化してrollback。UI方式変更を含むため未承認・未実施 |
+| 4 | 管理者確認で判明した必要最小限の既存host復旧と#199/Bのbundle/profile/callback遷移の展開 | 現revision／原因が未確認のため具体的な復旧差分は未確定。**この行への包括承認では実行しない**。変更対象・現/新revision・traffic・検証・rollbackを示して別承認 |
+
+承認対象は上記の範囲に限定し、別ブック・追加Cloud基盤・本番原本・通常金融登録へ拡張しない。0の確認ができるまで復旧／deploy差分の確定は保留する。1〜3も今回は実行しない。承認後の検証は、新caseの本人／別ユーザー拒否、原本・draft変更、二重登録、期限、期限後結果、通信断/UNKNOWN、iPhone原本往復と保存済み入力の復元に絞る。金融writeは全経路0が条件。
+
+**今回確定したのはU22・共有1grant・S内4ファイルの分離案・B推奨・承認範囲。管理者によるhost現状確認と実接続の確定は未完了。** 新たな監査範囲は増やさず、その未確認点で停止する。文書差分／whitespace／秘密情報混入のみ検査し、コード・合成テストの再実行・実Google認証・iPhone実機検証は行っていない。main／本番Sheets／台帳／原本／authority／validated SHA／本番フラグは未変更。共有・資源作成・復旧・deploy・金融write・原本移動・医療AI送信は0。NO-GO維持。
