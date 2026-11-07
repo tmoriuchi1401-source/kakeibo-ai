@@ -222,3 +222,22 @@ Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設�
 続く今回の明示的な再試行でも、Cloud Runのwindow titleは確認できたが、自動承認レビューが「Cloud ConsoleのURLを検証できず、前提未確認のgetApp再試行は許可できない」として拒否した。拒否された操作を別手段で回避せず、Cloudへの接続試行を停止した。ユーザーが同じ画面を再度開けば解決する問題だとは案内しない。
 
 取得できたのはwindow titleだけで、管理者アカウント・対象project ID・service/revision・traffic/Ready・エラーログ・runtime service account/IAMは未確認。**503の原因と復旧変更／rollback先は依然未特定**。PC操作のURL検証失敗をCloud Runの障害原因と混同しない。以後の調査には、現在URLを安全に検証できる承認済み接続経路、または管理者本人が取得したSecret/tokenを除く構成・エラー情報が必要。このターンでは接続停止の監査記録だけを保存した。Cloud設定・deploy・IAM・OAuth・Secret値・金融writeの操作は0。NO-GO維持。
+
+## 管理者提供資料による503分析へ変更（承認済み）
+
+ユーザーが調査方法の変更を承認した。**Chromeの自動操作・接続再試行は中止**し、管理者本人が取得したスクリーンショット／ログだけを分析する。新しい認証・資格情報・Cloud資源は不要。初回の資料要求は次の4点だけとし、IAM・runtime資格・OAuth設定等は追加要求しない。現時点では4点とも未受領で、503原因は未特定。
+
+| 初回資料 | Google Cloud Consoleでの読取操作 | 必要な表示範囲／現在の証拠 |
+|---|---|---|
+| 1. サービス状態 | 対象projectのCloud Run→既存認証サービスを選択 | サービス名・regionと状態／警告メッセージ部分。未受領 |
+| 2. 最新RevisionのReady | 同サービスのRevision history（リビジョン／変更履歴）→最新Revisionの状態表示 | Revision名、Ready状態、失敗時の理由全文。環境変数やSecretの詳細は開かない。未受領 |
+| 3. Traffic割当 | 同じRevision一覧のTraffic列を見るだけ | 全割当先Revisionと各割合。2と同じ画像でよい。traffic管理・保存は操作しない。未受領 |
+| 4. 503付近のエラー | 同サービスのLogs（ログ）→503発生時刻の前後5分程度を選択→該当503行と直前のエラーを展開 | 時刻とtimezone、severity、Revision名、エラー本文の該当部分だけ。最新Revisionだけに絞らず、実際の割当先を含める。未受領 |
+
+1〜3は表示が収まれば同じ画像でよい。ログ全文のexport・サービスYAML・環境変数・Secret値・token・認証情報は要求しない。共有前にログ内のAuthorization/Cookie/OAuthコード等を除外し、該当エラーに必要な部分だけ提供してもらう。スクリーンショットや生ログをそのままGitHubへ保存せず、PRには秘密・個人情報を除いた判断根拠だけを記録する。
+
+分析は、(a)最新Revisionと実際のtraffic先を区別、(b)同時刻・同Revisionの503と起動／実行エラーを照合、(c)観測事実・仮説・未確認を分離、の順に進める。最新RevisionのReady不成立や過去revision名だけで原因・rollback先を決めない。4点で不足するときだけ、次に必要な資料1項目と具体的Console操作を示す。証拠なしで再deploy・権限拡大・memory/timeout変更を推奨しない。
+
+原因を特定できた後に、必要な設定／コード／trafficの最小差分、影響範囲、変更前の割当／検証済み正常revisionへ戻す条件付きrollback、読取で確認する復旧判定を提示する。復旧操作は実施しない。現時点の成果は方法変更と取得手順の記録であり、障害診断完了ではない。設定変更・deploy・金融writeは0。NO-GO維持。
+
+手順の参照：[Revisionの一覧・詳細](https://docs.cloud.google.com/run/docs/managing/revisions)、[サービスのログ表示](https://docs.cloud.google.com/run/docs/logging)、[503等の切り分け](https://docs.cloud.google.com/run/docs/troubleshooting)。これらは取得・分析方法の根拠であり、当該サービスの実障害を証明する資料ではない。
