@@ -1,5 +1,25 @@
 # PR #200：iPhone隔離合成受入試験・資源と変更範囲の承認案（2026-11-08）
 
+## Gate A 追加実測：既存SAによる読取専用確認
+
+基準commit `24e1588800577872e69245694b1c0c7bb983fd2e` と本書・preflight・CAS改訂文書を照合後、指定済みの3資源だけを既存service account資格で直接GETした。owner接続による代用やownerへの委任はしていない。既存SAのread-only tokenを使用し、OAuth認可設定・IAM・ACL・資格情報は変更していない。
+
+| 確認項目 | 判定・観測 |
+|---|---|
+| SA metadata GET | PASS。3資源それぞれ読取前後の計6 GETが実HTTP 200 |
+| PNG bytes/hash | **FAIL（生成原本との照合未完了）**。media GETは200、58,010 bytes、PNG signature/decoder検査成功、SHA-256を計算。承認済み生成原本bytesまたは作成時の独立hash記録がこの実行環境で確認できず、一致は推測しない |
+| JSON独立読取 | PASS。media GET 200、217 bytes、正常parse。production=false / enabled=false / status=unconfigured。実際のキー構造に金融authority領域は存在しない |
+| Sheets構造確認 | PASS。Sheets API metadata GET 200、指定ID一致、native Sheets、可視の「確認」1タブ。編集欄・checkbox・cache未設定は現段階の正常状態 |
+| ACL・parent・version | PASS。全3資源の単一parent・trash=false・MIME・owner＋既存SA writerのみのexact ACL・versionを確認。読取前後のmetadataが完全一致。余分な共有なし |
+| write | 対象3資源・対象外ファイルとも0件。Drive/SheetsへはGETだけ、計9回すべて200 |
+| Gate A総合 | **NO-GO：原本hashの独立比較が不足。資源再作成・権限追加で補わない** |
+
+PNG bytesとSHA-256、JSON内容、実ID・ACLメール・version・各HTTP statusの詳細はrepo外の非公開証跡だけに保存した。取得したPNG自体を「承認済み生成原本」と再定義して比較することや、長さ・表示内容だけでhash一致を認定することはしていない。作成元会話・公開監査文書・対象作業領域を確認したが、比較基準の原本bytes/hashは確保できなかったため、その非公開記録の保存場所を利用者へ照会した。
+
+停止理由は原本比較証跡の不足であり、今回403/404・SAアクセス不足は観測していない。未完了は承認済み生成原本との独立hash比較1点。Gate B計画の確定・設定・project/trigger作成・iPhone実行、Gate C dispatchは進めず、本番NO-GOを維持する。旧CAS probe・本番Sheet/台帳/原本・既存定期処理・Cloud Run・main/validated SHA・Secrets/Variablesには触れていない。金融write・AI送信・原本移動は0。この追記以外のPRコード・workflow差分は0。
+
+以下のowner側実施記録は作成時の履歴として保持する。SAアクセスの現在の観測結果は上表を優先し、Gate A未完了の理由は上記の原本比較不足として区別する。
+
 ## Gate A 実施結果（2026-11-08、作成・owner側独立読戻し）
 
 **実施範囲**：ユーザーのGate A承認後、既存の承認済みprivate親フォルダだけを利用して、新規3資源を1件ずつ作成した。作成はそれぞれ1回のみ。既存CAS probe JSONは読取のみで一切変更していない。
