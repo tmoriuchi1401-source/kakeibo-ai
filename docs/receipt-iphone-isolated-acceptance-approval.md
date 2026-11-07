@@ -1,6 +1,26 @@
 # PR #200：iPhone隔離合成受入試験・資源と変更範囲の承認案（2026-11-08）
 
-## Gate A 追加実測：既存SAによる読取専用確認
+## Gate A 完了：生成原本hashとの独立照合
+
+**最新判定：Gate A PASS。Gate B/C・本番接続・金融writeはNO-GOを維持する。**
+
+利用者から、Drive取得画像ではなく保存されていた生成原本ファイルを直接計算したSHA-256・58,010 bytes・PNG 760×950の記録が提供された。これを独立した比較基準とし、前回の**既存SA自身によるmedia GETで保存したPNG**のSHA-256をローカルで再計算したところ一致した。保存済みSA証跡内のhashとも一致し、PNG形式・寸法・長さも再検査した。owner接続の追加読取をSA成功の代用にしていない。生成原本の別環境パスをこのWindows環境から直接開いたとは主張しない。
+
+| 項目 | 判定 |
+|---|---|
+| SA metadata GET | PASS。指定3資源の前後metadata GET計6回、すべて200 |
+| PNG bytes/hash | PASS。SA取得bytesの再計算hashと、利用者提供の独立した生成原本hashが一致。58,010 bytes、PNG 760×950 |
+| JSON独立読取 | PASS。media GET 200、217 bytes、production=false / enabled=false / status=unconfigured。金融authority領域なし |
+| Sheets構造確認 | PASS。SAによるSheets metadata GET 200、指定ID、native Sheets、可視の「確認」1タブ |
+| ID・ACL・parent・version | PASS。指定ID・MIME・単一parent・trash=false・owner＋既存SA writerのみ。全3資源の読取前後metadata/version一致 |
+| 対象／対象外write | ともに0件。金融write・本番変更も0件 |
+| Gate A総合 | **PASS** |
+
+元のSA直接GET9回（全200）の記録を改変せず保持し、別の非公開照合記録に比較基準の出所・再計算結果・証跡hashを保存した。今回の追加Drive/Sheets GET、ファイル作成・更新・CAS再試験・共有/権限変更はすべて0。実ID・メール・原本hash/bytes・JSON全文・資格情報は公開PR/CIに転記しない。
+
+前回不足していた原本hash比較1点が解消された。次は[Gate Bの適用前計画](receipt-gate-b-event-acceptance-plan.md)の個別承認を待つ。計画を整理しただけで、セル設定・Apps Script project/trigger作成・iPhone実行・dispatchは行っていない。以下のNO-GO記録は原本hash受領前の履歴として保持し、現在のGate A判定は本節を優先する。
+
+## Gate A 追加実測：既存SAによる読取専用確認（原本hash受領前）
 
 基準commit `24e1588800577872e69245694b1c0c7bb983fd2e` と本書・preflight・CAS改訂文書を照合後、指定済みの3資源だけを既存service account資格で直接GETした。owner接続による代用やownerへの委任はしていない。既存SAのread-only tokenを使用し、OAuth認可設定・IAM・ACL・資格情報は変更していない。
 
