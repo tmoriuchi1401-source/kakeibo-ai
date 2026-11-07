@@ -385,7 +385,9 @@ def result_cache_entry(record):
     an exact-key lookup formula. No cross-service CAS or case-row write.
     """
     validate_journal(dict(schema=PURPOSE, generation=0, requests={record["request_id"]: record}))
-    if record["state"] not in FINAL | {UNKNOWN}:
+    # UNKNOWN is a transient projection. Persisting it under the same key as
+    # a later terminal result would create an artificial cache conflict.
+    if record["state"] not in FINAL:
         raise StateError("receipt_result_display_pending")
     snapshot = record["snapshot"]
     key = digest([PURPOSE, record["request_id"], snapshot["case_id"],

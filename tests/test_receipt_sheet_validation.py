@@ -452,6 +452,39 @@ def test_private_prepared_ticket_is_not_a_registration_or_worker_permission():
     assert w.cas.writes == 1
 
 
+def test_unknown_is_transient_only_and_never_an_appendable_cache_entry():
+    w, request = prepared_world()
+    w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    transient = dict(w.journal.query(RID), state=UNKNOWN)
+    before = deepcopy(w.sheet["cases"])
+    assert project_result(before, transient)[0]["result"]["state"] == UNKNOWN
+    with pytest.raises(StateError, match="display_pending"):
+        result_cache_entry(transient)
+    with pytest.raises(StateError, match="display_pending"):
+        cached_result([], transient)
+    assert w.sheet["cases"] == before
+    assert w.journal.query(RID)["state"] == "受付済み"
+
+
+def test_terminal_query_after_transient_unknown_has_no_same_uuid_cache_conflict():
+    w, request = prepared_world()
+    w.journal.accept_prepared(RID, request["snapshot"]["digest"])
+    cache = []
+    transient = dict(w.journal.query(RID), state=UNKNOWN)
+    with pytest.raises(StateError):
+        cache.append(result_cache_entry(transient))
+    assert cache == []
+    terminal = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    cache.append(result_cache_entry(terminal))
+    writes = w.cas.writes
+    for _ in range(2):
+        fresh = w.journal.query(RID)
+        assert fresh["request_id"] == transient["request_id"]
+        assert cached_result(cache, fresh)["state"] == "検証済み・未記帳"
+    assert w.cas.writes == writes
+    assert terminal["result"]["financial_write_count"] == 0
+
+
 def test_same_uuid_worker_reexecution_refused_after_private_only_accept():
     w, request = prepared_world()
     w.journal.accept_prepared(RID, request["snapshot"]["digest"])
