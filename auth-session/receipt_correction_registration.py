@@ -67,12 +67,13 @@ class AuthenticatedCorrectionRegistration(AuthenticatedGeneralConfirmation):
     confirmation. Never supply these from browser form fields or a hidden queue.
     This adapter owns no source-edit, journal-creation or accounting capability.
     """
-    def __init__(self, store, identity, *, read_case, build_review, validate_snapshot, **kwargs):
+    def __init__(self, store, identity, *, read_case, build_review, validate_snapshot, journal=None, **kwargs):
         if store.binding != SCOPE or store.validate is not validate_registration_state:
             raise StateError('receipt_registration_dedicated_store_required')
         super().__init__(store, identity, lambda *_: None, lambda *_: None, **kwargs)
         self.requested_action, self.read_case = ACTION, read_case
         self.build_review, self.validate_snapshot = build_review, validate_snapshot
+        self.journal = journal
 
     def current(self, case_id):
         try:
@@ -125,16 +126,26 @@ class AuthenticatedCorrectionRegistration(AuthenticatedGeneralConfirmation):
                 or not same(fingerprint(csrf), record['session']['csrf'])):
             raise StateError('human_general_auth_csrf_invalid')
         self.fresh(record)
-        record['status'] = 'claimed'
-        self.store.save(state)  # Existing versioned CAS; no retries/fallback.
-        actor = self.verified_actor(ticket.request_id)
-        validation = self.validate_snapshot(record['binding']['snapshot'], self.fresh(record))
-        state, record = self.record(ticket.request_id, 'claimed')
-        # Check login revocation, source and draft again before the final CAS.
-        self.verified_actor(ticket.request_id)
-        checksum = receipt_digest(record, validation)
-        record.update(status='complete', validation=validation, registration_digest=checksum)
-        self.store.save(state)
+        try:
+            if self.journal:self.journal.transition(record, '受付済み')
+            record['status'] = 'claimed'
+            self.store.save(state)  # Existing versioned CAS; no retries/fallback.
+            actor = self.verified_actor(ticket.request_id)
+            if self.journal:
+                self.journal.transition(record, '検証中')
+            validation = self.validate_snapshot(record['binding']['snapshot'], self.fresh(record))
+            state, record = self.record(ticket.request_id, 'claimed')
+            # Check login revocation, source and draft again before the final CAS.
+            self.verified_actor(ticket.request_id)
+            checksum = receipt_digest(record, validation)
+            if self.journal:self.journal.transition(record, validation['state'], validation)
+            record.update(status='complete', validation=validation, registration_digest=checksum)
+            self.store.save(state)
+        except Exception:
+            if self.journal:
+                try:self.journal.failed(record)
+                except Exception:pass  # Metadata stays uncertain; never resend validation.
+            raise
         return dict(request_id=ticket.request_id, actor_id=actor.actor_id,
                     case_id=record['binding']['case_id'], source=deepcopy(record['binding']['source']),
                     snapshot_digest=record['binding']['snapshot']['digest'], expires_at=record['expires_at'],

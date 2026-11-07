@@ -27,10 +27,14 @@ def main():
         # Test-only additions. compose.py --output remains exactly unchanged.
         shutil.copyfile(HERE / 'receipt_correction_registration.py',
                         fixture / 'services/human_general/receipt_correction_registration.py')
+        for name in ('receipt_correction_io.py','receipt_correction_web.py'):
+            shutil.copyfile(HERE/name,fixture/'services/human_general'/name)
         shutil.copyfile(HERE / 'receipt_correction_contracts.py',
                         fixture / 'tests/test_receipt_correction_registration.py')
+        shutil.copyfile(HERE/'receipt_correction_flow_contracts.py',fixture/'tests/test_receipt_correction_flow.py')
         subprocess.run([sys.executable, '-m', 'pytest', '-q', '--tb=short',
-                        'tests/test_receipt_correction_registration.py'], cwd=fixture, check=True)
+                        'tests/test_receipt_correction_registration.py',
+                        'tests/test_receipt_correction_flow.py'], cwd=fixture, check=True)
         print('receipt_registration_synthetic_passed; financial_write=0; deployed=false')
 
 
