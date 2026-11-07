@@ -1,5 +1,22 @@
 # PR #200：iPhone隔離合成受入試験・資源と変更範囲の承認案（2026-11-08）
 
+## Gate A 実施結果（2026-11-08、作成・owner側独立読戻し）
+
+**実施範囲**：ユーザーのGate A承認後、既存の承認済みprivate親フォルダだけを利用して、新規3資源を1件ずつ作成した。作成はそれぞれ1回のみ。既存CAS probe JSONは読取のみで一切変更していない。
+
+| 論理資源 | 実施結果 | owner接続での独立確認 |
+|---|---|---|
+| BOOK | 新規native Google Sheets 1冊。初期シートを「確認」に変更、唯一の可視タブ。商品編集欄やcheckbox、結果cacheは**未設定** | 新規実ID・単一parent・MIME・owner＋既存SA writer ACL、tab metadata一致 |
+| SOURCE | 新規完全合成PNG 1件。元画像には実額500円/868円/計1,368円を表示し、意図的なAI誤読候補730円は画像に印字しない。**画像だけを訂正した同一新規ファイル** | 新規実ID・単一parent・MIME・owner＋既存SA writer ACL、58,010 bytesのraw読戻し一致 |
+| PRIVATE | 新規完全合成JSON 1件、217 bytes、`enabled=false`/`status=unconfigured` | 新規実ID・単一parent・MIME・owner＋既存SA writer ACL、raw読戻しの長さ/内容一致 |
+
+- **Google Drive接続の制約**：owner OAuthでは「親IDを指定してnative Sheetsを直接作成」はサポートされなかった。このため、作成した新規ブックをownerのrootから**承認済みprivate parentへ移動し、旧root親を除去**。移動後の単一parentとACLを独立GETで確認した。既存ブックのコピー・改変はしていない。
+- **既存SA自身の直接GET**：現在利用可能なGoogle Drive接続はowner側。owner側でSA writer ACLは確認したが、**既存SAの認証主体による直接metadata/media GET成功は、この実行では未確認**。Gate Aの読み取り判定は「owner側PASS、SA実読取PENDING」。SA書込可能性や実認証scopeまで成功と主張しない。
+- 実ID・完全なACLメール・元画像bytes/hash・JSON内容等の詳細は非公開の実行記録に保持し、public PR本文に書き込まない。
+- 旧CAS probe JSON・production_run.json・銀行/カード/Amazon/PayPayなどの既存資源への変更0。Apps Script project/trigger/PAT・GitHub Actions新dispatch・main/validated SHA・Cloud Run・金融write・AI送信・原本移動0。新規作成3件と、**その新規ブックの親移動/「確認」へのtab名変更、新規PNGの画像訂正**だけを実施した。
+- **判定**：Gate Aの資源作成は完了。**SA直接読取は未検証につきGate B/CはNO-GO維持**。SAを独立主体として既存権限のまま読めなければ、追加権限を自動付与せず停止する。新規資源は削除せず保持する。
+
+
 > **状態：計画のみ／作成・接続・dispatch未承認。** 2026-11-08の独立した単一JSON Drive v2 media PUT + If-Match CAS実測はPASS。PR #200はDraft、mainとvalidated SHA不変、金融write NO-GO。これはiPhone登録・Google Sheets連携・Python実adapterが実環境で成立した証拠ではない。
 
 ## 1. 目標と非目標
