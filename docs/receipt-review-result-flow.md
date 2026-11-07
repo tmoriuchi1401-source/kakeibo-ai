@@ -62,3 +62,64 @@ iPhone操作性は既存screenのviewport、幅420px、折返し、認証後の�
 4. 承認済み環境で実Google認証・iPhoneの原本往復／登録1回／過去結果照会を確認する。金融writeは次工程のまま、NO-GO・authority・validated SHA・既存金融処理を維持する。
 
 main、本番Sheets・金融台帳・原本、Variables／Secrets、validated SHA、authority、銀行等の運用設定は未変更。本番dispatch・金融write・原本移動・AI送信・新規Cloud資源・既存host deployは0。
+
+## 実資源の読取専用監査（2026-11-07追補）
+
+PR #195〜#199は全てOPEN/Draft/未merge。#199の開始headは `63c556fd1e27c7559694faa5cd97e30f984ea61b`、remote mainは `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8` と照合した。AGENTS.md・iPhone仕様全文（第10節を含む）・商品別修正仕様を再確認した。今回は**この監査文書だけを追記**し、#199のコード・認証方式・writer・deployment bundleを変更しない。
+
+接続済みDriveアカウントで検索／metadata／見出し／限定セルを読取り、既存ローカルservice accountではDrive/Sheetsのread-only scopeを用いた。環境の `SPREADSHEET_ID` が発見した管理ブックと一致することも、値を出力せず照合した。以下のM/U17/U22/Sは監査上の別名であり、新しい資源ではない。実資源ID・URL・メール・原本内容・商品値・下書き・メモ・秘密は本追補に保存しない。
+
+### 接続判定
+
+「可（読取）」は現在の調査資格での読取可否であり、hostの実行資格・登録権限・記帳権限を証明しない。「不可」は今回の条件では接続を進められないという判定。
+
+| 接続対象 | 既存資源 | 利用可否 | 不足事項 | 次に必要な操作 |
+|---|---|---|---|---|
+| Sheets | M：環境設定と一致する管理ブック。U17：10月17日の採用済み1タブ合成ブック。U22：10月22日の登録接続合成ブック | 可（読取）／不可（#199登録接続） | Mに「確認」「解析候補明細」はない。U17/U22はownerのみのACLで、既存service accountでは404。商品別修正・要求UUID・原本version・snapshotの実保存対応も未確定 | 使用する既存ブックを明示し、必要なACLと保存欄を別途承認。既存入力・メモ・保留を移行／上書きしない対応を確定 |
+| Drive | Receipt配下のinbox/processed、S：既存system-stateフォルダ、既存再取込記録／PDF registry／限定商品確認context | 可（既存資格で一部metadata/JSON読取）／不可（一般登録用anchor） | private caseは存在するが#199の一般案件catalogではない。同一版の総額確認・候補全体digest等の必要anchorがない。原本側には追加共有者があり#199のexact ACL条件と不一致 | 対象一般案件を既存の安定identityで独立照合し、専用anchorの保存先と作成手順を承認。原本bytes/hash/versionと用途を再検証。ACL検査を緩和しない |
+| 認証ホスト | 既存private PDF設定のoriginと、10月13日監査資料の既存service URL（別表記） | 不可（現時点で利用可能と確認できない） | 両URLの `/health` と `/logout` はGoogle Frontendの503。設定originのcallbackへのOPTIONSも503。既存service accountのCloud Run一覧読取は403。現revision/IAM/Secret参照/OAuth設定は未確認 | 既存管理者資格で現service/revision/障害・origin/callbackを読取確認。復旧や既存hostのbundle/route変更が必要なら、具体差分と別承認後に実施 |
+| private journal | Sと既存JSONはowner＋既存service account writerのACLで読取可。限定canaryのjournal参照も存在 | 可（保存領域の存在確認）／不可（#199の永続結果保存） | 確認した記録に `receipt-correction-results-only-v1` の独立結果領域はない。既存PDF/再取込/限定canaryのstateやauthorityを一般登録結果へ転用できない。host資格のアクセスも未確認 | authority・短期認証記録と分離された既存の承認済み空き領域を特定。なければ停止し、別途保存領域の承認が必要。CAS・期限後保持・独立read-backを検証 |
+
+### Sheetsで実際に確認した対応
+
+- **M**：全41タブのmetadataを確認した。「確認」は存在せず、`領収書確認` と `要確認` は別の旧画面。`解析候補明細` も存在しない。U17/U22をMの本番タブだと扱わない。
+- **U17「確認」**：A＝案件ID、C＝外部原本、D＝確認状態、E〜I＝日付／店舗施設／総額／カテゴリ／医療支払方法、J〜L＝PDF下書き、M＝途中メモ、N＝確認理由、O＝入力点検、P＝原本hash、Q＝原本ID。先頭1行・1列固定。商品ごとの金額・数量・追加／除外、要求UUID、原本version、登録snapshotの専用見出しはない。
+- **U22「確認」**：A＝案件ID、B＝操作依頼、C＝登録・結果、D＝種類、E＝外部原本、F＝確認状態、G〜K＝日付／店舗施設／総額／カテゴリ／医療支払方法、L〜N＝PDF下書き、O＝途中メモ、P＝確認理由、Q＝入力点検、R＝原本hash、S＝原本ID。先頭1行・1列固定。B/Cの限定読取では登録番号と、入力・原本等とのEXACT比較を行うCのIF式を確認した。**この式による「未記帳」表示は認証backendの受付／永続journalを証明しない。** Cを#199の結果欄として直ちに上書きしない。
+- **M「領収書確認」**：A＝確認ID、B＝種別、C＝状態、D＝原本リンク、E＝確認する内容、F＝既存値、G＝候補（未確定）、H〜L＝医療入力、M＝判断、N＝統合先支出ID、O＝本人メモ、P＝反映結果。これは商品別修正入力欄ではない。`要確認` はA＝確認ID、G＝対象資料、H＝比較資料、L＝ユーザー判断、M＝統合先取込ID、P＝ユーザー備考、Q＝反映結果。これらの判断欄から登録処理を起動しない。
+- **Mの既存データ**：`取込データ` A＝取込ID、C＝データ元、D＝元データID、K＝元データハッシュ。`レシート` A＝レシートID、F＝画像URL。`商品マスタ` A〜D＝商品ID／商品名／大・小カテゴリ。`カテゴリ自動分類ルール` A＝ルールID、B＝条件種別、G/H＝商品ID/名、J/K＝大・小カテゴリ、L/M＝承認元支出ID/日時、N＝revision、O＝有効。見出しの実在を確認しただけで、各商品の分類や承認内容の正当性を検証済みとはしない。
+
+U17/U22のAと原本ID/hashは見える値であり、未信頼の下書き。原本version・private anchor・要求UUID・snapshotとの独立照合なしに、ソート／挿入後の対応を保証しない。U17のM、U22のO、および明細入力は読取のみとし、再生成や行番号への書戻しを行わない。Mの旧実装は `receipt_confirmation.review_id(kind, source)` でsource ID/version/hashから確認IDを作り、`ui_rows` でID欠落・重複を拒否し、private `confirmation_items.inputs` と照合する。ただし、そのIDは#199の `receipt:<source_id>` という取込IDとは別物で、金額・日付や行位置から結合しない。H301/G103等の旧保留も移植しない。
+
+### Drive identity・保存境界の実測
+
+Receipt配下の `receipt_inbox` と `receipt_processed` の存在を確認した。既存再取込manifestのfolderはprocessedと一致し、manifestの管理ブックbindingもMと一致した。inbox/processedとMには追加ユーザーの共有がある。U17/U22はownerのみ。**#199 `IndependentReceiptReader.checked_metadata` のowner＋指定service-account writerのみという条件に、そのまま合格する構成ではない。** 正当な共有を勝手に削除せず、別の資格を同一service accountとみなさず、exact ACLを緩和しない。
+
+S・PDF registry・再取込記録・限定商品確認contextは既存service accountでmetadata/JSON読取200。原本identityを持つprivate case記録は存在するが、確認したschemaは次のように異なる。
+
+- 再取込記録：`manifest`／`records`／`confirmation_items`。sourceはID/hash/version/MIME/classification等を保持。`confirmation_items` に#199の `total_confirmation` はない。本人が会話で確認した総額を、信頼済み原本版付き記録へ自動昇格させない。
+- PDF registry：`anchor`／`generation`／`pages`／`schema`。一般レシートの `cases[case_id]` catalogではない。private設定のspreadsheet bindingはMに一致した。
+- 限定商品確認context：`config`／`owner_actor_id`／`schema`。configはcandidate/journal/drive/scopeを限定している。既存p14等のcandidate／journalの実在は、通常案件の修正保存・登録許可を意味しない。
+
+既存の一般分類private caseの原本1件について、metadataのsource ID一致、version、単一parent、SHA256/MD5 checksum、Drive v2の強ETagが取得できることを確認した（原本はPDF）。原本bytesは取得せず、保存hashとの完全一致や現在版の登録適格性は未検証。取得手順は、Drive IDをprivate sourceから取得→metadata/version/ACL/parent→既存read-only bytes readerでSHA256→metadata再読取。解析hashと原本bytes hashは区別する。metadata checksumや表示リンクだけで#199のbytes検証を置き換えない。
+
+Drive connectorのmetadata応答は正規化されversion/checksumが返らなかったため、既存service accountの直接read-only APIで有無を確認した。結果保存で必要な強ETag/CASは既存 `DriveRegistryIO` 等の契約を再利用できるが、今回CAS書込みやjournal初期化は実行していない。Sの一覧・上記既存記録で汎用の専用結果領域を特定できなかった、という調査範囲の結論であり、Drive全体に存在しないとの断定ではない。
+
+### 認証ホストの現状と最小差分
+
+既存private PDF設定のoriginと過去監査資料のservice URLをそれぞれ確認し、HTTPS GETを実行した。両表記が同じserviceを指すことや現在のtraffic/revisionを、503応答から断定しない。過去資料は10月13日時点のもので、READMEのbaseline revisionを含め**現在の稼働証拠にしない**。503の原因は未特定。callbackへのGET/OPTIONS応答も503であり、実Google OAuth・callback・shared sessionは今回試していない。Cloud Run構成読取403を受け、IAM付与・別資格の作成・API有効化・deployには進んでいない。
+
+コード上は既存 `/start` → POST `/oauth/callback` → `/confirm` → `/result`、shared loginと `/logout` があり、callback URIは `HGA_ORIGIN + /oauth/callback`。実OAuth clientの登録済みcallbackと同一かは未確認。#199の最小接続差分は、既存runtimeのpurpose/profile選択へ専用gateway/reader/journalを渡し、認証後の遷移を既存Blueprintの `/receipt/register/<UUID>`、結果／再ログイン後の戻り先を `/receipt/result/<UUID>` に接続し、必要な依存閉包だけdeployment whitelistへ含めること。ブラウザから案件データ・actor証拠・private anchorを採用しない。汎用seeding endpointや新認証・新server・新writerは不要という方針だが、実ホストへ無変更で接続可能という意味ではない。
+
+展開前に、既存管理者による現revision/image/traffic、runtime service account、`HGA_ORIGIN`／`HGA_DATABASE`／`GOOGLE_CLOUD_PROJECT`、既存 `HGA_CONFIG_PATH`／`HGA_OWNER_PATH`／`HGA_SESSION_KEY_PATH` とDrive設定参照、実OAuth callback/owner、既存Firestore request/ticket/loginのIAM・TTL、および専用結果領域の保持／CAS権限を読取確認する必要がある。Secretの**値**は取得／出力しない。現在のservice accountにはCloud Run一覧読取が許可されず、deploy資格・Secret access・runtimeの新領域アクセスを確認できていない。既存限定canary権限の転用やauthority・validated SHA・NO-GOの変更は、この接続に含めない。
+
+### 最短構成と次回の最小作業
+
+採用候補は**既存「確認」1タブ＝下書きの読取元、登録と結果＝既存認証画面**。これなら実Sheetsへの結果write・式置換・ソート中の行競合を初回接続から除ける。認証後「この内容を登録」1回、結果は現在の認証済み登録者がprivate journalから照会する。入力・メモを保持し、600秒経過後は再登録せず照会する。実ブックの対象リンクは未設定で、端末の操作回数も未計測。
+
+次回にまとめて進めるための前提は、(1)既存hostの稼働／実行資格とOAuth設定、(2)使用する既存ブック・修正保存欄・正確なACL、(3)一般case anchor／専用永続結果保存領域の3点が特定・承認されること。承認後の最小実装は、上記実見出しに基づくreader mappingとanchor対応、既存hostのpurpose/callback戻り先・Blueprint/依存閉包、登録リンクの接続に限定する。未解決の一般商品修正の保存欄は既存列への推測割当をしない。列や入力UIを変える場合は理由・保持方法・範囲を示して事前承認する。
+
+既存の専用空き領域が見つからない場合、新ファイル等は今回作らず、保存領域について別途承認が必要。そのため**現状では「次の1回で実機完走できる」とは約束できない**。前提が揃った後に、既存資源だけの無金融write試験で本人／別ユーザー、原本・下書き変更、期限、再送、期限後結果照会、UNKNOWNを確認し、iPhoneでSheets→原本→既存認証→登録1回→結果まで検証する。Sheetsへの結果反映と金融writeは初回接続の必須条件にしない。
+
+**停止判定**：実登録経路・private保存先・ACL・host稼働が未確定のため、接続実装へ進まない。今回の実測は資源読取と副作用のないHTTP確認のみ。#199の71件／既存認証363件／回帰67件は前回の合成結果で、今回再実行していない。実Google認証・iPhone実機・永続CAS成功・金融write成功の証拠にしない。今回の変更はMarkdownのみで、差分・whitespace・秘密情報混入を確認する。
+
+本番Sheets／台帳／原本・設定・Variables/Secrets・authority・validated SHA・mainは未変更。資源作成・権限変更・dispatch・金融write・原本移動・AI送信・host deployは0。NO-GO維持。
