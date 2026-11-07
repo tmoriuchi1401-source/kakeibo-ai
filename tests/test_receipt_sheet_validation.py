@@ -537,6 +537,9 @@ def test_ordinary_product_cells_need_no_typed_ids_hashes_or_delimiters():
     w = World()
     cells = ordinary_cells(w)
     cells["items"][1].update(name="原本の商品名", quantity=2, amount=868, confirmed=True)
+    cells["items"].append(dict(_item_id="new:emptyslot", _binding=digest([w.case_id,w.source]),
+        name="", quantity="", amount="", category=list(CATEGORIES[0]), kind="product",
+        target="", mode="採用", confirmed=False))
     w.row["draft"] = cells
     fresh = w.reader(w.case_id)
     assert fresh["preview"]["item_total"] == 1368

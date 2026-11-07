@@ -28,7 +28,8 @@ def operations_from_cells(draft, originals, categories):
         old = baseline.get(key)
         if old is None and not re.fullmatch(r"new:[A-Za-z0-9_-]{8,64}", key):
             raise ValueError("receipt_cells_item_invalid")
-        if old is None and cell["name"] == "" and all(cell[f] in (None, "") for f in ("quantity", "amount", "category", "target")):
+        if (old is None and cell["name"] == "" and cell["mode"] == "採用"
+                and all(cell[f] in (None, "") for f in ("quantity", "amount", "target"))):
             continue  # A still-empty addition group is not a fictitious item.
         evidence = "原本照合済み（入力者の申告・本人認証ではない）"
         if cell["mode"] == "除外":

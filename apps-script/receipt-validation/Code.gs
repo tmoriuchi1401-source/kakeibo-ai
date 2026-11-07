@@ -120,7 +120,7 @@ function receiptSnapshot_(candidate, hash) {
         throw Error('receipt_cells_identity_invalid');
       seen.add(key);
       if (!old && !/^new:[A-Za-z0-9_-]{8,64}$/.test(key)) throw Error('receipt_cells_item_invalid');
-      if (!old && cell.name==='' && ['quantity','amount','category','target'].every(k=>cell[k]===null || cell[k]==='')) continue;
+      if (!old && cell.name==='' && cell.mode==='採用' && ['quantity','amount','target'].every(k=>cell[k]===null || cell[k]==='')) continue;
       const evidence='原本照合済み（入力者の申告・本人認証ではない）';
       if (cell.mode==='除外') {
         if (!old || !cell.confirmed) throw Error('receipt_cells_remove_unconfirmed');
