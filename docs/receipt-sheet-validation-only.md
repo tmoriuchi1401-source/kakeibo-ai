@@ -66,12 +66,16 @@ node --test apps-script/receipt-validation/Code.test.cjs apps-script/category-su
 - JS実captureの合成requestをPythonへ渡し、同じdraftのsnapshot/hashが一致し、独立検証まで動くことを3ケース確認。
 - 新CIはSecretsなしのPRテストのみ。CIとローカル結果、実接続・iPhone結果を区別する。
 
+初回head `da4866ad471e4638f9653df2f278770a2c854b47` の[専用CI](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/42366817614)は成功（Python62＋JavaScript15）。同headの既存全体CIは、`test_gemini_error_compat.py`の`import httpx`で両matrixが各1収集エラー。最新SDKの推移で直接依存の不足が表面化しており、#196の`requirements-test.txt`の2行だけも再利用して修正する。本番requirementsや既存テストの期待値・安全条件は変更しない。再実行の結果はPR本文へ記録する。
+
 ## 本番接続の停止点と次の最小作業
 
 1. **最初にコードレビュー**：上記UI差分と入力方式、検証専用scope、要求予約/結果投影のCAS契約を査読する。この段階で実資源作成は不要。
 2. 既存の許可済みprivate領域・ACL・具体的な列対応・実行資格・不変要求保存・強CASが使えるかを限定読取で確定する。今回その実資源や資格を調査・作成しない。#199の旧host/private4ファイル案を既定にしない。
 3. 要求を不変に保存し、同案件へUUIDを原子的に結ぶ `reserve` と、結果だけを原子的identity照合して返すadapterを証明できるまで接続しない。Sheets座標のread→writeだけでは保証できない。保証できなければ停止を維持し、その操作だけを個別判断する。
 4. 証明後に、**別途承認された対象だけ**へ列/trigger/資格/UUID受付workflow/結果連携を最小接続し、金融writeなしでiPhone実機を確認する。今回新trigger・PAT・Drive領域・本番workflow dispatchは0。新権限が必要なら直前で停止。実記帳は本PR対象外で別の権限証明・承認が必要。
+
+特に、通常のcheckbox編集eventはrow全体の「タップ時snapshot」を含まない。handler開始前にsortされた座標から、本人が意図した案件を推測してはならない。合成portの `readCaseAtEvent/reserve` は観測した案件への原子的結合をモデル化しているだけで、実Apps Scriptでタップ意図まで証明したものではない。これもライブ接続前の未解決条件として保持する。
 
 ## 変更0の証拠と限界
 
