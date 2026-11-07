@@ -214,3 +214,11 @@ Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設�
 今回、service名・region・現revision・traffic・Ready状態・直近platform/appエラー・runtime service account・IAM・実OAuth callbackは**いずれもCloud Consoleで未確認**。既存資料・過去HTTP応答を現在の管理者観測に置き換えない。503の原因、復旧の具体変更、rollback先revisionは未特定のまま。推測によるIAM付与やredeploy案を確定事項として提示しない。
 
 再開条件は、指定プロジェクトのCloud ConsoleがChrome前面に表示され、その管理者接続を安全に取得できること。その後、当該既存サービスの構成・Ready/失敗理由・限定したエラーを読取り、Secret値を含まない根拠だけで最小復旧差分と現revision/trafficへ戻すrollbackを確定する。今回の保存はこの未接続記録のみで、コード／テスト／Cloud設定／権限／本番資源は変更していない。NO-GO維持。
+
+### Cloud Run前面表示後の再接続結果
+
+ユーザーの画面切替後、window inventoryのChromeタイトルがCloud Runの指標画面へ変わったことを確認した。現在がVariables画面だとは扱わない。ただしブラウザ接続のinventoryは空で、native `getApp` は「Windows上の現在URLを十分な確度で検証できない」としてComputer Useの安全制御で停止した。この時点の再試行ではPR更新も行わなかった。
+
+続く今回の明示的な再試行でも、Cloud Runのwindow titleは確認できたが、自動承認レビューが「Cloud ConsoleのURLを検証できず、前提未確認のgetApp再試行は許可できない」として拒否した。拒否された操作を別手段で回避せず、Cloudへの接続試行を停止した。ユーザーが同じ画面を再度開けば解決する問題だとは案内しない。
+
+取得できたのはwindow titleだけで、管理者アカウント・対象project ID・service/revision・traffic/Ready・エラーログ・runtime service account/IAMは未確認。**503の原因と復旧変更／rollback先は依然未特定**。PC操作のURL検証失敗をCloud Runの障害原因と混同しない。以後の調査には、現在URLを安全に検証できる承認済み接続経路、または管理者本人が取得したSecret/tokenを除く構成・エラー情報が必要。このターンでは接続停止の監査記録だけを保存した。Cloud設定・deploy・IAM・OAuth・Secret値・金融writeの操作は0。NO-GO維持。
