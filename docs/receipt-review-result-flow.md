@@ -279,3 +279,9 @@ Chromeのwindow inventoryは取得できたが、前面は対象外のGitHub設�
 - **Rollback方針**：旧サービスは常時手動0を維持。検証専用経路を将来別ホストに導入する場合のみ、当該**別ホストだけ**を停止・ルート無効化できる構成を事前に確定し、旧サービスを起動するrollbackは認めない。
 
 この追補の追加時点では、Cloud Runスケーリング・revision/traffic、IAM、Secrets、GitHub Variables、validated SHA、main、Sheets/Drive資源、金融台帳、原本、writer、workflow dispatch、host deployは**一切変更していない**。NO-GO維持。
+
+### 独立読取追補：GitHub Actionsの実行中状態
+
+GitHub Actions RESTの読取専用GETで、リポジトリの`in_progress`／`queued`／`waiting`をそれぞれ問い合わせ、**観測時点の該当runは各0件**だった。APIの結果を受けただけでworkflow dispatch・再送・設定変更はしていない。
+
+**限定解釈**：この瞬間のGitHub Actionsの3状態に該当するrunが見つからないことだけを示す。過去の実行の完了性、GitHub外のCloud Run/CLI/SDK、別リポジトリのworker、private journal上のpending/UNKNOWN、金融SAの利用可能性や、将来のスケジュール起動まで否定しない。旧writerの収束・隔離の独立証明は引き続き未成立であり、NO-GO維持。
