@@ -1,5 +1,7 @@
 # PR #200：private確定記録とiPhone通常セル編集
 
+**2026-11-08追記：[Gate C最小設計・受入条件](receipt-gate-c-minimal-design.md)を参照。以下は2026-11-07の設計履歴。独立CAS probeとGate Aの後続PASS、Gate Bの3独立イベント・原因不明・総合NO-GOを区別する。Gate Cの実adapter、最新ticket管理、snapshot公開とsortの競合、専用Actions入口は未達であり、実装開始・実行・本番接続・金融writeはNO-GO／別承認待ち。**
+
 2026-11-07。前提：Cloud Runなし、金融NO-GO、本番設定・実Sheets・Drive原本を変更しない。旧[初期合成設計](receipt-sheet-validation-only.md)の跨サービス原子性と1セル10項目形式を、この文書で置き換える。
 
 ## APIの確認結果
