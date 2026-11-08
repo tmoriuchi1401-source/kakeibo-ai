@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import socket
 import subprocess
-from threading import RLock
+from threading import Barrier, RLock
 
 import pytest
 
@@ -16,13 +16,14 @@ from app.drive_run_state import StateError
 from app.page_receipt_model import digest
 from app.reconciliation import parse_import_rows
 from app.receipt_sheet_draft import parse_draft
-from app.receipt_sheet_validation import (PURPOSE, UNKNOWN, IndependentReceiptReader,
+from app.receipt_sheet_validation import (JOURNAL_SCHEMA, PURPOSE, PREPARED, UNKNOWN, IndependentReceiptReader,
     ValidationJournal, empty_journal, execute_request, execute_accepted_request,
     project_result, validate_journal, result_cache_entry, cached_result)
 from test_receipt_item_correction_plan import scenario, edit, add, SOURCE, CATEGORIES
 
 RID = "11111111-1111-4111-8111-111111111111"
 RID2 = "22222222-2222-4222-8222-222222222222"
+RID3 = "33333333-3333-4333-8333-333333333333"  # Offline fixture only.
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -45,6 +46,7 @@ class CAS:
     def __init__(self):
         self.value, self.generation = empty_journal(), 0
         self.lock, self.writes = RLock(), 0
+        self.attempts = 0
         self.fault = None
         self.weak = False
 
@@ -54,6 +56,7 @@ class CAS:
 
     def replace_versioned(self, value, tag):
         with self.lock:
+            self.attempts += 1
             if self.fault == "before":
                 raise TimeoutError()
             if tag != f'"{self.generation}"' or self.fault == "conflict":
@@ -422,9 +425,10 @@ def test_no_cloud_or_financial_entrypoints_in_new_module():
 
 def prepared_world():
     w = World().corrected()
+    _, tag = w.journal.load()  # Capture the private version BEFORE input.
     request = dict(request_id=RID, purpose=PURPOSE, snapshot=w.reader(w.case_id)["request_snapshot"])
     before = deepcopy(w.sheet)
-    w.journal.prepare(request)
+    w.journal.prepare(request, expected_tag=tag)
     assert w.sheet == before  # private save does not require ANY Sheets write
     return w, request
 
@@ -499,12 +503,13 @@ def test_same_uuid_worker_reexecution_refused_after_private_only_accept():
 
 def test_competing_prepared_uuids_for_one_case_only_one_private_acceptance():
     w, first = prepared_world()
+    _, tag = w.journal.load()
     second = dict(deepcopy(first), request_id=RID2)
     second["snapshot"]["operations"][0]["changes"]["amount"] = 867
     raw = deepcopy(second["snapshot"])
     del raw["digest"]
     second["snapshot"]["digest"] = digest(raw)
-    w.journal.prepare(second)
+    w.journal.prepare(second, expected_tag=tag)
     def accept(req):
         try:
             w.journal.accept_prepared(req["request_id"], req["snapshot"]["digest"])
@@ -537,6 +542,239 @@ def test_worker_claim_response_loss_does_not_allow_a_second_worker():
     with pytest.raises(StateError, match="replay"):
         execute_accepted_request(RID, reader=w.reader, journal=w.journal)
     assert w.cas.writes == 3
+
+
+def changed_request(first, *, case_id=None, source_id=None):
+    request = dict(deepcopy(first), request_id=RID2)
+    snapshot = request["snapshot"]
+    if case_id is not None:
+        snapshot["case_id"] = case_id
+    if source_id is not None:
+        snapshot["source"]["source_id"] = source_id
+    snapshot["operations"] = []
+    del snapshot["digest"]
+    snapshot["digest"] = digest(snapshot)
+    return request
+
+
+def synchronize_loads(w):
+    """Force two contenders to read the SAME version before either CAS."""
+    generation, read = w.cas.generation, w.cas.read_versioned
+    barrier = Barrier(2, timeout=5)
+    def synchronized():
+        value, tag = read()
+        if tag == f'"{generation}"':
+            barrier.wait()
+        return value, tag
+    w.cas.read_versioned = synchronized
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_latest_ticket_rejects_old_uuid_and_preserves_immutable_history(changed):
+    w, first = prepared_world()
+    assert w.cas.value["schema"] == JOURNAL_SCHEMA
+    original = w.journal.query(RID)
+    _, tag = w.journal.load()
+    second = changed_request(first) if changed else dict(deepcopy(first), request_id=RID2)
+    w.journal.prepare(second, expected_tag=tag)
+    assert w.cas.value["active_prepared"] == {w.case_id: RID2}
+    before = deepcopy(w.cas.value)
+    # A superseded UUID is rejected even if its old snapshot still matches.
+    with pytest.raises(StateError, match="replay"):
+        w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    with pytest.raises(StateError, match="replay"):
+        w.journal.prepare(first, expected_tag=w.journal.load()[1])
+    assert w.cas.value == before and w.cas.writes == 2
+    assert w.journal.query(RID) == original
+    accepted = w.journal.accept_prepared(RID2, second["snapshot"]["digest"])
+    second["snapshot"]["operations"].append({"changed": "caller mutation"})
+    accepted["snapshot"]["operations"].append({"changed": "returned mutation"})
+    assert w.journal.query(RID2)["snapshot"] == before["requests"][RID2]["snapshot"]
+    assert w.cas.value["active_prepared"] == {}
+
+
+@pytest.mark.parametrize("tag", ['"0"', 'W/"1"', None])
+def test_delayed_or_unproven_prepare_never_replaces_latest_ticket(tag):
+    w, first = prepared_world()
+    before = deepcopy(w.cas.value)
+    with pytest.raises(StateError, match="preparation_stale"):
+        w.journal.prepare(changed_request(first), expected_tag=tag)
+    assert w.cas.value == before and w.cas.attempts == 1
+
+
+def test_preparation_requires_explicit_pre_capture_etag_and_frozen_snapshot():
+    w, first = prepared_world()
+    with pytest.raises(TypeError):
+        w.journal.prepare(changed_request(first))
+    frozen = w.journal.query(RID)["snapshot"]
+    first["snapshot"]["operations"].clear()
+    assert w.journal.query(RID)["snapshot"] == frozen
+    # Current input differs, so passing its independently rebuilt digest stops.
+    w.row["draft"]["operations"] = []
+    fresh = w.reader(w.case_id)["request_snapshot"]
+    with pytest.raises(StateError, match="replay"):
+        w.journal.accept_prepared(RID, fresh["digest"])
+    assert w.cas.writes == 1
+    w.journal.accept_prepared(RID, frozen["digest"])
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    assert result["state"] == "保留" and result["snapshot"] == frozen
+    assert result["result"]["financial_write_count"] == 0
+
+
+@pytest.mark.parametrize("operation", ["prepare", "accept", "accept_alias", "claim"])
+def test_forced_same_etag_cas_race_has_one_winner(operation):
+    w, first = prepared_world()
+    second = changed_request(first, case_id="other-case" if operation == "accept_alias" else None)
+    if operation == "accept_alias":
+        w.journal.prepare(second, expected_tag=w.journal.load()[1])
+    if operation == "claim":
+        w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    tag = w.journal.load()[1]
+    before_writes = w.cas.writes
+    synchronize_loads(w)
+    def compete(index):
+        try:
+            if operation == "prepare":
+                request = second if index == 0 else dict(deepcopy(second), request_id=RID3)
+                w.journal.prepare(request, expected_tag=tag)
+            elif operation == "accept_alias":
+                request = first if index == 0 else second
+                w.journal.accept_prepared(request["request_id"], request["snapshot"]["digest"])
+            elif operation == "accept":
+                w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+            else:
+                w.journal.transition(RID, "検証中")
+            return True
+        except StateError:
+            return False
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(compete, range(2))).count(True) == 1
+    assert w.cas.writes == before_writes + 1
+    assert w.cas.attempts == before_writes + 2
+    assert validate_journal(w.cas.value) == w.cas.value
+
+
+@pytest.mark.parametrize("state", ["受付済み", "検証中", UNKNOWN])
+@pytest.mark.parametrize("identity", ["same", "other_case", "other_source"])
+def test_preparation_blocks_related_unresolved_work(state, identity):
+    w, first = prepared_world()
+    w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    if state != "受付済み":
+        w.journal.transition(RID, state)
+    _, tag = w.journal.load()
+    second = changed_request(first, case_id="other-case" if identity == "other_case" else None,
+                             source_id="other-source" if identity == "other_source" else None)
+    before = deepcopy(w.cas.value)
+    attempts = w.cas.attempts
+    with pytest.raises(StateError, match="duplicate_or_unresolved"):
+        w.journal.prepare(second, expected_tag=tag)
+    assert w.cas.value == before and w.cas.attempts == attempts
+
+
+def test_final_history_blocks_same_snapshot_and_source_alias_but_allows_new_input():
+    w, first = prepared_world()
+    w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    _, tag = w.journal.load()
+    for second in (dict(deepcopy(first), request_id=RID2), changed_request(first, case_id="other-case")):
+        with pytest.raises(StateError, match="duplicate_or_unresolved"):
+            w.journal.prepare(second, expected_tag=tag)
+    second = changed_request(first)
+    w.journal.prepare(second, expected_tag=tag)
+    assert w.journal.accept_prepared(RID2, second["snapshot"]["digest"])["state"] == "受付済み"
+
+
+@pytest.mark.parametrize("operation", ["prepare", "accept"])
+@pytest.mark.parametrize("fault", ["before", "after", "conflict", "readback"])
+def test_unknown_ticket_io_never_retries_or_repairs(operation, fault):
+    w, first = prepared_world()
+    tag, writes, attempts = w.journal.load()[1], w.cas.writes, w.cas.attempts
+    second = changed_request(first)
+    if fault == "readback":
+        read = w.cas.read_versioned
+        def lost_readback():
+            if w.cas.writes > writes:
+                raise TimeoutError("synthetic lost readback")
+            return read()
+        w.cas.read_versioned = lost_readback
+    else:
+        w.cas.fault = fault
+    with pytest.raises((TimeoutError, StateError)):
+        if operation == "prepare":
+            w.journal.prepare(second, expected_tag=tag)
+        else:
+            w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    assert w.cas.attempts == attempts + 1
+    assert w.cas.writes == writes + (fault in {"after", "readback"})
+    assert validate_journal(w.cas.value) == w.cas.value
+    if fault == "readback":
+        w.cas.read_versioned = read
+    w.cas.fault = None
+    before = deepcopy(w.cas.value)
+    w.journal.query(RID)  # Reconciliation is read-only, never a new attempt.
+    assert w.cas.value == before and w.cas.attempts == attempts + 1
+
+
+def test_three_event_sequence_accepts_at_most_once_without_apps_script_execution():
+    w, first = prepared_world()
+    # Synthetic port-level sequence only, NOT a live handler/device assertion.
+    ready, register = "ready:" + RID, "register:" + RID
+    accepted = 0
+    for old, new in [(ready, register), (register, ready), (ready, register)]:
+        if (old, new) != (ready, register):
+            continue
+        try:
+            w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+            accepted += 1
+        except StateError:
+            pass
+    assert accepted == 1 and w.cas.writes == 2
+    assert sum(r["state"] == "受付済み" for r in w.cas.value["requests"].values()) == 1
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    assert result["result"]["financial_write_count"] == 0
+    assert result["result"]["posting_authority"] is False
+
+
+@pytest.mark.parametrize("state", [PREPARED, "受付済み", "検証中", UNKNOWN, "検証済み・未記帳"])
+def test_legacy_journal_is_read_only_and_never_infers_latest_or_auto_migrates(state):
+    w, first = prepared_world()
+    if state != PREPARED:
+        w.journal.accept_prepared(RID, first["snapshot"]["digest"])
+    if state == "検証済み・未記帳":
+        execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    elif state in {"検証中", UNKNOWN}:
+        w.journal.transition(RID, state)
+    w.cas.value["schema"] = PURPOSE
+    del w.cas.value["active_prepared"]
+    before = deepcopy(w.cas.value)
+    attempts = w.cas.attempts
+    record = w.journal.query(RID)
+    assert record["state"] == state
+    if state == "検証済み・未記帳":
+        assert result_cache_entry(record)["state"] == state
+    _, tag = w.journal.load()
+    for action in (lambda: w.journal.prepare(changed_request(first), expected_tag=tag),
+                   lambda: w.journal.accept_prepared(RID, first["snapshot"]["digest"]),
+                   lambda: w.journal.accept(changed_request(first)),
+                   lambda: w.journal.transition(RID, "検証中"),
+                   lambda: w.journal.save(before, tag)):
+        with pytest.raises(StateError, match="migration_required"):
+            action()
+    assert w.cas.value == before and w.cas.attempts == attempts
+
+
+@pytest.mark.parametrize("change", ["missing", "unknown_uuid", "other_case", "consumed", "not_dict", "legacy_extra"])
+def test_corrupt_active_index_is_not_repaired(change):
+    w, _ = prepared_world()
+    if change == "missing": del w.cas.value["active_prepared"]
+    elif change == "unknown_uuid": w.cas.value["active_prepared"][w.case_id] = RID2
+    elif change == "other_case": w.cas.value["active_prepared"] = {"other-case": RID}
+    elif change == "consumed": w.cas.value["requests"][RID]["state"] = "受付済み"
+    elif change == "not_dict": w.cas.value["active_prepared"] = []
+    else: w.cas.value["schema"] = PURPOSE
+    with pytest.raises(StateError, match="journal_invalid"):
+        w.journal.load()
+    assert w.cas.writes == 1
 
 
 def test_result_cache_cannot_target_another_case_and_later_edits_survive():

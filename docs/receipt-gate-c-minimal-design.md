@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**第1工程のオフライン実装記録は末尾11節。Python coreとmockテストだけを追加承認に基づき更新した。以下1～10節は基準commit時点の設計・未達記録として保持する。Gate B総合NO-GO、Gate C実環境・本番接続・金融write NO-GOは継続。**
+
 2026-11-08。対象：Draft PR #200、`tmoriuchi1401-source/kakeibo-ai`。
 調査基準・開始時および継続時のPR headは `3f4f5ab2872ba0c71b6b28fd7ef315fcbbcdcd53` と完全一致。base/mainは `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8`。想定外差分なし。以降、本設計を追加する文書commitだけを許容し、別のhead変更を検出した場合は停止する。
 
@@ -208,3 +210,34 @@ Gate Bで再利用する事実：iPhoneの商品編集・金額修正、合計1,
 **見通し：新規インフラなしで、既存の非金融ロジックを中心に組み立てる余地は大きい。ただし実接続とsnapshot公開の安全条件は未完成。現時点の実装開始はNO-GO／承認待ち、実行は技術的未解決もありNO-GO。** Gate Bの原因不明を解消済みにせず、Gate B総合NO-GOを維持する。今回の文書提出後も、自動で次段階へ進まない。
 
 今回のSTOP維持：Gate Cコード実装、Apps Script変更/実行、UUID発行、trigger作成、iPhone再試験、Google Sheets/JSON書込、Actions dispatch、Secrets/Variables/main/validated SHA変更、金融writer接続/write、追加インフラ、PR mergeはすべて0。
+
+## 11. 第1工程：Python coreのみのオフライン実装（2026-11-08）
+
+利用者の追加承認により、基準 `072267c0258009fb7dfd18346505bb570c22dc6d` から既存 `app/receipt_sheet_validation.py` と `tests/test_receipt_sheet_validation.py` だけを実装変更。本節以外の設計記録は履歴として保持する。実46列decoder、private envelope/Drive adapter、Apps Script ports/manifest、CLI、workflowは作成・変更していない。
+
+### coreの差分と再利用
+
+- `empty_journal()`は新journal schema `receipt-sheet-validation-journal-v2` と `active_prepared`（case→最新PREPARED UUID）を返す。要求purposeは従来の `receipt-sheet-validation-only-v1` のまま。
+- `prepare(request, *, expected_tag)`はexpected_tag必須。呼出し側は**private load→独立snapshot読取→prepare**の順にする。coreで最新loadの強ETagと一致しなければPUT前に拒否し、その後の競合は既存transport CASで拒否。自動reload/retryなし。
+- ticket追加とactive更新は同じCAS・generation増分1回。古いPREPARED履歴は削除/変更せず、activeから外す。同UUIDの再準備は禁止。requestのdeepcopyで呼出し元の後変更から固定snapshotを隔離する。
+- `accept_prepared()`は従来の状態・snapshot digest検査にactive一致を追加し、受付への遷移とactive解除を同じCASで保存。旧UUID・旧snapshot・再送は受付不可。
+- 従来重複判定を共通の `_check_duplicates()`へ移し、prepare・既存2受付入口で再利用。同caseまたは同sourceの未終端/UNKNOWN、FINALの同snapshot、別case同sourceを拒否。`accept()`は旧オフライン回帰入口のままで、受付時に当該caseの準備ticketを失効させる。
+- `transition()`の許可遷移、worker claim、独立reader/validator、終端cacheロジックは再利用。transitionへの変更は旧schema更新禁止のload指定だけ。新writer・検証アルゴリズム・イベントhandlerは追加していない。
+
+### 互換性とmigration条件
+
+旧schema（`schema=receipt-sheet-validation-only-v1`、schema/generation/requestsだけ）はstrict検証・load/query・結果表示を維持する。新コードの更新操作は `receipt_validation_migration_required` で停止する。旧writerはv2を理解しないため、読み書き可能な混在運用にしない。v2のactive欠落/未知UUID/別case参照/消費済参照は不正として拒否し、修復しない。
+
+**自動migration・migration実行ツールは追加していない。Google上のJSONも未変更。** 将来migrationするには、対象・実行主体・停止状態を別途承認し、旧writer/trigger停止、元bytes/強ETagの独立照合、全requestsのUUID/state/snapshot/result保持、generation増分、同一ファイルCAS＋read-backをレビューする。旧PREPAREDの新旧順は推測せずactiveを空にし、旧UUIDは再armしない。受付済み/検証中/UNKNOWNを消去・FINAL化・新UUIDで再送して移行を成立させない。新しい準備は既存の未解決重複ブロックを維持する。実adapter/schema envelopeの承認なしにこの手順を実施しない。
+
+### オフライン検証結果と制限
+
+Python 3.14.7、pytest 9.1.1、合成fixture・既存mock CASだけで、関連5モジュール **156成功・失敗0・4件除外**。変更前の同じ主要3モジュールは85成功、変更後に40ケース追加して125成功、既存の原本候補/validator関連2モジュール31件を加えて156成功。ネットワーク接続は禁止fixture、対象core試験は金融`SheetsDB`構築もtrap。金融writeは0。
+
+追加ケースは正常準備/受付とsnapshotコピー、古いUUID/同UUID再送、stale/weak/missing ETag、遅延prepare、同ETagのprepare/受付/source別名受付/claim競合（barrierで強制）、未終端/UNKNOWNのcase/source重複、FINAL後の重複と新入力、保存前/後/競合/read-back喪失の単一試行、3イベント系列、旧schema照会/更新拒否、active index破損を検査した。3イベントはPython側の合成受付port試験であり、実Apps Script handler・iPhoneの証拠ではない。
+
+実行対象は `test_receipt_sheet_validation.py`、`test_receipt_item_correction_plan.py`、`test_pdf_intake_registry.py`、`test_receipt_review_snapshot.py`、`test_receipt_autonomous_reading.py`。除外した4件は既存の `test_javascript_capture_to_python_worker_hash_and_snapshot_match`（3パラメータ）と `test_ordinary_product_cells_need_no_typed_ids_hashes_or_delimiters`。NodeでApps Scriptソースを評価するため今回の実行禁止に合わせて除外し、テスト本体は変更していない。全体CI/Node回帰/Google実API試験は今回実行対象に含めない。`git diff --check`成功。
+
+残る境界：coreだけではexpected_tagを取得した実時刻やタップ時のSheets内容は証明できない。受付には独立再構築した最新digestを渡す必要があり、既存workerも変更snapshotを保留する。保存応答UNKNOWNは永続UNKNOWNへ自動変換せず例外で停止し、GET照合だけを許す。保存前失敗など永続痕跡のない不明をcore単体で記憶する仕組みはないため、呼出し側の自動再送/新UUID迂回禁止は引き続き必須。
+
+checkbox公開とsortの競合、現入力と旧結果の表示整合、原本印字の意味照合、Actions default-branch・資格供給、実adapter・実機sort/行移動は未解決のまま。第1工程の合成成功を実接続GOにしない。Google/Apps Script/trigger/実UUID/dispatch/Secrets/Variables/main/validated SHA/金融writer/本番データ/mergeへの変更・実行は0。次工程は別途承認待ちで停止する。

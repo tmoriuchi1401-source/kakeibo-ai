@@ -16,6 +16,7 @@ from .receipt_sheet_draft import parse_draft
 from .receipt_sheet_cells import operations_from_cells
 
 PURPOSE = "receipt-sheet-validation-only-v1"
+JOURNAL_SCHEMA = "receipt-sheet-validation-journal-v2"
 STATES = {"受付済み", "検証中", "修正が必要", "保留", "検証済み・未記帳", "結果不明・照合待ち"}
 PREPARED = "下書き準備済み"  # Private ticket, not a registration or authority.
 FINAL = {"修正が必要", "保留", "検証済み・未記帳"}
@@ -128,12 +129,20 @@ class IndependentReceiptReader:
 
 
 def empty_journal():
-    return dict(schema=PURPOSE, generation=0, requests={})
+    return dict(schema=JOURNAL_SCHEMA, generation=0, requests={}, active_prepared={})
 
 
 def validate_journal(value):
+    """Read legacy history without inferring which old ticket was latest.
+
+    Legacy schema is read-only; migration requires separate reviewed CAS.
+    In v2, inactive PREPARED records remain immutable replay history.
+    """
     try:
-        if (set(value) != {"schema", "generation", "requests"} or value["schema"] != PURPOSE
+        keys = {"schema", "generation", "requests"}
+        if value["schema"] == JOURNAL_SCHEMA:
+            keys.add("active_prepared")
+        if (set(value) != keys or value["schema"] not in {PURPOSE, JOURNAL_SCHEMA}
                 or type(value["generation"]) is not int or value["generation"] < 0
                 or not isinstance(value["requests"], dict) or len(value["requests"]) > 1000):
             raise ValueError()
@@ -159,9 +168,30 @@ def validate_journal(value):
                     raise ValueError()
             elif r["result"] is not None:
                 raise ValueError()
+        if value["schema"] == JOURNAL_SCHEMA:
+            active = value["active_prepared"]
+            if not isinstance(active, dict) or len(active) > 1000:
+                raise ValueError()
+            for case_id, rid in active.items():
+                record = value["requests"][request_uuid(rid)]
+                if record["state"] != PREPARED or record["snapshot"]["case_id"] != case_id:
+                    raise ValueError()
     except Exception:
         raise StateError("receipt_validation_journal_invalid") from None
     return value
+
+
+def _check_duplicates(value, snapshot):
+    # Shared by preparation and both acceptance paths; PREPARED is not work.
+    for old in value["requests"].values():
+        if old["state"] == PREPARED:
+            continue
+        s = old["snapshot"]
+        same_case = s["case_id"] == snapshot["case_id"]
+        same_source = s["source"]["source_id"] == snapshot["source"]["source_id"]
+        if (same_source and not same_case or (same_source or same_case)
+                and (old["state"] not in FINAL or s == snapshot)):
+            raise StateError("receipt_validation_duplicate_or_unresolved")
 
 
 class ValidationJournal:
@@ -174,15 +204,20 @@ class ValidationJournal:
     def __init__(self, transport, *, preflight):
         self.transport, self.preflight = transport, preflight
 
-    def load(self):
+    def load(self, *, writable=False):
         self.preflight()
         value, tag = self.transport.read_versioned()
         if not strong_etag(tag):
             raise StateError("receipt_validation_strong_cas_required")
-        return deepcopy(validate_journal(value)), tag
+        value = deepcopy(validate_journal(value))
+        if writable and value["schema"] != JOURNAL_SCHEMA:
+            raise StateError("receipt_validation_migration_required")
+        return value, tag
 
     def save(self, value, tag):
         validate_journal(value)
+        if value["schema"] != JOURNAL_SCHEMA:
+            raise StateError("receipt_validation_migration_required")
         self.preflight()
         # The implementation must use an atomic server-side If-Match.
         self.transport.replace_versioned(deepcopy(value), tag)
@@ -191,66 +226,61 @@ class ValidationJournal:
             raise StateError("receipt_validation_readback_unknown")
 
     def accept(self, request):
+        request = deepcopy(request)
         request_uuid(request["request_id"])
         if set(request) != {"request_id", "purpose", "snapshot"} or request["purpose"] != PURPOSE:
             raise StateError("receipt_validation_purpose_invalid")
-        value, tag = self.load()
+        value, tag = self.load(writable=True)
         rid, snapshot = request["request_id"], request["snapshot"]
         if rid in value["requests"]:
             raise StateError("receipt_validation_replay_rejected")
-        for old in value["requests"].values():
-            if old["state"] == PREPARED:
-                continue
-            s = old["snapshot"]
-            same_case = s["case_id"] == snapshot["case_id"]
-            same_source = s["source"]["source_id"] == snapshot["source"]["source_id"]
-            if (same_source and not same_case or (same_source or same_case)
-                    and (old["state"] not in FINAL or s == snapshot)):
-                raise StateError("receipt_validation_duplicate_or_unresolved")
+        _check_duplicates(value, snapshot)
         value["requests"][rid] = dict(deepcopy(request), state="受付済み", result=None)
+        value["active_prepared"].pop(snapshot["case_id"], None)
         value["generation"] += 1
         self.save(value, tag)
 
-    def prepare(self, request):
+    def prepare(self, request, *, expected_tag):
         """Freeze one draft BEFORE presenting its custom-value checkbox.
 
         Single private-document CAS only; no Sheet update is part of this
         transaction. A failed checkbox publication leaves an inert ticket.
+        Caller MUST load expected_tag BEFORE independently capturing input.
+        A stale/unknown attempt never reloads and retries with a fresh tag.
         """
+        request = deepcopy(request)
         request_uuid(request["request_id"])
         if set(request) != {"request_id", "purpose", "snapshot"} or request["purpose"] != PURPOSE:
             raise StateError("receipt_validation_purpose_invalid")
-        value, tag = self.load()
-        rid = request["request_id"]
+        value, tag = self.load(writable=True)
+        if not strong_etag(expected_tag) or tag != expected_tag:
+            raise StateError("receipt_validation_preparation_stale")
+        rid, snapshot = request["request_id"], request["snapshot"]
         if rid in value["requests"]:
             raise StateError("receipt_validation_replay_rejected")
+        _check_duplicates(value, snapshot)
         value["requests"][rid] = dict(deepcopy(request), state=PREPARED, result=None)
+        value["active_prepared"][snapshot["case_id"]] = rid
         value["generation"] += 1
         self.save(value, tag)
 
     def accept_prepared(self, rid, snapshot_digest):
         """Consume the private ticket once; no cross-resource atomicity."""
-        value, tag = self.load()
+        value, tag = self.load(writable=True)
         record = value["requests"][request_uuid(rid)]
-        if record["state"] != PREPARED or record["snapshot"]["digest"] != snapshot_digest:
+        if (record["state"] != PREPARED or record["snapshot"]["digest"] != snapshot_digest
+                or value["active_prepared"].get(record["snapshot"]["case_id"]) != rid):
             raise StateError("receipt_validation_replay_rejected")
         snapshot = record["snapshot"]
-        for key, old in value["requests"].items():
-            if key == rid or old["state"] == PREPARED:
-                continue
-            s = old["snapshot"]
-            same_case = s["case_id"] == snapshot["case_id"]
-            same_source = s["source"]["source_id"] == snapshot["source"]["source_id"]
-            if (same_source and not same_case or (same_source or same_case)
-                    and (old["state"] not in FINAL or s == snapshot)):
-                raise StateError("receipt_validation_duplicate_or_unresolved")
+        _check_duplicates(value, snapshot)
         record["state"] = "受付済み"
+        del value["active_prepared"][snapshot["case_id"]]
         value["generation"] += 1
         self.save(value, tag)
         return deepcopy(record)
 
     def transition(self, rid, state, result=None):
-        value, tag = self.load()
+        value, tag = self.load(writable=True)
         old = value["requests"][rid]
         allowed = {"受付済み": {"検証中", UNKNOWN}, "検証中": FINAL | {UNKNOWN}}
         if state not in allowed.get(old["state"], set()):
