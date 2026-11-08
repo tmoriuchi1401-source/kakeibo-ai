@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**最新：18節は `835a4bf` 基準のcatalog不足解消案。対象caseの6項目はA取得0・B候補1・C取得不能5。新規の合成データfixtureは必要だが、本人確認/actorはfixtureで代替しない。既存原本・生成関数を再利用し、permit再利用防止の責任と必須/省略可能作業を具体化。今回の変更は本Markdownだけ。実接続NO-GOを維持。**
+
 **最新：17節で `bab822e199c533830a1ca1b6c1cfa42b6e81dd1d` 基準の実接続前条件を確定。停止latchの再生成時消失、既定認証層によるPUT最大3送信をmockで確認。信頼catalogは必須情報不足。追加は診断テストと設計記録のみ。Gate B総合／Gate C実環境／本番NO-GOを維持。**
 
 **最新：14節に第2工程の46列decoderを記録。独立提供の期待bindingと照合する純粋Python関数と合成テストだけを追加。新規82件、既存Python219件、Node16件成功。値だけの部分copy/sortは検出保証外。Gate B総合／Gate C実環境／本番NO-GOを維持する。**
@@ -679,3 +681,90 @@ python -m pytest -q tests/test_receipt_gate_c_preconnect_audit.py tests/test_rec
 ```
 
 Google API読取/書込み、private JSON初期化/migration、Apps Script実行、trigger作成、Actions dispatch/再実行、本番接続、金融write、Secrets/Variables/IAM/ACL、main/validated SHA、PR mergeはすべて0。public公式仕様の読取とGitHub PR/commitの読取を行った。PR #200には調査用テストと本設計だけを `[skip ci]` commitで記録し、CI起動や実接続の承認にしない。**Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GOを維持する。**
+
+## 18. catalog不足の分類・最小fixture案・再利用防止の責任（2026-11-09、文書のみ）
+
+基準commitは **`835a4bfa039efed7153247db1f17f4f4d6d417ff`**。開始時PR #200 headと一致、Draft・未merge、main/base `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8`を確認した。実装・接続は次の承認まで行わない。本節は17.2の「未確保」を取得可能性と解消方法に分けたもので、取得していない証跡を取得済みに変更しない。
+
+### 18.1 調査の範囲と打切り
+
+- Gate A/Bの既存private作業領域のテキスト資料38件を対象に、候補/取込/catalog/policy/total_confirmation/actorの保存物と作成経緯を読取。`gate-a-downloaded-private.json`は217 bytesのunconfigured記録でcatalogなし。既存PNGのhashを再計算し、独立生成原本hashの保存証跡と一致した。Google上のPRIVATEを今回取得・変更したわけではない。
+- 以前の合成UIのprivate資料46件も限定確認。`phase4-source-attestation.json`の原本集合は今回の対象SOURCEと一致せず、その本人/案件対応を転用しない。pytestの一時fixture・node_modules・資格保存領域は正規証跡に数えない。
+- 作成元履歴「Cloud Run不要のレシート検証基盤構築」「家計簿画像の確認方法」の取得できた範囲、およびPR #200コメント0件を確認。作成元会話の追加ページ取得はtool errorとなったため、再探索を繰り返さず未取得とした。会話の評価文や「PASS」はcandidate rowや検証済みactorの原記録の代用にしない。
+- Google Driveスキルで、`receipt-validation`、receipt/PR200に限定した`catalog`、同範囲の`合成`の3検索を読取専用で実施。前2件は0件、最後は既知の合成BOOKのみ。候補・取込・確認証跡の保存元は得られなかった。検索は網羅一覧ではなく、Drive全体の不存在を証明しない。実BOOKの値は期待値構築に使用しない。
+- 任意の追加情報として、利用者に既存非公開保存先だけを照会した。Bの追加調査は**保存先が指定された1件を読み、case/source/version/承認の結合を確認する一回**に限定する。場所が分からないまま金融台帳・認証資格・他案件の履歴を広く探さない。回答なしを承認と解釈しない。
+
+分類は **A＝対象caseへの正規証跡を取得可能、B＝具体的な既存供給候補はあるが対象caseの承認/結合が未確認、C＝この限定調査で正規証跡を取得不能**。Cは全世界での不存在を断定する区分ではない。コードの形式例と、対象caseへの承認済み実データを区別する。
+
+### 18.2 不足情報と解消方法の一覧
+
+| 対象caseに必要な項目 | 分類 | 調査結果・出所/版 | 最小の解消方法・検証 |
+|---|---|---|---|
+| 正規候補11列全件 | **C** | Gate B setup/成功記録は商品B=730円を設定したUI証跡のみ。候補ID・取込ID・解析hash・全行順を含む保存物は未取得。既存 `candidate_rows()` とtest scenarioは基準commitにあるが、対象caseの証跡ではない | 新規合成fixtureとして意図的誤読を明示し、既存generatorで11列を生成。全行・版・解析payloadのhashと出典を固定し、`verified_candidate_range()`で照合。UIから逆生成しない |
+| 正規取込12列 | **C** | 対象caseの12列原記録なし。manifestはcase/source対応だけ。Sheets設定要求は取込commit記録ではない | 同じ新fixtureに12列を明示定義し、`parse_import_rows()`で既存形式へ渡す。「新規合成定義」と記録し、過去の取込日時/解析結果を装わない |
+| カテゴリpair・承認ルール | **B** | `config/categories.tsv`の既存版は取得可能（最終変更commit `f0cedbe812385c70b33c1f8ed5d567b98e3b3f35`）。ただし「食料品/消耗品」と、Gate B UI/testの「食品/洗剤」等は一致しない。対象case用の承認済みpair/18列rulesは未取得 | 既存の合成policy承認保存先が分かる場合だけ1件照合。取得できなければ、既存testの最小pair集合と「この合成fixtureのルール0件」を**新規に承認**する案を採る。分類名の自動読み替えや、承認なしのrules=[]補完はしない |
+| total_confirmation | **C** | source/hash/versionと総額に結合した本人確認保存物なし。Gate Aはbytesの真正性確認、Gate Bは編集イベント観測であり、総額本人確認とは異なる | 新fixtureでも本人が原本・総額・対象版を確認した正規記録が必要。AA、UIの総額、会話の一般的な「進めよう」、Gate A PASSから生成しない |
+| 検証済みactor | **C** | この確認行為に結合した検証済みissuer/sub・actorの原記録なし。test Worldの `actor_id="d"*64` は架空fixture。既存auth-sessionコードは検証パターンであって対象caseの証跡ではない | 有効な既存検証済みactor/確認記録が指定された場合だけ結合を検査。なければ本人確認方法の具体案を別途承認するまで接続停止。ownerメールのhash、SA、GitHub承認者、`e.user`で既存actorを捏造しない。旧OAuth/Cloudホストを再開しない |
+| 独立catalog pin | **C** | 対象caseの承認済みcatalog自体が未成立。実pinと独立配布記録なし。digest関数/constructor照合だけは既存実装 | 上のデータと真正な確認記録が成立してから `page_receipt_model.digest(catalog)` をオフライン計算。fixture版/出典/承認記録と別の非公開承認記録へ固定し、実行hostへ独立配布。PRIVATE/BOOKから起動時に学習しない。今はpin値を作らない |
+
+**対象6項目の取得判定はA 0件、B 1件、C 5件**。Aを増やすために別caseやtestの架空actorを対象証跡へ昇格させない。補助証跡としては次のAを再利用できる。
+
+| Aとして取得可能な補助資産 | 出所・版 | 検証方法/限界 |
+|---|---|---|
+| 独立生成原本hashと保存済み取得bytes | `gate-a-original-reconciliation-private.json`（2026-11-07T23:51:16Zの記録）＋`gate-a-sa-readonly-evidence-private.json`、PNG version4の過去証跡 | 保存PNGのSHA-256再計算一致。実ID/hash値はprivateのまま。現在のGoogle版、印字内容や総額本人確認を証明しない |
+| 730円のUI作成経緯・機械vector/AT | `gate-b-setup-requests-private.json`＋成功記録、初回manifestと再試験01 config | 全vectorから17.2記載の式でAT再計算一致。UI経緯の証拠に限り、正規候補・未使用の登録UUID・本人確認には転用しない |
+| 11/12列の形式と生成/検証関数、catalog strict validator | 基準commitの `receipt_review_snapshot.py`、`reconciliation.py`、`receipt_private_adapter.py`、関連tests | 既存関数のまま新fixtureのデータ検証に使える。テストの成功やvalidな形式だけでは承認/本人性を証明しない |
+
+### 18.3 新規fixtureは必要か
+
+**必要。新規に必要なのは承認済みの合成データ一式であり、追加の原本画像・BOOK・DB・サーバーではない。** 既存SOURCE PNGを独立hash/version確認の上で再利用する案を優先する。ただし旧Gate Bのcase/item IDをそのままcatalogに入れることはできない。
+
+既存 `verified_candidate_range()` は `取込ID == "receipt:" + source_id`、候補IDは `取込ID + ":001"` 等を要求する。Gate B manifestはイベント試験用case IDと `product-a` 等のslot IDであり、この正規候補形式の証跡ではない。新fixtureでは既存生成規則どおりにcase/item identityを定義し、decoderのmachine/ATも同じ承認済み定義から作る。既存coreにGate B専用のID例外を追加するより小さい。実ID・新UUID・fixture bytesは今回発行/生成しない。
+
+最小案は一つの非公開fixture版に、(1)元の原本参照、(2)独立に定義した合成解析payload、(3)候補11列全件、(4)取込12列、(5)カテゴリpairと明示的ルール集合、(6)真正な本人確認/actor証跡への参照、(7)catalog/decoder bindingをまとめる。候補列は既存HEADERSの「候補ID・取込ID・解析hash・行番号・商品名・数量・金額・大/小カテゴリ・備考・レシート合計」をそのまま使う。取込列は既存 `sheets.py` の12列を使う。解析hashは新しい合成解析payloadのhashとして定義し、原本bytes hashと区別する。意図的誤読730円は新fixtureの定義であり、過去にOCRで取得された証拠と称さない。日付/店舗/名称等は原本または新しい合成定義に明示し、実BOOKから逆算しない。
+
+本人確認・actorはfixtureによる代替対象にしない。`ReceiptPrivateAdapter._expected()` はtotal_confirmationとactor形式を必須とするため、現契約のまま本人証跡がなければ実catalogは成立しない。架空actorは純粋mockの中だけに留め、live用pin/JSONへ入れない。本人証跡なしで「検証済み・未記帳」へ進むための緩和も実施しない。継続仕様12.2の検証要求と本人会計authorityの分離は維持し、確認方法の変更が必要ならその契約差分を先に承認する。
+
+将来のBOOK適用では旧Gate B試験行/入力/メモ/使用済みUUIDを保持し、同じ「確認」タブに新fixtureの独立case行を追加する案を優先する。既存の退避/保留行を再利用しない。新caseの表示/機械列・登録ticketの更新範囲は適用前に具体化する。新case名だけで同sourceの未確定要求を回避せず、旧試験が未記帳・dispatchなしであった記録とPRIVATE履歴を独立照合する。3明細以内の一例に絞り、枠拡張は今回の必須条件にしない。
+
+### 18.4 run-bound permitの再利用を誰がどう防ぐか
+
+17.1のrun bindingだけでは一回性は完成しない。**ownerが発行範囲を決め、固定SHAのhostが各起動で強制拒否し、runner内の排他的開始markerが同じrun内の二重起動を拒否する**。レビューを通ったというフラグをworkerが何度でも使える設計にしない。初期の隔離一回受入について、既存CAS probe helperの `marker.open("x")` と既存のexclusive file/fsyncパターンを再利用する。helper自体や金融capability storeを起動・転用しない。
+
+| 責任者/境界 | 最小の強制条件 |
+|---|---|
+| owner（permit発行・再開判断） | 取得済み非公開計画に対象UUID/段階、catalog/snapshot、PRIVATE、repo/workflow/実装SHA、run_id/attempt=1/job、期限を結合して一回だけ許可。UNKNOWNが残る同UUID/同case/sourceへ新permitを発行しない。許可済み・開始済み・停止の記録を保持し、紛失時は停止。通常iPhone操作を恒久的な取引ごとの手動承認へ変える案ではなく、初回隔離受入の実行管理 |
+| 固定SHAの起動wrapper/host（実装必要） | 既定GET-only。Actions提供のrun/attempt/workflow SHAとauthoritativeなrun/job情報を照合し、permit本文やユーザー入力のrun番号を信じない。別run/別job・attempt>1・期限外・署名/承認出所不明・履歴欠落はwrite資格取得前に拒否。environment承認だけでこの検査を代用しない |
+| 同一jobの起動wrapper（実装必要） | checkout/再生成で消さない同一runnerのprivate作業領域にpermit単位の `.started` を**排他的新規作成**し、内容flush/fsync完了後だけ資格取得/最初の副作用を許す。markerが存在/破損/作成不能ならGET-only。markerを削除/resetするコードやcleanupを作らない。二重processは同じpathを競合し一つだけが進む。adapterの新instanceへwrite能力を再付与しない |
+| Actions job設定（実装/設定必要） | 単一job・単一worker process、restart/step retry/matrixなし、専用concurrency cancel=false。同runのrerunはattempt検査で拒否、新runはbinding不一致で拒否。同一attemptを別runnerへ自動移送/復元して再実行する運用は認めず、runner喪失・marker喪失はUNKNOWN停止。ephemeral runnerのmarkerをrun間の永続台帳とは呼ばない |
+| private journal/core（既存再利用） | UUIDのprepare/accept/claim・FINAL・同case/sourceの未確定拒否とIf-Match CASを維持。永続UNKNOWNは再開不可。保存不明を記録するための追加PUTや、GET成功によるmarker解除は行わない |
+| ownerとhost（障害後） | GETとrun/attempt/markerを照合して状態を確定。FINALなら表示だけ。未確定なら停止継続し、同UUIDの自動再送0。ownerもmarkerの削除・過去journalへのrollbackを復旧手順にしない。新permitの判断は既存要求の再実行許可と区別する |
+
+`run_attempt`はrerunで増え、rerunは元のSHA/ref/権限を再利用するため、SHA一致や実行者一致だけでは拒否できない。[Actions context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context)、[rerun仕様](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)。environmentのrequired reviewersは資格解放前の審査に利用可能だが、同一permitの消費台帳ではない。[environment仕様](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+
+この方式は、ownerと固定host、単一jobのrunner lifetimeを信頼する**初回一回受入の最小契約**。管理者によるmarker削除/履歴rollbackや、同一attemptを別machineで偽装実行する者まで防ぐ保証ではない。そのような再配置を許す構成、Apps Scriptを含む複数writerの常時自動受付、processの自動引継ぎには、同じ既存PRIVATEにoperation/permitの消費をCASで保持する最小schema追加等の独立レビューが必要になる。現v1 envelope/journal v2には勝手にkeyを追加できない。新DB/新サーバーを提案せず、金融 `SqliteCapabilityStore` のDBも追加しない。**その拡張を済ませたことにはせず、該当運用はNO-GO**。初回受入を超えた通常運用の安全性をlocal markerだけで認定しない。
+
+### 18.5 最小実装の残作業（今回実装しない）
+
+区分は最初の隔離iPhone導線を「検証済み・未記帳」まで通すためのもの。本番/金融writeの必須条件を削る区分ではない。
+
+| 区分 | 残作業 | 既存再利用/最小差分 |
+|---|---|---|
+| **必須** | 新規合成fixtureの定義・承認、真正なtotal_confirmation/actorの確保、独立pin | 18.2～18.3。既存candidate_rows/parse_import_rows/parse_rules/digest/strict validatorを使う。actor不明なら接続不可 |
+| **必須** | 非金融の薄いDrive IO | 17.3の固定ID・v2 If-Match・401再送/HTTP retry/redirect抑止・独立GET。既存PDF adapterは変更しない |
+| **必須** | run-bound host/wrapperの一回性 | 18.4のrun/job照合、exclusive marker、起動GET-only、UNKNOWN停止。既存journal/adapter/claimを再実装しない。再起動/二重process/別run/期限切れ/記録不能をmockで拒否 |
+| **必須** | Sheets実read・ticket準備/受付・結果投影のport | 46列decoder、JS snapshot、ValidationJournal、IndependentReceiptReader、FINAL cacheを接続するだけ。背景準備/checkbox公開の競合・入力保持も受入対象。自動Apps Script portの再送停止を証明できなければ開かない |
+| **必須** | UUID-onlyの非金融Actions入口と資格経路 | 既存category workflowの形式を参考にし、金融env/Secretsは転用しない。main凍結下で新workflow_dispatchが利用できるとは仮定しない。default-branch登録の個別承認がない間は該当入口を停止 |
+| **必須** | 対象の初期状態/ACLと独立read-back、実CAS・iPhone導線の段階受入 | 別承認後だけ。既存Gate A/CAS過去証跡とUI合格部分を再利用し、未測定の差分だけを試験。Gate Bの3イベント/公開競合/部分sortの対象制限は未解決のまま通さない |
+| **省略可能（今回の一例）** | 追加PNG/BOOK/第4Drive資源、新しい認証Web、DB/サーバー、OCR再解析 | 既存PNG/BOOK/PRIVATEと意図的誤読fixtureを使う。新しいOAuth/本人確認基盤の構築を自動的な次作業にしない |
+| **省略可能（初回一回受入）** | 自動復旧、失敗run回収、無人permit発行、runner間の引継ぎ | 機能を持たずUNKNOWNで止まる。常時自動運用まで許す場合の永続消費設計は省略不可、別工程 |
+| **省略可能（3明細以内）** | 商品枠拡張・新UI・新formatter/planner/カテゴリengine | 確定済み1タブ/1行1案件を維持。既存正規化、金額/税/値引き/重複検証を再実装しない |
+| **省略可能** | 過去の全件回帰/端末UI採用試験のやり直し | 文書だけの今回は新テスト不要。後の実装差分に対応するmockと、未完了の実接続/iPhone受入は必須 |
+
+### 18.6 次に承認が必要な操作
+
+次の最小承認単位は **「既存原本を使った新規合成fixtureのオフライン作成・policy確定・既存validatorでの検証」**。非公開データ定義、版と出典、候補/取込ID、解析hash、カテゴリpairと明示的rules=0の是非を対象にし、旧Gate B行を正規証跡へ改名しない。本人確認/actorの保存先が得られなければ、その部分は未成立として残す。fixture作成承認は本人確認の完了でも、架空actor利用の承認でもない。
+
+続いて必要なのは、真正な本人確認をどう取得・検証するかの具体的な承認、および18.4/18.5の**オフラインだけの薄いIO/host/port実装**の承認。これらが揃ってから、別段階でPRIVATE初期化bytes・対象ID・変更回数・read-back/停止手順を承認する。BOOKの新case行/ticket/cache、Apps Script project/trigger/認可、Actions入口/dispatch資格/必要な設定はそれぞれ具体化して承認する。現在禁止されているmain変更・本番Secrets変更・dispatchを、この計画で黙示的に許可しない。
+
+今回の成果は①A/B/C一覧と解消方法、②新fixture必要/真正actor代替不可の判断、③必須/省略可能な最小残作業、④上記の次承認単位。**本Markdown一件のみ更新**し、fixture生成・製品/テスト変更・Google write・Apps Script実行・trigger・Actions dispatch・金融write・本番設定/Secrets・main変更・mergeは0。Drive追加操作は上記metadata検索のみで、原本/実BOOK/PRIVATEの新規内容取得はしていない。Gate B総合・Gate C実環境・本番NO-GOを維持し、実装・接続は次の承認まで停止する。
