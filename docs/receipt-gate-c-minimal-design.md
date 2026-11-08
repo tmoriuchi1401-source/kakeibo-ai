@@ -498,3 +498,65 @@ slotの表示番号と恒久item IDを区別し、列追加/行移動後も新�
 4. **実環境は別ゲート**：不足する信頼データとAT provenanceを確認し、unconfigured初期化/migrationの具体内容・対象・read-back・停止方法を提示して別承認を得る。ATの算式を解明できなくても独立catalogとopaque固定照合で安全性が成立するかをレビューし、未証明なら停止。Gate Bの3イベント原因未特定、checkbox公開/入力競合、private実CAS、実port/Actions入口・資格、iPhone sort安全性は未解決のまま。
 
 今回の成果は本節の**文書追記だけ**であり、adapter開始や実環境再開を承認済みにしない。コード/テスト/Googleセル/原本照合/private JSON/Apps Script/trigger/Secrets/Variables/main/validated SHA/金融writer/インフラ/mergeへの変更、Actions実行・dispatchは0。**Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GO、金融write 0件を維持する。** PR #200だけへ文書commitを保存し、CI自動起動を抑止してリモート読戻しを確認する。
+
+## 16. 第3工程：単一private JSON adapter（2026-11-08、オフライン実装）
+
+基準 `1a9da6a9c3821a9b5fdf906c4808d57f40b13aa5` と開始時PR #200 headの一致、Draft・未mergeを確認。15節、ValidationJournal、DriveRegistryIO、IndependentReceiptReaderとiPhone継続仕様を確認した。既存core/decoder/validator/PDF adapter/Apps Scriptと既存試験のblobは基準treeと一致する。
+
+今回の変更は **`app/receipt_private_adapter.py`、`tests/test_receipt_private_adapter.py`、本節の3ファイルだけ**。非金融adapterは注入されたmock bytes IOを使い、Google client/資格/HTTP transportを作らない。実JSONの初期化・migration・Google接続は行わない。
+
+### 16.1 外側schemaとcatalog契約
+
+外側は厳密に `{schema: "receipt-private-envelope-v1", version: 1, catalog, journal}`。journalは既存 `receipt-sheet-validation-journal-v2` のまま。schema/versionの追加は新しい外側envelopeだけで、既存journal schemaは変更しない。unconfiguredや旧schemaからこの形式を自動生成・migrationする関数はない。旧journalはcoreのread-only互換性を維持したまま、このadapterでは接続を拒否する。
+
+catalogは `{cases: {case_id: entry}}`。entryは以下の6項目を過不足なく保持する。これは**合成fixtureで検証した保存契約**であり、実データを確保/承認/保存したという意味ではない。
+
+| 項目 | 内容と既存ロジックの再利用 |
+|---|---|
+| anchor | source、candidate_digest、import_digest、policy_digest、total_confirmation。既存IndependentReceiptReaderが要求するanchorと同型 |
+| import_row | 正規取込の12列全体。既存parse_import_rowsとreviewでcase/source/総額/要確認理由を照合 |
+| candidate_rows | 元候補11列を全件、順序を保持して保存。review→既存verified_candidate_range等で候補ID/解析hash/行順/総額と対応。4件以上は切り捨てず停止 |
+| categories / rules | 完全なカテゴリpairと承認済みルール行。parse_rules/valid_ruleを再利用し、不正でparseから落ちたルールを黙認しない。policy_digestと照合 |
+| decoder | 固定machine vectorとkind_label。original_itemsはreviewから、receipt_totalはtxから導出し、context_digestはdigest(anchor)。既存46列decoderで全元明細の期待値・数量/名称/カテゴリ/slot IDを検査 |
+
+catalog digestは**ファイルやSheetから学習せず、独立した信頼設定としてconstructorへ必須指定**する。毎回のGETと保存前後で同じdigestを照合する。JSONの数値/配列型を保持し、catalog自体を再正規化・書換えしない。欠落/変更/重複source/不整合は停止する。total_confirmationもこのadapterの接続前提として必須にし、未確認情報を埋めない（既存reviewの未確認時挙動は変更なし）。原本bytesは格納せず、source hash/version/MIME/purposeを保存し、実bytes/ACLとの照合は既存IndependentReceiptReader側に残す。
+
+`read_catalog()`はcatalogと**journalと同じ外側ETag**を返す。`private_cases()`は既存reader用のanchor mapと同ETag、`decoder_expected(case_id)`は既存decoderの期待値を返す。返値はdeepcopy。context digestにはjournal/ETag/ATを混ぜない。AT/試験UUID/runは固定machine期待値としてのみ扱い、登録受付authorityに転用しない。
+
+### 16.2 CAS保存・状態遷移・UNKNOWN
+
+| 段階 | 実装した処理／停止条件 |
+|---|---|
+| IO binding・metadata | io.configのfile_id/folder_idと固定設定を照合。fileとparentそれぞれのID/MIME/単一owner/owner＋既存SA writerだけのACL/非trash/version/強ETag、fileの単一parentを検査。metadata→media→metadataで変更があれば停止 |
+| strict bytes読取 | UTF-8 bytes、上限1 MiB、重複JSON key（入れ子含む）、NaN/Infinity/指数overflow、BOM、不正Unicode surrogate、schema/version/型の不整合を拒否。例外は固定StateErrorへ置換しraw API detailをchain表示しない |
+| 受付port | `read_versioned() -> (journal dict, outer strong ETag)`。既存ValidationJournal.prepare(expected_tag)/accept_prepared/transition/load/saveをそのまま使用 |
+| 許可遷移 | `_transition()`はbefore journalをメモリ内で既存ValidationJournalへ渡し、提案された1操作を再適用して結果全体を比較。prepare追加、最新ticket受付、既存transitionだけを許し、世代飛ばし・履歴削除・snapshot変更・active indexだけの操作・旧状態への巻戻し・UNKNOWN再開を拒否。旧acceptによる準備省略は接続しない |
+| 条件付き保存 | 読取時の外側bytes/ETagを保持。保存直前の独立GETで同じbytes/ETagを確認し、catalog不変の外側JSONを `io.replace_versioned(before_bytes, tag, after_bytes)`へ**1回だけ**渡す。新しい状態へのmerge、ETag取り直し再送、無条件PUTは行わない |
+| 独立read-back | metadata付き独立GETで外側bytes全体が提案と完全一致し、ETagが強く更新されたことを確認。既存core.saveが追加で行うloadにも同じ確認値を拘束し、その間の変更もUNKNOWN停止 |
+| UNKNOWN | 書込みを止めてから保存を試みる。保存前後の通信/読戻し不明、CAS競合等で失敗したinstanceは恒久GET-only。照合GETが成功しても書込みを再開しない。自動retry/repair/新UUID迂回はない。既存coreが返すUNKNOWNと永続journal状態は同一視しない |
+
+ioのbytes signatureとmetadata projectionは既存DriveRegistryIOのDrive v2 If-Match方式を再利用する。**実DriveRegistryIOを構築/実行したわけではなく、PDF用configや既定認証retryを安全と認定したわけでもない。** 注入IOは固定対象への原子的If-Match・送信1回・retry/redirect無効を満たす契約。今回証明したのはmockでの呼出し/競合だけであり、実HTTP 412・認証refresh時の再送抑止は未実測。既存PDF/金融transportは変更しない。
+
+### 16.3 専用合成試験と回帰
+
+| 群 | 結果 |
+|---|---|
+| 新規adapter専用 | **67成功・失敗0**。正常prepare→accept→claim→FINALと既存reader/cache連携、同一外側ETag、catalog不変/返値不変、stale拒否、prepare/accept/claimの強制同時CAS最大1勝者、JSON/schema/旧版/unconfigured/必須情報/元候補/カテゴリpolicy/機械列/parent ACL/transport対象の拒否 |
+| 障害・未確認境界（上記67件に含む） | 保存前/後応答喪失、読戻し失敗/不一致/ETag未更新、core追加読戻し競合、metadata/media競合、後続GET成功後もPUT増分0。730→868かつconfirmed=falseは既存decoderでprepare前に拒否。元候補4件は容量超過拒否。金融writer構築trap・network禁止を維持 |
+| 既存Python関連5モジュール | **219成功・失敗0**。既存core/PDF adapter等を変更せず回帰 |
+| 既存decoder | **82成功・失敗0**。変更なし |
+| 既存Node receipt fixture | **16成功・失敗0**。read-only fs/vm/crypto等の純粋ローカル試験を再確認して実行。Apps Script実行ではない |
+| 構文・書式 | 新規Pythonのcompileall、git diff --checkを確認 |
+
+Pythonは合計368件（新規67＋既存219＋decoder82）。Python 3.14.7／pytest 9.1.1／Node v22.23.2。plugin自動読込を止め、Node実行processのNODE_OPTIONSを除外した。既存google-genaiの非推奨警告1件は継続。fixtureの既存固定UUID/合成ID/hashだけを使用し、実UUID発行・本番データ・実原本の使用はない。
+
+### 16.4 未解決事項と次工程の条件
+
+- **UNKNOWN停止の寿命**：書込み禁止latchはadapter instance内。GETで解除するAPIはないが、instance再生成/別processによる再送を永続的に禁止する実行hostの契約は未接続。クラッシュ後に新instanceでprepareし直す自動回復は禁止。将来hostが非公開障害記録とjournal/実行証跡をGET照合し、別の明示再開判定までwrite経路を閉じる必要がある。UNKNOWNを記録するための追加PUTは今回作らない。
+- **信頼境界**：catalog digestの独立設定元、実catalog/元候補/取込/policy/total_confirmationは未確保。private ACLと正しい固定IOが前提で、資格を持つ外部操作がjournalをrollbackしてからprocessを作り直すケースを単一JSONだけで検知できるとは主張しない。adapter自身が要求する巻戻しは専用試験で拒否する。
+- **実接続差分**：Drive v2 metadataとreaderの既存metadata形式の整合、実IOの固定ID/ACL/parent/強ETag・bytes対応・HTTP If-Match・全層retry=0の証明、実資源の初期化/migration内容の査読・別承認が必要。今回はlive client/CLI/workflow/Apps Script portを追加していない。
+- **UI/入力**：実BOOKのAA未確認、AT生成provenance、値だけのcopy/部分sort、checkbox公開と入力変更の競合、原本印字の意味照合、Gate Bの3イベント原因未特定は未解決。3明細上限と1タブ方式を変更しない。
+
+推奨順序は、(1)本オフライン差分レビュー、(2)信頼catalog供給元とUNKNOWN時host停止契約の確定、(3)mockで実IO契約差分の検証、(4)初期化/Google試験対象・副作用・停止手順を提示して別承認、の順。今回の成功を(4)のGOにしない。
+
+**第3工程はオフラインadapterの受入まで。Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GO、金融write 0件を維持して停止する。** 実Google通信/書込み、private JSON初期化/migration、実UUID発行、Apps Script/trigger、Actions dispatch、Secrets/Variables/main/validated SHA、金融writer、mergeへの変更は0。保存先は既存Draft PR #200だけ。commitでCI自動起動を抑止し、リモート読戻しを確認する。
