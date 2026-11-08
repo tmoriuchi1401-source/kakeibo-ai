@@ -1,6 +1,6 @@
 # PR #200：Gate B iPhoneセル・イベント受入計画（適用前）
 
-**最新：[実施記録](receipt-gate-b-event-acceptance-results.md)。合成BOOKのAPI設定とオフライン観測実装は完了。専用project/trigger・認可・iPhone実機は未実施、Gate B/Cと本番接続はNO-GO。** 以下は適用前の承認計画として保持する。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
+**最新：[実施記録](receipt-gate-b-event-acceptance-results.md)。専用project/triggerの手動設定報告、iPhone商品修正・チェック1回・入力保持まで確認。独立読取のイベントログ0件でUUID/oldValueは未証明、Gate B/Cと本番接続はNO-GO。** 以下は適用前の承認計画として保持する。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
 
 ## 1. 変更対象と適用範囲
 
