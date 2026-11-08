@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**最新：14節に第2工程の46列decoderを記録。独立提供の期待bindingと照合する純粋Python関数と合成テストだけを追加。新規82件、既存Python219件、Node16件成功。値だけの部分copy/sortは検出保証外。Gate B総合／Gate C実環境／本番NO-GOを維持する。**
+
 **最新：13節の純粋ロジック修正で、ETag取得順・expected_tag引渡し、MVP数量、名称規則をPython/JSで統一。許容例のsnapshot/digest一致と不正入力の両側拒否をローカル試験済み。実adapter・Google接続は未追加。Gate B総合／Gate C実環境NO-GOは維持。12節は修正前の監査記録として保持する。**
 
 **最新：12節の契約監査でETag引渡し・準備順序・数値canonical化・名称正規化の不一致を確認。既存ローカル回帰は成功したが、言語間契約の成立とは判定しない。修正案の提示までで停止し、製品コードは変更していない。Gate B総合／Gate C実環境NO-GOを維持。**
@@ -360,3 +362,59 @@ Pythonの既存 `receipt_sheet_cells.py`へ小さい共通関数を置き、JS�
 試験環境はPython 3.14.7／pytest 9.1.1／Node v22.23.2。既存のnetwork禁止・金融SheetsDB構築trapを維持。Nodeは既存のread-only fs、空vm、crypto、配列/JSON操作だけで、NODE_OPTIONSを当該processから外し外部plugin自動読込を止めた。UUIDは既存固定fixtureだけ、金融write・外部通信・Google操作は0。依存google-genaiの非推奨警告1件は従来どおり。
 
 **判定：今回のMVP範囲・試験済入力では3契約は一致。次のオフライン実装レビューへ進むことは可能だが、その実装・実接続の承認ではない。Gate B総合NO-GO、Gate C実環境NO-GOを維持して停止する。** 任意の数値/Unicode/その他データ型全体のcanonical化を保証しない。実portのCAS/read-back・schema/ACL確認、checkbox公開とsort競合、原本印字の意味照合、実機sort/行移動、専用Actions入口・資格供給は未解決。Google実API、Apps Script実環境、trigger、Secrets/Variables/main/validated SHA、mergeへの変更、Actions dispatch、金融writeは0。PR #200だけへ保存し、CI起動はcommitで抑止する。
+
+## 14. 第2工程：46列decoder（2026-11-08、純粋ロジックのみ）
+
+基準 `e1e020d3b69052147aa52e6945d85296da8f791d` と開始時PR headは完全一致、Draft維持。必須資料（本書、Gate B計画/実施記録、receipt_sheet_cells.py、receipt_sheet_validation.py、receipt-validation/Code.gs）とiPhone継続仕様を確認。作業ファイルのblobも基準treeと照合した。
+
+追加は `app/receipt_sheet_decoder.py`、`tests/test_receipt_sheet_decoder.py` と本節だけ。既存validator・CAS状態機械・共通digest・Apps Script・既存テストは変更しない。Google読取を含む実API呼出し、private JSON更新、CLI/workflow/実port/インフラ追加はない。
+
+### 14.1 APIと列契約の根拠
+
+- `decode_receipt_row(row, *, expected)`：厳密に46要素のlistを受け、既存 `operations_from_cells()` とJS `receiptSnapshot_()`へ渡せるcandidateを返す。case/source/draft.items/original_items/categories/context_digestに加え、独立検算したreceipt_total/corrected_total/differenceと、未変更のメモ/原本表示を返す。
+- `decode_receipt_rows(rows, *, catalog)`：A列のcase IDで期待情報を選び、case ID→candidateのmapを返す。行番号で案件を確定しない。case重複・未知case・同source IDの複数caseを拒否。全46列が一緒に動く行sortは結果の対応を変えない。
+- expectedは**rowから生成せず独立に渡す**。必要要素はcase_id/source/original_items/categories/context_digest/machine/receipt_total/kind_label。将来private catalogと独立原本・保存候補・policyを照合した値を渡す契約だけを定義し、catalog adapterや永続schemaは作っていない。テストでは完全合成の既存Worldを再利用する。
+
+| 列 | decoderの扱い・根拠 |
+|---|---|
+| A:I | Gate B計画の案件ID、種類、原本表示、支払総額、表示合計、差額、状態、メモ、観測用登録セル。A/B/Dを独立期待値と照合。Bの実表示文字列は公開資産で一意に固定されていないため、kind_labelを明示して完全一致照合する。テストの「一般」は合成値で、実BOOKの表示を新しく定義したものではない |
+| J:R／S:AA／AB:AJ | 3つの9列group：名称・数量・行金額・大分類・小分類・種別・帰属・採否・原本照合。Gate B計画の列順と一致 |
+| AK:AN | Gate B fixtureのmachine[0:4]と同じcase/source ID/version/hashの並び。expected.sourceと矛盾がないことを検査し、rowも完全一致させる |
+| AO:AQ | 同fixtureの2既存item ID＋new:追加枠IDの3 slot。decoderは既存item 1～3件の包含、一意ID、非既存slotのnew:形式を検査。項目数を46列の外へ拡張しない |
+| AR:AS | 同fixtureの試験UUID/run。期待vectorとの一致だけを検査し、新しい登録要求や本人承認にしない |
+| AT | Gate Bが64桁hexとして検査する固定binding。**hash算式・意味は公開資産から確定できないため不透明値として期待vectorに固定**。context_digestや新snapshot digestをここへ割り当てない |
+
+列順の根拠は[Gate B計画](receipt-gate-b-event-acceptance-plan.md)と[Code.test.cjsのmachine fixture](../apps-script/receipt-gate-b/Code.test.cjs#L15)、10セル完全一致の根拠は[Gate B classify](../apps-script/receipt-gate-b/Code.gs#L46)。実配置の非公開見出し/式を取得済みとはしない。AK:ATすべてを固定期待vectorと比較し、いずれかの欠落/変更を拒否する。
+
+通常セルの `_binding` は既存どおりdigest([case_id, trusted_source])で作る。sourceのMIME/classification/transaction_kind、原本真正性、context、カテゴリpolicyを編集SheetやATだけから認定しない。C/G/H/Iはauthorityに使わず、IのTRUEやregister表示だけで受付を作らない。返却candidateにもrequest_id/posting_authorityを生成しない。
+
+### 14.2 固定した入力型・変換・検算
+
+| 入力 | 許容／拒否 |
+|---|---|
+| row全体 | 46個のnative scalar（str/int/float/bool/None）のlistだけ。数式error文字列を数値へ解釈しない。NaN/Infinity、配列/オブジェクト値は拒否 |
+| 金額D/E/Fおよび商品行金額 | NUMBERのintまたは整数値floatを、丸めずintへ変換。BOOLEAN・文字列数値・通貨記号・カンマ・非整数float・非有限数・JS安全整数範囲外は拒否。金額上限/符号等の会計規則は既存validatorへ残す |
+| 数量・名称 | 13節のreceipt_quantity/receipt_nameをそのまま再利用。数量の文字列や空欄は使用中の商品では拒否。MVP精度/範囲、名称のNEL/BOM/制御文字拒否、日本語/emoji保持も維持 |
+| 大/小分類 | 期待policyにある完全一致pairだけ。片方欠落、他のpair、余計な空白を自動補正しない |
+| 種別・採否 | 商品→product、外税→tax、値引き→discount。採用/除外だけを許す。未知値や英語の代替値を推測採用しない |
+| 帰属 | 空欄(None/空文字)または既存previewの「指定なし」は帰属なし。商品1/2/3だけを物理slotからitem identityへ結合。数字1等は拒否。空slot・除外商品・税/値引き自身への帰属や、商品に帰属先を付ける指定は拒否 |
+| 原本照合 | 使用中はnative boolだけ。文字列TRUE/FALSE、数値1/0、欠落は拒否。変更/追加/除外に照合が必要かは既存operations_from_cellsが判定 |
+| 空の追加slot | 名称/数量/金額がNone/空文字、帰属なし、カテゴリは両方空または正しいpair、種別は空/商品、採否は空/採用、照合は空/Falseだけを許す。未知値は拒否。未使用と判定済みのslotだけを既存helper用の不活性セルへ変換し、操作/合計に含めない。入力rowは変更しない |
+| 機械列・期待情報 | 固定textで完全一致。versionの文字列を数値へ変えない。item重複/欠落、expectedと機械列のcase/source不一致、無効contextは拒否 |
+
+合計は採用された非空slotの**行金額だけ**を加算し、数量を再乗算しない。Dは独立expected.receipt_totalと照合。再計算合計とD−合計をそれぞれE/Fに照合し、違えば拒否する。合計/差額0だけでは原本一致・検証済み・登録受付を認定しない。税配賦・内税・架空調整などの判断は既存validatorが別に行う。
+
+### 14.3 試験結果と残る限界
+
+| 試験群 | 結果・確認内容 |
+|---|---|
+| 新規decoder試験 | **82成功・失敗0**。2商品＋空枠、730→868、1,368/差額0、追加/除外/外税/値引きと帰属ID、数量2/0.125/境界、native整数float、Unicode、不正数値/型/カテゴリ/controls、全機械列の変更/欠落、case/source/item重複・欠落、行sort/部分identity copy、メモ/入力不変を含む |
+| Python/JS連携（新規82件に含む） | decoder出力→既存Node fixtureでJS snapshot/digest→既存IndependentReceiptReaderの再構築snapshotとの完全一致→既存mock CAS/worker。正常修正は「検証済み・未記帳」、未修正は「修正が必要」。金融writeは0 |
+| 既存Python関連回帰 | **219成功・失敗0**。第1工程までの5モジュールを変更せず実行。新規82件と分けて集計（合計301件） |
+| 既存Node回帰 | **16成功・失敗0**。既存ソース・fixtureの変更なし、純粋ローカル実行のみ |
+
+環境はPython 3.14.7／pytest 9.1.1／Node v22.23.2。既存network禁止と金融SheetsDB構築trapを維持。既存固定のオフラインUUIDだけを使い、実UUIDを発行しない。新規moduleにIO/サービス呼出しはない。依存google-genaiの非推奨警告1件は既存回帰で継続。構文・whitespace検査も実施する。
+
+**検出限界**：全行sortはcase mapで同一対応を維持し、A/AK不一致・別案件の機械列copy・重複は拒否する。一方、identityを残したまま名称/金額などの値だけをcopy/sortすると、正当な商品編集と観測上区別できない。照合checkboxも入力者申告なので、これを暗号学的bindingにしない。そのような入力がdecoderでは操作候補になることを専用試験で明示し、原本意味検証/実機sortの解決を主張しない。期待catalog自体をrowから捏造すれば独立性が失われるため、将来のcatalog/原本/候補/policyの独立照合は必須。
+
+ATのhash算式、実列の値型/数式/表示captionの独立取得、private catalog adapter、受付連携、checkbox公開中の競合、原本印字の意味照合、iPhone実機sort/行移動は未達のまま。**第2工程はオフラインdecoderの受入まで。Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GOで停止する。** Google実API・Apps Script実環境・private JSON・trigger・Secrets/Variables/main/validated SHA・金融writer・merge・追加インフラへの変更、Actions dispatch、金融writeは0。保存先は既存Draft PR #200だけとし、文書を含むcommitでCI自動起動を抑止する。
