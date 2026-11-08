@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**最新：12節の契約監査でETag引渡し・準備順序・数値canonical化・名称正規化の不一致を確認。既存ローカル回帰は成功したが、言語間契約の成立とは判定しない。修正案の提示までで停止し、製品コードは変更していない。Gate B総合／Gate C実環境NO-GOを維持。**
+
 **第1工程のオフライン実装記録は末尾11節。Python coreとmockテストだけを追加承認に基づき更新した。以下1～10節は基準commit時点の設計・未達記録として保持する。Gate B総合NO-GO、Gate C実環境・本番接続・金融write NO-GOは継続。**
 
 2026-11-08。対象：Draft PR #200、`tmoriuchi1401-source/kakeibo-ai`。
@@ -241,3 +243,72 @@ Python 3.14.7、pytest 9.1.1、合成fixture・既存mock CASだけで、関連5
 残る境界：coreだけではexpected_tagを取得した実時刻やタップ時のSheets内容は証明できない。受付には独立再構築した最新digestを渡す必要があり、既存workerも変更snapshotを保留する。保存応答UNKNOWNは永続UNKNOWNへ自動変換せず例外で停止し、GET照合だけを許す。保存前失敗など永続痕跡のない不明をcore単体で記憶する仕組みはないため、呼出し側の自動再送/新UUID迂回禁止は引き続き必須。
 
 checkbox公開とsortの競合、現入力と旧結果の表示整合、原本印字の意味照合、Actions default-branch・資格供給、実adapter・実機sort/行移動は未解決のまま。第1工程の合成成功を実接続GOにしない。Google/Apps Script/trigger/実UUID/dispatch/Secrets/Variables/main/validated SHA/金融writer/本番データ/mergeへの変更・実行は0。次工程は別途承認待ちで停止する。
+
+## 12. Python／Apps Script契約監査（2026-11-08、調査・ローカル試験のみ）
+
+基準はPR #200の `e0b9ac8e02a432ff008a3a7ec0dd53dbbc0b1190`。開始時headは完全一致、Draft・未merge、mainは `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8`。ローカルcheckoutのHEADは以前の設計commitを指していたが、core・関連テスト・本資料・Apps Script source/testのGit blobを基準commitのtreeと照合し、作業ファイル内容の一致を確認してから調査した。本監査の変更は本Markdownだけ。
+
+### 12.1 ETagとprepareの契約差分
+
+| 契約 | Python core | Apps Script／既存Node fixture | 判定 |
+|---|---|---|---|
+| prepare引数 | `ValidationJournal.prepare(request, *, expected_tag)`。expected_tag省略はTypeError、stale/weak/nullは保存前に拒否 | `receiptPrepareDraft(candidate, ports)`は`ports.prepare(request)`を1引数で呼ぶ。ETag引数なし | **不一致**。現在の呼出しをPythonへ直接結び付けられない |
+| 入力読取順 | 呼出し側がloadでETag取得→独立snapshot読取→prepare。同関数内のloadは取得済ETagの再照合であり、最初の取得ではない | candidateを引数で受けた後snapshotを計算→fixture UUID取得→prepare。ETag取得portの呼出しはない | **不一致**。後付けの最新ETag取得では遅延した旧snapshotの準備を防げない |
+| 最新ticket | v2 journalのactive_preparedとrequestsを同じCASで保存。accept_preparedでactive一致必須 | Node harnessのprepareはrequestをローカル変数へコピーするだけ。acceptPreparedもローカルprepared.stateだけを更新する | **未接続／試験の不足**。現Node成功はv2・active・expected ETagの試験ではない |
+| 完了の意味 | CAS成功＋独立read-back後だけ正常return。不明時は例外、retryなし | prepareがthrowすればcheckbox ruleを返さない点は一致。ただしmockはCAS/read-backをモデル化していない | エラー時停止の純粋な制御だけは再利用可能。保存完了の保証は未検証 |
+| 要求形式 | request_id／purpose／snapshot。purposeは旧来のvalidation-only v1のまま | 同じ3要素とpurpose文字列 | 対応。journal schema v2とrequest purpose v1を混同しない |
+
+参照：[Python prepare](../app/receipt_sheet_validation.py#L243)、[JS prepare](../apps-script/receipt-validation/Code.gs#L159)、[Node fixture](../apps-script/receipt-validation/Code.test.cjs)、[Python準備fixture](../tests/test_receipt_sheet_validation.py#L426)。実port/binding実装は存在せず、今回も追加しない。
+
+一時的なローカル観測fixtureで既存JS関数を呼んだtraceは `snapshot_read, snapshot_read, fixture_uuid, prepare_args=1`。ETag読取spyは呼ばれなかった。expected_tagを要求するstrict mockは `expected_tag_missing` で停止した。これは監査用mockのエラー名であり、実Python bridgeやGoogleサービスの実行結果ではない。既存JSのprepare試験は1引数を受け入れるstubなので、この不一致を検出せず成功する。
+
+### 12.2 snapshot canonical化とdigest
+
+Pythonの`app/page_receipt_model.py:digest()`はsorted keys・compact separators・ensure_ascii・allow_nan=falseのJSON bytesをSHA-256化。JSの`receiptCanonical_()`はsorted keys・ASCII escapeを行うが、数値文字列表現はJSON.stringifyに依存する。通常セルの数値はPython `operations_from_cells()`とJS `receiptSnapshot_()`で再構築される。**数学的な値の一致だけではcanonical bytesの一致にならない。**
+
+既存のWorld／ordinary_cells／IndependentReceiptReaderを使い、同じ合成candidateを既存JS `receiptSnapshot_()`へ渡す一時ローカルprobeで以下を確認した。probeはstdin/stdoutと既存ソース読取だけで、repositoryへ実装や新規テストファイルを追加していない。
+
+| 合成入力 | snapshot内容の比較（digestを除く） | Python数量表現／JS数量表現 | digest |
+|---|---|---|---|
+| 数量2・日本語/emoji名称 | 一致 | `2`／`2` | 一致 |
+| 数量0.125・日本語/emoji名称 | 一致 | `0.125`／`0.125` | 一致 |
+| 数量0.00001 | 一致 | `1e-05`／`0.00001` | **不一致** |
+| 数量0.0000001 | 一致 | `1e-07`／`1e-7` | **不一致** |
+| 数量10の21乗 | 一致 | `1000000000000000000000`／`1e+21` | **不一致** |
+| 名称の前後にU+0085 NEL、数量2 | **不一致** | `2`／`2` | **不一致** |
+| 名称の前後にU+FEFF BOM、数量2 | **不一致** | `2`／`2` | **不一致** |
+
+最後の2件はcanonical serializerだけの問題ではなく、Pythonのname.strip()とJSのname.trim()が扱う文字集合の差。NELはPython側で除去されJS側で残り、BOMはJS側で除去されPython側で残る。通常セルの現チェックは上表の数量を一律に拒否していないため、実入力範囲外と推測して除外できない。旧delimited parserの数量範囲は通常セルと同一ではない。
+
+不一致をdigest省略や比較緩和で回避しない。PythonとJSで同じ入力を別snapshotと判断する可能性があり、現契約では正しい入力でも拒否／保留になる。新しい意味照合・writer・schema migrationで埋めない。本監査は上記fixtureでの再現であり、全数値/Unicodeの同値性を網羅証明したものではない。
+
+### 12.3 除外4試験の安全確認と実行結果
+
+事前に以下を読取確認した後だけ実行した。
+
+- 対象は `test_javascript_capture_to_python_worker_hash_and_snapshot_match` の3パラメータと `test_ordinary_product_cells_need_no_typed_ids_hashes_or_delimiters` の1件。すべて既存の合成World・in-memory CASを使い、Node subprocessへ合成JSONだけをstdinで渡す。
+- `Code.test.cjs`のimportsはNode標準のfs/vm/crypto/assert/testだけ。fsはCode.gsとstdinの読取、結果はstdout。vmにはGoogleサービス・require・process等を注入しない。評価するCode.gsにも実サービス呼出し・installer・token保存はない。
+- `dispatch`は名前だけで、実体は`state.sent`配列へのpush。acceptPrepared/prepare/publishReceiptもメモリ操作か故障注入だけ。実UUIDを発行せず固定のオフラインfixture値を返す。Google identity・本番データ・金融writerを使わない。
+- Python試験は既存のsocket接続禁止とSheetsDB構築trapを維持。Nodeの安全性はPythonのsocket monkeypatchが子processを守ると仮定せず、別途上記のsource/path監査で確認した。NODE_OPTIONSを当該テストprocessで解除し、pytest追加pluginの自動読込も無効化した。OS全体のnetwork isolationを測定したという主張ではない。
+
+環境：Python 3.14.7／pytest 9.1.1／Node v22.23.2。
+
+| 実行 | 結果 | 証拠の限界 |
+|---|---|---|
+| 以前除外した4件だけを選択 | **4成功・失敗0**（98件は選択外） | legacy変更/追加/除外と通常セルinteger例のsnapshot/digest一致。prepare(expected_tag)接続は通らない |
+| `node --test apps-script/receipt-validation/Code.test.cjs` | **13成功・失敗0** | 純粋なJS制御・mock portsのみ。実ETag・active index・Googleとは未接続 |
+| 11節と同じPython関連5モジュール、今回は除外なし | **160成功・失敗0** | 先の4件を含むため164件と重複集計しない。依存google-genaiのPython非推奨警告1件あり |
+| 上表の境界probeと順序trace | 数値3例・名称2例の不一致、ETag欠落を再現 | 監査用の期待された不一致であり、既存160/13件の失敗へ混算しない |
+
+今回の成功は「既存ローカルfixtureは安全に実行でき、その範囲で一致した」という証拠。第1工程で残した4件の未実行は解消したが、ETag順序・全入力domainのcanonical互換性の未達は解消していない。
+
+### 12.4 修正対象と最小差分案（未実施・ここで停止）
+
+| 対象 | 次にレビューする最小差分 | 今回の判断 |
+|---|---|---|
+| `apps-script/receipt-validation/Code.gs:receiptPrepareDraft()` | 準備開始時ETagを明示保持し、同じ準備内で「ETag取得→case IDからcandidate独立読取→snapshot→prepare」を定義する。既存candidate引数だけでは取得順を証明できないため、case IDから既存readCaseById portを使う契約案を優先。JSのprepareへexpected_tagを明示し、Python bindingではkeyword引数へ対応させる。prepare直前のETag取り直しは禁止 | **コード変更しない**。port契約だけの小修正候補。実adapter/decoder/Google呼出し追加には広げない |
+| `apps-script/receipt-validation/Code.test.cjs`のprepare/acceptPrepared fixture、`tests/test_receipt_sheet_validation.py` | 1引数を黙って受けるstubをstrictにし、expected_tag・読取順・v2 active index・stale/UNKNOWN拒否を既存CASの契約に照合する。現4試験は受付snapshotの確認が中心なので、準備経路の契約試験を別に足す | **テスト変更しない**。成功済みfixtureを契約成立の代用にしない |
+| `app/receipt_sheet_cells.py:operations_from_cells()`とJS `receiptSnapshot_()`／必要ならreceipt専用canonical境界 | 両言語で認める数量の精度/範囲と整数化、名称前後文字の扱いを同じ規則に固定し、上表の境界を既存言語間試験へ追加。最小の安全案は既存delimited数量範囲等へ揃え、表現の未保証入力を保留にすること。ただし通常セルの許容範囲を狭める変更になるため、採用範囲は別途判断が必要 | **未決・修正しない**。任意floatの一般canonical実装や全用途共通digestの変更を追加せず、影響範囲を限定して再レビュー |
+| `app/page_receipt_model.py:digest()`、既存validator/CAS | 多数用途共通のdigestをJS都合で一括変更しない。比較省略・許容誤差・既存結果の再hash/migrationもしない | 今回変更不要。既存の厳密比較とfail-closedを維持 |
+
+ETag/順序の修正候補はJS既存関数・mock契約試験の数十行規模と見込むが、数値/文字列domainの判断前に修正全体の確定行数は出せない。現在の不一致を認めたまま新adapter/decoder/Apps Script実装へ進まない。**調査・文書記録までで停止。Gate B総合NO-GO、Gate C実環境NO-GO、金融write 0。** Google変更・Apps Script実サービス実行・実UUID発行・trigger作成・Actions dispatch・Secrets/Variables/main/validated SHA変更・mergeは0。本記録はCI自動起動を抑止する文書commitだけでPR #200へ保存する。
