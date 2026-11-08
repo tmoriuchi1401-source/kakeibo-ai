@@ -418,3 +418,83 @@ Pythonの既存 `receipt_sheet_cells.py`へ小さい共通関数を置き、JS�
 **検出限界**：全行sortはcase mapで同一対応を維持し、A/AK不一致・別案件の機械列copy・重複は拒否する。一方、identityを残したまま名称/金額などの値だけをcopy/sortすると、正当な商品編集と観測上区別できない。照合checkboxも入力者申告なので、これを暗号学的bindingにしない。そのような入力がdecoderでは操作候補になることを専用試験で明示し、原本意味検証/実機sortの解決を主張しない。期待catalog自体をrowから捏造すれば独立性が失われるため、将来のcatalog/原本/候補/policyの独立照合は必須。
 
 ATのhash算式、実列の値型/数式/表示captionの独立取得、private catalog adapter、受付連携、checkbox公開中の競合、原本印字の意味照合、iPhone実機sort/行移動は未達のまま。**第2工程はオフラインdecoderの受入まで。Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GOで停止する。** Google実API・Apps Script実環境・private JSON・trigger・Secrets/Variables/main/validated SHA・金融writer・merge・追加インフラへの変更、Actions dispatch、金融writeは0。保存先は既存Draft PR #200だけとし、文書を含むcommitでCI自動起動を抑止する。
+
+## 15. 実BOOK読取結果と商品枠・private catalogの設計補足（2026-11-08、文書のみ）
+
+基準は `9a657788152adb9f351bf93ed85dd8c70fc2b40f`。開始時のPR #200 headと一致、Draft・未merge。**本節は利用者が提示した読取専用照合結果を確認済み事実として記録する。今回の作業ではGoogleへ再接続せず、実セル・原本照合チェック・private JSON・decoder・Apps Scriptを変更していない。** 14節の「実列の値型/表示caption未確認」は、以下の提示範囲について更新する。全列の見出し・全値・全数式・binding生成根拠まで独立確認できたという意味ではない。
+
+### 15.1 実BOOKとdecoderの契約差分
+
+| 確認済みの実BOOK事実 | 現decoderとの関係／残条件 |
+|---|---|
+| 合成BOOKの「確認」は46列 | 46要素listの契約と一致。API未接続。将来のreaderは省略された末尾空欄を扱う契約と列構造を明示し、46列を超えるデータを切り捨てない |
+| E2/F2は数式、有効値1,368/0 | decoderに渡すのはnativeな有効数値。式文字列やformatted表示「1,368」は渡さない。decoderは行金額からE/Fを独立再計算するので、数式の存在/表示だけを信頼しない。式そのものの許可一覧・全参照範囲は今回未確認 |
+| 金額・数量はnative NUMBER | int/整数値floatの円変換と数量規則に整合。数量の精度/範囲制限は継続。全ての可能な値が許容されるという保証ではない |
+| 原本照合はnative BOOLEAN | 使用中slotのstrict bool契約と一致。文字列TRUE/FALSEへの変換は不要・禁止 |
+| I2はUUID付きcustom checkbox | decoderは表示値をauthorityに使わない。イベントvalue/oldValueの検査とprivate最新ticket照合が別に必要。既存Gate B UUIDをGate Cの準備/受付へ移植しない |
+| AT2は64文字の固定文字列、セル内に数式なし | 固定text照合という扱いと整合。ただしdecoderはlowercase hex64も要求する。今回の事実だけでは文字集合まで再確認済みとせず、過去Gate Bのhex検査記録と区別する。生成算式・入力対象は15.2の未確認事項 |
+| B2は「一般（完全合成）」 | trusted expected.kind_labelはこの完全一致値にする。14節のテスト値「一般」は合成fixture用であり、実BOOK用期待値ではない。decoderのコード変更は不要、将来catalog設定の差分 |
+| 商品Bは868円、AA2はfalse | 数値は変換可能だが、trusted元候補730円との差分には原本照合申告が必要。現状態を検証済みとしない（15.3） |
+| 合成private JSONはunconfigured、catalog/journalなし | decoderのexpectedや受付記録を実供給できない。既存ファイルがあるだけではValidationJournalに接続不能。欠落を空catalog/empty_journalで補わず停止 |
+
+全46列のheader・AK:AQの全identity・dropdown候補・原本リンク・退避行の扱いまで今回追加確認したとはしない。登録不可の退避行を実caseとしてcatalogへ作らず、将来readerで明示的に区別する。行番号を案件identityにしない。取得された数値や機械列を使って自分自身の期待値を生成しない。
+
+### 15.2 AT bindingの出所と検証の限界
+
+[Gate B実施記録](receipt-gate-b-event-acceptance-results.md)の再試験では、非公開manifest/配置用configへ新runの固定bindingを用意し、disabled・trigger 0件の間にIおよびAR:ATの4セルを更新、その後configとの一致を照合している。したがって**現在確認できる出所はGate B試験の事前設定値**であり、ATセルが現在の商品編集から式で生成するdigestではない。商品Bの変更をATが自動拘束しているとは扱わない。
+
+公開handlerはmachine[9]のhex64形式と機械vector全体のconfig一致を検査するだけ。公開fixtureの反復文字はテスト用代替値で、生成算式の証拠ではない。今回の確認で確定したのも「固定文字列、セル内数式なし」までである。
+
+未確認なのは、生成に使った関数/版、canonical化、hash入力項目、UUID/run/case/source/itemとの拘束範囲、作成時証跡との照合である。将来は既存の非公開manifest・配置準備記録・生成手順をread-onlyで追跡し、再計算可能なら元記録と照合する。証拠がなければopaque値のままとし、算式を推測したり再生成して置換しない。実値・UUID・原本hash・認証情報を公開資料へ転記しない。
+
+AT、通常セルの `digest([case_id, source])`、catalog由来context_digest、request snapshot.digestは別の契約である。ATをいずれかの代用品やprivate受付authorityにしない。既存decoderの全machine期待値比較は整合検査に限り、Sheetからの期待値採取では真正性を証明できない。
+
+### 15.3 AA2=false時の安全停止
+
+trusted保存候補が730円、現在の商品Bが868円と独立確認できることが前提。元候補を現在値868円から捏造すると差分が消えるため、その供給は禁止する。
+
+| 段階 | 必要な停止動作と既存根拠 |
+|---|---|
+| 準備前の実接続guard | 現privateはunconfiguredなので読取/設定検証で停止。無断初期化・UUID発行・prepare・checkbox公開・dispatchへ進まない |
+| decoder→snapshot準備 | `operations_from_cells()`は730→868のeditかつconfirmed=falseを `receipt_cells_original_check_required`で拒否。JS `receiptSnapshot_()`も同規則で拒否し、`receiptPrepareDraft()`ではsnapshot処理がuuid/prepareより先。E/F一致で例外を免除しない |
+| 既存ticketの受付前再読取 | 最新入力からsnapshotを再構築できない、または固定snapshotと不一致ならaccept前に拒否。古いticket・既存チェック状態で回避しない。実portは未実装 |
+| 受付後のworker再読取 | 原本照合欠落/変更等でreaderが失敗すれば成功を表示しない。既存workerの保留保存を使用し、保存結果不明ならUNKNOWNで停止。再検証/再確定の自動再送なし |
+
+「falseは常に全商品を拒否」という規則ではない。既存helperは**元候補から変更のない既存商品**には照合申告を要求しない。今回の商品Bは変更済みなので拒否対象。trueにすること自体も入力者申告にすぎず、原本真正性・本人認証・total_confirmation・記帳authorityの証明にはならない。今回はAA2を操作せず、実環境でこの停止経路を試験したとも扱わない。
+
+### 15.4 private catalogに必要な情報と既存取得元
+
+以下は既存reader/reviewの契約へ対応する設計。既存の取得形式があることと、**今回の合成caseの信頼できる実データが確保済みであることを分ける**。合成private JSONにはどれも格納されていない。
+
+| 必要情報 | 再利用する既存取得元・検査 | 現在の不足／禁止する代替 |
+|---|---|---|
+| case ID、source ID/hash/version/MIME、normal/purchaseの目的 | Gate Aの非公開作成manifest・生成原本の独立hash記録と、既存SAによるmetadata/media/ACL/parent確認。IndependentReceiptReader.checked_metadataとraw bytes SHA-256検査 | 現在版の対応をadapterで再検証する必要あり。解析hashやSheet機械列だけを原本hash/分類の根拠にしない。bytes hash一致は印字内容の意味照合の完成ではない |
+| 正規の取込txとimport_digest | 既存「取込データ」の12列、reconciliation.parse_import_rows、receipt pipelineの取込commit形式。case/source/支払総額/要確認理由とdigestを拘束 | 合成BOOKに対応する正規取込記録の存在/保管場所は未確認。現在のD/E/Fや修正値から逆算して生成しない。本番取込を合成caseへ流用しない |
+| 元候補全行、candidate_digest、original_itemsと安定item ID | 既存「解析候補明細」の11列、receipt_review_snapshot.candidate_rows/verified_candidate_range、receipt_item_correction_planの元候補再構築、review.preview.original_items | 合成730円候補の承認済み保存物は未確認。元画像868円と意図的誤読730円を区別した既存合成作成記録が必要。AO:AQのIDだけで正規候補と認定しない |
+| カテゴリpair、承認済み商品ルール、policy_digest | 既存「カテゴリ」masterと「カテゴリ自動分類ルール」、category_rules.parse_rules、readerのdigest([categories, rules])検査 | 合成受入用の固定policy/版/参照元の確定が必要。dropdownや編集後の商品カテゴリからpolicyを作らない。既存SheetsDBは形式の参照先であり金融clientを起動しない |
+| 支払総額とtotal_confirmationの出所 | reviewが要求するsource/receipt_total/actor_idの厳密な既存確認契約。原本総額照合の独立記録と、信頼できる本人確認済み保存元 | この合成caseで条件を満たす保存元は未確認。AAの申告・IのUUID・ACLやtrigger実行者からactor_idを生成しない。欠落は既存reviewの未確認/修正が必要を維持し、検証済みへ昇格させない |
+| decoder期待値とcontext | source/元候補/policyから得るoriginal_items/categories、trusted支払総額、kind_label、固定machine vector、catalog anchorのdigest | kind_labelは今回の確認値を使える。残るmachineの出所/slot対応を既存manifestと照合。decoder expectedと既存reader anchorは同じobjectではなく、context_digestはdigest(anchor)。ETagやjournal世代やATを含めない |
+| 保存境界とjournal | 既存PRIVATEの固定ID/parent/ACL確認記録と、ValidationJournal v2（generation/requests/active_prepared） | 外側envelopeとcatalog不変性の実adapterは未実装。unconfigured→configuredは別の明示承認。過去状態を勝手にmigration/初期化しない |
+
+`IndependentReceiptReader`は現状、imports/candidates/categories/rulesをsheet_valuesから受け、private anchorの3 digestと照合する。新たな非公開catalogへのデータ同居を採る場合も、元データの独立出所と同じ検証が必要で、単なるanchor追加で供給済みにはならない。編集「確認」rowからの再構成を独立取得と呼ばない。既存テストWorldの固定actorや合成データは試験用であり、実catalogの認証証跡ではない。
+
+### 15.5 3枠超過時の暫定保留と最小拡張案
+
+**現行46列は合計3明細slot**。商品1/2/3という表示でも、外税・値引きも各1slotを消費する。初期fixtureは既存2商品＋空追加枠1つであり、「既存3商品に加えて追加枠1つ」ではない。3つの元明細があれば追加枠は残らない。
+
+暫定方針は、全元明細と追加・除外対象を一意に表せないcaseを**案件全体として保留・受付対象外**にする。先頭3件への切捨て、複数商品合算、別case/別行への分割、メモへの退避で処理を通さない。合計が合っても全明細不足なら停止。既存decoderの元ID包含/最大3件検査は補助であり、readerが事前に元候補を3件へ切った場合は検出不能。独立catalog/元候補全件から容量を確認するのが将来adapterの必須条件。今回は実BOOKの保留表示も書き換えない。
+
+将来の最小案は、**同じ「確認」1タブ・1行1案件のまま9列groupを右方向へ反復追加**すること。PCメニュー・別詳細タブ・Webアプリ・新DBは不要。A:I、原本往復、入力/メモ、固定案件列/見出しは保持する。案件ごとに列位置を変えず、レイアウト版ごとの共通slot上限Nを明示し、対象の全元明細と必要追加枠を収容する。Nの具体値は原本件数分布とiPhone横scroll評価後に決める未確定事項で、今回3→任意上限の変更はしない。
+
+変更が必要になる最小範囲は、列契約/見出し・表示合計式/入力規則、46列decoderの版別group/target解決、機械領域の商品ID対応とprivate期待binding、関連合成試験。AK:ATの固定座標は追加groupと衝突するため、機械領域を明示移設・拡張してlayout versionとslot ID対応を拘束する設計が必要。古い46列を新列数で誤解釈せず、旧版は明示読取または安全停止とし、入力を自動migrationしない。既存operations_from_cells/JS receiptSnapshot_の最大100明細group、planner/journalの最大100 operationsも上限設計の制約であって、「100商品対応済み」の意味ではない。
+
+slotの表示番号と恒久item IDを区別し、列追加/行移動後も新規ID再利用・別商品の入力継承を防ぐ。新旧入力の不変性、全件合計/税値引き帰属、Python/JS snapshot/digest、超過拒否、行全体sort・部分sort、iPhone検索/原本往復/横scroll/入力保持の受入が必要。値だけのcopy/sortの検出限界は14節どおり残る。**これは設計案まで。UI変更・列拡張・移行の実装は事前の別承認を要する。**
+
+### 15.6 次のprivate CAS adapter実装に必要な条件
+
+1. **先にデータ契約を固定**：unconfiguredファイルとjournal v2を区別する外側envelope、catalog/anchor/decoder expectedの対応、全元候補の供給元、policy/total_confirmationの不足時停止、opaque ATの扱いをレビューする。未確保データは欠落を模したmockで停止を試験し、勝手な初期値を設計しない。
+2. **次に薄い非金融adapterをオフラインで検証**：DriveRegistryIOの既存If-Match方式とValidationJournal.prepare/accept_prepared/transitionを再利用する差分だけ。bytes↔dictのstrict parse、catalog完全不変、同一外側ETag、ETag取得→独立snapshot読取→expected_tag prepare、CAS後の全体read-back、全層retry/redirect=0とUNKNOWN停止をmock transportで検査する。実初期化を含めず、同居catalog/journalの単一CASに限定する。
+3. **追加すべき受入条件**：native数値/BOOLEANと数式有効値の引渡し、実kind_label、730→868かつfalseのprepare前拒否、trusted元候補欠落/改変・全明細3枠超過・全machine不一致の拒否、旧ETag/同時CAS最大1勝者・応答喪失時送信1回、catalog不変、金融write 0。今回これらの新テストや実接続は実行していない。
+4. **実環境は別ゲート**：不足する信頼データとAT provenanceを確認し、unconfigured初期化/migrationの具体内容・対象・read-back・停止方法を提示して別承認を得る。ATの算式を解明できなくても独立catalogとopaque固定照合で安全性が成立するかをレビューし、未証明なら停止。Gate Bの3イベント原因未特定、checkbox公開/入力競合、private実CAS、実port/Actions入口・資格、iPhone sort安全性は未解決のまま。
+
+今回の成果は本節の**文書追記だけ**であり、adapter開始や実環境再開を承認済みにしない。コード/テスト/Googleセル/原本照合/private JSON/Apps Script/trigger/Secrets/Variables/main/validated SHA/金融writer/インフラ/mergeへの変更、Actions実行・dispatchは0。**Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GO、金融write 0件を維持する。** PR #200だけへ文書commitを保存し、CI自動起動を抑止してリモート読戻しを確認する。
