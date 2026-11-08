@@ -1,6 +1,6 @@
 # PR #200：Gate B iPhoneセル・イベント受入計画（適用前）
 
-**計画のみ。Gate AはPASS、Gate B/Cと本番接続はNO-GO。** 今回はGoogle Sheets設定・Apps Script project/trigger作成・認可・実機実行を行わない。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
+**最新：[実施記録](receipt-gate-b-event-acceptance-results.md)。合成BOOKのAPI設定とオフライン観測実装は完了。専用project/trigger・認可・iPhone実機は未実施、Gate B/Cと本番接続はNO-GO。** 以下は適用前の承認計画として保持する。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
 
 ## 1. 変更対象と適用範囲
 
