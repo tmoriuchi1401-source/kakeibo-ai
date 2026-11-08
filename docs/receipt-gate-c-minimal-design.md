@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**最新：17節で `bab822e199c533830a1ca1b6c1cfa42b6e81dd1d` 基準の実接続前条件を確定。停止latchの再生成時消失、既定認証層によるPUT最大3送信をmockで確認。信頼catalogは必須情報不足。追加は診断テストと設計記録のみ。Gate B総合／Gate C実環境／本番NO-GOを維持。**
+
 **最新：14節に第2工程の46列decoderを記録。独立提供の期待bindingと照合する純粋Python関数と合成テストだけを追加。新規82件、既存Python219件、Node16件成功。値だけの部分copy/sortは検出保証外。Gate B総合／Gate C実環境／本番NO-GOを維持する。**
 
 **最新：13節の純粋ロジック修正で、ETag取得順・expected_tag引渡し、MVP数量、名称規則をPython/JSで統一。許容例のsnapshot/digest一致と不正入力の両側拒否をローカル試験済み。実adapter・Google接続は未追加。Gate B総合／Gate C実環境NO-GOは維持。12節は修正前の監査記録として保持する。**
@@ -560,3 +562,120 @@ Pythonは合計368件（新規67＋既存219＋decoder82）。Python 3.14.7／py
 推奨順序は、(1)本オフライン差分レビュー、(2)信頼catalog供給元とUNKNOWN時host停止契約の確定、(3)mockで実IO契約差分の検証、(4)初期化/Google試験対象・副作用・停止手順を提示して別承認、の順。今回の成功を(4)のGOにしない。
 
 **第3工程はオフラインadapterの受入まで。Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GO、金融write 0件を維持して停止する。** 実Google通信/書込み、private JSON初期化/migration、実UUID発行、Apps Script/trigger、Actions dispatch、Secrets/Variables/main/validated SHA、金融writer、mergeへの変更は0。保存先は既存Draft PR #200だけ。commitでCI自動起動を抑止し、リモート読戻しを確認する。
+
+## 17. 実接続前の必須条件と最小接続計画（2026-11-09、調査・オフライン診断）
+
+基準はPR #200 head **`bab822e199c533830a1ca1b6c1cfa42b6e81dd1d`**。開始時のGitHub headとの完全一致、Draft・未merge、base/main `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8`を確認。AGENTSとiPhone継続仕様を全文確認した。今回は本節と `tests/test_receipt_gate_c_preconnect_audit.py` のみ追加・更新し、製品実装・既存PDF adapter・金融処理を変更しない。
+
+結論：既存private journalとActionsを再利用できるが、**現状のまま実接続はNO-GO**。永続UNKNOWN自体の拒否と、保存結果不明という呼出し結果のUNKNOWNを区別する。後者を含めたprocess間の停止保証、catalogの真正な供給、送信一回の実transportは未成立。以下の必須条件は設計であり、実装・設定・初期化・実行の承認ではない。
+
+### 17.1 UNKNOWN・再生成・同一UUIDの扱い
+
+追加診断は既存合成fixtureとbytes mockだけを使う。保存前例外ではjournalが変化しない状況を作り、同じadapterのGET後はwrite禁止のまま、新adapterでは同UUIDのprepare/accept/claimが再試行できることを確認した。claim未保存の場合、`execute_accepted_request()`の次回呼出しがvalidatorまで進むことも確認した。これは**欠陥境界の再現**であり、回復の受入試験ではない。
+
+保存済みで応答だけ失われた場合はGETでPREPARED/受付済み/検証中を発見でき、同段階の再適用は拒否された。しかし、保存済みPREPAREDを次回acceptしたり、受付済みを次回claimしたりすることまではcoreが禁止しない。停止理由の外部観測なしに「次の段階だから安全」として進めない。永続UNKNOWNから検証中への遷移は新instanceでも拒否された。
+
+| 事象 | 次回起動時の読取・停止条件 | 禁止する動作 |
+|---|---|---|
+| prepareの応答不明、UUIDがGETで見つからない | 未送信・未保存を断定できない。既知UUIDを障害対象として保持し、checkbox非公開で停止 | 同UUID再prepare、別UUIDへの自動置換、空journal生成 |
+| prepare応答不明、PREPAREDが存在 | UUID/source/snapshot/catalog/世代を照合するだけ。公開済みか不明でも停止 | GET成功による公開・accept再開 |
+| accept応答不明、PREPAREDまたは受付済み | dispatch 0のままGETと独立run照合 | accept再送、未dispatchに見える要求の自動回収 |
+| dispatch応答不明、受付済み/検証中/FINAL | journalとActionsの該当run/attempt/checkoutを別途GET。runが見つからなくても未受信の証明にはならない | 同UUID自動再dispatch、run一覧の検索結果だけによる再送 |
+| claim応答不明、受付済みまたは検証中 | 当該呼出しのvalidator 0。次回もGET-only | 新instanceで再claim、検証中を受付済みに戻す |
+| FINAL保存応答不明 | GETの完全一致FINALだけ既存cacheへ表示可能。不一致・非終端なら照合待ち | 検証やFINAL PUTのやり直し、UNKNOWNの永続cache化 |
+| 永続UNKNOWN・履歴欠落・rollback疑い | 同case/sourceを停止。GETと人による調査のみ | UNKNOWN解除、TTL削除、履歴書換え、別UUID迂回 |
+
+**既存資産だけで無条件には保証できない理由**：CASが守るのは保存された状態と同時更新。PUT未保存でprocessが消えると、「要求は試したがUNKNOWNだった」という事実は同じJSONに残らない。UNKNOWNを書き込む追加PUTも失敗し得るため解決にならない。Actions concurrencyは直列化であり、順番に到着する再dispatch・新run・再起動を消費済みにしない。[Actions concurrency仕様](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+
+最小追加条件は、新DBではなく**実行hostの起動時GET-onlyと、runごとの一回限りの明示許可**。初期の隔離受入はこれで限定する。
+
+1. あらゆる入口・process起動・adapter再生成はGET-onlyを既定にする。前回成功した一般的なenabledフラグを次回起動のwrite許可にしない。書込み能力を取得する前に固定PRIVATE、catalog pin、全未確定要求、前回Actions runをGET照合する。読めない・実行証跡が欠ける場合は停止する。
+2. 許可は非公開の承認記録にrepo/workflow/実装SHA、run_id、run_attempt=1、UUID、case/source/snapshot/catalog digest、許す段階と保存前ETag/bytesのdigest、期限を結合する。承認を同じJSONから自己発行しない。新runや別processへ引き継がない。run_idが確定した後の手動審査で一つのprocessだけを許す。GitHub environmentのrequired reviewer等は候補だが、利用可否・bypass制限・既存設定は未確認。単なる承認済みenvironment名だけではこのbindingを満たさない。
+3. 1 run＝1 worker process、restart supervisor・step retry・matrix・子workerによる再開なし。`run_attempt != 1`は資格取得前に拒否。別run_idの同UUIDも許可不一致で拒否。承認後の同run内で異常が出ればそのrunの許可は消費済みとし、processを作り直さない。起動しなかった可能性があっても自動再利用しない。[run_attempt仕様](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#github-context)
+4. Actions run/attemptと非公開承認・障害記録を保存し、retention切れや削除で履歴がなくなったらfail-closed。private内容・原本・actorをpublic logs/artifactsへ出さない。`finally`や終了時artifact uploadの成功を安全性の必須前提にせず、異常終了・cancel・timeout・記録不能はすべて未確定として扱う。
+5. Apps Script側の準備/受付PUTとdispatchにも同じ停止契約が必要。ScriptLockやPropertiesのbooleanだけでは成立しない。未接続の自動入口を開かず、初期受入は人が監督する固定一回に限定する。常時自動受付に拡張する前には、同じprivate journalへの**送信前の消費記録**（operation/run bindingと未解決保持）または同等の独立した永続permitが必要。marker保存そのもののUNKNOWNもGET-onlyで停止し、process再生成で再試行しない。既存strict schemaにはないため、その自動化は今回の範囲外。
+
+この最小案の保証は、許可済みhostと単一process契約の遵守を前提にする。資格を持つ任意の別プログラムやownerによるjournal/承認記録のrollbackまで防ぐとは主張しない。**既存Actions設定だけで実装済みとは判定しない**。run履歴検索・concurrency・`run_attempt=1`だけを組み合わせても、新規runへの自動再送は止まらない。
+
+明示再開の必要条件は、(a)全writer/trigger/queued runが停止し生存workerがないこと、(b)当該UUID・前後bytes/強ETag・世代・catalog・run/attemptの独立照合、(c)既存UNKNOWNと未確定要求を保持したまま処置を非公開記録へ固定、(d)ownerによる対象・段階・副作用を指定した新たな明示判断、(e)安全条件と独立read-back経路の再確認。GETでFINALが判明した場合は表示だけで終える。永続UNKNOWNは既存core上再開不能であり、今回その解除機能を作らない。証拠不足なら同案件を隔離し、別UUIDでも進めない。サービス再開の判断と、そのUUIDの再実行許可を混同しない。
+
+### 17.2 信頼catalog供給元の読取監査
+
+対象は既存の完全合成caseのみ。PR本文・設計/承認文書・コメント（0件）、既存ローカルprivate証跡と設定要求を読取。Googleへの追加GETはしていない。確認したprivate資料は `gate-a-original-reconciliation-private.json`、`gate-a-sa-readonly-evidence-private.json`、`gate-a-downloaded-private.json`、`gate-b-manifest-private.json`、`gate-b-setup-requests-private.json`、`gate-b-book-write-evidence-private.json`、Gate B完了/再試験記録。実ID・メール・原本hash・各資料全文は公開文書へ転記しない。以下は保存済み証跡の事実であり、現在のGoogle状態の再証明ではない。
+
+| 必須情報 | 読取で確認できた出所 | 欠落・採用条件 |
+|---|---|---|
+| 原本hash・version | Gate Aの独立生成原本hash提供記録とSA取得bytesの一致。PNG versionは保存記録上4、MIME/58,010 bytes/parent/exact ACLも記録あり | 原本identityの過去証拠はある。実接続時にmetadata→bytes→metadataを再GETし、承認済み独立hash/versionと一致すること。原本hashを解析hashに置換しない |
+| 元候補730円 | 承認文書に「原本868円、意図的誤読候補730円」。Gate B setup要求と成功記録にUI初期値730円、合計1,230円、差138円 | **正規候補11列全件の保存物は未確認**。UIに730があった事実はcandidate/import/analysis hashの証拠ではない。商品ID・行順・名称/数量/種別・候補digest・解析hashを含む承認済み合成fixtureが必要 |
+| 正規取込情報 | UI設定とmanifestのcase/source対応はある。既存parserは12列import rowを要求 | **このcaseの正規12列rowと保存元・版/解析hashが欠落**。UIの総額・日付・caseから逆算して生成しない |
+| カテゴリpolicy | Gate Bの入力規則に大分類/小分類の候補がある。既存parser/adapterはcategoriesのpair一覧と18列rulesを照合 | **このcase用に承認されたpair一覧・ルール全件・版・policy digestの独立記録なし**。独立dropdownの組合せや現在の商品分類をpolicyと認定しない。rules=[]も根拠なしに補わない |
+| total_confirmation | 既存契約は完全なsource＋整数receipt_total＋64hex actor_id。原本hash照合は総額の本人確認とは別 | **当該source/version・総額1,368円の本人確認保存物が欠落**。AA=true、Gate A PASS、登録UUID、UIイベントを代用しない |
+| actor_idの正当な出所 | 既存 `auth-session/generic_review.py` 等は検証済みGoogle issuer/subのdigestを使う。`shared_login.py` は検証済みactorとsession/requestを照合する | **この合成caseの確認に結合された検証済みactorレコードなし**。64hexの形だけでは本人性を証明しない。メール、ACL owner、SA、trigger実行者、GitHub actorから生成しない。既存の有効な確認証跡を取得できる場合だけ再利用。なければ合成用本人確認記録の出所・検証手段を別途確定する。旧Web/OIDCホストは再稼働しない |
+| catalog digestの独立固定 | constructor必須pinと各GETの照合は実装済み | **承認済み実catalogもpin設定元もない**。元データの独立出所を検査した後、既存 `page_receipt_model.digest(catalog)` のcanonical JSON（型・配列順保持）をオフライン計算。版・source・各出典・実装SHAとともに別の非公開承認記録へ固定し、既存の保護された実行設定へ明示配布する。実PRIVATEや編集BOOKから実行時に学習しない。設定の作成/変更は別承認 |
+
+最小追加データは、**合成専用の正規候補/取込/policyの承認済み保存一式、本人確認とactorの検証証跡、独立catalog pin**。実BOOKを逆算する代わりに「未確保」で停止する。既存Gate B manifestの機械vectorは設定時のprovenanceに使えるが、使用済みGate B UUID/runを新しい受付ticketにしない。ATは固定値の整合比較に限り、catalog digestや本人authorityに代用しない。合成UIの作成記録を正規取込済みと改名しない。catalog生成時も全候補3枠超過は案件全体保留とする。
+
+**ATについて15～16節の未確認事項を更新**：既存 `gate-b-retest-01-private.json` のbinding_derivationに `sha256(UTF8 compact JSON machine[0:9])` の記録を発見。保存済み初回manifestと再試験configのmachine vectorからそれぞれ再計算してAT一致を確認した（実BOOKの値から期待値を生成していない）。これは機械列の生成式の出所であって、正規候補・policy・actorの真正性の証拠ではない。実接続時の完全一致検査と、その元manifestが承認対象であることの確認は引き続き必要。保存済みGate A取得PNGのhashも独立生成原本hash記録と再計算一致した。原本の現在状態や印字意味・本人の総額確認を再証明したとはしない。
+
+### 17.3 DriveRegistryIOとHTTP送信回数
+
+`app/pdf_intake_registry.py` の実装は**変更せず読取**。追加診断ではfake credentialsとrequests `BaseAdapter.send`のmockを使い、AuthorizedSessionより下のPreparedRequest送信数を計測した。実TCP/TLS・Google APIを使わない。Python 3.14.7、google-auth 2.56.3、requests 2.34.2での結果。requirementsは下限指定のため将来の実runtimeで版と挙動を再確認する。
+
+| 項目 | 実装・mock結果 | 接続前に必要な差分/証明 |
+|---|---|---|
+| Drive v2条件付PUT | `/upload/drive/v2/files/{id}?uploadType=media&fields=id,etag`、bytes body、`If-Match: "old"`、application/jsonを確認。メソッド内のPUT呼出しは1回 | 固定PRIVATEだけに限定。resumable/create/無条件PUTへのfallbackなし。実HTTP成立は今回未実施。[v2 files.update仕様](https://developers.google.com/workspace/drive/api/reference/rest/v2/files/update) |
+| 412 | HTTP 412は`StateError('HTTP_412')`。PUT前のbytes/ETag不一致も同じエラー名 | server 412はmock送信1回、local staleは追加送信0を区別。エラー文字列だけで実API CAS合格としない |
+| 401 refresh | **既定AuthorizedSessionは401→200で同じPUTを2回、401→401→200/401で3回送信**。401→412も2回。body/If-Matchは同一 | 既存PDF既定clientを直接接続しない。レシート専用transportで事前token準備、`max_refresh_attempts=0`・`refresh_status_codes=()`相当を固定。401なら停止。token endpointのrefreshとDrive PUT再送を別に計測。[google-auth仕様](https://google-auth.readthedocs.io/en/latest/reference/google.auth.transport.requests.html) |
+| HTTP retry | ローカル既定HTTPS HTTPAdapterはRetry(total=0, read=False)。IO自体にはloopなし。ただし任意sessionを注入可能で、IOはretry設定を検査しない | 専用sessionの全mountでconnect/read/status/other/redirectを0、urllib3 retry・上位job retry・proxy経路を含め査読。資格refresh無効だけで全層0と認定しない |
+| redirect | `_request()`の`allow_redirects=False`。301/302/303/307/308は各1送信で停止 | 専用sessionでも固定host/IDとredirect=0を維持。別hostへcredentials/bodyを追送しない |
+| timeout/deadline | 通常1 requestへ20秒。begin_request後は45秒deadlineの残時間と20秒の小さい方。期限切れは送信0。Timeout/ConnectionErrorは停止 | requests timeoutは総wall-clock上限ではなく、認証再帰にもIOの残時間再計算はない。host全体の上限・単一process終了・再起動禁止も必要。timeoutは未保存の証明にならない。[requests timeout仕様](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts) |
+| 強ETag/read-back | 弱/欠落/無引用tagはPUT0。read_versionedはACL＋metadata→media→metadata。replace_versionedは事前GETするが**PUT後のGETは実行しない** | 既存ReceiptPrivateAdapterが全体bytes、catalog不変、新強ETag、metadataを独立GETし、core.save追加GETも照合。PUTの200/返却etagだけで確定しない。v2→reader metadataはparentsのobject→ID list、labels.trashed→trashedを明示変換 |
+
+zero-refreshを明示した注入sessionでは、401/412/429/500/503、各redirect、timeout/接続例外がそれぞれPreparedRequest送信1回で停止した。**これは専用実transportの完成証明ではない**。mockはurllib3内部の実socket送信やネットワーク中継を測っていない。実資格取得やGoogle書込みはなく、既存CAS probeの過去成功も今回のレシートtransportの認証再送抑止を証明しない。
+
+### 17.4 最小の追加実装ファイルと資源・資格
+
+以下の名前は将来の最小差分候補。今回は追加しない。既存core/decoder/planner/validator/cacheを優先再利用し、新DB・常駐server・Cloud Run・新しい金融経路は作らない。
+
+| ファイル | 必要な差分 |
+|---|---|
+| `app/receipt_private_drive_io.py`（新規候補） | 固定PRIVATE/FOLDER専用の薄いbytes IO。既存DriveRegistryIOのv2方式を再利用し、PDF用inbox/processed設定を偽IDで満たさず専用構成にする。強ETag、exact ACL、metadata投影、全層retry/redirect=0、事前token準備。PDF adapter本体は変更不要 |
+| `app/receipt_sheet_validation_host.py`（新規候補） | 17.1の起動GET-only/一回許可/同UUID再送拒否とrun照合。既存ReceiptPrivateAdapter＋ValidationJournal＋execute_accepted_requestに接続。実46列read、catalogの正規行をreader portへ渡す処理、v2 metadata正規化、自己完結cache appendを小さなportとして同居。金融SheetsDBを作らない |
+| `apps-script/receipt-validation/`の専用port（将来追加候補） | 既存Code.gsの純粋イベント/snapshot処理を維持し、実BOOK/sheet/trigger/最新ticket/全層送信一回/停止契約を満たすportのみ接続。Apps Script輸送で再送0を証明できない段階ではPUT/dispatchを有効にしない。Gate B projectへそのまま上書きしない |
+| `.github/workflows/receipt-sheet-validation.yml`（新規候補） | 非金融のUUID-only入口。固定checkout SHA、専用concurrency・cancel=false、run_attempt=1、run-bound許可、単一process、timeout、最小Secrets。category-sheet-requestは金融設定を読むため転用しない。default branchに登録が必要なworkflow_dispatchはmain凍結中に利用可能と仮定しない。[workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onworkflow_dispatch) |
+| 専用mockテスト | host再起動・別run/attempt・許可欠落/失効・記録欠落/削除・全段階の応答不明・HTTP下層送信数・catalog pin・metadata変換・cacheと入力保持。今回の診断テストはhost guard未実装の境界を残している |
+
+Google対象は既存隔離**BOOK 1冊、SOURCE PNG 1件、PRIVATE JSON 1件と既存親FOLDERの固定allowlist**。実IDは既存非公開manifestにあるものだけ。旧CAS probe・本番BOOK・金融台帳は対象外。PNG/FOLDERはGET-only、PRIVATEは別承認後の単一CAS対象、BOOK変更は別承認後のticket/結果cache領域に限定。既存入力・メモ・原本リンク・可視1タブ・3明細上限は維持。非表示cacheの追加が必要なら同じBOOK内の差分として明示し、第4Drive資源を自動作成しない。
+
+資格は既存SAとownerの既存共有範囲を確認して再利用する方針。独立readerはdrive.readonly/spreadsheets.readonly、PRIVATE PUTはdrive、BOOK投影はspreadsheetsのtoken能力が必要。ただしOAuth scopeはfile単位の制限ではないため固定allowlistをhost/IO双方で強制する。既存SAが持つ他資源の資格能力を安全とみなさず、金融Secretsをjobへ渡さない。SA秘密鍵やowner OAuthを取得/公開/新設しない。
+
+GitHub側のworkerはcontents:read、run照合にはActions:read相当が必要。将来のdispatch用資格は対象repoのActions:write相当と保管/失効先の確認が必要で、既存category tokenの流用を認めない。private pin/permitの保管先・アクセス者、Apps ScriptのURL Fetch/Drive/Sheets scope、専用project/triggerの対象と所有者は未確定。既存Secrets/Variables/environmentを今回作成・変更しない。mainを変えず既存金融workflowへ迂回して実行する案は採らない。
+
+### 17.5 段階計画・独立読戻し・GO条件
+
+| 段階 | 最小作業と独立確認 | 現在の判定 |
+|---|---|---|
+| 0：今回 | 既存記録読取、故障mock、設計追記 | 完了。Google通信/変更なし |
+| 1：不足資料の確保 | 17.2の候補/取込/policy/本人確認/actor出所を確認し、独立pinと承認済み非公開catalogをオフラインで固定。欠落は欠落として停止 | **未完了・接続NO-GO** |
+| 2：専用IO/hostのオフライン差分 | 17.1の新run・再生成停止と17.3の全層送信1回を含むmock受入。権限・固定allowlist・一回permit・現在のschemaとの差分をレビュー | 未実装、実環境GOではない |
+| 3：PRIVATEだけの限定実CAS | 既存unconfigured bytes/version/ETagを独立GETし、catalog＋空journalへの初期化内容・1回の変更・失敗時扱いを事前レビューして**別承認**。現在は初期化禁止。承認後もstale 412、唯一勝者、応答破棄は固定件数/別々の許可で測る。自動restore/retryはしない | **NO-GO** |
+| 4：BOOK/Apps Script/Actions導線 | Gate B未特定3イベント、最新ticket公開競合、値だけ部分sortの限界と対象制限、AA照合、17.2のmanifest/AT対応、実port、default-branch登録/資格の問題を確認・解決してから、別承認された範囲で接続。iPhoneは同案件の入力保持と「検証済み・未記帳」まで | **Gate B総合／Gate C実環境NO-GO** |
+| 5：本番・金融write | 今回の対象外。独立した将来の判断が必要 | **本番NO-GO** |
+
+独立read-backは書込み応答・書込みsession内cacheを使わない新規GETで行う。PRIVATEはmetadata/ACL/parent→raw media→metadataを取得し、保存前bytes/ETagと提案全体bytes/新強ETag・generation・全UUID履歴・catalog pinを比較。SOURCEは独立基準hash/versionを使いmetadata→bytes→metadataを照合。BOOKは明示UNFORMATTED_VALUEで46列のcase/source/machineと入力snapshotを再構築し、数式の有効値/型も照合する。結果cacheはFINALのcase/source/UUID/snapshotに完全一致した場合だけ同じ「確認」へ表示し、投影失敗で再検証しない。runはGitHubのauthoritativeなrun/attempt/job情報を別に取得し、時間経過や画面の成功文字列から完了を推定しない。
+
+停止条件は401/412/timeout/redirect/429/5xx、ACL/parent/MIME/version/強ETag変化、catalog/pin不一致、未確定履歴・証跡欠落、permit不一致、原本/入力の変更、読戻し不明。新規write/dispatchを閉じてGET照合へ移る。明確な412でもETagを取り直して自動再送しない。rollbackはjournalを過去bytesへ戻す操作ではなく停止・隔離を基本とし、履歴を消す復旧は提案しない。trigger停止/資格失効など実環境の停止操作もその時点の対象を指定した承認に従う。今回それらの操作は行わない。
+
+**実接続GOは、17.1～17.4の必須条件が実装・検証済みで、段階3/4の対象・変更bytes/件数・資格・停止方法・独立読戻しが明示承認された場合に限る。現時点の判定はNO-GO。** 設計文書更新やmock成功ではこの条件を満たさない。
+
+### 17.6 オフライン検証と変更境界
+
+追加診断 **31件成功**。401認証再送、HTTP status/redirect/timeout、弱ETag、local/server 412の違い、process再生成時の停止消失、保存済み段階のGET照合、永続UNKNOWN拒否を含む。既存adapter/decoder/core/PDF registryの関連回帰325件と合わせて **356件成功・失敗0**。socket.connect/create_connectionと金融SheetsDB構築をtrapし、fake credentialsだけを使用した。
+
+実行コマンド（Windowsローカル、plugin自動読込OFF）：
+
+```text
+python -m pytest -q tests/test_receipt_gate_c_preconnect_audit.py tests/test_receipt_private_adapter.py tests/test_receipt_sheet_decoder.py tests/test_receipt_sheet_validation.py tests/test_pdf_intake_registry.py --tb=short
+```
+
+Google API読取/書込み、private JSON初期化/migration、Apps Script実行、trigger作成、Actions dispatch/再実行、本番接続、金融write、Secrets/Variables/IAM/ACL、main/validated SHA、PR mergeはすべて0。public公式仕様の読取とGitHub PR/commitの読取を行った。PR #200には調査用テストと本設計だけを `[skip ci]` commitで記録し、CI起動や実接続の承認にしない。**Gate B総合NO-GO、Gate C実環境NO-GO、本番NO-GOを維持する。**
