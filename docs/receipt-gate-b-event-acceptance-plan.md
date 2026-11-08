@@ -1,6 +1,6 @@
 # PR #200：Gate B iPhoneセル・イベント受入計画（適用前）
 
-**最新：[実施記録](receipt-gate-b-event-acceptance-results.md)。専用project/triggerの手動設定報告、iPhone商品修正・チェック1回・入力保持まで確認。独立読取のイベントログ0件でUUID/oldValueは未証明、Gate B/Cと本番接続はNO-GO。** 以下は適用前の承認計画として保持する。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
+**最新：[実施記録](receipt-gate-b-event-acceptance-results.md)。新UUID試験で初回UUID/oldValue・案件bindingは一致したが、1回操作報告に対しログ3件で原因未確定。専用trigger0件の画像・disabled保存報告と停止後ログ保持を確認し、Gate B/C・本番接続はNO-GO。** 以下は適用前の承認計画として保持する。既存の[通常セル案](receipt-cas-iphone-revision.md)と「確認」1可視タブ・1行1案件を維持する。
 
 ## 1. 変更対象と適用範囲
 

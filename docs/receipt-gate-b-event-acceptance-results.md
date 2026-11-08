@@ -1,6 +1,6 @@
 # PR #200：Gate Bの実施記録
 
-**Gate B総合NO-GO。利用者のiPhone商品修正・専用チェック1回と入力保持を確認したが、独立読取の観測ログは0件。UUIDイベント・oldValueは未証明。** 基準commit `54de3271eaf423848545bc540cefdf043ae286e7`。Gate A/CAS/原本hashの再試験は行わない。
+**Gate B総合NO-GO・停止済み。承認された新UUID試験で初回value/oldValueと案件bindingは一致したが、利用者の1回操作報告に対しログは3件。原因は未確定。専用trigger 0件の画像とconfig disabled保存報告を受領し、最終GETでログ3件の保持を確認した。** 基準commit `54de3271eaf423848545bc540cefdf043ae286e7`、再試験計画commit `f5babab0da3e5533351235157cfe32e3cfcdd97f`。Gate A/CAS/原本hashの再試験は行わない。
 
 ## 実BOOKへ適用した範囲
 
@@ -9,7 +9,7 @@
 - 46列へ拡張し、機械用AK:ATを非表示。同BOOKに非表示`_gate_b_events`を1タブ追加。独立metadata GETで可視タブ「確認」1つ、非表示ログ、固定行/列を確認。機械列の非表示はGoogle出力xlsxのcolumn属性でも確認した。
 - 独立CellData GETでD/E/F=1,368/1,230/138、Iのcustom BOOLEAN checked/uncheckedの同UUID対応、商品カテゴリ/原本照合規則、空き追加枠を照合した。実UUIDや機械identityを公開しない。
 - **API検算（iPhoneではない）**：数量1を保持して商品Bの行金額だけを730→868へ変更し、独立GETでE/F=1,368/0を確認。合計式は行金額だけを足し、数量列や乗算を含まない。後で行金額を730へ復元し、数量1・E/F=1,230/138・メモ未変更を独立GETで確認した。ログは見出しだけでイベント0件。
-- Google側の書込みはこのBOOKへのbatchUpdate成功3回（設定一括、金額検算、初期値復元）だけ。PNG/private JSON/旧CAS probe/本番/既存project/定期処理への書込み0。認可・Secrets/Variables・main/validated SHA・Cloud Run・金融write・dispatch・AI送信・原本移動0。
+- 初期API設定時点のGoogle側書込みは、このBOOKへのbatchUpdate成功3回（設定一括、金額検算、初期値復元）。後日の承認済み再試験で4セル更新を1回追加した（下記）。PNG/private JSON/旧CAS probe/本番/既存project/定期処理への書込み0。Secrets/Variables・main/validated SHA・Cloud Run・金融write・dispatch・AI送信・原本移動0。
 
 ## ローカル実装・検証
 
@@ -17,7 +17,7 @@
 
 新Node合成17件成功・失敗0。通常TRUE、欠落oldValue、別UUID/oldUUID、複数セル、他BOOK/sheet/列、sort、重複/削除/部分binding、二重タップ、後の入力/メモ保持、append/flush不明、lock競合、disabled/trigger欠落、ログ構造不一致を検査。既存Nodeイベント回帰13件も成功。関連Python75件（新Node harnessを含む）成功・失敗0。既存CIのpytest discoveryを使い、workflow差分は0。
 
-xlsxのローカルrenderで見出し・合計・商品/追加枠の配置を確認した。export先ではcustom checkboxが文字列/数値として表示され、空欄にもrendererの代替表示が出た。対応するnative CellDataが空欄/BOOLEANであることは独立確認済みで、exportの描画を理由にnativeセルを変更していない。**Googleネイティブ描画とiPhone操作性は未検証**。
+xlsxのローカルrenderで見出し・合計・商品/追加枠の配置を確認した。export先ではcustom checkboxが文字列/数値として表示され、空欄にもrendererの代替表示が出た。対応するnative CellDataが空欄/BOOLEANであることは独立確認済みで、exportの描画を理由にnativeセルを変更していない。この時点のGoogleネイティブ描画とiPhone操作性は未検証であり、後続の実機結果は以下に分けて記録する。
 
 ## 手動設定と初回iPhone操作の追記（2026-11-08）
 
@@ -33,9 +33,45 @@ iPhone操作前の独立GETでは商品B=730、合計1,230、差額138、専用�
 
 既存コードの合成試験とCIは変更していない。設定実装commitのCIは全3ジョブ成功、Python合計4,931件成功・失敗0（一般4,215、sensitive 716）、OCRジョブも成功。これらは実機UUIDイベント成功の代わりにならない。
 
-## UI操作の制約と残る確認
+## 承認された新UUID試験の実施結果（2026-11-08）
 
-### 誤設定削除後の読取確認と再試験案（未適用）
+利用者は`f5babab`の隔離観測試験1件を承認し、変更範囲の確認でIとAR:ATを指定した。旧UUIDは使用済みのまま保持し、新UUID v4・新run ID・固定bindingを非公開に準備。既存handler本体・manifest scope・テスト・workflowは変更していない。ローカルで新configの固定binding一致・旧UUID拒否を確認したが、これはオフライン確認であり実機証拠に数えない。
+
+### 設定と独立読戻し
+
+- 利用者の専用project config全体画像でenabled=false、新UUID/run ID/bindingと配置版の一致を確認し、続けて保存済みとの報告を受領した。Apps Script APIによる取得ではなく、画面と利用者報告による証拠。
+- BOOKの指定ID・単一parent・owner/既存SA writerだけのACL、可視「確認」/非表示ログの構造を再確認。案件IDと固定原本identityで一意に対象を照合した。
+- disabled設定・trigger 0件の準備段階で、同BOOKへのbatchUpdate **1回・2 requests**でIとAR:ATの4セルだけを更新。独立CellData GETで新ready値・custom checkbox規則・新UUID/run/bindingとconfigの一致を確認。変更前後の差分は4セルだけで、メモ・原本リンク・商品欄・その他セル・既存ログは完全一致した。跨サービス原子性は仮定していない。
+- 利用者提示のtrigger一覧画像で、1行・`receiptGateBObserveEdit`・Head・スプレッドシートから/編集時を確認。誤設定のpreflightではない。利用者はその後enabled保存済み・新規認可なしと報告した。実認可scope画面を観測済みとは扱わない。
+- 操作直前の独立GETで、新UUIDのready状態・固定binding一致、商品B868/合計1,368/差額0、メモ存在、ログ0件を再確認してからiPhoneのチェック1回を案内した。
+
+### 実機操作報告と3件のログ
+
+利用者は「iPhoneで1回チェック済み」と報告した。独立GETでは同run・同sheet・単一Iセル・同一の有効な形式のtrigger UIDで、次の3件を観測した。
+
+| 順序 | 同UUIDの値の方向 | 保存された判定 |
+|---|---|---|
+| 1 | ready → register | `OBSERVED_UNAPPROVED` |
+| 2 | register → ready | `REJECT_EVENT_IDENTITY` |
+| 3 | ready → register | `REJECT_DUPLICATE` |
+
+初回のevent.value/oldValue、要求UUID、run ID、案件ID、sheet/単一セル形状と固定machine bindingはすべて期待値に一致した。3件のtrigger UIDは同一で、形式検査も成功した。ただし、trigger一覧UIからUID自体を独立取得して照合した証拠はない。
+
+**1回操作報告と3件の発生との対応・原因は未確定。** 実ログの方向は確認できるが、人が3回操作した、iPhoneが重複配送した、同期が原因だった、などと推測しない。後続2件は既存のidentity/duplicate検査で拒否された。この挙動を「意図的な実機二重タップ試験成功」へ読み替えず、予定した1回観測試験はNO-GOで停止した。観測成功は本人承認・登録受付・検証済み・会計authorityを意味しない。
+
+### 停止・保持・書込み範囲
+
+3件を検出後、再タップ/自動再送/新UUIDの再発行をせず、専用config disabled保存と今回のtrigger1件だけの削除を案内した。利用者から「disabled保存済み」と、フィルタなしでtrigger0件を表示する画像を受領。config disabledは利用者の保存報告、trigger0件は提供画像による確認であり、Apps Script APIによる独立列挙ではない。
+
+停止後の最終独立GETではログが引き続き3件で、保存した観測時ログの全セルと一致した。案件は一意、machine binding一致、商品B868・合計1,368・差額0、メモは観測時と一致し、チェック値はregisterのまま保持した。チェック解除やログ消去を停止方法に使っていない。この新UUIDも使用済みとして保持し再利用しない。
+
+Workからのこの再試験のGoogleデータwriteは指定BOOKへの4セル準備batch1回だけ。BOOK内には観測ログ3行が残る。利用者は承認範囲の専用project configと専用triggerだけを操作した。対象外データwrite・private JSON/PNG/旧CAS probe変更・金融write・dispatch・AI送信・原本移動・本番変更は0。Cloud Run・main・validated SHA・Secrets・Variables・既存project/定期処理は変更していない。
+
+次の最小作業は、停止状態を維持したまま、既存の実行履歴と利用者の操作状況を読取/聞取りで照合し、3件の発生原因と未確認点を整理すること。今回の承認はこの1試験までであり、新しい実機操作・trigger再作成・再有効化・Gate C接続には進まない。原因調査のための新ログ機能や権限追加も行っていない。
+
+## 当初の再試験案とUI操作の制約（履歴）
+
+### 誤設定削除後の読取確認と再試験案（承認前の記録）
 
 利用者は誤設定の`receiptGateBPreflight` trigger 1件を手動削除したと報告。提示された専用projectのtrigger一覧画像はフィルタなしで「0個のトリガー」を表示している。この確認は利用者提供画像によるもので、Apps Script APIによる独立列挙ではない。
 
@@ -71,17 +107,18 @@ manifestの**宣言scope**は`https://www.googleapis.com/auth/spreadsheets.curre
 | 項目 | 判定 |
 |---|---|
 | 合成Sheets設定 | PASS（API独立読戻し・iPhone修正後合計確認） |
-| 専用project設定 | PASS（利用者の配置・preflight完了報告。実コード独立確認は未完了） |
-| onEdit trigger | 未実施・現在0件（誤設定はFAILとして保持。削除後0件を利用者画像で確認） |
+| 専用project設定 | PASS（private config画像一致・保存報告。handler本体の実配置API確認は未完了） |
+| onEdit trigger | PASS（正しい関数の1件を画像確認。その後停止・現在0件の画像確認） |
 | iPhone商品編集 | PASS（利用者報告＋868/1,368/0の独立GET） |
-| UUIDイベント | FAIL（ログ0件、観測未証明） |
-| oldValue一致 | 未実施（実イベント未取得。合成は成功） |
+| UUIDイベント | 初回一致、全体FAIL（同runに3件。1回操作報告との対応が未確定） |
+| oldValue一致 | PASS（初回は同UUIDのready値） |
 | sort時の案件誤認防止 | 未実施（合成は成功） |
-| 入力・メモ保持 | PASS（利用者報告＋修正値・メモ存在を独立GET） |
+| 入力・メモ保持 | PASS（4セル準備更新前後の完全一致、観測後/停止後も保持） |
+| trigger UID | 同一UID・形式検査PASS。実trigger UIのUID独立照合は未完了 |
 | 対象外write | 0件 |
-| Gate B総合 | **NO-GO** |
+| Gate B総合 | **NO-GO・停止済み** |
 
-次の最小一手は、上記の限定した再試験案に対する承認を待つこと。使用済みUUIDの再送やチェック解除で今回の観測欠落を補完しない。Gate C・本番接続は別承認のまま。
+上記の承認前計画は履歴として保持する。最新状態は新UUID試験の3件検出によるNO-GO・停止済み。使用済みUUIDの再送やチェック解除で補完しない。Gate C・本番接続は別承認のまま。
 
 補足：数量を2へ変える追加検算案は自動承認レビューが「指定ケースの数量と異なる」として拒否し、Googleへ送信されていない。レビューを迂回せず、明示された数量1で行金額だけを変更する安全な検算と、数量参照のない実式の照合を行った。
 
