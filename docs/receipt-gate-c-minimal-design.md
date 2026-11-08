@@ -1,5 +1,7 @@
 # Gate C：既存CAS受付・独立検証・同一Sheets表示の最小設計
 
+**最新：13節の純粋ロジック修正で、ETag取得順・expected_tag引渡し、MVP数量、名称規則をPython/JSで統一。許容例のsnapshot/digest一致と不正入力の両側拒否をローカル試験済み。実adapter・Google接続は未追加。Gate B総合／Gate C実環境NO-GOは維持。12節は修正前の監査記録として保持する。**
+
 **最新：12節の契約監査でETag引渡し・準備順序・数値canonical化・名称正規化の不一致を確認。既存ローカル回帰は成功したが、言語間契約の成立とは判定しない。修正案の提示までで停止し、製品コードは変更していない。Gate B総合／Gate C実環境NO-GOを維持。**
 
 **第1工程のオフライン実装記録は末尾11節。Python coreとmockテストだけを追加承認に基づき更新した。以下1～10節は基準commit時点の設計・未達記録として保持する。Gate B総合NO-GO、Gate C実環境・本番接続・金融write NO-GOは継続。**
@@ -312,3 +314,49 @@ Pythonの`app/page_receipt_model.py:digest()`はsorted keys・compact separators
 | `app/page_receipt_model.py:digest()`、既存validator/CAS | 多数用途共通のdigestをJS都合で一括変更しない。比較省略・許容誤差・既存結果の再hash/migrationもしない | 今回変更不要。既存の厳密比較とfail-closedを維持 |
 
 ETag/順序の修正候補はJS既存関数・mock契約試験の数十行規模と見込むが、数値/文字列domainの判断前に修正全体の確定行数は出せない。現在の不一致を認めたまま新adapter/decoder/Apps Script実装へ進まない。**調査・文書記録までで停止。Gate B総合NO-GO、Gate C実環境NO-GO、金融write 0。** Google変更・Apps Script実サービス実行・実UUID発行・trigger作成・Actions dispatch・Secrets/Variables/main/validated SHA変更・mergeは0。本記録はCI自動起動を抑止する文書commitだけでPR #200へ保存する。
+
+## 13. 3契約の最小修正（2026-11-08、オフラインのみ）
+
+基準は `37fa555816200601a4b06b645deac8f845ba88c5`。開始時PR headは完全一致、Draft維持。今回の追加承認に従い、既存のreceipt専用純粋ロジック・mock・関連テストと本資料だけを変更した。新規ファイル、実port、46列decoder、CLI、workflow、インフラは追加しない。
+
+### 13.1 準備契約
+
+`receiptPrepareDraft(caseId, ports)`へ変更。事前取得済candidateを引数で渡す旧呼出しは拒否する。順序は **readVersionedで強ETag取得→readCaseById(caseId)→snapshot/digest→UUID fixture→prepare(request, {expected_tag})→正常return後だけcheckbox rule**。case/sourceの取り違えも拒否する。
+
+- readVersionedの戻りはPython loadと同じ論理上の `[journal, tag]`。tagは非空のquoted strong ETagで、weak・欠落・CR/LF混入を拒否。prepareに渡すtagを再取得しない。
+- prepare portは**同期的に既存CAS＋独立read-backを完了し、失敗/UNKNOWNならthrow**する契約。Promise/thenableではruleを返さない。実bindingは存在せず、今回も追加しない。
+- Node mockはexpected_tag必須、staleをsave前に拒否、ticket/active indexを同じin-memory journalに保持する。before/after/read-back故障でも試行は1回。etag読取spyと順序traceを検査した。
+- 言語間試験はJSから出力されたrequest/optionsを既存Python `ValidationJournal.prepare(request, **options)`へ渡し、同じsnapshotのaccept_prepared→既存workerまで実行する。ここにあるのはfixture経由のローカル契約試験であり、Google/backend transportのadapterではない。
+
+### 13.2 receipt専用の数値・名称規則
+
+Pythonの既存 `receipt_sheet_cells.py`へ小さい共通関数を置き、JS側にも同じ規則を置いた。通常セル、旧delimited形式、論理operationsの入力で使い、snapshotを生成する前に整合させる。論理operationsでもcase/source/context_digestを落とさない。既存の共通digestとJS receiptCanonical_のserialization本体は変更しない。
+
+| 規則／入力 | 両言語の結果 |
+|---|---|
+| 数量：正の有限number、整数部7桁以内、小数部3桁以内 | 最短10進表記を検査。丸め・許容誤差・掛算再計算なし。Pythonの整数値floatは従来どおりintにする |
+| 2（2.0を含む）、0.125、0.001、9,999,999.999 | 許容。snapshot内容・digestが完全一致 |
+| 0.00001、0.0000001、10の21乗、0、負数、NaN/Infinity、bool、0.1234、10,000,000、2.0000000000000004 | 拒否。prepare/CAS/UUID fixtureへ進めない（非有限値はnative helperでも試験） |
+| 名称前後の通常空白、TAB/改行、NBSP、全角空白等の明示した共通Whitespace集合 | 前後だけ除去。内部空白を統合しない |
+| NEL U+0085、BOM U+FEFF、残存C0/C1制御文字、孤立surrogate、空名称 | 明示拒否。黙って文字を落として別名にしない |
+| 日本語・emoji（ZWJ結合を含む）、アクセント文字 | そのまま保持。NFC/NFKC・大小変換なし。`é`と`e`＋結合アクセント、`商品 A`と`商品A`は区別する |
+
+旧形式はLF/CRLFで行分割し、PythonだけがNEL等を改行として消費する差も避けた。旧形式の空欄edit名称は従来どおり「元名称を維持」であり、空の商品名への変更ではない。通常セル/明示的nameフィールドの空名称は拒否する。この既存の空欄操作を新しく禁止しない。
+
+### 13.3 互換性・回帰と安全境界
+
+事前のrepository調査では、レシート関連の既存正常fixtureにMVP範囲外の正当数量を発見していない。既存プレビューもmin/step=0.001。今回指定された範囲外例の拒否は意図した制限であり、未知の実データを不正と認定したものではない。実データの読取/監査は行っていない。
+
+許容範囲内の6例（2.0、0.125、0.001、最大値、日本語/emoji/結合文字・通常空白等）について変更前ソースと比較した。Pythonの通常セルoperations・旧形式snapshotは各6例で一致し、JSの通常セル/旧形式snapshotは12例すべて**digest込みで変更なし**。基準commitまでこれら元ソースが不変であることはGit blobで確認済み。既存160件の正常/異常回帰も成功した。既存の正当データを壊す事例は確認していないが、この合成比較で実データ全件互換を主張しない。
+
+保存済journalのsnapshot/resultは再正規化・再hash・migrationしない。今回の正規化は新たな入力captureだけに適用する。将来、旧snapshotにMVP範囲外数量や禁止文字が見つかった場合は書換えや自動再受付で補完せず、保留して影響を報告する。
+
+| ローカル試験 | 結果 |
+|---|---|
+| 従来の関連Python5モジュール | **219成功・失敗0**。既存160＋追加59ケース。通常セル/旧形式/論理operationsの許容・拒否、ETag付き実core連携を含む |
+| 既存Node receipt fixture | **16成功・失敗0**。従来13件の意味を維持しprepare fixtureを強化、3件追加（ETag、取り違え/非同期、数値/名称） |
+| 構文・whitespace | Python compileall、git diff --check成功 |
+
+試験環境はPython 3.14.7／pytest 9.1.1／Node v22.23.2。既存のnetwork禁止・金融SheetsDB構築trapを維持。Nodeは既存のread-only fs、空vm、crypto、配列/JSON操作だけで、NODE_OPTIONSを当該processから外し外部plugin自動読込を止めた。UUIDは既存固定fixtureだけ、金融write・外部通信・Google操作は0。依存google-genaiの非推奨警告1件は従来どおり。
+
+**判定：今回のMVP範囲・試験済入力では3契約は一致。次のオフライン実装レビューへ進むことは可能だが、その実装・実接続の承認ではない。Gate B総合NO-GO、Gate C実環境NO-GOを維持して停止する。** 任意の数値/Unicode/その他データ型全体のcanonical化を保証しない。実portのCAS/read-back・schema/ACL確認、checkbox公開とsort競合、原本印字の意味照合、実機sort/行移動、専用Actions入口・資格供給は未解決。Google実API、Apps Script実環境、trigger、Secrets/Variables/main/validated SHA、mergeへの変更、Actions dispatch、金融writeは0。PR #200だけへ保存し、CI起動はcommitで抑止する。

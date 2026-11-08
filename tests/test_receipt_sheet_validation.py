@@ -16,6 +16,7 @@ from app.drive_run_state import StateError
 from app.page_receipt_model import digest
 from app.reconciliation import parse_import_rows
 from app.receipt_sheet_draft import parse_draft
+from app.receipt_sheet_cells import receipt_name, receipt_quantity
 from app.receipt_sheet_validation import (JOURNAL_SCHEMA, PURPOSE, PREPARED, UNKNOWN, IndependentReceiptReader,
     ValidationJournal, empty_journal, execute_request, execute_accepted_request,
     project_result, validate_journal, result_cache_entry, cached_result)
@@ -802,6 +803,101 @@ def ordinary_cells(w):
         _item_id=i["item_id"], _binding=binding, name=i["name"], quantity=i["quantity"],
         amount=i["amount"], category=list(i["category"]), kind=i["kind"],
         target="", mode="採用", confirmed=False) for i in base])
+
+
+def javascript_preparation(w, draft, tag):
+    candidate = dict(case_id=w.case_id, source=w.source, draft=draft,
+                     original_items=w.reader(w.case_id)["preview"]["original_items"],
+                     categories=CATEGORIES, context_digest=digest(w.anchor))
+    completed = subprocess.run(["node", str(ROOT / "apps-script/receipt-validation/Code.test.cjs"), "--prepare"],
+        input=json.dumps(dict(candidate=candidate, tag=tag), ensure_ascii=True, allow_nan=False),
+        capture_output=True, text=True, encoding="utf-8", check=True)
+    return json.loads(completed.stdout)
+
+
+@pytest.mark.parametrize("form", ["cells", "text", "operations"])
+@pytest.mark.parametrize("quantity,name,expected_name", [
+    (2.0, " \t商品🍎 ", "商品🍎"), (0.125, "商品🍎", "商品🍎"),
+    (0.001, "\u3000日本語\u00a0", "日本語"), (9999999.999, "商品", "商品"),
+    (2, "👩‍💻", "👩‍💻"), (2, "e\u0301", "e\u0301"),
+])
+def test_mvp_preparation_cross_language_snapshot_digest_and_etag(form, quantity, name, expected_name):
+    w = World()
+    _, tag = w.journal.load()  # Private version precedes both input readers.
+    cells = ordinary_cells(w)
+    cells["items"][1].update(name=name, quantity=quantity, amount=868, confirmed=True)
+    draft = cells if form == "cells" else draft_text(w, ["変更",w.sheet["candidates"][1][1][0],
+        name,str(quantity),"868","","","","","原本で確認済み"])
+    if form == "operations":
+        draft = dict(case_id=w.case_id, source=w.source, operations=[edit(
+            w.sheet["candidates"][1][1][0], name=name, quantity=quantity, amount=868, category=list(CATEGORIES[0]))])
+    captured = javascript_preparation(w, draft, tag)
+    assert captured["error"] is None and captured["writes"] == 1
+    assert captured["trace"][:2] == ["etag", "input"]
+    assert captured["trace"][-4:] == ["fixture_uuid", "prepare", "cas", "readback"]
+    assert captured["trace"].count("etag") == 1
+    assert captured["options"] == {"expected_tag": tag}
+    w.row["draft"] = draft
+    fresh = w.reader(w.case_id)
+    assert captured["request"]["snapshot"] == fresh["request_snapshot"]
+    assert captured["request"]["snapshot"]["digest"] == fresh["request_snapshot"]["digest"]
+    changes = fresh["request_snapshot"]["operations"][0]["changes"]
+    assert changes["name"] == expected_name and changes["quantity"] == quantity
+    # Exercise the real existing Python CAS with the options emitted by JS.
+    w.journal.prepare(captured["request"], **captured["options"])
+    w.journal.accept_prepared(RID, fresh["request_snapshot"]["digest"])
+    result = execute_accepted_request(RID, reader=w.reader, journal=w.journal)
+    assert result["state"] == "検証済み・未記帳"
+    assert result["result"]["financial_write_count"] == 0
+
+
+@pytest.mark.parametrize("form", ["cells", "text", "operations"])
+@pytest.mark.parametrize("quantity,name", [
+    (0.00001,"商品"), (0.0000001,"商品"), (10**21,"商品"),
+    (0,"商品"), (-1,"商品"), (0.1234,"商品"), (10000000,"商品"),
+    (2.0000000000000004,"商品"), (True,"商品"),
+    (2,"\u0085商品"), (2,"商品\ufeff"), (2,"商品\x00"), (2,"\ud800"),
+])
+def test_mvp_invalid_quantity_or_name_rejected_by_both_languages(form, quantity, name):
+    w = World()
+    _, tag = w.journal.load()
+    cells = ordinary_cells(w)
+    cells["items"][1].update(name=name, quantity=quantity, amount=868, confirmed=True)
+    draft = cells if form == "cells" else draft_text(w, ["変更",w.sheet["candidates"][1][1][0],
+        name,str(quantity),"868","","","","","原本で確認済み"])
+    if form == "operations":
+        draft = dict(case_id=w.case_id, source=w.source, operations=[edit(
+            w.sheet["candidates"][1][1][0], name=name, quantity=quantity, amount=868)])
+    captured = javascript_preparation(w, draft, tag)
+    assert captured["error"] and captured["writes"] == 0 and captured["rule"] is None
+    assert "fixture_uuid" not in captured["trace"]
+    w.row["draft"] = draft
+    with pytest.raises(StateError):
+        w.reader(w.case_id)
+    assert w.cas.attempts == 0
+
+
+def test_receipt_normalization_does_not_round_fold_or_accept_nonfinite_numbers():
+    for quantity in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="quantity_invalid"):
+            receipt_quantity(quantity)
+    assert receipt_quantity(2.0) == 2 and type(receipt_quantity(2.0)) is int
+    assert receipt_name(" \t商品🍎\r\n") == "商品🍎"
+    assert receipt_name("é") != receipt_name("e\u0301")
+    assert receipt_name("商品 A") != receipt_name("商品A")
+    with pytest.raises(ValueError, match="name_invalid"):
+        receipt_name("  ")
+
+
+def test_legacy_empty_edit_name_still_means_retain_original():
+    w = World()
+    _, tag = w.journal.load()
+    draft = draft_text(w, ["変更",w.sheet["candidates"][1][1][0],"  ","2","868","","","","","原本で確認済み"])
+    captured = javascript_preparation(w, draft, tag)
+    w.row["draft"] = draft
+    assert captured["error"] is None
+    assert captured["request"]["snapshot"] == w.reader(w.case_id)["request_snapshot"]
+    assert "name" not in captured["request"]["snapshot"]["operations"][0]["changes"]
 
 
 def test_ordinary_product_cells_need_no_typed_ids_hashes_or_delimiters():

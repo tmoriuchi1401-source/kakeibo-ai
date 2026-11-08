@@ -5,10 +5,42 @@ _item_id/_binding are machine fields, never human input. Original evidence is
 the existing saved candidate; 'confirmed' is only an input statement.
 """
 from copy import deepcopy
-import math
 import re
 
 from .page_receipt_model import digest
+
+
+NAME_SPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+
+
+def receipt_quantity(value):
+    # Inspect the shortest decimal representation; NEVER round to fit the MVP.
+    if (type(value) not in (int, float) or not 0 < value < 10_000_000
+            or not re.fullmatch(r"[0-9]{1,7}(\.[0-9]{1,3})?", str(value))):
+        raise ValueError("receipt_cells_quantity_invalid")
+    return int(value) if float(value).is_integer() else value
+
+
+def receipt_name(value):
+    if not isinstance(value, str):
+        raise ValueError("receipt_cells_name_invalid")
+    name = value.strip(NAME_SPACE)
+    if not name or re.search(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff\ufeff]", name):
+        raise ValueError("receipt_cells_name_invalid")
+    return name
+
+
+def receipt_operations(operations):
+    """Normalize only new receipt input; never rewrite stored journal records."""
+    output = deepcopy(operations)
+    for operation in output:
+        fields = operation.get("changes", {}) if operation.get("action") == "edit" else (
+            operation if operation.get("action") == "add" else {})
+        if "name" in fields:
+            fields["name"] = receipt_name(fields["name"])
+        if "quantity" in fields:
+            fields["quantity"] = receipt_quantity(fields["quantity"])
+    return output
 
 
 def operations_from_cells(draft, originals, categories):
@@ -37,10 +69,8 @@ def operations_from_cells(draft, originals, categories):
                 raise ValueError("receipt_cells_remove_unconfirmed")
             operations.append(dict(action="remove", item_id=key, evidence=evidence))
             continue
-        quantity = cell["quantity"]
-        if (not isinstance(cell["name"], str) or not cell["name"].strip()
-                or type(cell["amount"]) is not int or type(quantity) not in (int, float)
-                or not math.isfinite(quantity) or quantity <= 0
+        quantity, name = receipt_quantity(cell["quantity"]), receipt_name(cell["name"])
+        if (type(cell["amount"]) is not int
                 or tuple(cell["category"] or ()) not in set(map(tuple, categories))):
             raise ValueError("receipt_cells_value_invalid")
         target = cell["target"]
@@ -49,7 +79,7 @@ def operations_from_cells(draft, originals, categories):
             if type(target) is not int or not 1 <= target <= len(draft["items"]):
                 raise ValueError("receipt_cells_target_invalid")
             target = draft["items"][target - 1]["_item_id"]
-        values = dict(name=cell["name"].strip(), quantity=int(quantity) if float(quantity).is_integer() else quantity,
+        values = dict(name=name, quantity=quantity,
                       amount=cell["amount"], category=list(cell["category"]), target_item_id=target)
         if old:
             if cell["kind"] != old["kind"]:

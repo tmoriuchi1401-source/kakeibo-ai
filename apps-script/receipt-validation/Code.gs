@@ -6,6 +6,37 @@
  */
 const RECEIPT_VALIDATION_PURPOSE = 'receipt-sheet-validation-only-v1';
 
+function receiptTrim_(value) {
+  return value.replace(/^[\u0009-\u000d \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\u0009-\u000d \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g, '');
+}
+
+function receiptName_(value) {
+  if (typeof value !== 'string') throw Error('receipt_cells_name_invalid');
+  const name = receiptTrim_(value);
+  if (!name || Array.from(name).some(c => {
+    const n = c.codePointAt(0);
+    return n < 32 || n >= 127 && n <= 159 || n >= 0xd800 && n <= 0xdfff || n === 0xfeff;
+  })) throw Error('receipt_cells_name_invalid');
+  return name;
+}
+
+function receiptQuantity_(value) {
+  if (typeof value !== 'number' || !(value > 0 && value < 10000000) ||
+      !/^[0-9]{1,7}(\.[0-9]{1,3})?$/.test(String(value))) throw Error('receipt_cells_quantity_invalid');
+  return value;
+}
+
+function receiptOperations_(operations) {
+  if (!Array.isArray(operations)) throw Error('receipt_cells_shape_invalid');
+  return operations.map(operation => {
+    const op=JSON.parse(JSON.stringify(operation));
+    const fields=op.action==='edit' ? op.changes : op.action==='add' ? op : {};
+    if ('name' in fields) fields.name=receiptName_(fields.name);
+    if ('quantity' in fields) fields.quantity=receiptQuantity_(fields.quantity);
+    return op;
+  });
+}
+
 function receiptCanonical_(value) {
   if (Array.isArray(value)) return '[' + value.map(receiptCanonical_).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(
@@ -16,7 +47,7 @@ function receiptCanonical_(value) {
 
 function receiptParseDraft_(text, hash) {
   if (typeof text !== 'string' || text.length > 40000) throw Error('receipt_draft_invalid');
-  const rows = text.split(/\r?\n/).filter(x => x.trim()).map(x => x.split('｜').map(x => x.trim()));
+  const rows = text.split(/\r?\n/).filter(x => receiptTrim_(x)).map(x => x.split('｜').map(receiptTrim_));
   if (rows.length < 3 || rows.length > 103 || rows[0].length !== 2 || rows[0][0] !== '案件' ||
       rows[1].length !== 5 || rows[1][0] !== '原本' || rows[2].length !== 2 || rows[2][0] !== '基準')
     throw Error('receipt_draft_header_invalid');
@@ -34,10 +65,10 @@ function receiptParseDraft_(text, hash) {
       return op;
     }
     const fields = {};
-    if (name) fields.name = name;
+    if (name) fields.name = receiptName_(name);
     if (qty) {
       if (!/^[0-9]{1,7}(\.[0-9]{1,3})?$/.test(qty) || Number(qty) <= 0) throw Error('receipt_draft_quantity_invalid');
-      fields.quantity = Number(qty);
+      fields.quantity = receiptQuantity_(Number(qty));
     }
     if (amount) {
       if (!/^-?[0-9]{1,8}$/.test(amount)) throw Error('receipt_draft_amount_invalid');
@@ -126,8 +157,8 @@ function receiptSnapshot_(candidate, hash) {
         if (!old || !cell.confirmed) throw Error('receipt_cells_remove_unconfirmed');
         operations.push({action:'remove',item_id:key,evidence});continue;
       }
-      if (typeof cell.name!=='string' || !cell.name.trim() || !Number.isSafeInteger(cell.amount) ||
-          typeof cell.quantity!=='number' || !Number.isFinite(cell.quantity) || cell.quantity<=0 ||
+      const name=receiptName_(cell.name), quantity=receiptQuantity_(cell.quantity);
+      if (!Number.isSafeInteger(cell.amount) ||
           !candidate.categories.some(c=>receiptCanonical_(c)===receiptCanonical_(cell.category)))
         throw Error('receipt_cells_value_invalid');
       let target=cell.target;
@@ -135,7 +166,7 @@ function receiptSnapshot_(candidate, hash) {
         if (!Number.isInteger(target) || target<1 || target>draft.items.length) throw Error('receipt_cells_target_invalid');
         target=draft.items[target-1]._item_id;
       }
-      const values={name:cell.name.trim(),quantity:cell.quantity,amount:cell.amount,category:cell.category,target_item_id:target};
+      const values={name,quantity,amount:cell.amount,category:cell.category,target_item_id:target};
       let op;
       if (old) {
         if (cell.kind!==old.kind) throw Error('receipt_cells_original_kind_changed');
@@ -150,17 +181,30 @@ function receiptSnapshot_(candidate, hash) {
     if(!originals.every(x=>seen.has(x.item_id))) throw Error('receipt_cells_missing_original_not_explicitly_excluded');
     delete snapshot.items;
     snapshot.operations=operations;
-    snapshot.context_digest=candidate.context_digest;
   }
+  snapshot.context_digest=candidate.context_digest;
+  snapshot.operations=receiptOperations_(snapshot.operations);
   snapshot.digest=hash(receiptCanonical_(snapshot));
   return snapshot;
 }
 
-function receiptPrepareDraft(candidate, ports) {
+function receiptPrepareDraft(caseId, ports) {
   // Background draft-save stage, NOT another user confirmation. No dispatch.
   // Live publication of the returned checkbox rule requires separate approval.
-  const snapshot=receiptSnapshot_(candidate,ports.hash), rid=ports.uuid();
+  if (typeof caseId !== 'string' || !caseId || !ports) throw Error('receipt_preparation_case_invalid');
+  const versioned=ports.readVersioned(); // Same logical (value, tag) as Python load.
+  if (!Array.isArray(versioned) || versioned.length !== 2 ||
+      typeof versioned[1] !== 'string' || !/^"[^"\r\n]+"$/.test(versioned[1]) || /[\r\n]/.test(versioned[1]))
+    throw Error('receipt_validation_strong_cas_required');
+  const expectedTag=versioned[1], candidate=ports.readCaseById(caseId);
+  const snapshot=receiptSnapshot_(candidate,ports.hash);
+  if (candidate.case_id !== caseId || snapshot.case_id !== caseId ||
+      receiptCanonical_(candidate.source) !== receiptCanonical_(snapshot.source))
+    throw Error('receipt_validation_case_mismatch');
+  const rid=ports.uuid();
   if(!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(rid)) throw Error('receipt_request_uuid_invalid');
-  ports.prepare({request_id:rid,purpose:RECEIPT_VALIDATION_PURPOSE,snapshot});
+  // Synchronous port MUST complete CAS + read-back or throw. No tag refresh/retry.
+  const result=ports.prepare({request_id:rid,purpose:RECEIPT_VALIDATION_PURPOSE,snapshot}, {expected_tag:expectedTag});
+  if (result && typeof result.then === 'function') throw Error('receipt_preparation_async_forbidden');
   return {checkedValue:'register:'+rid,uncheckedValue:'ready:'+rid};
 }

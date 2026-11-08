@@ -41,11 +41,45 @@ function harness(candidate = {case_id:'synthetic-case',source:original,draft:tex
   };
   return state;
 }
+function preparationHarness(candidate = {case_id:'synthetic-case',source:original,draft:text}, tag='"0"') {
+  const state={candidate:clone(candidate),tag,trace:[],writes:0,request:null,options:null,fault:null};
+  const journal={schema:'receipt-sheet-validation-journal-v2',generation:0,requests:{},active_prepared:{}};
+  state.ports={
+    readVersioned:()=>{state.trace.push('etag');return [clone(journal),state.tag];},
+    readCaseById:caseId=>{state.trace.push('input');assert.equal(caseId,candidate.case_id);
+      if(state.onRead)state.onRead();return clone(state.candidate);},
+    hash:s=>{state.trace.push('snapshot');return hash(s);},
+    uuid:()=>{state.trace.push('fixture_uuid');return RID;},
+    prepare:(request,options)=>{
+      state.trace.push('prepare');
+      if(!options || Object.keys(options).join()!=='expected_tag' || options.expected_tag!==state.tag)
+        throw Error('receipt_validation_preparation_stale');
+      if(journal.requests[request.request_id])throw Error('receipt_validation_replay_rejected');
+      if(state.fault==='before')throw Error('private save unknown');
+      state.trace.push('cas');state.writes++;
+      journal.generation++;
+      journal.requests[request.request_id]={...clone(request),state:'下書き準備済み',result:null};
+      journal.active_prepared[request.snapshot.case_id]=request.request_id;
+      state.request=clone(request);state.options=clone(options);state.tag='"'+journal.generation+'"';
+      if(state.fault==='after')throw Error('private save unknown');
+      state.trace.push('readback');
+      if(state.fault==='readback')throw Error('private readback unknown');
+      assert.deepEqual(journal.requests[RID].snapshot,clone(request.snapshot));
+    }
+  };
+  return state;
+}
 const event = {range:'synthetic-register-cell',value:'register:'+RID,oldValue:'ready:'+RID,user:{email:'unverified@synthetic.invalid'}};
 if (process.argv.includes('--capture')) {
   const h = harness(JSON.parse(readFileSync(0,'utf8')));
   ctx.receiptValidationEdited(event,h.ports);
   process.stdout.write(JSON.stringify(h.requests[0]));
+} else if (process.argv.includes('--prepare')) {
+  const input=JSON.parse(readFileSync(0,'utf8'));
+  const h=preparationHarness(input.candidate,input.tag);
+  let rule=null,error=null;
+  try {rule=ctx.receiptPrepareDraft(input.candidate.case_id,h.ports);}catch(e){error=e.message;}
+  process.stdout.write(JSON.stringify({request:h.request,options:h.options,trace:h.trace,writes:h.writes,rule,error}));
 } else {
   test('one explicit registration sends UUID only; editor never asserted',()=>{
     const h=harness();
@@ -134,14 +168,49 @@ if (process.argv.includes('--capture')) {
     assert.equal(h.sent.length,1);
   });
   test('preparation publishes no checkbox on private-save uncertainty and never dispatches',()=>{
-    const h=harness();let prepared;
-    const ports={hash,uuid:()=>RID,prepare:r=>{prepared=clone(r);}};
-    const rule=ctx.receiptPrepareDraft(h.candidate,ports);
+    const h=preparationHarness();
+    const rule=ctx.receiptPrepareDraft(h.candidate.case_id,h.ports);
     assert.equal(rule.checkedValue,'register:'+RID);
     assert.equal(rule.uncheckedValue,'ready:'+RID);
-    assert.equal(prepared.snapshot.digest,h.prepared.snapshot.digest);
-    assert.equal(h.sent.length,0);
-    ports.prepare=()=>{throw Error('private save unknown');};
-    assert.throws(()=>ctx.receiptPrepareDraft(h.candidate,ports),/private save unknown/);
+    assert.equal(h.request.snapshot.digest,harness().prepared.snapshot.digest);
+    assert.deepEqual(h.options,{expected_tag:'"0"'});
+    assert.deepEqual(h.trace,['etag','input','snapshot','fixture_uuid','prepare','cas','readback']);
+    for(const fault of ['before','after','readback']){
+      const f=preparationHarness();f.fault=fault;
+      assert.throws(()=>ctx.receiptPrepareDraft(f.candidate.case_id,f.ports),/unknown/);
+      assert.equal(f.writes,fault==='before'?0:1);
+      assert.equal(f.trace.filter(x=>x==='prepare').length,1);
+    }
+  });
+  test('missing or stale preparation ETag is rejected before save without reload',()=>{
+    for(const tag of [undefined,null,'W/"0"','unquoted','""','"0"\n','"0"\r']){
+      const h=preparationHarness();h.ports.readVersioned=()=>[{},tag];
+      assert.throws(()=>ctx.receiptPrepareDraft(h.candidate.case_id,h.ports),/strong_cas/);
+      assert.equal(h.writes,0);assert.deepEqual(h.trace,[]);
+    }
+    const h=preparationHarness();
+    assert.throws(()=>h.ports.prepare({request_id:RID}),/preparation_stale/);
+    h.trace=[];h.onRead=()=>{h.tag='"concurrent"';};
+    assert.throws(()=>ctx.receiptPrepareDraft(h.candidate.case_id,h.ports),/preparation_stale/);
+    assert.equal(h.writes,0);assert.equal(h.trace.filter(x=>x==='etag').length,1);
+    assert.throws(()=>ctx.receiptPrepareDraft(h.candidate,h.ports),/case_invalid/);
+  });
+  test('preparation rejects retargeted input and asynchronous completion',()=>{
+    const h=preparationHarness();h.candidate.case_id='other-case';
+    assert.throws(()=>ctx.receiptPrepareDraft('synthetic-case',h.ports),/case_mismatch/);
+    assert.equal(h.writes,0);assert.ok(!h.trace.includes('fixture_uuid'));
+    const f=preparationHarness();f.ports.prepare=()=>({then:()=>{}});
+    assert.throws(()=>ctx.receiptPrepareDraft(f.candidate.case_id,f.ports),/async_forbidden/);
+  });
+  test('receipt quantity and name boundaries are explicit and never rounded or folded',()=>{
+    for(const value of [2,2.0,0.125,0.001,9999999.999])assert.equal(ctx.receiptQuantity_(value),value);
+    for(const value of [0.00001,0.0000001,1e21,0,-1,NaN,Infinity,true,0.1234,10000000,2.0000000000000004])
+      assert.throws(()=>ctx.receiptQuantity_(value),/quantity_invalid/);
+    assert.equal(ctx.receiptName_(' \t商品🍎\r\n'),'商品🍎');
+    assert.equal(ctx.receiptName_('\u3000日本語\u00a0'),'日本語');
+    assert.equal(ctx.receiptName_('👩‍💻'),'👩‍💻');
+    assert.notEqual(ctx.receiptName_('é'),ctx.receiptName_('e\u0301'));
+    for(const value of ['\u0085商品','商品\ufeff','商品\u0000','\ud800','  '])
+      assert.throws(()=>ctx.receiptName_(value),/name_invalid/);
   });
 }

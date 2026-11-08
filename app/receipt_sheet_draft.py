@@ -5,13 +5,14 @@ line total, never unit price. Empty edit fields retain the existing value.
 """
 import re
 from .page_receipt_model import digest
+from .receipt_sheet_cells import NAME_SPACE, receipt_name, receipt_quantity
 
 
 def parse_draft(text):
     if not isinstance(text, str) or len(text) > 40000:
         raise ValueError("receipt_draft_invalid")
-    lines = [line.strip().split("｜") for line in text.splitlines() if line.strip()]
-    lines = [[cell.strip() for cell in line] for line in lines]
+    lines = [line.split("｜") for line in text.split("\n") if line.strip(NAME_SPACE)]
+    lines = [[cell.strip(NAME_SPACE) for cell in line] for line in lines]
     if (len(lines) < 3 or len(lines) > 103 or len(lines[0]) != 2 or lines[0][0] != "案件"
             or len(lines[1]) != 5 or lines[1][0] != "原本"
             or len(lines[2]) != 2 or lines[2][0] != "基準"):
@@ -37,12 +38,11 @@ def parse_draft(text):
         else:
             fields = {}
             if name:
-                fields["name"] = name
+                fields["name"] = receipt_name(name)
             if quantity:
                 if not re.fullmatch(r"[0-9]{1,7}(\.[0-9]{1,3})?", quantity) or float(quantity) <= 0:
                     raise ValueError("receipt_draft_quantity_invalid")
-                numeric = float(quantity)
-                fields["quantity"] = int(numeric) if numeric.is_integer() else numeric
+                fields["quantity"] = receipt_quantity(float(quantity))
             if amount:
                 if not re.fullmatch(r"-?[0-9]{1,8}", amount):
                     raise ValueError("receipt_draft_amount_invalid")

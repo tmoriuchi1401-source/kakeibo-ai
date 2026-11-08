@@ -13,7 +13,7 @@ from .drive_run_state import StateError
 from .page_receipt_model import digest
 from .receipt_item_correction_review import review, registration_plan
 from .receipt_sheet_draft import parse_draft
-from .receipt_sheet_cells import operations_from_cells
+from .receipt_sheet_cells import operations_from_cells, receipt_operations
 
 PURPOSE = "receipt-sheet-validation-only-v1"
 JOURNAL_SCHEMA = "receipt-sheet-validation-journal-v2"
@@ -102,6 +102,7 @@ class IndependentReceiptReader:
             if (set(draft) != {"case_id", "source", "operations"}
                     or draft["case_id"] != case_id or draft["source"] != source):
                 raise ValueError()
+            draft = dict(deepcopy(draft), operations=receipt_operations(draft["operations"]))
             selected = [r for _, r in sheets["candidates"] if len(r) > 1 and r[1] == case_id]
             if (digest(selected) != anchor["candidate_digest"]
                     or digest(txs[0].row) != anchor["import_digest"]
