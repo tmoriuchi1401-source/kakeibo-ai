@@ -35,6 +35,35 @@ iPhone操作前の独立GETでは商品B=730、合計1,230、差額138、専用�
 
 ## UI操作の制約と残る確認
 
+### 誤設定削除後の読取確認と再試験案（未適用）
+
+利用者は誤設定の`receiptGateBPreflight` trigger 1件を手動削除したと報告。提示された専用projectのtrigger一覧画像はフィルタなしで「0個のトリガー」を表示している。この確認は利用者提供画像によるもので、Apps Script APIによる独立列挙ではない。
+
+続いてconnector metadata GETで「確認」1可視タブと非表示ログの構造を確認し、`_gate_b_events!A1:M200`の全2,600セルを読取。期待する13列見出しが一致し、観測イベントは0件だった。同時に商品B=868、合計1,368、差額0、メモ存在、旧UUIDのregister値保持を確認した。今回の読取ではメモ本文を証跡へ転記せず、前回との本文一致を新たに立証したとは扱わない。
+
+旧UUIDは観測未成立の使用済み試験として終了し、再利用しない。新UUIDを使う場合も受付UNKNOWNの再送ではなく、backend未接続の独立したGate B観測runとする。**以下は再試験の提案のみ。新UUID生成・BOOK更新・config更新・trigger作成・有効化・再操作は今回行っていない。**
+
+| 対象 | 別途承認後の最小変更 |
+|---|---|
+| 非公開の試験証跡 | 旧UUID/run/bindingと失敗理由を保持し、使用済みとして扱う。新UUID v4・新run ID・対応固定bindingを用意し、旧UUIDと異なることを確認 |
+| 同じ合成案件のI列1セル | checked=`register:<新UUID>`、unchecked=`ready:<同UUID>`のcustom checkbox規則とready値だけを設定。旧UUIDを解除して再利用しない |
+| 同案件のAR:AT 3セル | 新UUID・新run ID・新runの固定bindingへ変更。AK:AQの案件/原本/item identityは保持 |
+| 既存専用projectのprivate config | `enabled=false`で新runId・ticket.uuid・ticket.machineの対応要素を更新。BOOK/sheet/log ID・case ID・handler本体・manifest scopeは維持 |
+| 同専用projectのtrigger | `receiptGateBObserveEdit`／Head／スプレッドシートから／編集時を**1件だけ**作成。保存後の一覧で関数名・種類・件数を確認。preflightを選ばない |
+
+実施順序は次のとおり。
+
+1. 承認後、trigger 0件、想定外の実行/入力/構造変更なしを再確認。対象は行番号ではなく案件IDと固定原本identityの一意一致で探し、重複/変更があれば停止する。
+2. 専用configをdisabledで準備し、trigger 0件の間に上記IおよびAR:ATだけを更新。同一BOOK内の一括更新を使い、その後の独立GETで規則・ready値・machine bindingとconfigの一致を確認する。private configとSheetsの跨サービス原子性は仮定しない。
+3. `receiptGateBPreflight`は必要なら**エディタからのread-only確認だけ**に使う。trigger対象にしない。実際のコード/config・宣言scopeを照合し、新たなOAuth要求が出たら実scope/主体/用途を提示して認可前に停止する。
+4. 正しい専用trigger 1件を作成し、一覧で関数名を確認してからobserverのenabled=trueを保存する。すべての確認完了まで利用者はチェックに触れない。必要な認可が未成立ならtriggerも有効化しない。
+5. iPhoneで既存の868/1,368/0とメモ保持を確認し、新UUIDの専用チェックを1回だけ操作。商品金額を730へ戻す必要はない。既存の商品編集実機成功は再利用し、このrunはUUID/oldValue観測を目的とする。
+6. 同BOOKのログで新run・新UUID・同UUIDのready→register・案件・trigger UIDと`OBSERVED_UNAPPROVED`を照合する。本人認証/登録受付/検証済みを意味しない。ログ欠落・複数観測・不一致・不明は停止し、再タップや自動再送をしない。sort実機試験はこの1回の成功へ含めず、未実施のまま区別する。
+
+商品欄・数量・カテゴリ・メモ・原本リンク・計算式・既存ログ・退避行を更新対象に含めない。新project/新タブ/新Drive資源・追加scope・Secrets・JSON更新は不要。停止時は今回の専用trigger 1件だけを削除し、同projectのenabled=falseを保存する。実行中の処理取消しを保証せず、ログをGETで照合し再送しない。
+
+**次の承認対象は上記の「同BOOK内の新UUIDによる独立観測run」1件のみ**。今回は読取と計画文書だけでGoogle側write 0、金融write 0、本番変更0。Gate B/C・本番接続はNO-GOを維持する。
+
 Computer UseがWindows上の現在ブラウザーURLを十分な確度で判定できずUI操作を停止した。別のUI経路でその判定を迂回せず、その後の専用project配置・trigger作成は上記の利用者手動報告として記録した。Sheets connectorでの独立確認と、手動報告の証拠範囲を分ける。
 
 manifestの**宣言scope**は`https://www.googleapis.com/auth/spreadsheets.currentonly`、予定実行者は既存owner、用途は当該合成BOOK内のevent観測ログだけ。**実際の認可要求scope/実行identityは観測できていない**。今後認可が要求された場合も、実表示を提示して認可前に停止する。
@@ -43,7 +72,7 @@ manifestの**宣言scope**は`https://www.googleapis.com/auth/spreadsheets.curre
 |---|---|
 | 合成Sheets設定 | PASS（API独立読戻し・iPhone修正後合計確認） |
 | 専用project設定 | PASS（利用者の配置・preflight完了報告。実コード独立確認は未完了） |
-| onEdit trigger | FAIL（作成1件との報告。画像のtrigger実行関数がpreflightで、予定handlerと不一致） |
+| onEdit trigger | 未実施・現在0件（誤設定はFAILとして保持。削除後0件を利用者画像で確認） |
 | iPhone商品編集 | PASS（利用者報告＋868/1,368/0の独立GET） |
 | UUIDイベント | FAIL（ログ0件、観測未証明） |
 | oldValue一致 | 未実施（実イベント未取得。合成は成功） |
@@ -52,7 +81,7 @@ manifestの**宣言scope**は`https://www.googleapis.com/auth/spreadsheets.curre
 | 対象外write | 0件 |
 | Gate B総合 | **NO-GO** |
 
-次の最小一手は、専用projectのtrigger一覧で今回作成した1件と関数名を確認し、誤設定の専用triggerだけを停止すること。全trigger削除や別project変更はしない。将来の訂正対象はhandlerを`receiptGateBObserveEdit`とする1件のみだが、この観測欠落を同UUIDの再送やチェック解除で補完しない。再試験用identityの扱いを含む再開手順は別途整理し、今回は停止する。Gate C・本番接続は別承認のまま。
+次の最小一手は、上記の限定した再試験案に対する承認を待つこと。使用済みUUIDの再送やチェック解除で今回の観測欠落を補完しない。Gate C・本番接続は別承認のまま。
 
 補足：数量を2へ変える追加検算案は自動承認レビューが「指定ケースの数量と異なる」として拒否し、Googleへ送信されていない。レビューを迂回せず、明示された数量1で行金額だけを変更する安全な検算と、数量参照のない実式の照合を行った。
 
