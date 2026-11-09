@@ -16,10 +16,19 @@
   "quantity_definition": "one_per_product_synthetic_definition_not_printed_quantity",
   "synthetic_imported_at": "2026-11-09T00:00:00+09:00",
   "policy": {
-    "status": "PROPOSED_NOT_APPROVED",
+    "status": "APPROVED_SYNTHETIC_FIXTURE_V1_ONLY",
     "source": "config/categories.tsv",
     "categories": [["その他", "その他"]],
     "rules": [],
-    "rules_status": "EMPTY_RULE_SET_PROPOSED_NOT_APPROVED"
+    "rules_status": "APPROVED_EMPTY_RULE_SET_FOR_FIXTURE_V1",
+    "approval": {
+      "source": "owner_explicit_instruction_in_this_conversation",
+      "recorded_on": "2026-11-09",
+      "baseline_commit": "30a70fc59814dcf1e5295da9e13cedaa17802ac7",
+      "fixture_version": "gate-c-offline-candidate-v1",
+      "baseline_definition_digest": "c45f31807fbeb6775e1ceaf29e6cc6855fbbc26b3d90238bbe0cef76e5b1a140",
+      "policy_digest": "0a61b0f7ee5c40761bd4c86af92ec031a61be9d84ddeb9e5a07a6a5fc9a746b3",
+      "production_applicability": false
+    }
   }
 }

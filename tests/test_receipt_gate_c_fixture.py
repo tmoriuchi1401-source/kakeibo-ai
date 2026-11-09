@@ -38,6 +38,8 @@ def build_fixture(source):
         items=[ReceiptItem(name=p["name"], quantity=1,
             amount=wrong["amount"] if i == wrong["item_index"] else p["amount"],
             major_category=categories[0][0], minor_category=categories[0][1],
+            # Preserve the historical analysis bytes/hash/IDs. Subsequent
+            # fixture-only policy approval is recorded separately in policy.
             confidence=0, note="synthetic quantity/category; policy not approved")
             for i, p in enumerate(printed["items"])])
     payload = result.model_dump(mode="json")
@@ -115,13 +117,29 @@ def test_generated_rows_reuse_existing_parser_hash_and_identity(data):
     assert [r[6] for r in e["candidate_rows"]] == [500, 730] and tx.amount == 1368
 
 
-def test_minimal_policy_is_existing_pair_but_not_approved(data):
+def test_minimal_policy_approval_matches_exact_fixture_version_and_scope(data):
     pairs = [line.split("\t") for line in (ROOT/"config/categories.tsv").read_text(encoding="utf-8").splitlines()[1:]]
     assert data["policy"]["categories"] == [["その他", "その他"]]
     assert all(pair in pairs for pair in data["policy"]["categories"])
-    assert data["policy"]["status"] == "PROPOSED_NOT_APPROVED"
-    assert data["policy"]["rules_status"] == "EMPTY_RULE_SET_PROPOSED_NOT_APPROVED"
+    assert data["policy"]["status"] == "APPROVED_SYNTHETIC_FIXTURE_V1_ONLY"
+    assert data["policy"]["rules_status"] == "APPROVED_EMPTY_RULE_SET_FOR_FIXTURE_V1"
     assert parse_rules(data["policy"]["rules"]) == []
+    definition = json.loads(DEFINITION.read_text(encoding="utf-8"))
+    approval = definition["policy"].pop("approval")
+    assert approval["source"] == "owner_explicit_instruction_in_this_conversation"
+    assert approval["recorded_on"] == "2026-11-09"
+    assert approval["fixture_version"] == definition["fixture_version"] == "gate-c-offline-candidate-v1"
+    assert approval["baseline_commit"] == "30a70fc59814dcf1e5295da9e13cedaa17802ac7"
+    assert approval["production_applicability"] is False
+    assert digest([definition["policy"]["categories"], definition["policy"]["rules"]]) == approval["policy_digest"]
+    assert approval["policy_digest"] == "0a61b0f7ee5c40761bd4c86af92ec031a61be9d84ddeb9e5a07a6a5fc9a746b3"
+    # Restore only approval metadata to bind ALL original fixture content to
+    # the owner-approved baseline, without depending on git history in CI.
+    definition["policy"]["status"] = "PROPOSED_NOT_APPROVED"
+    definition["policy"]["rules_status"] = "EMPTY_RULE_SET_PROPOSED_NOT_APPROVED"
+    assert digest(definition) == approval["baseline_definition_digest"]
+    assert approval["baseline_definition_digest"] == "c45f31807fbeb6775e1ceaf29e6cc6855fbbc26b3d90238bbe0cef76e5b1a140"
+    assert data["scope"] == "OFFLINE_ONLY_NOT_APPROVED_FOR_CONNECTION"
 
 
 def test_decoder_and_existing_review_keep_missing_owner_confirmation(data):
