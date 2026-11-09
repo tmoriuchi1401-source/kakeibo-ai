@@ -1,0 +1,25 @@
+{
+  "fixture_version": "gate-c-offline-candidate-v1",
+  "scope": "OFFLINE_ONLY_NOT_APPROVED_FOR_CONNECTION",
+  "source_reference": "existing_Gate_A_SOURCE_PNG_private_binding",
+  "printed_origin": "direct_visual_read_of_saved_SOURCE_PNG_not_BOOK",
+  "printed": {
+    "merchant": "架空スーパー 合成店",
+    "date": "2026-11-08",
+    "total": 1368,
+    "items": [
+      {"name": "合成商品A", "amount": 500},
+      {"name": "合成商品B", "amount": 868}
+    ]
+  },
+  "intentional_wrong_read": {"item_index": 1, "amount": 730},
+  "quantity_definition": "one_per_product_synthetic_definition_not_printed_quantity",
+  "synthetic_imported_at": "2026-11-09T00:00:00+09:00",
+  "policy": {
+    "status": "PROPOSED_NOT_APPROVED",
+    "source": "config/categories.tsv",
+    "categories": [["その他", "その他"]],
+    "rules": [],
+    "rules_status": "EMPTY_RULE_SET_PROPOSED_NOT_APPROVED"
+  }
+}
