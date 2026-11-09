@@ -30,3 +30,9 @@
 その後の接続実装・設定変更・実環境試験は既存設計の最小差分に限り、別承認とする。今回その実装を開始せず、別紙公開を次工程の条件にしない。
 
 今回の変更はこのstatus文書のみ。機密別紙は非公開領域に保持する。Google write、Actions dispatch、Secrets変更、金融write、main変更・mergeは行わない。**Gate B総合・Gate C実環境・本番NO-GOを維持する。**
+
+## policy承認対象の確定（基準5a46d26）
+
+承認対象は **gate-c-offline-candidate-v1限定の「その他／その他」1pair、rules=[]（ルール0件）**。既存合成fixtureの2商品・総額1,368円の試験だけを対象にする。
+
+ownerの明示承認では、fixture版、pair、ルール0件、合成試験限定の範囲を指定する。今回の準備依頼を採用承認と解釈せず、fixture定義の `PROPOSED_NOT_APPROVED` を維持する。本番policyの採用・本人確認・実接続の承認は含めない。
