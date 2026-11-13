@@ -203,3 +203,25 @@ def test_mismatched_projection_cannot_redirect_reads_or_results_to_another_book(
             source_folder="synthetic-folder", owner_email="owner@synthetic.invalid",
             service_email="service@synthetic.invalid")
     assert io.writes == 0
+
+
+def test_live_cache_write_uses_existing_no_replay_session_without_sdk_write():
+    class Session:
+        def __init__(self): self.calls = []
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return type("Reply", (), {"status_code": 503})()
+    session = Session()
+    port = GoogleReceiptProjection(None, spreadsheet_id="synthetic-sheet",
+        cache_range=CACHE_RANGE, write_http=session)
+    c, w, _, _ = connected()
+    accept(c, w)
+    from app.receipt_sheet_validation import result_cache_entry
+    entry = result_cache_entry(c.run(RID)["record"])
+    with pytest.raises(StateError, match="cache_write_unknown"):
+        port.append_result(entry)
+    assert len(session.calls) == 1
+    url, options = session.calls[0]
+    assert url.startswith("https://sheets.googleapis.com/v4/spreadsheets/synthetic-sheet/values/")
+    assert options["allow_redirects"] is False
+    assert options["json"] == {"values": [cache_row(entry)]}

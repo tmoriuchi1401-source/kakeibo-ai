@@ -6,6 +6,7 @@ live caller must separately approve the exact workbook/cache range and Drive
 resources. This first connection deliberately accepts one general receipt.
 """
 from copy import deepcopy
+from urllib.parse import quote
 
 from .category_rules import parse_rules
 from .drive_run_state import StateError
@@ -23,7 +24,7 @@ CACHE_HEADERS = ["key", "request_id", "case_id", "source_id", "source_version",
                  "financial_write_count", "mime_type", "classification", "transaction_kind"]
 
 
-def connect_existing_google_services(*, private, drive, sheets, spreadsheet_id, source_folder):
+def connect_existing_google_services(*, private, drive, sheets, spreadsheet_id, source_folder, write_http=None):
     """Bind existing authenticated services; never create credentials/resources.
 
     Drive v3 is used only for independent metadata and original-byte reads;
@@ -37,7 +38,8 @@ def connect_existing_google_services(*, private, drive, sheets, spreadsheet_id, 
     def source_bytes(fid):
         return drive.files().get_media(fileId=fid).execute(num_retries=0)
     return ReceiptSheetConnection(private=private,
-        projection=GoogleReceiptProjection(sheets, spreadsheet_id=spreadsheet_id, cache_range=CACHE_RANGE),
+        projection=GoogleReceiptProjection(sheets, spreadsheet_id=spreadsheet_id, cache_range=CACHE_RANGE,
+                                           write_http=write_http),
         metadata=metadata, source_bytes=source_bytes, spreadsheet_id=spreadsheet_id,
         private_id=private.fid, source_folder=source_folder,
         owner_email=private.owner, service_email=private.service)
@@ -158,10 +160,11 @@ class GoogleReceiptProjection:
     creation, sharing or writer construction. Writes have zero client retries.
     Its self-keyed cache is a projection, never an acceptance journal.
     """
-    def __init__(self, service, *, spreadsheet_id, cache_range):
+    def __init__(self, service, *, spreadsheet_id, cache_range, write_http=None):
         if cache_range != CACHE_RANGE:
             raise StateError("receipt_connection_cache_range_invalid")
         self.service, self.spreadsheet_id, self.cache_range = service, spreadsheet_id, cache_range
+        self.write_http = write_http
 
     def _values(self):
         return self.service.spreadsheets().values()
@@ -172,6 +175,16 @@ class GoogleReceiptProjection:
         return [r + [None] * (46 - len(r)) for r in rows]
 
     def append_result(self, entry):
+        if self.write_http is not None:
+            # Reuse the worker's existing zero-refresh-replay Requests session.
+            # httplib2 can silently repeat writes below execute(num_retries=0).
+            response = self.write_http.post("https://sheets.googleapis.com/v4/spreadsheets/"+
+                self.spreadsheet_id+"/values/"+quote(self.cache_range, safe="")+":append",
+                params=dict(valueInputOption="RAW", insertDataOption="INSERT_ROWS"),
+                json={"values": [cache_row(entry)]}, timeout=20, allow_redirects=False)
+            if response.status_code != 200:
+                raise StateError("receipt_connection_cache_write_unknown")
+            return
         self._values().append(spreadsheetId=self.spreadsheet_id, range=self.cache_range,
             valueInputOption="RAW", insertDataOption="INSERT_ROWS",
             body={"values": [cache_row(entry)]}).execute(num_retries=0)

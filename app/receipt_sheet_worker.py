@@ -124,7 +124,7 @@ def existing_google_connection(binding, info):
     drive = build("drive", "v3", http=http, cache_discovery=False)
     sheets = build("sheets", "v4", http=http, cache_discovery=False)
     return connect_existing_google_services(private=private, drive=drive, sheets=sheets,
-        spreadsheet_id=binding["spreadsheet_id"], source_folder=binding["folder_id"])
+        spreadsheet_id=binding["spreadsheet_id"], source_folder=binding["folder_id"], write_http=session)
 
 
 def run(env, *, connect=existing_google_connection):
