@@ -17,7 +17,7 @@ from .receipt_sheet_validation import (
 )
 from .reconciliation import parse_import_rows
 
-CACHE_RANGE = "'_receipt_validation_results'!A2:M1001"
+CACHE_RANGE = "'_receipt_validation_results'!A2:M1000"
 CACHE_HEADERS = ["key", "request_id", "case_id", "source_id", "source_version",
                  "source_sha256", "snapshot_digest", "state", "posting_authority",
                  "financial_write_count", "mime_type", "classification", "transaction_kind"]
@@ -63,14 +63,16 @@ def result_formula(row):
         raise StateError("receipt_connection_formula_row_invalid")
     cache = "'_receipt_validation_results'!"
     rid = f'REGEXEXTRACT(TO_TEXT($I{row}),"^(?:ready|register):([a-f0-9-]{{36}})$")'
-    conditions = [f'{cache}B2:B1001={rid}', f'{cache}C2:C1001=$A{row}',
-                  f'{cache}D2:D1001=$AL{row}', f'{cache}E2:E1001=TO_TEXT($AM{row})',
-                  f'{cache}F2:F1001=$AN{row}']
-    filtered = f'UNIQUE(FILTER({cache}A2:M1001,{",".join(conditions)}))'
+    conditions = [f'{cache}B2:B1000={rid}', f'{cache}C2:C1000=$A{row}',
+                  f'{cache}D2:D1000=$AL{row}', f'{cache}E2:E1000=TO_TEXT($AM{row})',
+                  f'{cache}F2:F1000=$AN{row}']
+    filtered = f'UNIQUE(FILTER({cache}A2:M1000,{",".join(conditions)}))'
     return (f'=IF(OR($A{row}<>$AK{row},$A{row}=""),"結果不明・照合待ち",'
-            f'IFERROR(IF(ROWS({filtered})<>1,"結果不明・照合待ち",'
-            f'INDEX({filtered},1,8)&"（登録時の内容・未記帳）"),'
-            '"結果未確認・未記帳／チェックを繰り返さない"))')
+            f'IFERROR(LET(records,{filtered},state,INDEX(records,1,8),'
+            'IF(ROWS(records)<>1,"結果不明・照合待ち",'
+            'IF(state="検証済み・未記帳","登録検証済み・未記帳",state)&"（登録時の内容）")), '
+            f'IF(OR($I{row}="",LEFT(TO_TEXT($I{row}),6)="ready:"),"編集中・未登録",'
+            '"受付確認中・未記帳／チェックを繰り返さない")))')
 
 
 class ReceiptSheetConnection:
@@ -165,7 +167,7 @@ class GoogleReceiptProjection:
         return self.service.spreadsheets().values()
 
     def read_rows(self):
-        rows = self._values().get(spreadsheetId=self.spreadsheet_id, range="'確認'!A2:AT1001",
+        rows = self._values().get(spreadsheetId=self.spreadsheet_id, range="'確認'!A2:AT1000",
             valueRenderOption="UNFORMATTED_VALUE").execute(num_retries=0).get("values", [])
         return [r + [None] * (46 - len(r)) for r in rows]
 

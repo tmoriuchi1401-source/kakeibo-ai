@@ -10,10 +10,51 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: kakeibo-production
+  group: ${{ startsWith(github.ref, 'refs/heads/feat/receipt-') && 'receipt-synthetic-validation' || 'kakeibo-production' }}
   cancel-in-progress: false
   queue: max
 jobs:
+  receipt-validation:
+    # The registered main workflow can select this pinned feature-branch ref.
+    # Production/category execution below remains main-only and unchanged.
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == format('refs/heads/{0}', vars.RECEIPT_VALIDATION_REF) &&
+      startsWith(vars.RECEIPT_VALIDATION_REF, 'feat/receipt-') &&
+      github.sha == vars.RECEIPT_VALIDATION_SHA &&
+      github.run_attempt == 1 &&
+      vars.RECEIPT_VALIDATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RECEIPT_VALIDATION_ENABLED: ${{ vars.RECEIPT_VALIDATION_ENABLED }}
+      RECEIPT_VALIDATION_REF: ${{ vars.RECEIPT_VALIDATION_REF }}
+      RECEIPT_VALIDATION_SHA: ${{ vars.RECEIPT_VALIDATION_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify approved checkout before private inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RECEIPT_VALIDATION_SHA"
+          test "$GITHUB_SHA" = "$RECEIPT_VALIDATION_SHA"
+      - name: Require normal logging before private inputs
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Validate one captured general receipt without posting
+        env:
+          RECEIPT_REQUEST_ID: ${{ inputs.request_id }}
+          RECEIPT_VALIDATION_CONFIG_JSON: ${{ secrets.RECEIPT_VALIDATION_CONFIG_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python -m app.receipt_sheet_worker
   category-request:
     if: >-
       github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
