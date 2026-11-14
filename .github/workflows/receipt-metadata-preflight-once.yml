@@ -1,0 +1,53 @@
+name: Temporary receipt metadata preflight
+on:
+  push:
+    tags: [receipt-metadata-preflight-once-20261114]
+permissions:
+  contents: read
+concurrency:
+  group: receipt-metadata-preflight-once-20261114
+  cancel-in-progress: false
+jobs:
+  metadata-only:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/tags/receipt-metadata-preflight-once-20261114' &&
+      github.event.created == true && github.event.deleted == false &&
+      github.run_attempt == 1 &&
+      vars.RECEIPT_VALIDATION_ENABLED == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Reject debug logging before private inputs
+        if: runner.debug == '1'
+        run: |
+          echo DEBUG_MODE_REJECTED
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Confirm immutable checkout before private inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing auth libraries without private inputs
+        shell: bash
+        run: |
+          if ! python -m pip install --quiet --no-input --disable-pip-version-check --retries 0 -r diagnostics/requirements-metadata-preflight.txt >/dev/null 2>&1; then
+            echo DEPENDENCY_INSTALL_FAILED
+            exit 1
+          fi
+      - name: One identity check and two metadata GETs only
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          RECEIPT_VALIDATION_CONFIG_JSON: ${{ secrets.RECEIPT_VALIDATION_CONFIG_JSON }}
+          RECEIPT_VALIDATION_ENABLED: ${{ vars.RECEIPT_VALIDATION_ENABLED }}
+          PREFLIGHT_REF_CREATED: ${{ github.event.created }}
+        run: python diagnostics/receipt_metadata_preflight.py
