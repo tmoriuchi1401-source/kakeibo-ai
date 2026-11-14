@@ -116,7 +116,7 @@ def existing_google_connection(binding, info):
         catalog_digest=binding["catalog_digest"])
     catalog, _ = private.read_catalog()
     if (list(catalog["cases"]) != [binding["case_id"]]
-            or _expected(binding["case_id"], catalog["cases"][binding["case_id"]]) != binding["expected"]):
+            or digest(_expected(binding["case_id"], catalog["cases"][binding["case_id"]])) != binding["expected_digest"]):
         raise StateError("receipt_worker_catalog_binding_mismatch")
     # execute(num_retries=0) alone does not disable credential-layer replay.
     http = AuthorizedHttp(credentials, http=httplib2.Http(timeout=20),
