@@ -200,6 +200,8 @@ class ReceiptPrivateAdapter:
                         or not strong_etag(m.get("etag"))
                         or fid == self.fid and m.get("parents") != [{"id": self.folder}]):
                     _fail("metadata_changed")
+            # Grants have no positional meaning; retain every field and duplicate.
+            m["permissions"] = sorted(m["permissions"], key=_bytes)
             values.append(m)
         return values
 
