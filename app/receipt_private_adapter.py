@@ -46,6 +46,45 @@ def _bytes(value):
                       separators=(",", ":")).encode("utf-8")
 
 
+_METADATA_DIFFERENCE_CODES = (
+    ("id", ("receipt_private_metadata_folder_id_changed", "receipt_private_metadata_json_id_changed")),
+    ("mimeType", ("receipt_private_metadata_folder_mime_type_changed", "receipt_private_metadata_json_mime_type_changed")),
+    ("trashed", ("receipt_private_metadata_folder_trashed_changed", "receipt_private_metadata_json_trashed_changed")),
+    ("owners", ("receipt_private_metadata_folder_owner_changed", "receipt_private_metadata_json_owner_changed")),
+    ("permissions", ("receipt_private_metadata_folder_permissions_changed", "receipt_private_metadata_json_permissions_changed")),
+    ("parents", ("receipt_private_metadata_folder_parents_changed", "receipt_private_metadata_json_parents_changed")),
+    ("version", ("receipt_private_metadata_folder_version_changed", "receipt_private_metadata_json_version_changed")),
+    ("etag", ("receipt_private_metadata_folder_etag_changed", "receipt_private_metadata_json_etag_changed")),
+)
+_METADATA_OTHER_CODES = ("receipt_private_metadata_folder_other_changed", "receipt_private_metadata_json_other_changed")
+
+
+def _log_metadata_changes(before, after):
+    """Only closed literal codes, never keys/values supplied by Drive."""
+    if (type(before) is not list or type(after) is not list or len(before) != 2 or len(after) != 2
+            or any(type(m) is not dict for m in before + after)):
+        LOG.warning("receipt_private_metadata_other_changed")
+        return
+    missing = object()
+    for index, (old, new) in enumerate(zip(before, after)):
+        old_rest, new_rest = dict(old), dict(new)
+        old_labels, new_labels = old_rest.pop("labels", missing), new_rest.pop("labels", missing)
+        for field, codes in _METADATA_DIFFERENCE_CODES:
+            if field == "trashed":
+                left = old_labels.get("trashed", missing) if type(old_labels) is dict else missing
+                right = new_labels.get("trashed", missing) if type(new_labels) is dict else missing
+            else:
+                left, right = old_rest.pop(field, missing), new_rest.pop(field, missing)
+            if left != right:
+                LOG.warning(codes[index])
+        if type(old_labels) is dict:
+            old_labels = {k: v for k, v in old_labels.items() if k != "trashed"}
+        if type(new_labels) is dict:
+            new_labels = {k: v for k, v in new_labels.items() if k != "trashed"}
+        if old_rest != new_rest or old_labels != new_labels:
+            LOG.warning(_METADATA_OTHER_CODES[index])
+
+
 def _parse(raw):
     def unique(pairs):
         result = {}
@@ -215,6 +254,7 @@ class ReceiptPrivateAdapter:
         after = self._metadata()  # Preserve the original short-circuit GET order.
         with _log_failure("receipt_private_read_metadata_consistency_failed"):
             if after != before:
+                _log_metadata_changes(before, after)
                 _fail("read_unknown")
         with _log_failure("receipt_private_read_json_failed"):
             value = _parse(raw)

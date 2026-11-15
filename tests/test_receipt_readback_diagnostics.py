@@ -49,6 +49,7 @@ CASES = [
     ('body_and_etag', 'receipt_private_readback_body_mismatch'),
 ]
 NEW_CODES = {
+    'receipt_private_metadata_folder_version_changed',
     'receipt_private_read_binding_failed', 'receipt_private_read_metadata_get_failed',
     'receipt_private_read_metadata_validation_failed', 'receipt_private_read_body_failed',
     'receipt_private_read_etag_failed', 'receipt_private_read_metadata_consistency_failed',
