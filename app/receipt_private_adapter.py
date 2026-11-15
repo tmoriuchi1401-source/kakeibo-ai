@@ -7,6 +7,7 @@ This module neither constructs that live transport nor initializes a file.
 """
 from copy import deepcopy
 import json
+import logging
 import re
 from threading import RLock
 
@@ -22,6 +23,7 @@ from .reconciliation import parse_import_rows
 SCHEMA = "receipt-private-envelope-v1"
 MAX_BYTES = 1024 * 1024
 FIELDS = "id,etag,version,parents(id),labels(trashed),mimeType,owners(emailAddress),permissions(type,role,emailAddress,deleted)"
+LOG = logging.getLogger(__name__)
 
 
 def _fail(code="invalid"):
@@ -216,15 +218,22 @@ class ReceiptPrivateAdapter:
         return raw, tag, value
 
     def _load(self):
+        acknowledged = self._ack is not None
+        if acknowledged:
+            LOG.warning("receipt_private_ack_readback_begin")
         try:
             raw, tag, value = self._read()
             if self._ack is not None and (raw, tag) != self._ack:
                 self._ack = None  # Later GETs can reconcile; writes stay stopped.
                 _fail("readback_unknown")
             self._ack, self._cached = None, (raw, tag, deepcopy(value))
+            if acknowledged:
+                LOG.warning("receipt_private_ack_readback_ok")
             return raw, tag, value
         except Exception:
             self._stopped = True
+            if acknowledged:
+                LOG.warning("receipt_private_ack_readback_failed")
             _fail("read_unknown")
 
     def read_versioned(self):
@@ -272,17 +281,28 @@ class ReceiptPrivateAdapter:
                 _fail("update_invalid")
             # Stop BEFORE the single conditional write; GETs never clear a fault.
             self._stopped = True
+            # Internal fixed codes only: never interpolate exceptions or data.
+            phase = "receipt_private_prewrite_read"
+            LOG.warning("%s_begin", phase)
             try:
                 # Independent pre-write read: never merge into a newer envelope.
                 fresh_raw, fresh_tag, _ = self._read()
                 if (fresh_raw, fresh_tag) != (raw, tag):
                     _fail("stale")
+                LOG.warning("%s_ok", phase)
+                phase = "receipt_private_cas"
+                LOG.warning("%s_begin", phase)
                 self.io.replace_versioned(raw, tag, proposed)
+                LOG.warning("%s_ok", phase)
+                phase = "receipt_private_adapter_readback"
+                LOG.warning("%s_begin", phase)
                 actual, new_tag, actual_value = self._read()
                 if actual != proposed or new_tag == tag:
                     _fail("readback_unknown")
                 self._cached = (actual, new_tag, actual_value)
                 self._ack = (actual, new_tag)  # Also check the core's save/load.
                 self._stopped = False
+                LOG.warning("%s_ok", phase)
             except Exception:
+                LOG.warning("%s_failed", phase)
                 _fail("write_unknown")

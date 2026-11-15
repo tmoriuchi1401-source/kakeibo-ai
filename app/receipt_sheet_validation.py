@@ -6,6 +6,7 @@ read-back. Editable Sheets and the trigger account are not owner approval.
 """
 from copy import deepcopy
 from hashlib import sha256
+import logging
 import re
 from uuid import UUID
 
@@ -21,6 +22,7 @@ STATES = {"受付済み", "検証中", "修正が必要", "保留", "検証済�
 PREPARED = "下書き準備済み"  # Private ticket, not a registration or authority.
 FINAL = {"修正が必要", "保留", "検証済み・未記帳"}
 UNKNOWN = "結果不明・照合待ち"
+LOG = logging.getLogger(__name__)
 
 
 def request_uuid(value):
@@ -352,29 +354,47 @@ def execute_accepted_request(request_id, *, reader, journal):
     record = journal.query(request_id)
     if record["state"] != "受付済み":
         raise StateError("receipt_validation_replay_rejected")
+    LOG.warning("receipt_worker_claim_begin")
     try:
         journal.transition(request_id, "検証中")
     except Exception:
+        LOG.warning("receipt_worker_claim_unknown")
         return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
+    LOG.warning("receipt_worker_claim_verified")
+    phase = "receipt_worker_source_check"
+    LOG.warning("%s_begin", phase)
     try:
         snapshot = record["snapshot"]
         fresh = reader(snapshot["case_id"])
         if fresh["request_snapshot"] != snapshot:
             raise StateError("receipt_validation_captured_input_changed")
+        LOG.warning("%s_ok", phase)
+        phase = "receipt_worker_registration_plan"
+        LOG.warning("%s_begin", phase)
         plan = registration_plan(fresh["snapshot"], fresh)
+        LOG.warning("%s_ok", phase)
+        phase = "receipt_worker_source_recheck"
+        LOG.warning("%s_begin", phase)
         again = reader(snapshot["case_id"])
         if again["snapshot"] != fresh["snapshot"] or again["request_snapshot"] != snapshot:
             raise StateError("receipt_validation_concurrent_edit")
         result = {k: deepcopy(plan[k]) for k in
                   ("state", "issues", "snapshot_digest", "posting_authority", "financial_write_count")}
         result["snapshot_digest"] = snapshot["digest"]
+        LOG.warning("%s_ok", phase)
     except Exception:
+        LOG.warning("%s_failed", phase)
         result = dict(state="保留", issues=["receipt_validation_source_or_input_changed"],
                       snapshot_digest=record["snapshot"]["digest"], posting_authority=False, financial_write_count=0)
+    LOG.warning("receipt_worker_terminal_begin")
     try:
         journal.transition(request_id, result["state"], result)
-        return journal.query(request_id)
+        LOG.warning("receipt_worker_terminal_verified")
+        record = journal.query(request_id)
+        LOG.warning("receipt_worker_terminal_query_ok")
+        return record
     except Exception:
+        LOG.warning("receipt_worker_terminal_unknown")
         return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
 
 
