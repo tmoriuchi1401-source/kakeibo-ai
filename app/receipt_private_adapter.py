@@ -5,6 +5,7 @@ and replace_versioned(before_bytes, tag, after_bytes) contract. The last method
 MUST perform one server-side Drive v2 If-Match PUT, no retry/redirect/merge.
 This module neither constructs that live transport nor initializes a file.
 """
+from contextlib import contextmanager
 from copy import deepcopy
 import json
 import logging
@@ -28,6 +29,16 @@ LOG = logging.getLogger(__name__)
 
 def _fail(code="invalid"):
     raise StateError("receipt_private_" + code) from None
+
+
+@contextmanager
+def _log_failure(code):
+    """Callers supply literals only; preserve the original exception/traceback."""
+    try:
+        yield
+    except Exception:
+        LOG.warning(code)
+        raise
 
 
 def _bytes(value):
@@ -171,50 +182,63 @@ class ReceiptPrivateAdapter:
         self._lock, self._stopped, self._cached, self._ack = RLock(), False, None, None
 
     def _metadata(self):
-        if (getattr(self.io, "config", {}).get("file_id") != self.fid
-                or self.io.config.get("folder_id") != self.folder):
-            _fail("transport_binding_mismatch")
+        with _log_failure("receipt_private_read_binding_failed"):
+            if (getattr(self.io, "config", {}).get("file_id") != self.fid
+                    or self.io.config.get("folder_id") != self.folder):
+                _fail("transport_binding_mismatch")
         values = []
         grants = {("user", "owner", self.owner), ("user", "writer", self.service)}
         for fid, mime in ((self.folder, "application/vnd.google-apps.folder"), (self.fid, "application/json")):
-            m = deepcopy(self.io.metadata(fid, FIELDS))
-            if (m.get("id") != fid or m.get("mimeType") != mime or m.get("labels", {}).get("trashed") is not False
-                    or [o.get("emailAddress") for o in m.get("owners", [])] != [self.owner]
-                    or {(p.get("type"), p.get("role"), p.get("emailAddress")) for p in m.get("permissions", [])
-                        if not p.get("deleted")} != grants
-                    or type(m.get("version")) is not str or not m["version"]
-                    or not strong_etag(m.get("etag"))
-                    or fid == self.fid and m.get("parents") != [{"id": self.folder}]):
-                _fail("metadata_changed")
+            with _log_failure("receipt_private_read_metadata_get_failed"):
+                m = deepcopy(self.io.metadata(fid, FIELDS))
+            with _log_failure("receipt_private_read_metadata_validation_failed"):
+                if (m.get("id") != fid or m.get("mimeType") != mime or m.get("labels", {}).get("trashed") is not False
+                        or [o.get("emailAddress") for o in m.get("owners", [])] != [self.owner]
+                        or {(p.get("type"), p.get("role"), p.get("emailAddress")) for p in m.get("permissions", [])
+                            if not p.get("deleted")} != grants
+                        or type(m.get("version")) is not str or not m["version"]
+                        or not strong_etag(m.get("etag"))
+                        or fid == self.fid and m.get("parents") != [{"id": self.folder}]):
+                    _fail("metadata_changed")
             values.append(m)
         return values
 
     def _read(self):
         before = self._metadata()
-        raw, tag = self.io.read_versioned()
-        if not strong_etag(tag) or tag != before[1]["etag"] or self._metadata() != before:
-            _fail("read_unknown")
-        value = _parse(raw)
-        if (type(value) is not dict or set(value) != {"schema", "version", "catalog", "journal"}
-                or value["schema"] != SCHEMA or type(value["version"]) is not int or value["version"] != 1
-                or type(value["catalog"]) is not dict or set(value["catalog"]) != {"cases"}
-                or type(value["catalog"]["cases"]) is not dict or not value["catalog"]["cases"]
-                or len(value["catalog"]["cases"]) > 1000
-                or digest(value["catalog"]) != self.catalog_digest):
-            _fail("envelope_or_catalog_invalid")
-        sources = []
-        for case_id, entry in value["catalog"]["cases"].items():
-            sources.append(_expected(case_id, entry)["source"]["source_id"])
-        if len(set(sources)) != len(sources):
-            _fail("catalog_source_duplicate")
-        journal = validate_journal(value["journal"])
-        if journal["schema"] != JOURNAL_SCHEMA:
-            _fail("migration_forbidden")
-        for record in journal["requests"].values():
-            snapshot = record["snapshot"]
-            anchor = value["catalog"]["cases"][snapshot["case_id"]]["anchor"]
-            if snapshot["source"] != anchor["source"] or snapshot["context_digest"] != digest(anchor):
-                _fail("journal_catalog_mismatch")
+        with _log_failure("receipt_private_read_body_failed"):
+            raw, tag = self.io.read_versioned()
+        with _log_failure("receipt_private_read_etag_failed"):
+            if not strong_etag(tag) or tag != before[1]["etag"]:
+                _fail("read_unknown")
+        after = self._metadata()  # Preserve the original short-circuit GET order.
+        with _log_failure("receipt_private_read_metadata_consistency_failed"):
+            if after != before:
+                _fail("read_unknown")
+        with _log_failure("receipt_private_read_json_failed"):
+            value = _parse(raw)
+        with _log_failure("receipt_private_read_catalog_failed"):
+            if (type(value) is not dict or set(value) != {"schema", "version", "catalog", "journal"}
+                    or value["schema"] != SCHEMA or type(value["version"]) is not int or value["version"] != 1
+                    or type(value["catalog"]) is not dict or set(value["catalog"]) != {"cases"}
+                    or type(value["catalog"]["cases"]) is not dict or not value["catalog"]["cases"]
+                    or len(value["catalog"]["cases"]) > 1000
+                    or digest(value["catalog"]) != self.catalog_digest):
+                _fail("envelope_or_catalog_invalid")
+            sources = []
+            for case_id, entry in value["catalog"]["cases"].items():
+                sources.append(_expected(case_id, entry)["source"]["source_id"])
+            if len(set(sources)) != len(sources):
+                _fail("catalog_source_duplicate")
+        with _log_failure("receipt_private_read_journal_failed"):
+            journal = validate_journal(value["journal"])
+            if journal["schema"] != JOURNAL_SCHEMA:
+                _fail("migration_forbidden")
+        with _log_failure("receipt_private_read_journal_catalog_failed"):
+            for record in journal["requests"].values():
+                snapshot = record["snapshot"]
+                anchor = value["catalog"]["cases"][snapshot["case_id"]]["anchor"]
+                if snapshot["source"] != anchor["source"] or snapshot["context_digest"] != digest(anchor):
+                    _fail("journal_catalog_mismatch")
         return raw, tag, value
 
     def _load(self):
@@ -297,7 +321,11 @@ class ReceiptPrivateAdapter:
                 phase = "receipt_private_adapter_readback"
                 LOG.warning("%s_begin", phase)
                 actual, new_tag, actual_value = self._read()
-                if actual != proposed or new_tag == tag:
+                if actual != proposed:
+                    LOG.warning("receipt_private_readback_body_mismatch")
+                    _fail("readback_unknown")
+                if new_tag == tag:
+                    LOG.warning("receipt_private_readback_etag_unchanged")
                     _fail("readback_unknown")
                 self._cached = (actual, new_tag, actual_value)
                 self._ack = (actual, new_tag)  # Also check the core's save/load.

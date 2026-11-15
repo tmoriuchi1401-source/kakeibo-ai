@@ -26,6 +26,7 @@ PRIVATE_CODES = {
     "receipt_private_cas_begin", "receipt_private_cas_ok", "receipt_private_cas_failed",
     "receipt_private_adapter_readback_begin", "receipt_private_adapter_readback_ok",
     "receipt_private_adapter_readback_failed",
+    "receipt_private_read_body_failed",
 }
 WORKER_CODES = {
     "receipt_worker_claim_begin", "receipt_worker_claim_verified", "receipt_worker_claim_unknown",

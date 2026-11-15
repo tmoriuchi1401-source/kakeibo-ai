@@ -10,8 +10,8 @@ import re
 
 from .drive_run_state import StateError
 from .page_receipt_model import digest
-from .pdf_intake_registry import DriveRegistryIO
-from .receipt_private_adapter import ReceiptPrivateAdapter, _expected
+from .pdf_intake_registry import DriveRegistryIO, MAX_BYTES as REGISTRY_MAX_BYTES, strong_etag
+from .receipt_private_adapter import ReceiptPrivateAdapter, _expected, _log_failure
 from .receipt_sheet_connection import connect_existing_google_services
 from .receipt_sheet_validation import UNKNOWN, request_uuid
 
@@ -95,6 +95,47 @@ class ExistingReceiptDriveIO(DriveRegistryIO):
                            owner_digest=digest(binding["owner_email"]))
         self.sa, self.http, self.writable = binding["service_email"], session, True
         self.deadline = None
+
+    # Dedicated receipt transport only. These preserve the inherited checks,
+    # request arguments/order and short-circuiting; shared PDF IO is unchanged.
+    def metadata(self, fid, fields):
+        with _log_failure("receipt_private_transport_metadata_get_failed"):
+            return super().metadata(fid, fields)
+
+    def acl(self):
+        for fid in (self.config['folder_id'], self.config['file_id']):
+            meta = self.metadata(fid, 'id,owners(emailAddress),permissions(type,role,emailAddress,deleted)')
+            with _log_failure("receipt_private_transport_metadata_validation_failed"):
+                owners = [x.get('emailAddress') for x in meta.get('owners', [])]
+                if (meta.get('id') != fid or len(owners) != 1 or digest(owners[0]) != self.config['owner_digest']
+                        or {(p.get('type'),p.get('role'),p.get('emailAddress')) for p in meta.get('permissions', [])
+                            if not p.get('deleted')} != {('user','owner',owners[0]),('user','writer',self.sa)}):
+                    raise StateError('pdf_intake_private_acl_changed')
+
+    def _meta(self):
+        fid = self.config['file_id']
+        value = self.metadata(fid, 'id,etag,parents(id),labels(trashed),mimeType')
+        with _log_failure("receipt_private_transport_metadata_validation_failed"):
+            if (value.get('id') != fid or not strong_etag(value.get('etag'))
+                    or value.get('labels',{}).get('trashed') or value.get('mimeType') != 'application/json'
+                    or value.get('parents') != [{'id': self.config['folder_id']}]):
+                raise StateError('pdf_intake_registry_moved_or_changed')
+        return value
+
+    def read_versioned(self):
+        self.acl()
+        before = self._meta()
+        with _log_failure("receipt_private_transport_body_get_failed"):
+            raw = self._request('GET', 'https://www.googleapis.com/drive/v2/files/'+self.config['file_id'],
+                                params={'alt':'media'}).content
+        with _log_failure("receipt_private_transport_body_size_failed"):
+            if len(raw) > REGISTRY_MAX_BYTES:
+                raise StateError('pdf_intake_registry_changed_during_read')
+        after = self._meta()
+        with _log_failure("receipt_private_transport_metadata_consistency_failed"):
+            if after != before:
+                raise StateError('pdf_intake_registry_changed_during_read')
+        return raw, before['etag']
 
 
 def existing_google_connection(binding, info):
