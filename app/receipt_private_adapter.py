@@ -20,6 +20,7 @@ from .receipt_sheet_decoder import decode_receipt_row
 from .receipt_sheet_validation import (JOURNAL_SCHEMA, PREPARED, PURPOSE,
     ValidationJournal, strong_etag, validate_journal)
 from .reconciliation import parse_import_rows
+from .receipt_get_diagnostics import observe
 
 SCHEMA = "receipt-private-envelope-v1"
 MAX_BYTES = 1024 * 1024
@@ -246,12 +247,14 @@ class ReceiptPrivateAdapter:
 
     def _read(self):
         before = self._metadata()
+        observe(self.io, "metadata", "outer_before", before[1])
         with _log_failure("receipt_private_read_body_failed"):
             raw, tag = self.io.read_versioned()
         with _log_failure("receipt_private_read_etag_failed"):
             if not strong_etag(tag) or tag != before[1]["etag"]:
                 _fail("read_unknown")
         after = self._metadata()  # Preserve the original short-circuit GET order.
+        observe(self.io, "metadata", "outer_after", after[1])
         with _log_failure("receipt_private_read_metadata_consistency_failed"):
             if after != before:
                 _log_metadata_changes(before, after)
@@ -347,6 +350,7 @@ class ReceiptPrivateAdapter:
                 _fail("update_invalid")
             # Stop BEFORE the single conditional write; GETs never clear a fault.
             self._stopped = True
+            observe(self.io, "begin", proposed)
             # Internal fixed codes only: never interpolate exceptions or data.
             phase = "receipt_private_prewrite_read"
             LOG.warning("%s_begin", phase)
@@ -358,7 +362,9 @@ class ReceiptPrivateAdapter:
                 LOG.warning("%s_ok", phase)
                 phase = "receipt_private_cas"
                 LOG.warning("%s_begin", phase)
+                observe(self.io, "enter_cas")
                 self.io.replace_versioned(raw, tag, proposed)
+                observe(self.io, "cas_ok")
                 LOG.warning("%s_ok", phase)
                 phase = "receipt_private_adapter_readback"
                 LOG.warning("%s_begin", phase)
@@ -376,3 +382,5 @@ class ReceiptPrivateAdapter:
             except Exception:
                 LOG.warning("%s_failed", phase)
                 _fail("write_unknown")
+            finally:
+                observe(self.io, "finish")

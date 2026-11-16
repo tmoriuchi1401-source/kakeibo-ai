@@ -17,6 +17,7 @@ from app.page_receipt_model import digest
 from app.receipt_private_adapter import ReceiptPrivateAdapter
 from app.receipt_sheet_worker import ExistingReceiptDriveIO, REGISTRY_MAX_BYTES
 from app.receipt_sheet_validation import ValidationJournal
+from app.receipt_get_diagnostics import CODES as GET_DIAGNOSTIC_CODES
 from test_receipt_private_adapter import fixture, capture, encode
 from test_receipt_sheet_validation import RID
 from test_receipt_worker_stages import PRIVATE_CODES, WORKER_CODES
@@ -133,6 +134,8 @@ def exercise(fault, adapter_type=ReceiptPrivateAdapter, transport_type=ExistingR
                 headers=deepcopy(kwargs.get('headers')), body_sha256=sha256(kwargs['data']).hexdigest() if 'data' in kwargs else None))
             if method == 'PUT':
                 assert kwargs['headers']['If-Match'] == f'"{memory.generation}"'
+                if fault in ('put_before', 'put_response'):
+                    memory.fault = 'before' if fault == 'put_before' else 'after'
                 memory.replace_versioned(memory.raw, kwargs['headers']['If-Match'], kwargs['data'])
                 armed[0] = True
                 if fault in ('etag_unchanged', 'body_and_etag'):
@@ -146,6 +149,10 @@ def exercise(fault, adapter_type=ReceiptPrivateAdapter, transport_type=ExistingR
             if armed[0]:
                 post_put_gets.append(True)
                 point = len(post_put_gets)
+            if fault == 'external_update' and point == 3:
+                changed = json.loads(memory.raw)
+                changed['journal']['generation'] += 1
+                memory.replace_versioned(memory.raw, f'"{memory.generation}"', encode(changed))
             media = kwargs['params'].get('alt') == 'media'
             if (fault == 'metadata_get' and point == 1
                     or fault == 'transport_metadata_get' and point == 3
@@ -188,6 +195,12 @@ def exercise(fault, adapter_type=ReceiptPrivateAdapter, transport_type=ExistingR
                 value['etag'] = '"synthetic-consistent-but-different"'
             if fault == 'metadata_race' and point == 8:
                 value['version'] = '999'
+            if fault == 'cas_version_lag' and point == 2:
+                value['version'] = str(int(value['version']) - 1)
+            if fault in ('post_version_up', 'post_version_down', 'post_both') and point == 9:
+                value['version'] = str(int(value['version']) + (-1 if fault == 'post_version_down' else 1))
+            if fault in ('post_etag', 'post_both') and point == 9:
+                value['etag'] = '"synthetic-later-etag"'
             def decoded():
                 if fault == 'metadata_decode' and point == 1 or fault == 'transport_metadata_decode' and point == 3:
                     raise ValueError(PRIVATE)
@@ -209,6 +222,7 @@ def exercise(fault, adapter_type=ReceiptPrivateAdapter, transport_type=ExistingR
     before_reconcile = memory.attempts
     # Clearing the injected fault allows a GET, never a new CAS after ambiguity.
     armed[0] = False
+    memory.fault = None
     port.config['file_id'] = 'synthetic-private'
     reconciled, current_tag = private.read_versioned()
     replay_error = None
@@ -218,7 +232,9 @@ def exercise(fault, adapter_type=ReceiptPrivateAdapter, transport_type=ExistingR
         except StateError as exc:
             replay_error = str(exc)
         assert replay_error == 'receipt_private_write_stopped'
-    assert memory.attempts == before_reconcile == 3 and memory.writes == 3
+    expected_attempts = 4 if fault == 'external_update' else 3
+    assert memory.attempts == before_reconcile == expected_attempts
+    assert memory.writes == (2 if fault == 'put_before' else expected_attempts)
     return dict(error=error, stopped=stopped, stopped_after_reconcile=private._stopped,
         replay_error=replay_error, api_trace=claim_trace, reconcile_trace=api_trace[len(claim_trace):],
         cas_attempts=memory.attempts, cas_writes=memory.writes, persistent_bytes_sha256=sha256(memory.raw).hexdigest(),
@@ -231,7 +247,7 @@ def test_claim_readback_faults_are_classified_without_data_or_retries(caplog, fa
     caplog.set_level(logging.WARNING)
     result = exercise(fault, on_claim=caplog.clear)
     messages = [r.getMessage() for r in caplog.records]
-    assert set(messages) <= PRIVATE_CODES | WORKER_CODES | NEW_CODES
+    assert set(messages) <= PRIVATE_CODES | WORKER_CODES | NEW_CODES | GET_DIAGNOSTIC_CODES
     assert all(PRIVATE not in message and RID not in message for message in messages)
     assert result['persistent_journal']['generation'] == 3
     assert result['persistent_journal']['requests'][RID]['state'] == '検証中'

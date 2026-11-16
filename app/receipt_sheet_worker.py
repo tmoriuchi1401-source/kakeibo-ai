@@ -14,6 +14,7 @@ from .pdf_intake_registry import DriveRegistryIO, MAX_BYTES as REGISTRY_MAX_BYTE
 from .receipt_private_adapter import ReceiptPrivateAdapter, _expected, _log_failure
 from .receipt_sheet_connection import connect_existing_google_services
 from .receipt_sheet_validation import UNKNOWN, request_uuid
+from .receipt_get_diagnostics import ExistingGetDiagnostics, observe
 
 
 def binding_from_catalog(catalog, *, spreadsheet_id, private_id, folder_id,
@@ -95,6 +96,7 @@ class ExistingReceiptDriveIO(DriveRegistryIO):
                            owner_digest=digest(binding["owner_email"]))
         self.sa, self.http, self.writable = binding["service_email"], session, True
         self.deadline = None
+        self._receipt_get_diagnostics = ExistingGetDiagnostics()
 
     # Dedicated receipt transport only. These preserve the inherited checks,
     # request arguments/order and short-circuiting; shared PDF IO is unchanged.
@@ -125,13 +127,16 @@ class ExistingReceiptDriveIO(DriveRegistryIO):
     def read_versioned(self):
         self.acl()
         before = self._meta()
+        observe(self, "metadata", "transport_before", before)
         with _log_failure("receipt_private_transport_body_get_failed"):
             raw = self._request('GET', 'https://www.googleapis.com/drive/v2/files/'+self.config['file_id'],
                                 params={'alt':'media'}).content
+        observe(self, "body", raw)
         with _log_failure("receipt_private_transport_body_size_failed"):
             if len(raw) > REGISTRY_MAX_BYTES:
                 raise StateError('pdf_intake_registry_changed_during_read')
         after = self._meta()
+        observe(self, "metadata", "transport_after", after)
         with _log_failure("receipt_private_transport_metadata_consistency_failed"):
             if after != before:
                 raise StateError('pdf_intake_registry_changed_during_read')
