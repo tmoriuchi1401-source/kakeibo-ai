@@ -72,6 +72,7 @@ class OriginalSession:
     def __init__(self, w):
         self.fid = w.source['source_id']
         self.meta = deepcopy(w.metadata[self.fid])
+        self.meta['permissions'][1]['role'] = 'reader'  # PNG: new-mode minimum.
         self.raw = w.raw
         self.trace, self.metadata_reads, self.media_reads = [], 0, 0
         self.change_metadata = None
@@ -143,7 +144,7 @@ def damage(session, kind):
     elif kind == 'owner': m['owners'] = [dict(emailAddress='other@synthetic.invalid')]
     elif kind == 'acl_added': m['permissions'].append(dict(type='anyone', role='reader'))
     elif kind == 'acl_removed': m['permissions'].pop()
-    elif kind == 'acl_role': m['permissions'][1]['role'] = 'reader'
+    elif kind == 'acl_role': m['permissions'][1]['role'] = 'writer'
     elif kind == 'acl_expiry': m['permissions'][1]['expirationTime'] = '2099-01-01T00:00:00Z'
     elif kind == 'parent': m['parents'] = ['another-parent']
     elif kind == 'trashed': m['trashed'] = True

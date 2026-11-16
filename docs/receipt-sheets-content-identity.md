@@ -42,9 +42,11 @@ snapshot digest形式、result内UUID/digest/state、posting_authority=false、f
 ID・内容・MIME・所有者・ACL・親・trashの不一致や不明応答は、終端結果を書かず停止する。
 raw metadata全体は比較せず、version/name/modifiedTime/descriptionの変化だけでは停止しない。
 ACLはactive permissionのtype/role/emailを比較し、順序は無視する。
-現在のbinding契約はowner本人＋writerの指定service accountの2権限を要求する。
+現在のbinding契約はSheetではowner本人＋worker writer、PNG原本ではowner本人＋worker readerの
+2権限を要求する。新modeだけの最小権限修正で、旧経路は変更しない。
 追加・欠落・重複・role変更・有効期限・pending ownerを拒否する。
-この契約は既存baselineと同じであり、本変更が共有追加を許可したり実施したりするものではない。
+PNGのworker roleだけは旧writer要求からreaderへ変更した。実共有の追加は本人の別承認を要する。
+このコード修正が共有追加を実施したり、承認済みとみなしたりするものではない。
 親は固定folder ID一つ。所有者・原本ID・MIMEも各GETで必須。
 
 これは各観測点での検証であり、複数GETとSheets更新の間の原子的な原本固定ではない。

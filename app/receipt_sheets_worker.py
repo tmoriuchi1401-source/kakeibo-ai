@@ -119,7 +119,10 @@ class GooglePort:
         if response.status_code != 200:
             fail("write_unknown")
 
-    def metadata(self, fid):
+    def metadata(self, fid, *, worker_role):
+        # Explicit at each call site: Sheet needs writes, original never does.
+        if worker_role not in {"reader", "writer"}:
+            fail("metadata_role_invalid")
         response = self.session.get("https://www.googleapis.com/drive/v3/files/" + fid,
             params={"fields": "id,trashed,mimeType,parents,owners(emailAddress),permissions(type,role,emailAddress,deleted,expirationTime,pendingOwner)"},
             timeout=20, allow_redirects=False)
@@ -131,7 +134,7 @@ class GooglePort:
                 or m.get("id") != fid or m.get("trashed") is not False
                 or [o.get("emailAddress") for o in m.get("owners", [])] != [self.c["owner_email"]]
                 or {(p.get("type"), p.get("role"), p.get("emailAddress")) for p in m.get("permissions", []) if not p.get("deleted")}
-                    != {("user", "owner", self.c["owner_email"]), ("user", "writer", self.c["service_email"])}):
+                    != {("user", "owner", self.c["owner_email"]), ("user", worker_role, self.c["service_email"])}):
             fail("acl_or_identity_changed")
         # Compare only security-relevant metadata. Drive version/name/timestamps
         # can change without changing bytes or the approved access boundary.
@@ -143,14 +146,14 @@ class GooglePort:
     def source_check(self, source):
         checked_source(source)
         fid = source["source_id"]
-        m = self.metadata(fid)
+        m = self.metadata(fid, worker_role="reader")
         if (m.get("mimeType") != source["mime_type"]
                 or m.get("parents") != [self.c["folder_id"]]):
             fail("source_changed")
         response = self.session.get("https://www.googleapis.com/drive/v3/files/" + fid,
             params={"alt": "media"}, timeout=20, allow_redirects=False)
         if (response.status_code != 200 or sha256(response.content).hexdigest() != source["sha256"]
-                or self.metadata(fid) != m):
+                or self.metadata(fid, worker_role="reader") != m):
             fail("source_changed")
 
     def context_check(self, snapshot):
@@ -184,7 +187,7 @@ def connect(c, info):
     with AuthorizedSession(creds, max_refresh_attempts=0, refresh_status_codes=()) as session:
         session.trust_env = False
         port = GooglePort(session, c)
-        m = port.metadata(c["spreadsheet_id"])
+        m = port.metadata(c["spreadsheet_id"], worker_role="writer")
         if m.get("mimeType") != "application/vnd.google-apps.spreadsheet":
             fail("spreadsheet_changed")
         yield port

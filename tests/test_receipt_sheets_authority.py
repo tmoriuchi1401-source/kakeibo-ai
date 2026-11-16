@@ -228,6 +228,8 @@ def test_new_manual_dispatch_is_rejected_even_when_first_claim_never_committed()
 def test_actual_http_port_uses_only_management_tail_and_original_reads():
     w, c, _, js = registration()
     p = Port(js['rows'])
+    original_metadata = deepcopy(w.metadata[w.source['source_id']])
+    original_metadata['permissions'][1]['role'] = 'reader'
     class Response:
         status_code=200
         content=w.raw
@@ -238,7 +240,7 @@ def test_actual_http_port_uses_only_management_tail_and_original_reads():
             assert kw['timeout']==20 and kw['allow_redirects'] is False
             if 'sheets.googleapis.com' in url: return Response({'values':p.read()})
             assert url.endswith('/'+w.source['source_id'])
-            return Response(w.metadata[w.source['source_id']])
+            return Response(original_metadata)
         def put(self, url, **kw):
             assert "H2%3AJ2" in url and kw['params']=={'valueInputOption':'RAW'}
             assert kw['allow_redirects'] is False
