@@ -8,14 +8,28 @@ const RECEIPT_SHEETS_HEADERS = ['request_id','receipt_id','source_id','source_ve
 const RECEIPT_SHEETS_TAB = '_receipt_requests';
 const RECEIPT_SHEETS_STOP = 'RECEIPT_SHEETS_STOPPED'; // Circuit breaker, never a request record.
 
+function receiptSheetsSource_(s) {
+  const required=['classification','mime_type','sha256','source_id','transaction_kind'];
+  if(!s || typeof s!=='object' || Array.isArray(s) ||
+     !required.every(k=>Object.prototype.hasOwnProperty.call(s,k)) ||
+     Object.keys(s).some(k=>!required.includes(k) && k!=='version') ||
+     typeof s.source_id!=='string' || !/^[A-Za-z0-9_-]{10,128}$/.test(s.source_id) ||
+     typeof s.sha256!=='string' || !/^[a-f0-9]{64}$/.test(s.sha256) ||
+     !['image/png','image/jpeg','image/heic','image/heif'].includes(s.mime_type) ||
+     s.classification!=='normal' || s.transaction_kind!=='purchase' ||
+     Object.prototype.hasOwnProperty.call(s,'version') && typeof s.version!=='string')
+    throw Error('receipt_sheets_source_invalid');
+}
+
 function receiptSheetsCheckRow_(r,hash) {
   if(!Array.isArray(r) || r.length!==10 || !r.every(x=>typeof x==='string' && x.length<=40000) ||
      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(r[0]) ||
      !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(r[9]))
     throw Error('receipt_sheets_row_invalid');
   const s=JSON.parse(r[5]);
+  receiptSheetsSource_(s.source);
   if(receiptCanonical_(s)!==r[5] || hash(r[5])!==r[6] || s.case_id!==r[1] ||
-     !s.source || s.source.source_id!==r[2] || s.source.version!==r[3] || s.source.sha256!==r[4] ||
+     !s.source || s.source.source_id!==r[2] || (s.source.version || "")!==r[3] || s.source.sha256!==r[4] ||
      !['受付済み','検証中','検証済み・未記帳','修正が必要','保留'].includes(r[7]))
     throw Error('receipt_sheets_row_mismatch');
   if(['受付済み','検証中'].includes(r[7])) {
@@ -52,6 +66,7 @@ function receiptSheetsConfig_(props,allowDisabled=false) {
     throw Error('receipt_sheets_configuration_invalid');
   for(const [cid, item] of Object.entries(c.cases)) {
     const entry=JSON.parse(item.context_json), expected=JSON.parse(item.expected_json);
+    receiptSheetsSource_(expected.source);
     if(expected.case_id!==cid || receiptCanonical_(expected.source)!==receiptCanonical_(entry.anchor.source) ||
        expected.context_digest!==receiptSheetsHash_(receiptCanonical_(entry.anchor)) ||
        receiptCanonical_(expected.machine)!==receiptCanonical_(entry.decoder.machine) ||
@@ -171,13 +186,14 @@ function receiptSheetsRegister_(e,ports,props) {
   const capture=ports.caseForRequest(rid), candidate=capture.candidate;
   const draft=receiptSnapshot_(candidate,ports.hash);
   const snapshot={case_id:draft.case_id,source:draft.source,operations:draft.operations,context_json:capture.context_json};
+  receiptSheetsSource_(snapshot.source);
   const source=snapshot.source, text=receiptCanonical_(snapshot), hash=ports.hash(text);
   if(text.length>40000) throw Error('receipt_sheets_snapshot_capacity');
   // The product assumption excludes registering the same receipt twice.
   // An already accepted receipt is still rejected rather than silently reused.
   if(table.slice(1).some(r=>r[1]===snapshot.case_id || r[2]===source.source_id))
     throw Error('receipt_sheets_receipt_already_registered');
-  const row=[rid,snapshot.case_id,source.source_id,source.version,source.sha256,text,hash,'受付済み','',new Date().toISOString()];
+  const row=[rid,snapshot.case_id,source.source_id,source.version || '',source.sha256,text,hash,'受付済み','',new Date().toISOString()];
   // Freeze two reads of the current editable case before the single insert.
   // UI edits AFTER this capture are drafts; the worker never reads them.
   if(!same(capture,ports.caseForRequest(rid)) || !same(table,ports.read()))

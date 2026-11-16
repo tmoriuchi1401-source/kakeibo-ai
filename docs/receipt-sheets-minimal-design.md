@@ -22,7 +22,10 @@
 これらは既存5件の履歴・旧経路を壊さないため保存するが、新modeからは呼ばない。
 新mode `sheets-authority-v1` は既存 `receiptConnectionEdited` の先頭で選択される。
 Code.gsから純粋なdecoder/snapshot関数だけを再利用する。
-Pythonのbaseline検証 `_expected` はIOのない `receipt_sheet_context.expected_context` に抽出した。
+Pythonの新mode baseline検証はIOのない `receipt_sheets_context.expected_context` を使用する。
+旧 `receipt_sheet_context` / `receipt_sheet_decoder` は変更せず、新mode専用decoderを分離した。
+Drive version必須依存撤廃の最新仕様・scope・配置ゲートは
+[`receipt-sheets-content-identity.md`](receipt-sheets-content-identity.md) を参照。
 
 既存の `receiptConnectionConfigure/Start/Stop` もmodeを判定し、新経路へ分岐する。
 Configureはdisabled設定だけを保存し、旧journal用bindingの上書きを拒否する。
@@ -46,7 +49,7 @@ Stopは新modeの設定をdisabledにし、一時PATコピーだけを削除す�
 |---|---|---|
 |A|request_id|custom checkboxに含まれるUUIDv4|
 |B|receipt_id|既存case_id|
-|C:E|source_id / source_version / source_sha256|原本ID・版・bytes hash|
+|C:E|source_id / source_version / source_sha256|原本ID・任意の版監査文字列（空欄可）・bytes hash|
 |F|snapshot_json|case_id、source、operations、context_json|
 |G|snapshot_digest|FのPython/JS共通canonical JSONのSHA-256|
 |H|status|受付済み → 検証中 → 検証済み・未記帳 / 修正が必要 / 保留|
@@ -74,8 +77,9 @@ workerはsnapshot内contextとこのbindingの完全一致を確認する。
 4. 管理tabのheader・UUID一意性・空白行・既存receiptを確認して、末尾の空行へRAW PUTを一回。
 5. 同じ管理tabを独立GETし、新規行が一意で全文一致することを確認してからUUIDだけdispatchする。
 6. workerは固定snapshotを読み、検証中を一回保存・読戻しする。
-7. 既存 `review` / `registration_plan` を使用し、固定operations・固定候補・固定policyで検証。
-   既存原本GETで版・bytes hash・ACL・親を検証前後に照合する。確認UIは読まない。
+7. 既存の純粋 `preview_item_corrections` を使用し、固定operations・固定候補・固定policyで検証。
+   新mode専用contextで原本・本人合計確認を検証し、旧version必須schemaへ変換しない。
+   原本GETでID・MIME・所有者・ACL・親とbytes SHA-256を検証前後に照合する。確認UIは読まない。
 8. 結果書込み直前にUUID、snapshot全文とdigest、状態、行位置を再照合。
    H:Jだけを一回PUTして独立GETで確認。同じ管理行が終端となる。
 9. 既存G列は管理行をUUID＋receipt＋原本identityで参照し、1件だけで、result内UUID/digest/stateと

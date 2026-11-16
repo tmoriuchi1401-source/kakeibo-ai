@@ -13,8 +13,8 @@ from uuid import UUID
 from .category_rules import parse_rules
 from .drive_run_state import StateError
 from .page_receipt_model import digest
-from .receipt_item_correction_review import review, registration_plan
-from .receipt_sheet_context import expected_context
+from .receipt_item_correction_plan import preview_item_corrections
+from .receipt_sheets_context import expected_context
 from .reconciliation import parse_import_rows
 
 TAB = "_receipt_requests"
@@ -71,7 +71,7 @@ def record_row(rid, snapshot, *, now):
     request_id(rid)
     checked_snapshot(snapshot)
     s = snapshot["source"]
-    row = [rid, snapshot["case_id"], s["source_id"], s["version"], s["sha256"],
+    row = [rid, snapshot["case_id"], s["source_id"], s.get("version", ""), s["sha256"],
            canonical(snapshot), digest(snapshot), "受付済み", "", now]
     check_row(row)
     return row
@@ -85,7 +85,7 @@ def check_row(row):
     snapshot = parse(row[5])
     checked_snapshot(snapshot)
     s = snapshot["source"]
-    if (row[1:5] != [snapshot["case_id"], s["source_id"], s["version"], s["sha256"]]
+    if (row[1:5] != [snapshot["case_id"], s["source_id"], s.get("version", ""), s["sha256"]]
             or row[6] != digest(snapshot) or row[7] not in STATES
             or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", row[9])):
         fail("row_binding_invalid")
@@ -150,11 +150,12 @@ class SheetAuthority:
 def validate_frozen(snapshot):
     entry = checked_snapshot(snapshot)
     txs = parse_import_rows([entry["import_row"]])
-    output = review(txs[0], list(enumerate(entry["candidate_rows"], 2)), snapshot["source"],
-                    snapshot["operations"], entry["categories"],
-                    total_confirmation=entry["anchor"]["total_confirmation"],
+    preview = preview_item_corrections(txs[0], list(enumerate(entry["candidate_rows"], 2)),
+                    snapshot["operations"], entry["categories"], total_confirmed=True,
                     approved_product_rules=parse_rules(entry["rules"]))
-    return registration_plan(output["snapshot"], output)
+    return dict(state="検証済み・未記帳" if preview["status"] == "preview_balanced" else "修正が必要",
+                issues=deepcopy(preview["issues"]), items=deepcopy(preview["items"]),
+                receipt_total=preview["receipt_total"], posting_authority=False, financial_write_count=0)
 
 
 def execute(rid, *, authority, source_check, context_check, validate=validate_frozen):
@@ -189,7 +190,10 @@ def display_record(rid, rows, *, receipt_id, source):
         def read(self): return deepcopy(rows)
     try:
         _, row = SheetAuthority(ReadOnly()).find(rid)
-        if row[1:5] != [receipt_id, source["source_id"], source["version"], source["sha256"]]:
+        actual = parse(row[5])["source"]
+        # Historical version text is not an identity condition for this mode.
+        if (row[1] != receipt_id or {k: v for k, v in actual.items() if k != "version"}
+                != {k: v for k, v in source.items() if k != "version"}):
             fail("display_mismatch")
         return row[7] if row[7] in FINAL else "受付確認中・未記帳／チェックを繰り返さない"
     except Exception:
@@ -217,7 +221,7 @@ def result_formula(row):
         f'rs,FILTER({tab}A2:J1000,{tab}A2:A1000=rid),'
         'dg,INDEX(rs,1,7),st,INDEX(rs,1,8),res,INDEX(rs,1,9),'
         f'ok,AND(n=1,INDEX(rs,1,2)=$A{row},INDEX(rs,1,3)=$AL{row},'
-        f'INDEX(rs,1,4)=TO_TEXT($AM{row}),INDEX(rs,1,5)=$AN{row},'
+        f'INDEX(rs,1,5)=$AN{row},'
         'REGEXMATCH(dg,"^[a-f0-9]{64}$")),'
         f'IF(NOT(ok),"{UNKNOWN}",IF(OR(st="受付済み",st="検証中"),'
         '"受付確認中・未記帳／チェックを繰り返さない",'

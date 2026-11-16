@@ -1,6 +1,9 @@
 # G列式の修正と独立Sheets評価
 
 2026-11-16。基準commitは `e30f3bee1313105210ae020cdfc99a1be00cbd32`。
+本書は修正時点の履歴。後続の明示承認による新mode version任意化は
+[`receipt-sheets-content-identity.md`](receipt-sheets-content-identity.md) を参照。
+本書の実Sheets24条件は当時の式の証拠であり、後続の式の実Sheets検証を意味しない。
 変更対象はreview branchの式生成・回帰試験・記録と、承認済み独立SheetのG2だけ。
 Apps Script配置・認可・trigger作成・登録・worker実行は行っていない。
 

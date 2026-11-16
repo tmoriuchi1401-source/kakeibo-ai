@@ -66,7 +66,7 @@ const globals={PropertiesService:{getUserProperties:()=>props,getScriptPropertie
   }}
 };
 const ctx=vm.createContext(globals);
-for(const name of ['Code.gs','Connection.gs','Sheets.gs'])vm.runInContext(fs.readFileSync(__dirname+'/'+name,'utf8'),ctx);
+for(const name of ['Code.gs','Connection.gs','Sheets.gs'])vm.runInContext(fs.readFileSync((input.bundle_dir || __dirname)+'/'+name,'utf8'),ctx);
 const event={range,value:'register:'+input.request_id,oldValue:'ready:'+input.request_id};
 function call(){try{return ctx.receiptConnectionEdited(event);}catch(e){errors.push(e.message);return null;}}
 let setup=null,ready=true;

@@ -6,7 +6,8 @@ import os
 import re
 from urllib.parse import quote
 
-from .receipt_sheet_context import expected_context
+from .receipt_sheets_context import expected_context
+from .receipt_sheets_source import checked_source
 from .receipt_sheets_authority import (TAB, MAX_ROWS, SheetAuthority, UNKNOWN,
     canonical, execute, fail, parse, request_id)
 
@@ -120,22 +121,30 @@ class GooglePort:
 
     def metadata(self, fid):
         response = self.session.get("https://www.googleapis.com/drive/v3/files/" + fid,
-            params={"fields": "id,trashed,version,mimeType,parents,owners(emailAddress),permissions(type,role,emailAddress,deleted)"},
+            params={"fields": "id,trashed,mimeType,parents,owners(emailAddress),permissions(type,role,emailAddress,deleted,expirationTime,pendingOwner)"},
             timeout=20, allow_redirects=False)
         if response.status_code != 200:
             fail("metadata_failed")
         m = response.json()
-        if (m.get("id") != fid or m.get("trashed") is not False
+        permissions = [p for p in m.get("permissions", []) if not p.get("deleted")]
+        if (len(permissions) != 2 or any(p.get("expirationTime") or p.get("pendingOwner") for p in permissions)
+                or m.get("id") != fid or m.get("trashed") is not False
                 or [o.get("emailAddress") for o in m.get("owners", [])] != [self.c["owner_email"]]
                 or {(p.get("type"), p.get("role"), p.get("emailAddress")) for p in m.get("permissions", []) if not p.get("deleted")}
                     != {("user", "owner", self.c["owner_email"]), ("user", "writer", self.c["service_email"])}):
             fail("acl_or_identity_changed")
-        return m
+        # Compare only security-relevant metadata. Drive version/name/timestamps
+        # can change without changing bytes or the approved access boundary.
+        return dict(id=m["id"], trashed=False, mimeType=m.get("mimeType"),
+                    parents=sorted(m.get("parents", [])),
+                    owners=sorted(o["emailAddress"] for o in m["owners"]),
+                    permissions=sorted((p["type"], p["role"], p["emailAddress"]) for p in permissions))
 
     def source_check(self, source):
+        checked_source(source)
         fid = source["source_id"]
         m = self.metadata(fid)
-        if (m.get("version") != source["version"] or m.get("mimeType") != source["mime_type"]
+        if (m.get("mimeType") != source["mime_type"]
                 or m.get("parents") != [self.c["folder_id"]]):
             fail("source_changed")
         response = self.session.get("https://www.googleapis.com/drive/v3/files/" + fid,

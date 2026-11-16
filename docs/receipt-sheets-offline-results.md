@@ -1,6 +1,9 @@
 # Sheets正本経路：オフライン結果
 
-2026-11-16。**新経路27 passed、共通コード回帰を含め377 passed。実機・本番はNO-GO。**
+2026-11-16。**最新419 passed（従来378＋新規41）。実機・本番はNO-GO。**
+version任意化・原本bytes前後照合・専用bundleの最新結果は
+[`receipt-sheets-content-identity.md`](receipt-sheets-content-identity.md) を参照。
+以下は初期試験とG2修正時点の詳細を含む。
 
 実コードの `receiptConnectionEdited` → `receiptSheetsRegister_` をNode VMで実行し、
 保存した同じSheets行をPython `SheetAuthority` / 既存レシート検証へ渡した。

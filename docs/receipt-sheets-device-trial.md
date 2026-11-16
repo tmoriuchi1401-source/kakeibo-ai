@@ -1,6 +1,8 @@
 # 独立した合成レシート1件：実機試験準備
 
 2026-11-16。オフライン377件PASS後に作成。**手順のみ。現時点で実機試験NO-GO、本番NO-GO。**
+新modeのversion任意化と専用ZIPの最新手順は
+[`receipt-sheets-content-identity.md`](receipt-sheets-content-identity.md) を優先する。
 停止中workflowの再開、Google資産作成、実環境設定変更はこの文書では許可しない。
 本人が変更対象と副作用を確認し、禁止事項のうち必要なものを明示して別途承認するまで実行しない。
 
@@ -9,7 +11,8 @@
 新しい合成case `SHEETS-SYNTH-ONE` 一件を用いる。既存失敗5件と異なるUUID、receipt_id、原本を使用。
 架空店舗、商品A 500円・商品B 868円、支払総額1368円と印字した完全合成原本を用意する。
 保存済み候補は商品Bを730円として、本人がiPhoneで868円に修正し、許可された別カテゴリを選択する。
-店舗・日付・合計・候補・カテゴリ・原本hash/versionのbaselineは事前に確認し、権限を推定しない。
+店舗・日付・合計・候補・カテゴリ・原本ID/hash/MIME・所有者/ACL/親のbaselineは事前に確認し、権限を推定しない。
+新modeだけversionは任意監査情報。未取得でも偽の値を補わない。
 
 まず**読取とローカル準備だけ**で以下を埋める。現時点で具体的な利用可能資産bindingは未選定。
 
@@ -36,7 +39,7 @@ Apps Script検索の結果0件は、bound projectやtriggerの不存在を証明
 
 上のbindingが揃った後、実施前に次を具体値付きで提示する。この段階でも適用しない。
 
-1. review commit、対象試験workbook/tab、合成原本ID/hash/version、UUID、receipt_id。
+1. review commit、対象試験workbook/tab、合成原本ID/hash/MIME・所有者/ACL/親、UUID、receipt_id。
 2. ローカルで作った `make_binding(..., ref=review branch)` のdisabled config。
    `mode=sheets-authority-v1`。既存Secret `RECEIPT_VALIDATION_CONFIG_JSON` と既存User Propertiesへ
    適用する対象、現在値の保全方法を示す。既存5件用bindingと取り違えない。
