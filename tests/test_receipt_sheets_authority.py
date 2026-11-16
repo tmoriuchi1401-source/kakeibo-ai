@@ -32,7 +32,7 @@ def no_legacy_or_financial_io(monkeypatch):
     monkeypatch.setattr(SheetsDB, '__init__', deny)
 
 
-def registration(*, fault=None, repeat=False, category=False):
+def registration(*, fault=None, repeat=False, category=False, setup=False):
     world, row, catalog, _ = fixture()
     # This is an entirely independent fixture, never an existing failed receipt.
     c = make_binding(catalog, spreadsheet_id='synthetic-sheet', folder_id='synthetic-folder',
@@ -44,7 +44,7 @@ def registration(*, fault=None, repeat=False, category=False):
         row[21:23] = world.sheet['categories'][1]
     completed = subprocess.run(['node', 'apps-script/receipt-validation/Sheets.test.cjs'],
         input=json.dumps(dict(config=c, table=[HEADERS], ui=[row], request_id=RID,
-                             fault=fault, repeat=repeat)),
+                             fault=fault, repeat=repeat, setup=setup)),
         text=True, encoding='utf-8', capture_output=True, check=True)
     return world, c, row, json.loads(completed.stdout)
 
@@ -79,10 +79,13 @@ def display(world, port):
 
 
 def test_normal_one_checkbox_to_validated_unposted_and_existing_ui_intact():
-    w, c, original, js = registration()
+    w, c, original, js = registration(setup=True)
     assert js['output']['state'] == '受付済み' and not js['stopped']
     assert js['writes'] == 1 and js['dispatches'] == [dict(ref=c['ref'], inputs=dict(request_id=RID))]
     assert js['ui'] == [original]
+    assert js['setup']['enabled'] is False and js['setup']['token_copy'] is False
+    assert js['setup']['trigger_count'] == 1 and js['setup']['trigger_mutations'] == 0
+    assert js['errors'] == ['receipt_sheets_configuration_invalid']  # Stopped receiver rejected before IO.
     snapshot = check_row(js['rows'][1])
     assert '保持するメモ' not in js['rows'][1][5]
     assert snapshot['operations'][0]['changes']['amount'] == 868
@@ -101,6 +104,18 @@ def test_normal_one_checkbox_to_validated_unposted_and_existing_ui_intact():
     pattern=''.join(token[1:-1].replace('""','"') if token.startswith('"') else values[token] for token in tokens)
     assert re.fullmatch(pattern,port.rows[1][8])
     assert not re.fullmatch(pattern,port.rows[1][8].replace(RID,RID2))
+    # Lifecycle prerequisites are part of the same normal-registration family.
+    for gate, reason in [('missing','receipt_sheets_existing_trigger_required'),
+                         ('duplicate','receipt_sheets_existing_trigger_required'),
+                         ('latch','receipt_sheets_start_not_ready'),
+                         ('old_binding','receipt_sheets_existing_binding_conflict')]:
+        _, _, _, rejected=registration(setup=gate)
+        assert rejected['errors']==[reason] and rejected['writes']==0 and not rejected['dispatches']
+        assert rejected['setup']['enabled'] is False and rejected['setup']['trigger_mutations']==0
+        if gate=='old_binding':assert rejected['setup']['mode']=='old-journal'
+    _, _, _, stopped=registration(fault='stop_before_lock')
+    assert stopped['errors']==['receipt_sheets_configuration_invalid']
+    assert stopped['writes']==0 and not stopped['calls'] and not stopped['dispatches']
 
 
 def test_amount_and_category_changes_are_captured_and_later_ui_edits_are_drafts():

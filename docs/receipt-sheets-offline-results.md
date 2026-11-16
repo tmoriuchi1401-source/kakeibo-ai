@@ -8,6 +8,11 @@ Sheets CASはfakeにも実装していない。既存Google IOはモック、soc
 金融writerと旧ReceiptPrivateAdapterは新経路の試験でconstructorを禁止した。
 原本は完全合成bytes。実Google credentials・本番データ・既存失敗5件は使用しない。
 
+通常登録の試験は、既存関数名のConfigure → Start → 一回登録 → Stopも実コードで確認する。
+停止後のイベントはIO前に拒否される。既存triggerの欠落・重複、停止latch保持、旧binding上書きは
+開始前に拒否され、trigger作成・削除と受付writeは0。旧経路の設定・停止も既存回帰で確認する。
+受付の初期scope確認とlock取得の間に停止した場合も、lock内で再確認してIO前に拒否する。
+
 |指定された試験群|確認内容|結果|
 |---|---|---|
 |通常登録と正常完了|一度の登録チェック、受付行一回保存、UUIDだけdispatch、claim一回、結果一回、固定snapshotのまま検証済み・未記帳|PASS|

@@ -1,6 +1,6 @@
 /** Review-only Sheets authority receiver. No installer or resource creation.
  * Load Code.gs (pure decoder/snapshot helpers) and this file for the new path.
- * Connection.gs is needed only to retain the existing trigger handler name.
+ * Connection.gs routes the existing handler and Configure/Start/Stop names.
  * All data writes are single-attempt Sheets RAW values. No Drive journal IO.
  */
 const RECEIPT_SHEETS_HEADERS = ['request_id','receipt_id','source_id','source_version','source_sha256',
@@ -33,9 +33,16 @@ function receiptSheetsHash_(text) {
     .map(b=>('0'+((b+256)%256).toString(16)).slice(-2)).join('');
 }
 
-function receiptSheetsConfig_(props) {
+function receiptSheetsLocked_(work) {
+  const lock=LockService.getScriptLock();
+  if(!lock.tryLock(1000)) throw Error('receipt_sheets_busy');
+  try {return work();} finally {lock.releaseLock();}
+}
+
+function receiptSheetsConfig_(props,allowDisabled=false) {
   const c=JSON.parse(props.getProperty('RECEIPT_VALIDATION_CONFIG_JSON') || 'null');
-  if(!c || c.mode!=='sheets-authority-v1' || c.enabled!==true || c.synthetic_only!==true ||
+  if(!c || c.mode!=='sheets-authority-v1' || typeof c.enabled!=='boolean' ||
+     !allowDisabled && c.enabled!==true || c.synthetic_only!==true ||
      c.repository!=='tmoriuchi1401-source/kakeibo-ai' || c.workflow!=='category-sheet-request.yml' ||
      !/^review\/receipt-sheets-[A-Za-z0-9/_-]+$/.test(c.ref) ||
      !['spreadsheet_id','folder_id'].every(k=>/^[A-Za-z0-9_-]{10,150}$/.test(c[k])) ||
@@ -52,6 +59,59 @@ function receiptSheetsConfig_(props) {
       throw Error('receipt_sheets_context_invalid');
   }
   return c;
+}
+
+function receiptSheetsConfigure() {
+  return receiptSheetsLocked_(()=>{
+    // Explicit invocation only after approval. Reuse an existing token; no setup IO.
+    const staged=PropertiesService.getScriptProperties(), props=PropertiesService.getUserProperties();
+    const c=receiptSheetsConfig_(staged,true);
+    if(c.enabled) throw Error('receipt_sheets_stage_disabled_configuration');
+    const previous=JSON.parse(props.getProperty('RECEIPT_VALIDATION_CONFIG_JSON') || 'null');
+    // Never overwrite an old journal trial's binding, even when it is disabled.
+    if(previous && (previous.mode!=='sheets-authority-v1' || previous.enabled ||
+       receiptCanonical_(previous)!==receiptCanonical_(c)))
+      throw Error('receipt_sheets_existing_binding_conflict');
+    const token=props.getProperty('RECEIPT_GITHUB_TOKEN') || staged.getProperty('CATEGORY_GITHUB_TOKEN') ||
+      props.getProperty('CATEGORY_GITHUB_TOKEN');
+    if(!token || !token.startsWith('github_pat_')) throw Error('receipt_sheets_token_missing');
+    props.setProperty('RECEIPT_VALIDATION_CONFIG_JSON',JSON.stringify(c));
+    props.setProperty('RECEIPT_GITHUB_TOKEN',token);
+    staged.deleteProperty('RECEIPT_VALIDATION_CONFIG_JSON');
+    staged.deleteProperty('CATEGORY_GITHUB_TOKEN');
+  });
+}
+
+function receiptSheetsStart() {
+  return receiptSheetsLocked_(()=>{
+    const props=PropertiesService.getUserProperties(), c=receiptSheetsConfig_(props,true);
+    if(c.enabled || props.getProperty(RECEIPT_SHEETS_STOP) || props.getProperty('RECEIPT_VALIDATION_STOPPED') ||
+       !props.getProperty('RECEIPT_GITHUB_TOKEN')) throw Error('receipt_sheets_start_not_ready');
+    const triggers=ScriptApp.getProjectTriggers();
+    if(triggers.length!==1 || triggers[0].getHandlerFunction()!=='receiptConnectionEdited' ||
+       triggers[0].getTriggerSourceId()!==c.spreadsheet_id ||
+       triggers[0].getEventType()!==ScriptApp.EventType.ON_EDIT)
+      throw Error('receipt_sheets_existing_trigger_required');
+    const rows=receiptSheetsPorts_(c,props).read(), seen=new Set();
+    if(!rows.length || rows.length>1000 || receiptCanonical_(rows[0])!==receiptCanonical_(RECEIPT_SHEETS_HEADERS))
+      throw Error('receipt_sheets_table_invalid');
+    for(const row of rows.slice(1)) {
+      receiptSheetsCheckRow_(row,receiptSheetsHash_);
+      if(seen.has(row[0])) throw Error('receipt_sheets_row_missing_or_duplicate');
+      seen.add(row[0]);
+    }
+    c.enabled=true;props.setProperty('RECEIPT_VALIDATION_CONFIG_JSON',JSON.stringify(c));
+    // No trigger creation, Google data write or GitHub flag change.
+  });
+}
+
+function receiptSheetsStop() {
+  return receiptSheetsLocked_(()=>{
+    const props=PropertiesService.getUserProperties(), c=receiptSheetsConfig_(props,true);
+    c.enabled=false;props.setProperty('RECEIPT_VALIDATION_CONFIG_JSON',JSON.stringify(c));
+    props.deleteProperty('RECEIPT_GITHUB_TOKEN'); // Only the trial copy, never the source PAT.
+    // Existing trigger, request rows and uncertainty latch remain untouched.
+  });
 }
 
 function receiptSheetsPorts_(c,props) {
@@ -142,8 +202,10 @@ function receiptSheetsEdited(e) {
   if(!e || !e.range || e.range.getSheet().getParent().getId()!==c.spreadsheet_id ||
      e.range.getSheet().getName()!=='確認' || e.range.getRow()<2 ||
      e.range.getColumn()!==9 || e.range.getNumRows()!==1 || e.range.getNumColumns()!==1) return null;
-  const lock=LockService.getScriptLock();
-  if(!lock.tryLock(1000)) throw Error('receipt_sheets_busy');
-  try {return receiptSheetsRegister_(e,receiptSheetsPorts_(c,props),props);}
-  finally {lock.releaseLock();}
+  return receiptSheetsLocked_(()=>{
+    // Stop may have run after the scope check but before acquiring this lock.
+    const active=receiptSheetsConfig_(props);
+    if(receiptCanonical_(active)!==receiptCanonical_(c)) throw Error('receipt_sheets_configuration_changed');
+    return receiptSheetsRegister_(e,receiptSheetsPorts_(active,props),props);
+  });
 }

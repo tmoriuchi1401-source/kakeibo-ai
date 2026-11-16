@@ -43,6 +43,8 @@ function receiptConnectionConfigure() {
   // Explicit editor invocation AFTER approval. Same staging -> User Properties
   // pattern as category-submit; no new PAT, token scope or trigger here.
   const staged=PropertiesService.getScriptProperties(), props=PropertiesService.getUserProperties();
+  const selected=JSON.parse(staged.getProperty(RECEIPT_CONNECTION_CONFIG) || 'null');
+  if(selected && selected.mode==='sheets-authority-v1') return receiptSheetsConfigure();
   const c=receiptConnectionConfig_(staged,true);
   if(c.enabled) throw Error('receipt_connection_stage_disabled_configuration');
   const token=staged.getProperty('CATEGORY_GITHUB_TOKEN') || props.getProperty('CATEGORY_GITHUB_TOKEN');
@@ -55,7 +57,10 @@ function receiptConnectionConfigure() {
 
 function receiptConnectionStart() {
   // Separately approved, explicit editor invocation. Never installs itself.
-  const props=PropertiesService.getUserProperties(), c=receiptConnectionConfig_(props,true);
+  const props=PropertiesService.getUserProperties();
+  const selected=JSON.parse(props.getProperty(RECEIPT_CONNECTION_CONFIG) || 'null');
+  if(selected && selected.mode==='sheets-authority-v1') return receiptSheetsStart();
+  const c=receiptConnectionConfig_(props,true);
   if(c.enabled || props.getProperty(RECEIPT_CONNECTION_STOP) ||
      !props.getProperty('RECEIPT_GITHUB_TOKEN') || ScriptApp.getProjectTriggers().length!==0)
     throw Error('receipt_connection_start_not_ready');
@@ -65,7 +70,10 @@ function receiptConnectionStart() {
 }
 
 function receiptConnectionStop() {
-  const props=PropertiesService.getUserProperties(), c=receiptConnectionConfig_(props,true);
+  const props=PropertiesService.getUserProperties();
+  const selected=JSON.parse(props.getProperty(RECEIPT_CONNECTION_CONFIG) || 'null');
+  if(selected && selected.mode==='sheets-authority-v1') return receiptSheetsStop();
+  const c=receiptConnectionConfig_(props,true);
   c.enabled=false;receiptConnectionStoreConfig_(c,props);
   const own=ScriptApp.getProjectTriggers().filter(t=>t.getHandlerFunction()==='receiptConnectionEdited' &&
     t.getTriggerSourceId()===c.spreadsheet_id);

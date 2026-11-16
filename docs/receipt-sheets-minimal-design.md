@@ -24,6 +24,18 @@
 Code.gsから純粋なdecoder/snapshot関数だけを再利用する。
 Pythonのbaseline検証 `_expected` はIOのない `receipt_sheet_context.expected_context` に抽出した。
 
+既存の `receiptConnectionConfigure/Start/Stop` もmodeを判定し、新経路へ分岐する。
+Configureはdisabled設定だけを保存し、旧journal用bindingの上書きを拒否する。
+Startは同じSheetを指す既存ON_EDIT triggerがproject内に一つだけあることを確認し、
+管理tabをGETで検査してから設定をenabledにする。trigger作成・削除は行わない。
+欠落・重複・停止latch保持中は開始を拒否する。
+Stopは新modeの設定をdisabledにし、一時PATコピーだけを削除する。
+既存trigger・正本行・停止latchを保持し、結果不明を解除しない。
+設定・開始・停止・受付は同じScriptLockを使用する。受付はlock取得後にもenabled設定を読み直すため、
+停止前に設定を読んで待機していたイベントも、停止後に古い設定で受付を続行しない。
+これらは本人承認後の明示操作用コードであり、review branchの保存では実行されない。
+[Triggerの識別情報](https://developers.google.com/apps-script/reference/script/trigger)の読取scopeは既存manifestのscript.scriptapp内に収まり、追加scopeは不要。
+
 ## 唯一の受付・検証正本
 
 同じworkbookの `_receipt_requests`、A1:J1000。行1は下記の固定header、最大999要求。
@@ -124,6 +136,7 @@ token取得も一回、credential refresh replay・HTTP redirects・HTTP retry�
 
 オフラインの合成検証のみ合格。Google実APIの書込み、式の実Sheets engine評価、
 iPhone表示・一回操作の実測、管理tabの全writer排除は未実証。
-既存5件の取得・修正・再実行、Google実環境操作は今回ゼロ。
+既存5件の個別本文取得・修正・再実行、Google実環境へのwriteはゼロ。
+試験資産候補のメタデータ検索だけを行い、利用可能なbindingは未確定のまま。
 新規サービス・Firestore・Drive JSON journal・復旧store・金融writeは新経路にない。
 実機試験準備と判定は [試験手順](receipt-sheets-device-trial.md) を参照する。

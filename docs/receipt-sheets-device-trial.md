@@ -25,6 +25,13 @@
 これらは「これから新規サービスを作るリスト」ではない。既存資産と既存権限だけで成立しなければNO-GOで停止する。
 既存5件のsource/journal/cache/checkboxは読書き・再実行せず、その案件で試さない。
 
+2026-11-16の追加確認：現行mainの `category-sheet-request.yml` にUUID入力のworkflow_dispatchが
+登録済みであることをGitHub GETで確認した。main変更が必要とまでは判定していない。
+Driveではreceipt/レシートに関係するSpreadsheetとApps Scriptのメタデータだけを検索した。
+本番・既存5件・過去検証用の候補が含まれ、今回使える独立bindingは未確定。
+Apps Script検索の結果0件は、bound projectやtriggerの不存在を証明しない。
+確認タブ本文・旧journal・原本内容はこの検索では取得せず、Google writeは0。
+
 ## 承認のために提示する変更表
 
 上のbindingが揃った後、実施前に次を具体値付きで提示する。この段階でも適用しない。
@@ -40,6 +47,14 @@
    `ready:<UUID>` / `register:<UUID>` custom checkboxを割当て、同じGセルに `result_formula(row)` を設定する差分。
    新しい確認画面やボタンは作らない。別の手動準備操作を本人の登録手順に追加しない。
 5. 管理tab、既存trigger、config、停止latchの現在状態と停止手順。latchの自動解除・旧案件の復旧は含めない。
+
+承認された独立projectでは、既存の関数名を使用する。
+`receiptConnectionConfigure` はstagingのdisabled新mode設定をUser Propertiesへ移す。
+旧journal用のUser bindingが残るprojectへの上書きは拒否されるため、そのprojectを流用しない。
+`receiptConnectionStart` は既存のON_EDIT triggerを検査してから有効化する。
+triggerがなければ停止し、作成を試みない。
+`receiptConnectionStop` は受付を無効化し、trial用PATコピーを削除する。
+trigger、受付行、停止latchは変更しない。GitHub側の停止flagも別途承認された手順でfalseへ戻す。
 
 ## 承認後に限る一件の手順
 
