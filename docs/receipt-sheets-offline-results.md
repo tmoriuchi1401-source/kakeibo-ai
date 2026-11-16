@@ -26,7 +26,8 @@ Sheets CASはfakeにも実装していない。既存Google IOはモック、soc
 応答喪失後の完全な終端行は、別の独立読取が結果を確定できることも確認した。
 不明応答そのものを成功扱いした試験ではない。詳細な意味は設計書「再実行拒否と不明結果」に記載。
 生成されたG列式の正規表現operandを解釈し、実際のUTF-8結果JSONを受理し、別UUIDを拒否することを確認。
-LET/FILTERを含む式全体の実Sheets engine動作は未試験で、実機手順の確認対象。
+初版の式全体の実Sheets評価では構文エラーが見つかった。修正後の独立Sheetでの
+24条件の評価結果と、その証明範囲は `receipt-sheets-formula-repair.md` に記録した。
 
 再現コマンド（repository root、既存のtest dependenciesとNodeが必要）：
 
@@ -34,7 +35,7 @@ LET/FILTERを含む式全体の実Sheets engine動作は未試験で、実機手
 python -m pytest tests/test_receipt_sheets_authority.py tests/test_receipt_sheet_worker.py tests/test_receipt_sheet_connection.py tests/test_receipt_private_adapter.py tests/test_receipt_sheet_decoder.py tests/test_receipt_sheet_validation.py tests/test_receipt_item_correction_plan.py tests/test_receipt_confirmation_ui.py -q --disable-warnings --tb=short --junitxml=../offline-results.xml
 ```
 
-変更した共有decoder/baseline抽出の回帰を含む350件と、新経路27件の計377件。
+変更した共有decoder/baseline抽出の回帰を含む350件と、新経路28件の計378件。
 試験はローカルPython 3.14 / Nodeで実行。workflow指定のPython 3.12でのActions実行は未実施。
 JUnit証拠は作業workspaceの `offline-results.xml` に保存（実環境の状態証拠とは区別する）。
 行位置検査はTOCTOUの解決ではない。管理tabに同時構造変更がない前提の成立証明はオフライン結果に含まれない。

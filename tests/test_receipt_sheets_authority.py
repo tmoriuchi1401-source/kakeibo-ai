@@ -260,3 +260,34 @@ def test_one_serial_group_and_existing_result_cell_contract():
     assert 'COUNTIF' in formula and 'n=1' in formula and 'UNIQUE' not in formula
     assert '_receipt_validation_results' not in formula and '_receipt_requests' in formula
     assert '登録時の内容' in formula and 'financial_write_count' in formula
+
+
+def test_result_formula_closes_let_before_iferror_fallback():
+    # Validate the whole generated expression, not only the result regex.
+    # Appending a ')' at EOF balances text but still leaves IFERROR's fallback
+    # inside LET; function arity checks catch that incorrect repair too.
+    expression = result_formula(2)
+    stack, functions, quoted, pos = [], [], False, 0
+    while pos < len(expression):
+        char = expression[pos]
+        if char == '"':
+            if quoted and pos+1 < len(expression) and expression[pos+1] == '"':
+                pos += 2
+                continue
+            quoted = not quoted
+        elif not quoted:
+            if char == '(':
+                name = re.search(r'([A-Z][A-Z0-9_]*)$', expression[:pos])
+                stack.append([name.group(1) if name else None, 1])
+            elif char == ',':
+                assert stack, 'comma outside function'
+                stack[-1][1] += 1
+            elif char == ')':
+                assert stack, 'unexpected closing parenthesis'
+                functions.append(stack.pop())
+        pos += 1
+    assert not quoted and not stack, 'unterminated string or function'
+    for name, argc in functions:
+        if name == 'IF': assert argc == 3
+        if name == 'IFERROR': assert argc == 2
+        if name == 'LET': assert argc >= 3 and argc % 2 == 1

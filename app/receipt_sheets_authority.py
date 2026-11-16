@@ -222,6 +222,6 @@ def result_formula(row):
         f'IF(NOT(ok),"{UNKNOWN}",IF(OR(st="受付済み",st="検証中"),'
         '"受付確認中・未記帳／チェックを繰り返さない",'
         f'IF(AND(OR(st="検証済み・未記帳",st="修正が必要",st="保留"),REGEXMATCH(res,{pattern})),'
-        f'st&"（登録時の内容）","{UNKNOWN}"))),'
+        f'st&"（登録時の内容）","{UNKNOWN}")))),'
         f'IF(OR($I{row}="",LEFT(TO_TEXT($I{row}),6)="ready:"),"編集中・未登録","{UNKNOWN}")))'
     )
