@@ -310,6 +310,26 @@ class ReceiptPrivateAdapter:
             _, tag, value = self._load()
             return deepcopy(value["journal"]), tag
 
+    def read_checkpoint(self):
+        """Independent GET-only evidence; never clears a previous write stop.
+
+        New reconciliation callers need the exact envelope and metadata, not a
+        reconstructed journal. Existing read/write HTTP paths are unchanged.
+        """
+        with self._lock:
+            try:
+                raw, tag, value = self._load()
+                metadata = self._metadata()
+                again, next_tag, _ = self._load()
+                final = self._metadata()
+                if ((raw, tag) != (again, next_tag) or metadata != final
+                        or metadata[1]["etag"] != tag):
+                    _fail("checkpoint_unknown")
+                return dict(raw=raw, etag=tag, envelope=deepcopy(value), metadata=metadata)
+            except Exception:
+                self._stopped = True
+                _fail("checkpoint_unknown")
+
     def read_catalog(self):
         with self._lock:
             _, tag, value = self._load()

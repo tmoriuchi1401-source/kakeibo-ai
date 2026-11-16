@@ -343,6 +343,30 @@ def execute_request(request_id, *, requests, reader, journal):
     return dict(request_id=request_id, state=UNKNOWN, posting_authority=False, financial_write_count=0)
 
 
+def checked_registration_result(snapshot, *, reader, begin_phase):
+    """Shared post-claim checks. Failures propagate; claim is not validation.
+
+    Caller owns failure policy: normal work records its existing hold; limited
+    recovery stops before writing. All phase names below are closed literals.
+    """
+    fresh = reader(snapshot["case_id"])
+    if fresh["request_snapshot"] != snapshot:
+        raise StateError("receipt_validation_captured_input_changed")
+    LOG.warning("receipt_worker_source_check_ok")
+    begin_phase("receipt_worker_registration_plan")
+    plan = registration_plan(fresh["snapshot"], fresh)
+    LOG.warning("receipt_worker_registration_plan_ok")
+    begin_phase("receipt_worker_source_recheck")
+    again = reader(snapshot["case_id"])
+    if again["snapshot"] != fresh["snapshot"] or again["request_snapshot"] != snapshot:
+        raise StateError("receipt_validation_concurrent_edit")
+    result = {k: deepcopy(plan[k]) for k in
+              ("state", "issues", "snapshot_digest", "posting_authority", "financial_write_count")}
+    result["snapshot_digest"] = snapshot["digest"]
+    LOG.warning("receipt_worker_source_recheck_ok")
+    return result
+
+
 def execute_accepted_request(request_id, *, reader, journal):
     """Preferred Actions entry: the private journal is the ONLY request record.
 
@@ -363,25 +387,12 @@ def execute_accepted_request(request_id, *, reader, journal):
     LOG.warning("receipt_worker_claim_verified")
     phase = "receipt_worker_source_check"
     LOG.warning("%s_begin", phase)
+    def begin_phase(next_phase):
+        nonlocal phase
+        phase = next_phase
+        LOG.warning("%s_begin", phase)
     try:
-        snapshot = record["snapshot"]
-        fresh = reader(snapshot["case_id"])
-        if fresh["request_snapshot"] != snapshot:
-            raise StateError("receipt_validation_captured_input_changed")
-        LOG.warning("%s_ok", phase)
-        phase = "receipt_worker_registration_plan"
-        LOG.warning("%s_begin", phase)
-        plan = registration_plan(fresh["snapshot"], fresh)
-        LOG.warning("%s_ok", phase)
-        phase = "receipt_worker_source_recheck"
-        LOG.warning("%s_begin", phase)
-        again = reader(snapshot["case_id"])
-        if again["snapshot"] != fresh["snapshot"] or again["request_snapshot"] != snapshot:
-            raise StateError("receipt_validation_concurrent_edit")
-        result = {k: deepcopy(plan[k]) for k in
-                  ("state", "issues", "snapshot_digest", "posting_authority", "financial_write_count")}
-        result["snapshot_digest"] = snapshot["digest"]
-        LOG.warning("%s_ok", phase)
+        result = checked_registration_result(record["snapshot"], reader=reader, begin_phase=begin_phase)
     except Exception:
         LOG.warning("%s_failed", phase)
         result = dict(state="保留", issues=["receipt_validation_source_or_input_changed"],
