@@ -30,24 +30,27 @@ snapshot digest形式、result内UUID/digest/state、posting_authority=false、f
 
 ## 原本を確認する順序
 
-承認済みbindingのsource、owner_email、service_email、folder_idへ固定して、workerは次を行う。
+最新の合成試験限定の責任分担・制約・手順は
+[`receipt-sheets-split-verification.md`](receipt-sheets-split-verification.md) を参照する。
+承認済みbindingのsourceとowner_emailへ固定して、workerは次を行う。
 
-1. Drive metadata GET：ID、trashed=false、MIME、所有者、ACL、親を確認。
+1. Drive metadata GET：ID、trashed=false、MIME、所有者を確認。
 2. 同じIDのmedia GET：実bytesのSHA-256を固定値と比較。
 3. metadataを再GET：上記のsecurity属性が一致していることを確認。
 4. 固定snapshotの純粋な商品検証を実行。
 5. 1〜3を再度実施し、検証後の実bytesを再取得・照合。
 6. 管理行のUUID・snapshot全文/digest・状態を再照合し、H:Jだけを一回更新・独立読戻し。
 
-ID・内容・MIME・所有者・ACL・親・trashの不一致や不明応答は、終端結果を書かず停止する。
+ID・内容・MIME・所有者・trashの不一致や不明応答は、終端結果を書かず停止する。
 raw metadata全体は比較せず、version/name/modifiedTime/descriptionの変化だけでは停止しない。
-ACLはactive permissionのtype/role/emailを比較し、順序は無視する。
+ACLと親はownerが事前・事後GETする。ACLはactive permissionのtype/role/emailを比較し、順序は無視する。
 現在のbinding契約はSheetではowner本人＋worker writer、PNG原本ではowner本人＋worker readerの
 2権限を要求する。新modeだけの最小権限修正で、旧経路は変更しない。
-追加・欠落・重複・role変更・有効期限・pending ownerを拒否する。
+owner検査で追加・欠落・重複・role変更・有効期限・pending ownerを拒否する。
 PNGのworker roleだけは旧writer要求からreaderへ変更した。実共有の追加は本人の別承認を要する。
 このコード修正が共有追加を実施したり、承認済みとみなしたりするものではない。
-親は固定folder ID一つ。所有者・原本ID・MIMEも各GETで必須。
+owner検査の親は固定folder ID一つ。workerは所有者・原本ID・MIMEを各GETで必須とする。
+workerによる実行中のACL/親変更検出は保証しない。owner事後検査が不一致なら全体NO-GO。
 
 これは各観測点での検証であり、複数GETとSheets更新の間の原子的な原本固定ではない。
 観測間に変更して元に戻された事象をすべて検出できるとは扱わない。

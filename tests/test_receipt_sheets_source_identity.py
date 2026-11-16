@@ -15,6 +15,7 @@ from app.receipt_sheets_context import expected_context
 from app.receipt_sheets_decoder import decode_receipt_row
 from app.receipt_sheets_source import checked_source
 from app.receipt_sheets_worker import GooglePort, make_binding
+from app.receipt_sheets_owner_check import check_owner_metadata
 from app.receipt_sheet_context import expected_context as legacy_context
 from app.receipt_sheet_decoder import decode_receipt_row as legacy_decode
 from test_receipt_private_adapter import fixture
@@ -154,20 +155,35 @@ def damage(session, kind):
 @pytest.mark.parametrize('kind', ['content', 'id', 'mime', 'owner', 'acl_added', 'acl_removed',
                                   'acl_role', 'acl_expiry', 'parent', 'trashed'])
 @pytest.mark.parametrize('phase', ['before', 'after'])
-def test_security_or_content_mismatch_stops_without_terminal_result(kind, phase):
+def test_worker_identity_failures_stop_and_owner_access_failures_gate_trial(kind, phase):
     w, c, _, js = received()
     session = OriginalSession(w)
+    owner_responsibility = kind in {'acl_added', 'acl_removed', 'acl_role', 'acl_expiry', 'parent'}
+    def owner_check():
+        return check_owner_metadata(w.source['source_id'], session.meta, c,
+                                    worker_role='reader', mime_type=w.source['mime_type'])
     if phase == 'before': damage(session, kind)
+    if owner_responsibility and phase == 'before':
+        with pytest.raises(StateError): owner_check()
+        assert session.trace == []  # Owner gate stops the trial before worker.
+        return
     result, p = run_case(w, c, js, session,
                         change=(lambda s: damage(s, kind)) if phase == 'after' else None)
-    assert result['state'] == UNKNOWN and len(p.writes) == 1
-    assert p.rows[1][7:9] == ['検証中', '']
     assert result['financial_write_count'] == 0 and result['posting_authority'] is False
-    if phase == 'before': assert 'validate' not in session.trace
+    if owner_responsibility:
+        # Content validation may finish. Only owner postcheck detects this drift;
+        # its failure means the overall synthetic trial is NOT PASS.
+        assert result['state'] == '検証済み・未記帳' and len(p.writes) == 2
+        with pytest.raises(StateError): owner_check()
+    else:
+        assert result['state'] == UNKNOWN and len(p.writes) == 1
+        assert p.rows[1][7:9] == ['検証中', '']
+        if phase == 'before': assert 'validate' not in session.trace
+
 
 
 @pytest.mark.parametrize('kind', ['acl_added', 'parent', 'mime'])
-def test_access_change_while_reading_original_stops_at_metadata_readback(kind):
+def test_metadata_readback_checks_identity_while_owner_checks_access(kind):
     w, c, _, js = received()
     session = OriginalSession(w)
     def mutate(data, n):
@@ -176,8 +192,13 @@ def test_access_change_while_reading_original_stops_at_metadata_readback(kind):
             data.clear(); data.update(deepcopy(session.meta))
     session.change_metadata = mutate
     result, p = run_case(w, c, js, session)
-    assert result['state'] == UNKNOWN and len(p.writes) == 1
-    assert session.media_reads == 1 and 'validate' not in session.trace
+    if kind == 'mime':
+        assert result['state'] == UNKNOWN and len(p.writes) == 1
+        assert session.media_reads == 1 and 'validate' not in session.trace
+    else:
+        assert result['state'] == '検証済み・未記帳' and len(p.writes) == 2
+        with pytest.raises(StateError):
+            check_owner_metadata(w.source['source_id'], session.meta, c, worker_role='reader', mime_type='image/png')
 
 
 def test_metadata_order_is_not_a_security_change():

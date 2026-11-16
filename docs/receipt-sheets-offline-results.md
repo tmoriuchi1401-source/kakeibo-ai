@@ -1,6 +1,7 @@
 # Sheets正本経路：オフライン結果
 
-2026-11-16。**最新419 passed（従来378＋新規41）。実機・本番はNO-GO。**
+2026-11-17。**最新472 passed（従来449＋新規23）。実機・本番はNO-GO。**
+最新の責任分担と検証制約は [`receipt-sheets-split-verification.md`](receipt-sheets-split-verification.md) を参照。
 version任意化・原本bytes前後照合・専用bundleの最新結果は
 [`receipt-sheets-content-identity.md`](receipt-sheets-content-identity.md) を参照。
 以下は初期試験とG2修正時点の詳細を含む。

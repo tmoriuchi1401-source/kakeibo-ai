@@ -1,10 +1,11 @@
-"""New-mode minimum ACL: exact owner+writer Sheet / owner+reader original."""
+"""Owner-side new-mode minimum ACL: exact owner+writer Sheet / owner+reader original."""
 from copy import deepcopy
 
 import pytest
 
 from app.drive_run_state import StateError
 from app.receipt_sheets_worker import GooglePort, connect
+from app.receipt_sheets_owner_check import check_owner_metadata
 from test_receipt_sheets_source_identity import received, OriginalSession, Response
 
 
@@ -48,10 +49,19 @@ def resource(asset):
     return w, c, session, fid, role
 
 
+def owner_metadata(session, c, fid, role):
+    mime = 'application/vnd.google-apps.spreadsheet' if fid == c['spreadsheet_id'] else 'image/png'
+    if role not in {'reader', 'writer'}:
+        return check_owner_metadata(fid, {}, c, worker_role=role, mime_type=mime)
+    m = session.get('https://www.googleapis.com/drive/v3/files/' + fid,
+        params={'fields': 'id,mimeType,parents,permissions'}, timeout=20, allow_redirects=False).json()
+    return check_owner_metadata(fid, m, c, worker_role=role, mime_type=mime)
+
+
 @pytest.mark.parametrize('asset', ['sheet', 'png'])
 def test_exact_minimum_acl_is_accepted(asset):
     _, c, session, fid, role = resource(asset)
-    m = GooglePort(session, c).metadata(fid, worker_role=role)
+    m = owner_metadata(session, c, fid, role)
     assert m['permissions'] == sorted([('user', 'owner', c['owner_email']),
                                         ('user', role, c['service_email'])])
     assert len(session.calls) == 1
@@ -64,7 +74,7 @@ def test_insufficient_or_excess_worker_role_is_rejected(asset, wrong):
     session.meta[fid]['permissions'][1]['role'] = (
         'reader' if role == 'writer' else 'writer') if wrong == 'opposite' else wrong
     with pytest.raises(StateError, match='acl_or_identity_changed'):
-        GooglePort(session, c).metadata(fid, worker_role=role)
+        owner_metadata(session, c, fid, role)
 
 
 @pytest.mark.parametrize('asset', ['sheet', 'png'])
@@ -75,7 +85,7 @@ def test_any_extra_active_sharing_recipient_is_rejected(asset, extra):
     _, c, session, fid, role = resource(asset)
     session.meta[fid]['permissions'].append(deepcopy(extra))
     with pytest.raises(StateError, match='acl_or_identity_changed'):
-        GooglePort(session, c).metadata(fid, worker_role=role)
+        owner_metadata(session, c, fid, role)
 
 
 @pytest.mark.parametrize('asset', ['sheet', 'png'])
@@ -88,10 +98,10 @@ def test_missing_duplicate_wrong_or_transferring_worker_is_rejected(asset, damag
     elif damage == 'wrong_principal': permissions[1]['emailAddress'] = 'other@synthetic.invalid'
     elif damage == 'pending_owner': permissions[1]['pendingOwner'] = True
     with pytest.raises(StateError, match='acl_or_identity_changed'):
-        GooglePort(session, c).metadata(fid, worker_role=role)
+        owner_metadata(session, c, fid, role)
 
 
-def test_png_promoted_to_writer_during_download_is_rejected_at_readback():
+def test_png_promotion_is_not_seen_by_worker_but_is_rejected_by_owner_postcheck():
     w, c, session, fid, _ = resource('png')
     original = session.get
     def changed(url, **kw):
@@ -99,9 +109,10 @@ def test_png_promoted_to_writer_during_download_is_rejected_at_readback():
         if kw['params'] == {'alt': 'media'}: session.meta[fid]['permissions'][1]['role'] = 'writer'
         return response
     session.get = changed
+    GooglePort(session, c).source_check(w.source)
+    assert len(session.calls) == 3  # Worker cannot inspect ACL changes.
     with pytest.raises(StateError, match='acl_or_identity_changed'):
-        GooglePort(session, c).source_check(w.source)
-    assert len(session.calls) == 3
+        owner_metadata(session, c, fid, 'reader')
 
 
 def test_credential_binding_mismatch_stops_before_token_or_resource_io(monkeypatch):
@@ -114,7 +125,7 @@ def test_credential_binding_mismatch_stops_before_token_or_resource_io(monkeypat
 
 
 @pytest.mark.parametrize('sheet_role', ['writer', 'reader'])
-def test_real_connect_requires_sheet_writer_and_source_reader_with_unchanged_scopes(monkeypatch, sheet_role):
+def test_real_connect_checks_identity_while_owner_checks_roles_with_unchanged_scopes(monkeypatch, sheet_role):
     import requests
     from google.auth.transport import requests as transport
     from google.oauth2 import service_account, _client
@@ -141,12 +152,11 @@ def test_real_connect_requires_sheet_writer_and_source_reader_with_unchanged_sco
     monkeypatch.setattr(transport, 'AuthorizedSession', lambda *a, **kw: session)
     if sheet_role == 'reader':
         with pytest.raises(StateError, match='acl_or_identity_changed'):
-            with connect(c, dict(client_email=c['service_email'])): raise AssertionError('yielded')
-        assert len(session.calls) == 1
-    else:
-        with connect(c, dict(client_email=c['service_email'])) as port:
-            port.source_check(w.source)
-        assert len(session.calls) == 4
+            check_owner_metadata(c['spreadsheet_id'], session.meta[c['spreadsheet_id']], c,
+                worker_role='writer', mime_type='application/vnd.google-apps.spreadsheet')
+    with connect(c, dict(client_email=c['service_email'])) as port:
+        port.source_check(w.source)
+    assert len(session.calls) == 4
     assert observed['scopes'] == ['https://www.googleapis.com/auth/drive.readonly',
                                  'https://www.googleapis.com/auth/spreadsheets']
 
@@ -155,7 +165,7 @@ def test_real_connect_requires_sheet_writer_and_source_reader_with_unchanged_sco
 def test_unexpected_acl_policy_role_stops_before_get(role):
     _, c, session, fid, _ = resource('sheet')
     with pytest.raises(StateError, match='metadata_role_invalid'):
-        GooglePort(session, c).metadata(fid, worker_role=role)
+        owner_metadata(session, c, fid, role)
     assert session.calls == []
 
 
@@ -166,4 +176,4 @@ def test_unavailable_full_permission_list_is_not_treated_as_minimum_acl(asset):
     _, c, session, fid, role = resource(asset)
     session.meta[fid].pop('permissions')
     with pytest.raises(StateError, match='acl_or_identity_changed'):
-        GooglePort(session, c).metadata(fid, worker_role=role)
+        owner_metadata(session, c, fid, role)

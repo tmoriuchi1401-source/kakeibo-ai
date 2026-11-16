@@ -1,6 +1,8 @@
 # 新modeの最小ACLと共有変更前の停止
 
 2026-11-17。基点 `03652d205a25e1eebd6ecfc3426c58a062ebde65`。
+本書はworker単独ACL照合案の履歴。後続の明示承認による新mode合成試験限定の
+分担方式は [`receipt-sheets-split-verification.md`](receipt-sheets-split-verification.md) を優先する。
 対象は `sheets-authority-v1` のPython workerだけ。
 共有権限の変更、認証scope/Secret変更、Apps Script配置・認可、trigger、登録、Actionsは未実施。
 
