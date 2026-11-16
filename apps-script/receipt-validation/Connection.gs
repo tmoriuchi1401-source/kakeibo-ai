@@ -213,40 +213,12 @@ function receiptConnectionPorts_(c, props) {
   return ports;
 }
 
-function receiptConnectionDecodeRow_(r,e,hash) {
-  const same=(a,b)=>receiptCanonical_(a)===receiptCanonical_(b), blank=v=>v==='' || v===null;
-  if(!Array.isArray(r) || r.length!==46 || r[0]!==e.case_id || r[1]!==e.kind_label ||
-     !same(r.slice(36),e.machine) || !Number.isSafeInteger(r[3]) || r[3]!==e.receipt_total)
-    throw Error('receipt_row_machine_binding_mismatch');
-  const binding=hash(receiptCanonical_([e.case_id,e.source])), items=[];
-  const kinds={'商品':'product','外税':'tax','値引き':'discount'}, targets={'商品1':1,'商品2':2,'商品3':3};
-  for(let i=0;i<3;i++) {
-    const [name,quantity,amount,major,minor,kind,target,mode,confirmed]=r.slice(9+9*i,18+9*i);
-    const key=e.machine[4+i], old=e.original_items.find(x=>x.item_id===key);
-    const noTarget=blank(target) || target==='指定なし', category=[major,minor];
-    if(!old && blank(name) && blank(quantity) && blank(amount) && noTarget) {
-      if(![null,'','商品'].includes(kind) || ![null,'','採用'].includes(mode) || ![null,'',false].includes(confirmed) ||
-         !(blank(major) && blank(minor)) && !e.categories.some(c=>same(c,category)))
-        throw Error('receipt_row_empty_addition_invalid');
-      items.push({_item_id:key,_binding:binding,name:'',quantity:'',amount:'',category:null,kind:'product',target:'',mode:'採用',confirmed:false});continue;
-    }
-    if(!kinds[kind] || !['採用','除外'].includes(mode) || typeof confirmed!=='boolean' ||
-       !noTarget && !targets[target] || !e.categories.some(c=>same(c,category)))
-      throw Error('receipt_row_product_controls_invalid');
-    items.push({_item_id:key,_binding:binding,name,quantity,amount,category,kind:kinds[kind],
-      target:noTarget?'':targets[target],mode,confirmed});
-  }
-  const total=items.filter(x=>x.name && x.mode==='採用').reduce((sum,x)=>sum+x.amount,0);
-  if(!Number.isSafeInteger(total) || r[4]!==total || r[5]!==r[3]-total)
-    throw Error('receipt_row_display_calculation_mismatch');
-  const candidate={case_id:e.case_id,source:e.source,draft:{case_id:e.case_id,source:e.source,items},
-    original_items:e.original_items,categories:e.categories,context_digest:e.context_digest};
-  receiptSnapshot_(candidate,hash); // Existing item identity/confirmation checks.
-  return candidate;
-}
 
 function receiptConnectionEdited(e) {
   const props=PropertiesService.getUserProperties();
+  // Explicit new binding selects the Sheets-only path before any legacy IO.
+  const selected=JSON.parse(props.getProperty(RECEIPT_CONNECTION_CONFIG) || 'null');
+  if(selected && selected.mode==='sheets-authority-v1') return receiptSheetsEdited(e);
   if(props.getProperty(RECEIPT_CONNECTION_STOP)) throw Error('receipt_connection_stopped');
   const c=receiptConnectionConfig_(props);
   if(!e || !e.range || e.range.getSheet().getParent().getId()!==c.spreadsheet_id ||
