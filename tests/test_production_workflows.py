@@ -19,8 +19,20 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue
-        assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name
-        for job in workflow["jobs"].values():
+        group = "kakeibo-production"
+        if name == "category-sheet-request.yml":
+            # Only the approved synthetic ref uses the separate queue. Main
+            # and all existing production entries retain their shared lock.
+            group = "${{ startsWith(github.ref, 'refs/heads/review/receipt-sheets-') && 'receipt-synthetic-validation' || 'kakeibo-production' }}"
+        assert workflow["concurrency"] == {"group": group, "cancel-in-progress": "false", "queue": "max"}, name
+        for job_name, job in workflow["jobs"].items():
+            if name == "category-sheet-request.yml" and job_name == "receipt-sheets-validation":
+                assert "startsWith(vars.RECEIPT_VALIDATION_REF, 'review/receipt-sheets-')" in job["if"]
+                assert "github.ref == format('refs/heads/{0}', vars.RECEIPT_VALIDATION_REF)" in job["if"]
+                assert "github.sha == vars.RECEIPT_VALIDATION_SHA" in job["if"]
+                assert "vars.RECEIPT_VALIDATION_ENABLED == 'true'" in job["if"]
+                assert "concurrency" not in job
+                continue
             assert "github.ref == 'refs/heads/main'" in job["if"], name
             assert "concurrency" not in job, name  # no parent/child lock deadlock
         assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}, name
