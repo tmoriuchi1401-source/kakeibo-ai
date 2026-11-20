@@ -10,6 +10,9 @@ Local Python 3.14 / Node 22: all 105 parametrized cases passed.
 Full local regression: 4,961 passed. Existing Node checks: 13 passed.
 Targeted mandatory/workflow checks: 113 passed; compileall and diff whitespace: PASS.
 CI uses the existing Python 3.12 synthetic workflow; final status is in the Draft PR.
+Initial CI collection lacked httpx after the GenAI SDK switched its transitive
+dependency to httpx2. Pin the already locally verified httpx 0.28.1 in test-only
+requirements; production requirements and error-handling code are unchanged.
 
 | Group | Cases | Result |
 |---|---:|---|
