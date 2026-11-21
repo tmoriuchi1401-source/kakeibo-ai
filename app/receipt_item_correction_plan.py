@@ -90,7 +90,8 @@ def _original_rows(tx, indexed_rows):
 
 
 def preview_item_corrections(tx, indexed_rows, operations, categories, *,
-                             approved_product_rules=(), total_confirmed=False):
+                             approved_product_rules=(), total_confirmed=False,
+                             general_review=False):
     """Build a NON-POSTING item-level preview from the exact rejected snapshot.
 
     Operations: edit {item_id, changes, evidence}; remove {item_id,evidence};
@@ -111,10 +112,10 @@ def preview_item_corrections(tx, indexed_rows, operations, categories, *,
         r"(?:^|;\s*)明細合計([0-9]{1,12})≠レシート合計([0-9]{1,12})(?=;|$)",
         tx.note,
     )
-    if (len(recorded) != 1 or int(recorded[0][0]) != original_total
+    if not general_review and (len(recorded) != 1 or int(recorded[0][0]) != original_total
             or int(recorded[0][1]) != tx.amount):
         raise ValueError("receipt_candidate_note_mismatch")
-    if tx.amount <= 0 or original_total == tx.amount:
+    if tx.amount <= 0 or (original_total == tx.amount and not general_review):
         raise ValueError("receipt_not_mismatched")
     # Candidate rows are identity/hash checked by verified_candidate_range.
     items = {item["item_id"]: deepcopy(item) for item in original}
