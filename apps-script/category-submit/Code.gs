@@ -8,6 +8,7 @@ const CATEGORY_QUEUE = '_カテゴリ実行受付';
 const CATEGORY_REPO = 'tmoriuchi1401-source/kakeibo-ai';
 const CATEGORY_WORKFLOW = 'category-sheet-request.yml';
 const CATEGORY_BUSY = ['dispatching', 'accepted', 'running'];
+const CATEGORY_EXPLANATION = 'F列チェック＋上部の実行で、全月の未分類に反映。分類済みは変更せず、完了分は一覧から除きます。';
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('カテゴリ操作')
@@ -31,6 +32,13 @@ function configureCategorySubmit() {
     installCategorySubmit();
     return;
   }
+  // A failed installation may already have migrated the credential. Retry
+  // setup with that user's saved settings instead of prompting for a new PAT.
+  const saved = PropertiesService.getUserProperties();
+  if (saved.getProperty('CATEGORY_GITHUB_TOKEN') && saved.getProperty('CATEGORY_SPREADSHEET_ID')) {
+    installCategorySubmit();
+    return;
+  }
   const ui = SpreadsheetApp.getUi();
   const answer = ui.prompt('カテゴリ操作の初回設定',
     'このリポジトリだけに Actions の書き込み権限を持つ GitHub トークンを入力してください。' +
@@ -47,34 +55,73 @@ function configureCategorySubmit() {
 }
 
 function installCategorySubmit() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) throw new Error('別の操作が進行中です。完了後に設定してください。');
+  try { categoryInstall_(); } finally { lock.releaseLock(); }
+}
+
+function categoryInstall_() {
   const props = PropertiesService.getUserProperties();
   if (!props.getProperty('CATEGORY_GITHUB_TOKEN')) throw new Error('先に初回設定を行ってください。');
   const ss = categorySpreadsheet_();
+  if (props.getProperty('CATEGORY_SPREADSHEET_ID') && props.getProperty('CATEGORY_SPREADSHEET_ID') !== ss.getId()) {
+    throw new Error('保存済みの接続先と対象シートが一致しません。');
+  }
   const sheet = ss.getSheetByName(CATEGORY_UI);
   if (!sheet) throw new Error('カテゴリ操作シートが見つかりません。');
   let queue = ss.getSheetByName(CATEGORY_QUEUE);
   if (queue && CATEGORY_BUSY.includes(String(queue.getRange('B2').getValue()))) {
     throw new Error('処理の完了後に設定してください。');
   }
-  if (!queue) {
-    if (sheet.getRange('A1').getValue() !== '■ 1. カテゴリを選ぶ・今後の自動分類') {
-      throw new Error('シート構成を確認してください。入力は変更していません。');
-    }
+  const marker = '■ 1. カテゴリを選ぶ・今後の自動分類';
+  const fresh = !queue && sheet.getRange('A1').getValue() === marker;
+  if (!fresh && (sheet.getRange('A6').getValue() !== marker ||
+      !['', '入力内容を処理する'].includes(sheet.getRange('A1').getValue()))) {
+    throw new Error('シート構成を確認してください。入力は変更していません。');
+  }
+  if (![0, 1].includes(sheet.getFrozenColumns())) {
+    throw new Error('A列固定のシート構成を確認してください。');
+  }
+  const triggers = categorySetupTriggers_(ss);
+  if (fresh) {
     // These five rows are permanently excluded from the Python UI writer.
     sheet.insertRowsBefore(1, 5);
-    queue = ss.insertSheet(CATEGORY_QUEUE);
-    queue.getRange('A1:J1').setValues([['request_id','state','submitted_at','started_at',
-      'finished_at','result','run_id','snapshot_rows','snapshot_sha256','version']]);
-    queue.hideSheet();
   }
-  sheet.getRange('A1').setValue('入力内容を処理する');
-  sheet.getRange('B1').insertCheckboxes().setValue(false);
-  sheet.getRange('C1:F1').merge().setValue('入力待ち');
-  sheet.getRange('A2').setValue('処理結果');
-  sheet.getRange('B2:F2').merge().setValue('入力後、上のチェックを入れると受付します。');
-  sheet.getRange('A3').setValue('最終更新');
-  sheet.getRange('B3:F3').merge().setValue('');
-  sheet.getRange('A4:F4').merge().setValue('F列チェック＋上部の実行で、全月の未分類に反映。分類済みは変更せず、完了分は一覧から除きます。');
+  // Preflight every merge before changing contents. Unexpected merges or
+  // occupied trailing cells require review; merging must never discard input.
+  const legacy = categorySetupMerges_(sheet);
+  if (!queue) {
+    queue = ss.insertSheet(CATEGORY_QUEUE);
+  }
+  const headers = ['request_id','state','submitted_at','started_at','finished_at',
+    'result','run_id','snapshot_rows','snapshot_sha256','version'];
+  const actual = queue.getRange('A1:J1').getValues()[0];
+  if (queue.getRange('A1:J1').isBlank()) queue.getRange('A1:J1').setValues([headers]);
+  else if (actual.some((v, i) => v !== headers[i])) throw new Error('受付シートの見出しを確認してください。');
+  queue.hideSheet();
+  if (legacy) {
+    sheet.getRange('A4:F4').breakApart();
+  }
+  // Also resumes a failure immediately after breakApart/copyTo. Only the
+  // known old explanation is moved automatically; custom content fails closed.
+  const heading = sheet.getRange('A4');
+  if (heading.getValue() === CATEGORY_EXPLANATION && !heading.getFormula()) {
+    if (sheet.getRange('B4').isBlank()) heading.copyTo(sheet.getRange('B4'));
+    heading.setValue('操作の説明');
+  }
+  ['C1:F1', 'B2:F2', 'B3:F3', 'B4:F4'].forEach(a1 => {
+    const range = sheet.getRange(a1);
+    if (!range.isPartOfMerge()) range.merge();
+  });
+  const defaults = {A1:'入力内容を処理する', B1:false, C1:'入力待ち', A2:'処理結果',
+    B2:'入力後、上のチェックを入れると受付します。', A3:'最終更新', A4:'操作の説明',
+    B4:CATEGORY_EXPLANATION};
+  Object.entries(defaults).forEach(([a1, value]) => {
+    const range = sheet.getRange(a1);
+    if (range.isBlank()) range.setValue(value);
+  });
+  const checkbox = sheet.getRange('B1');
+  if (!checkbox.getDataValidation()) checkbox.setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
   sheet.getRange('A1:F4').setWrap(true).setVerticalAlignment('middle').setFontSize(10)
     .setFontColor('#1f2933').setFontWeight('normal');
   sheet.getRange('A1:F1').setBackground('#dceee8').setFontWeight('bold');
@@ -82,14 +129,74 @@ function installCategorySubmit() {
   sheet.getRange('A2:F4').setBackground('#f3f6f8');
   sheet.setRowHeights(1,3,34); sheet.setRowHeight(4,44); sheet.setRowHeight(5,10);
   sheet.setFrozenRows(4);
-  const names = ['categorySubmitEdited', 'categoryCheckActive'];
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (names.includes(t.getHandlerFunction())) ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger('categorySubmitEdited').forSpreadsheet(ss).onEdit().create();
-  ScriptApp.newTrigger('categoryCheckActive').timeBased().everyMinutes(5).create();
+  if (sheet.getFrozenColumns() === 0) sheet.setFrozenColumns(1);
+  if (!triggers.edit) ScriptApp.newTrigger('categorySubmitEdited').forSpreadsheet(ss).onEdit().create();
+  if (!triggers.clock) ScriptApp.newTrigger('categoryCheckActive').timeBased().everyMinutes(5).create();
   props.setProperty('CATEGORY_SPREADSHEET_ID', ss.getId());
   SpreadsheetApp.flush();
+}
+
+function categorySetupMerges_(sheet) {
+  const targets = ['C1:F1', 'B2:F2', 'B3:F3', 'B4:F4'];
+  const merged = sheet.getRange('A1:F4').getMergedRanges().map(r => r.getA1Notation());
+  if (merged.some(a1 => !targets.includes(a1) && a1 !== 'A4:F4')) {
+    throw new Error('上部の結合範囲を確認してください。入力は変更していません。');
+  }
+  const heading = sheet.getRange('A4');
+  if (merged.includes('A4:F4') && (heading.getFormula() ||
+      !['', '操作の説明', CATEGORY_EXPLANATION].includes(heading.getValue()))) {
+    throw new Error('旧結合の説明文を確認してください。入力は変更していません。');
+  }
+  if (heading.getValue() === CATEGORY_EXPLANATION && !heading.getFormula()) {
+    const explanation = sheet.getRange('B4');
+    if (!explanation.isBlank() && (explanation.getFormula() || explanation.getValue() !== CATEGORY_EXPLANATION)) {
+      throw new Error('説明文の移行先に既存の入力があります。入力は変更していません。');
+    }
+  }
+  for (const a1 of targets) {
+    if (merged.includes(a1) || (a1 === 'B4:F4' && merged.includes('A4:F4'))) continue;
+    const range = sheet.getRange(a1);
+    for (let col = 2; col <= range.getNumColumns(); col++) {
+      const cell = range.getCell(1, col);
+      if (!cell.isBlank() || cell.getNote() || cell.getDataValidation()) {
+        throw new Error('結合先に既存の入力または設定があります。入力は変更していません。');
+      }
+    }
+  }
+  return merged.includes('A4:F4');
+}
+
+function categorySetupTriggers_(ss) {
+  const own = ScriptApp.getProjectTriggers();
+  const edit = own.filter(t => t.getHandlerFunction() === 'categorySubmitEdited' &&
+    t.getEventType() === ScriptApp.EventType.ON_EDIT && t.getTriggerSourceId() === ss.getId());
+  const clock = own.filter(t => t.getHandlerFunction() === 'categoryCheckActive' &&
+    t.getEventType() === ScriptApp.EventType.CLOCK);
+  if (edit.length > 1 || clock.length > 1) throw new Error('既存トリガーの重複を確認してください。');
+  return {edit: edit.length === 1, clock: clock.length === 1};
+}
+
+// Read-only diagnostic: booleans/counts only, never credential values or IDs.
+function inspectCategorySubmitSetup() {
+  const staged = PropertiesService.getScriptProperties();
+  const saved = PropertiesService.getUserProperties();
+  const ss = SpreadsheetApp.getActive() || SpreadsheetApp.openById(
+    saved.getProperty('CATEGORY_SPREADSHEET_ID') || staged.getProperty('CATEGORY_SPREADSHEET_ID'));
+  const sheet = ss.getSheetByName(CATEGORY_UI);
+  const queue = ss.getSheetByName(CATEGORY_QUEUE);
+  const triggers = categorySetupTriggers_(ss);
+  const status = {
+    stagedTokenPresent: !!staged.getProperty('CATEGORY_GITHUB_TOKEN'),
+    userTokenPresent: !!saved.getProperty('CATEGORY_GITHUB_TOKEN'),
+    userSpreadsheetMatches: saved.getProperty('CATEGORY_SPREADSHEET_ID') === ss.getId(),
+    frozenRows: sheet.getFrozenRows(), frozenColumns: sheet.getFrozenColumns(),
+    explanationMerged: sheet.getRange('B4:F4').getMergedRanges().some(r => r.getA1Notation() === 'B4:F4'),
+    legacyExplanationMerge: sheet.getRange('A4').isPartOfMerge(),
+    queueBusy: !!queue && CATEGORY_BUSY.includes(String(queue.getRange('B2').getValue())),
+    editTriggerPresent: triggers.edit, clockTriggerPresent: triggers.clock
+  };
+  console.log(JSON.stringify(status));
+  return status;
 }
 
 function categorySubmitEdited(e) {
