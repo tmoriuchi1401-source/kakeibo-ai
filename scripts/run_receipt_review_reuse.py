@@ -1,7 +1,6 @@
 """Explicitly approved AI-free PR-B intake only; no copy, auth, Start or writer."""
 import argparse
 from datetime import datetime, timezone
-from hashlib import sha256
 import json
 import logging
 import os
@@ -29,7 +28,7 @@ def main():
     if not token or any(c.isspace() for c in token):raise ValueError('explicit_owner_token_required')
     manifest=json.loads(Path(args.manifest).read_text(encoding='utf-8'))
     original_bytes=Path(args.original_file).read_bytes();copy_bytes=Path(args.copy_file).read_bytes()
-    from app.receipt_review_reuse import ReuseFence, build_reused_case, intake_reused
+    from app.receipt_review_reuse import ReuseFence, build_reused_case, intake_reused, original_metadata_matches
     from app.receipt_review_diagnostics import ReviewDiagnostics
     from app.receipt_review_worker import ScriptPort
     from app.utils import now_jst_string
@@ -58,15 +57,11 @@ def main():
             def original_check(source):
                 live()
                 reply=session.get('https://www.googleapis.com/drive/v3/files/'+source['source_id'],
-                    params={'fields':'id,version,mimeType,trashed,parents,owners(emailAddress),sha256Checksum'},
+                    params={'fields':'id,version,mimeType,trashed,parents,owners(emailAddress),sha256Checksum,appProperties'},
                     timeout=20,allow_redirects=False)
                 if reply.status_code!=200:raise RuntimeError('original_read_unknown')
-                value=reply.json()
-                return (value.get('id')==source['source_id'] and value.get('version')==source['version']
-                    and value.get('mimeType')=='image/png' and value.get('trashed') is False
-                    and value.get('parents')==[config['original_parent_id']]
-                    and [x.get('emailAddress') for x in value.get('owners',[])]==[config['owner_email']]
-                    and value.get('sha256Checksum')==sha256(original_bytes).hexdigest())
+                return original_metadata_matches(reply.json(),source,
+                    parent_id=config['original_parent_id'],owner_email=config['owner_email'])
             result=intake_reused(manifest,original_bytes=original_bytes,copy_bytes=copy_bytes,
                 original_check=original_check,port=port,fence=fence,diagnostics=diagnostics,clock=now_jst_string)
         output.write(json.dumps(result,separators=(',',':'))+'\n');output.flush();os.fsync(output.fileno())

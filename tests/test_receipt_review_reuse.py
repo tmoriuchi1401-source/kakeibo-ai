@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.receipt_review_diagnostics import ReviewDiagnostics
-from app.receipt_review_reuse import ReuseFence, ReuseUnknown, build_reused_case, intake_reused
+from app.receipt_review_reuse import ReuseFence, ReuseUnknown, build_reused_case, intake_reused, original_metadata_matches
 from app.receipt_review_cases import snapshot_from_row, validate_snapshot
 from app.receipt_review_worker import execute_review
 from app.receipt_sheets_authority import UNKNOWN
@@ -219,3 +219,17 @@ def test_cli_disabled_or_expired_does_not_create_attempt_db(tmp_path,monkeypatch
     monkeypatch.setattr(sys,'argv',args)
     with pytest.raises(ValueError):main()
     assert not (tmp_path/'attempts.sqlite').exists() and not (tmp_path/'diag').exists()
+
+
+@pytest.mark.parametrize('fault',['none','medical','unknown','hash','version','owner','parent'])
+def test_original_metadata_keeps_privacy_and_lineage_boundary(fault):
+    source=manifest()['original']
+    meta=dict(id=source['source_id'],version=source['version'],mimeType='image/png',trashed=False,
+        parents=['synthetic-original-folder'],owners=[dict(emailAddress='owner@synthetic.invalid')],
+        sha256Checksum=source['sha256'],appProperties={})
+    if fault in {'medical','unknown'}:meta['appProperties']['kakeiboReceiptClass']=fault
+    if fault=='hash':meta['sha256Checksum']='b'*64
+    if fault=='version':meta['version']='7'
+    if fault=='owner':meta['owners']=[]
+    if fault=='parent':meta['parents']=[]
+    assert original_metadata_matches(meta,source,parent_id='synthetic-original-folder',owner_email='owner@synthetic.invalid') is (fault=='none')

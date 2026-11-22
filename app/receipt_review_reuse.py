@@ -26,6 +26,16 @@ class ReuseFence(AttemptFence):
                 db.execute('INSERT INTO attempts VALUES (?)', (key,))
 
 
+def original_metadata_matches(value, source, *, parent_id, owner_email):
+    """Historical restrictive source classification cannot be waived by the draft."""
+    return (value.get('id')==source['source_id'] and value.get('version')==source['version']
+        and value.get('mimeType')=='image/png' and value.get('trashed') is False
+        and value.get('parents')==[parent_id]
+        and [x.get('emailAddress') for x in value.get('owners',[])]==[owner_email]
+        and value.get('sha256Checksum')==source['sha256']
+        and value.get('appProperties',{}).get('kakeiboReceiptClass') in (None,'normal'))
+
+
 def build_reused_case(manifest, *, clock):
     expected={'schema','original','copy','records','owner_confirmation','categories'}
     if type(manifest) is not dict or set(manifest)!=expected or manifest['schema']!='receipt-review-reuse-v1':
