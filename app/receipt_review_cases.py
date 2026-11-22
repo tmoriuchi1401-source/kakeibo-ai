@@ -204,30 +204,59 @@ def validate_snapshot(snapshot, entry):
 
 class ReviewPipeline:
     """Drive process_inbox adapter: analysis only, never _materialize_result."""
-    def __init__(self, pipeline, port, *, metadata, fence):
+    def __init__(self, pipeline, port, *, metadata, fence, diagnostics=None):
         self.pipeline, self.port, self.metadata, self.fence = pipeline, port, metadata, fence
         self._source_privacy = {}
+        self.diagnostics = diagnostics
+        self.stage = 'runner'
+
+    def checkpoint(self, stage):
+        self.stage = stage
+        if self.diagnostics is not None:
+            self.diagnostics.event(stage, 'STARTED')
 
     def process_bytes(self, raw, mime, sid, image_url="", *, known_source_classification=None):
+        try:
+            result = self._process_bytes(raw, mime, sid, image_url,
+                known_source_classification=known_source_classification)
+            if self.diagnostics is not None:
+                self.diagnostics.event('complete', 'PASS' if result['status']=='review_created' else 'BLOCKED')
+            return result
+        except Exception as error:
+            if self.diagnostics is not None:
+                self.diagnostics.failure(self.stage, error)
+            raise
+
+    def _process_bytes(self, raw, mime, sid, image_url="", *, known_source_classification=None):
         from .receipt_privacy_gate import evaluate_receipt_privacy, require_receipt_ai_permission
         # PDFs are held in full, including mixed documents. No PDF AI fallback.
         if mime not in {"image/png","image/jpeg","image/heic","image/heif"}:
             return dict(status="held", reason="pdf_manual_structure_review")
+        self.checkpoint('lookup')
         prior = self.port.lookup_source(sid, sha256(raw).hexdigest())
         if prior is not None:
             return dict(status="skipped", reason="review_case_exists")
         known_source_classification = self._source_privacy.get(sid, known_source_classification)
         if known_source_classification not in (None,"normal"):
             self._source_privacy[sid] = known_source_classification
+        self.checkpoint('privacy')
         gate = evaluate_receipt_privacy(raw, mime, known_source_classification=known_source_classification)
         if gate.classification != "normal" or not gate.gemini_allowed or gate.buyback_evidence:
             self._source_privacy[sid] = gate.classification
             return dict(status="privacy_blocked", reason="manual_review_only")
+        self.checkpoint('source_metadata')
         before = self.metadata(sid)
+        self.checkpoint('privacy')
         require_receipt_ai_permission(raw,mime,known_source_classification=known_source_classification)
+        self.checkpoint('fence')
         self.fence.consume_source(sid,sha256(raw).hexdigest())
+        if self.diagnostics is not None:
+            self.diagnostics.event('fence', 'PASS')
+        self.checkpoint('categories')
         cats = self.pipeline.db.categories()
+        self.checkpoint('analysis')
         result = self.pipeline._analyze(raw,mime,cats,dict(known_source_classification=known_source_classification))
+        self.checkpoint('source_recheck')
         if result.transaction_kind != "purchase" or before != self.metadata(sid):
             return dict(status="held", reason="source_or_kind_changed")
         source = dict(source_id=sid, sha256=sha256(raw).hexdigest(), version=before["version"],
@@ -237,6 +266,10 @@ class ReviewPipeline:
         cid, analysis_hash = "receipt:"+sid, digest(result.model_dump())
         imported = [cid,self.pipeline.clock(),"receipt",sid,result.date,result.merchant,result.total,
                     result.payment_method,"要確認","",analysis_hash,""]
+        self.checkpoint('candidate')
         entry = make_case(source, imported, candidate_rows(cid,analysis_hash,result), cats)
+        if self.diagnostics is not None:
+            self.diagnostics.intake_attempted = True
+        self.checkpoint('intake')
         self.port.intake(entry, make_row(entry))
         return dict(status="review_created", financial_write_count=0)
