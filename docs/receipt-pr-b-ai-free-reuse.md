@@ -39,8 +39,16 @@ Tax and quantity come from prior explicit source confirmation, not inference.
 
 Privacy runs locally on both original/copy bytes. Original version/hash/owner/
 parent and copy source identity are independently checked before intake. An
-atomic persistent fence reserves original ID, copy ID and content hash before
-remote calls. Retained old UNKNOWN hash/ID fences cannot be escaped by copying.
+atomic persistent fence reserves original ID, copy ID and content hash AFTER
+read-only lookup, original checks, copy metadata/current bytes checks and local
+privacy/manifest validation have all passed, and BEFORE the single mutating intake.
+Preflight failures consume no keys. After commit, uncertainty retains all keys.
+When original Drive SHA256 is absent, the runner downloads current original bytes
+and hashes them between identical metadata reads (ID/version/owner/parent/MIME/
+privacy), in addition to checking local original bytes against the manifest.
+A returned but incorrect/empty checksum is rejected; no fallback overrides it.
+Missing checksum without current-byte evidence is rejected. These are read-only
+checks, not authorization for AI or source mutation. Retained old UNKNOWN hash/ID fences cannot be escaped by copying.
 The independent Script catalog is also checked before and after the single intake.
 Intake/readback or diagnostic uncertainty stops without retry; no new UUID/reset
 is used to recover UNKNOWN. The current gate/lock/immutable snapshot validation

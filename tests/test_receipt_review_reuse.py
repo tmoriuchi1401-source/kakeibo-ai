@@ -116,12 +116,12 @@ def test_independent_duplicate_and_persistent_restart_fence(tmp_path):
     result,port,fence,diag=perform(tmp_path)
     entry=json.loads(port.state['cases'][1][4])
     second=ReviewDiagnostics(tmp_path/'second.jsonl')
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(ValueError):
         intake_reused(manifest(),original_bytes=RAW,copy_bytes=RAW,original_check=lambda s:True,
             port=port,fence=ReuseFence(fence.path),diagnostics=second,clock=lambda:'synthetic')
     assert port.calls.count('intake')==1
     # A new local DB still cannot defeat the independent Script catalog.
-    with pytest.raises(ReuseUnknown):
+    with pytest.raises(ValueError):
         intake_reused(manifest(),original_bytes=RAW,copy_bytes=RAW,original_check=lambda s:True,
             port=port,fence=ReuseFence(tmp_path/'other.db'),diagnostics=ReviewDiagnostics(tmp_path/'other.jsonl'),clock=lambda:'synthetic')
     assert port.calls.count('intake')==1 and entry['source']['sha256']==sha256(RAW).hexdigest()
@@ -143,6 +143,13 @@ def test_unknown_intake_is_never_resent_and_keeps_three_fences(tmp_path,fault,ca
     log=(tmp_path/'private.jsonl').read_text()
     assert json.loads(log.splitlines()[-1])['result']=='UNKNOWN'
     assert CANARY not in log+capsys.readouterr().out
+    port.fault=None
+    if fault=='readback':port.lookup_source=lookup
+    with pytest.raises((ValueError,sqlite3.IntegrityError)):
+        intake_reused(manifest(),original_bytes=RAW,copy_bytes=RAW,original_check=lambda s:True,
+            port=port,fence=ReuseFence(tmp_path/'attempts.sqlite'),
+            diagnostics=ReviewDiagnostics(tmp_path/'retry.jsonl'),clock=lambda:'synthetic')
+    assert port.calls.count('intake')==1
 
 
 def test_unknown_old_content_fence_cannot_be_bypassed_with_new_copy_id(tmp_path):
@@ -152,12 +159,12 @@ def test_unknown_old_content_fence_cannot_be_bypassed_with_new_copy_id(tmp_path)
     with pytest.raises(sqlite3.IntegrityError):
         intake_reused(data,original_bytes=RAW,copy_bytes=RAW,original_check=lambda s:True,port=port,
             fence=fence,diagnostics=ReviewDiagnostics(tmp_path/'private.jsonl'),clock=lambda:'synthetic')
-    assert port.calls==[] and fence.path.read_bytes()==before
+    assert port.calls==['lookup'] and fence.path.read_bytes()==before
 
 
 def test_privacy_and_original_recheck_stop_before_intake(tmp_path,monkeypatch):
     port=JsPort()
-    with pytest.raises(ReuseUnknown):perform(tmp_path,port=port,original_check=lambda s:False)
+    with pytest.raises(ValueError):perform(tmp_path,port=port,original_check=lambda s:False)
     assert 'intake' not in port.calls
     from app import receipt_privacy_gate
     monkeypatch.setattr(receipt_privacy_gate,'evaluate_receipt_privacy',lambda *a,**k:
@@ -233,3 +240,74 @@ def test_original_metadata_keeps_privacy_and_lineage_boundary(fault):
     if fault=='owner':meta['owners']=[]
     if fault=='parent':meta['parents']=[]
     assert original_metadata_matches(meta,source,parent_id='synthetic-original-folder',owner_email='owner@synthetic.invalid') is (fault=='none')
+
+
+@pytest.mark.parametrize('fault',['lookup','duplicate','original','original_second','id','version','owner','parent','hash','network','privacy','manifest','bytes'])
+def test_preflight_failure_consumes_no_fence(tmp_path,monkeypatch,fault):
+    port=JsPort();data=manifest();checks=[]
+    def original(source):
+        checks.append(True)
+        return not (fault=='original' or fault=='original_second' and len(checks)==2)
+    if fault=='lookup':
+        def fail(*a):raise TimeoutError(CANARY)
+        port.lookup_source=fail
+    if fault=='duplicate':port.lookup_source=lambda *a:{'existing':True}
+    if fault in {'id','version','owner','parent','hash','network'}:port.source_fault=fault
+    if fault=='manifest':data['owner_confirmation']['quantity']=None
+    if fault=='privacy':
+        from app import receipt_privacy_gate
+        monkeypatch.setattr(receipt_privacy_gate,'evaluate_receipt_privacy',lambda *a,**k:
+            SimpleNamespace(classification='unknown',gemini_allowed=False,buyback_evidence=False))
+    fence=ReuseFence(tmp_path/'attempts.sqlite')
+    with pytest.raises(Exception) as caught:
+        intake_reused(data,original_bytes=RAW,copy_bytes=b'bad' if fault=='bytes' else RAW,
+            original_check=original,port=port,fence=fence,
+            diagnostics=ReviewDiagnostics(tmp_path/'diag'),clock=lambda:'synthetic')
+    assert not isinstance(caught.value,ReuseUnknown)
+    with sqlite3.connect(fence.path) as db:assert db.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]==0
+    assert 'intake' not in port.calls
+
+
+def test_all_read_only_checks_precede_fence_and_one_intake(tmp_path):
+    port=JsPort();fence=ReuseFence(tmp_path/'attempts.sqlite');order=[]
+    consume=fence.consume_copy;lookup=port.lookup_source;source_check=port.source_check;intake=port.intake
+    def mark(name,fn):
+        def call(*a):order.append(name);return fn(*a)
+        return call
+    port.lookup_source=mark('lookup',lookup);port.source_check=mark('copy',source_check)
+    port.intake=mark('intake',intake);fence.consume_copy=mark('fence',consume)
+    intake_reused(manifest(),original_bytes=RAW,copy_bytes=RAW,
+        original_check=mark('original',lambda s:True),port=port,fence=fence,
+        diagnostics=ReviewDiagnostics(tmp_path/'diag'),clock=lambda:'synthetic')
+    assert order==['lookup','original','copy','original','fence','intake','lookup']
+    assert port.calls.count('intake')==1
+
+
+@pytest.mark.parametrize('fault',['none','mismatch','empty','missing_evidence','changed_bytes','changed_version','wrong_owner','wrong_parent','http'])
+def test_original_checksum_fallback_requires_current_bytes_and_stable_metadata(fault):
+    from scripts.run_receipt_review_reuse import check_original
+    source=manifest()['original']
+    meta=dict(id=source['source_id'],version=source['version'],mimeType='image/png',trashed=False,
+        parents=['parent'],owners=[dict(emailAddress='owner')],appProperties={})
+    if fault=='mismatch':meta['sha256Checksum']='b'*64
+    if fault=='empty':meta['sha256Checksum']=''
+    if fault=='wrong_owner':meta['owners']=[]
+    if fault=='wrong_parent':meta['parents']=[]
+    if fault=='missing_evidence':
+        assert not original_metadata_matches(meta,source,parent_id='parent',owner_email='owner')
+        return
+    class FakeSession:
+        def __init__(self):self.calls=[]
+        def get(self,url,*,params,**kw):
+            self.calls.append(params)
+            m=deepcopy(meta)
+            if fault=='changed_version' and len(self.calls)==3:m['version']='7'
+            return SimpleNamespace(status_code=403 if fault=='http' else 200,json=lambda:m,
+                content=b'wrong' if fault=='changed_bytes' else RAW)
+    session=FakeSession()
+    if fault=='http':
+        with pytest.raises(RuntimeError):check_original(session,source,parent_id='parent',owner_email='owner')
+    else:
+        assert check_original(session,source,parent_id='parent',owner_email='owner') is (fault=='none')
+    if fault in {'none','changed_bytes','changed_version'}:assert len(session.calls)==3
+    else:assert len(session.calls)==1

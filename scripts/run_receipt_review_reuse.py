@@ -5,6 +5,29 @@ import json
 import logging
 import os
 from pathlib import Path
+from hashlib import sha256
+
+
+def check_original(session, source, *, parent_id, owner_email):
+    """Missing Drive checksum requires current bytes bracketed by stable metadata."""
+    from app.receipt_review_reuse import original_metadata_matches
+    url='https://www.googleapis.com/drive/v3/files/'+source['source_id']
+    fields='id,version,mimeType,trashed,parents,owners(emailAddress),sha256Checksum,appProperties'
+    def metadata():
+        reply=session.get(url,params={'fields':fields},timeout=20,allow_redirects=False)
+        if reply.status_code!=200:raise RuntimeError('original_read_unknown')
+        return reply.json()
+    before=metadata()
+    if before.get('sha256Checksum') is not None:
+        return original_metadata_matches(before,source,parent_id=parent_id,owner_email=owner_email)
+    # Validate all non-checksum identity/privacy fields before downloading bytes.
+    if not original_metadata_matches(before,source,parent_id=parent_id,owner_email=owner_email,
+            verified_bytes_hash=source['sha256']):return False
+    reply=session.get(url,params={'alt':'media'},timeout=20,allow_redirects=False)
+    if reply.status_code!=200:raise RuntimeError('original_read_unknown')
+    hashed=sha256(reply.content).hexdigest()
+    return (before==metadata() and original_metadata_matches(before,source,
+        parent_id=parent_id,owner_email=owner_email,verified_bytes_hash=hashed))
 
 
 def main():
@@ -56,11 +79,7 @@ def main():
             port=ExpiringPort(session,script_id=config['script_id'],folder_id=config['folder_id'],owner_email=config['owner_email'])
             def original_check(source):
                 live()
-                reply=session.get('https://www.googleapis.com/drive/v3/files/'+source['source_id'],
-                    params={'fields':'id,version,mimeType,trashed,parents,owners(emailAddress),sha256Checksum,appProperties'},
-                    timeout=20,allow_redirects=False)
-                if reply.status_code!=200:raise RuntimeError('original_read_unknown')
-                return original_metadata_matches(reply.json(),source,
+                return check_original(session,source,
                     parent_id=config['original_parent_id'],owner_email=config['owner_email'])
             result=intake_reused(manifest,original_bytes=original_bytes,copy_bytes=copy_bytes,
                 original_check=original_check,port=port,fence=fence,diagnostics=diagnostics,clock=now_jst_string)

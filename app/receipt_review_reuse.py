@@ -26,13 +26,14 @@ class ReuseFence(AttemptFence):
                 db.execute('INSERT INTO attempts VALUES (?)', (key,))
 
 
-def original_metadata_matches(value, source, *, parent_id, owner_email):
+def original_metadata_matches(value, source, *, parent_id, owner_email, verified_bytes_hash=None):
     """Historical restrictive source classification cannot be waived by the draft."""
     return (value.get('id')==source['source_id'] and value.get('version')==source['version']
         and value.get('mimeType')=='image/png' and value.get('trashed') is False
         and value.get('parents')==[parent_id]
         and [x.get('emailAddress') for x in value.get('owners',[])]==[owner_email]
-        and value.get('sha256Checksum')==source['sha256']
+        and (value.get('sha256Checksum')==source['sha256']
+            or (value.get('sha256Checksum') is None and verified_bytes_hash==source['sha256']))
         and value.get('appProperties',{}).get('kakeiboReceiptClass') in (None,'normal'))
 
 
@@ -127,9 +128,6 @@ def intake_reused(manifest, *, original_bytes, copy_bytes, original_check, port,
             gate=evaluate_receipt_privacy(raw,'image/png')
             if gate.classification!='normal' or not gate.gemini_allowed or gate.buyback_evidence:
                 raise ValueError('reuse_privacy_blocked')
-        stage='fence';diagnostics.event(stage,'STARTED')
-        fence.consume_copy(original['source_id'],copy['source_id'],copy['sha256']);consumed=True
-        diagnostics.event(stage,'PASS')
         stage='lookup';diagnostics.event(stage,'STARTED')
         if port.lookup_source(copy['source_id'],copy['sha256']) is not None:
             raise ValueError('reuse_independent_duplicate')
@@ -137,6 +135,11 @@ def intake_reused(manifest, *, original_bytes, copy_bytes, original_check, port,
         if original_check(original) is not True:raise ValueError('reuse_original_identity_unknown')
         port.source_check(copy)
         if original_check(original) is not True:raise ValueError('reuse_original_identity_unknown')
+        # Read-only preflight must not burn a permanent single-attempt reservation.
+        # Commit after every check, but before the first potentially mutating RPC.
+        stage='fence';diagnostics.event(stage,'STARTED')
+        fence.consume_copy(original['source_id'],copy['source_id'],copy['sha256']);consumed=True
+        diagnostics.event(stage,'PASS')
         stage='intake';diagnostics.intake_attempted=True;diagnostics.event(stage,'STARTED')
         result=port.intake(entry,row)
         if result!={'case_id':entry['case_id']}:raise ValueError('reuse_intake_unknown')
