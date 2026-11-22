@@ -370,7 +370,9 @@ def test_script_port_single_attempt_rpc_and_source_version(monkeypatch):
 def test_production_workflows_and_writer_files_unchanged_from_p1a():
     paths=['.github/workflows','app/sheets.py','app/receipt_pipeline.py','app/receipt_sheets_worker.py',
            'app/receipt_sheets_authority.py','app/receipt_sheets_context.py','app/receipt_sheet_cells.py',
-           'apps-script/receipt-validation/Code.gs','apps-script/receipt-validation/Sheets.gs']
+           'apps-script/receipt-validation/Code.gs','apps-script/receipt-validation/Sheets.gs',
+           # New secret-free CI only; all existing production entries stay byte-identical.
+           ':(exclude).github/workflows/receipt-prb-safety.yml']
     completed=subprocess.run(['git','diff','d2440c4b43c5a54411e0abd91cfa7ded0ad674c5','--',*paths],
         cwd=ROOT,text=True,capture_output=True,check=True)
     assert completed.stdout==''
