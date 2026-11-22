@@ -10,17 +10,32 @@ from .medical_receipt_privacy import Classification
 from .receipt_privacy_gate import ReceiptPrivacyBlocked, require_receipt_ai_permission
 
 class GeminiAI:
-    def __init__(self, api_key: str, model: str = "gemini-3.6-flash", *, request_attempts: int | None = None):
+    def __init__(self, api_key: str, model: str = "gemini-3.6-flash", *, request_attempts: int | None = None,
+                 prb_diagnostics=None):
         # Use the stable v1 Interactions API.
         options = {"api_version": "v1"}
         if request_attempts is not None:
             options['retry_options'] = {'attempts': request_attempts}
-        self.client = genai.Client(api_key=api_key, http_options=options)
+        self.prb_diagnostics = prb_diagnostics
+        if prb_diagnostics is not None:
+            from .receipt_review_diagnostics import prb_client
+            self.client = prb_client(api_key, prb_diagnostics)
+        else:
+            self.client = genai.Client(api_key=api_key, http_options=options)
         self.model = model
 
     @staticmethod
     def category_text(categories):
         return "\n".join(f"- {a} / {b}" for a, b in categories)
+
+    def _receipt_interaction(self, **kwargs):
+        if getattr(self, 'prb_diagnostics', None) is None:
+            return self.client.interactions.create(**kwargs)
+        # SDK warning strings are not part of the private diagnostic allowlist.
+        import warnings
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter('always')
+            return self.client.interactions.create(**kwargs)
 
     def analyze_receipt(self, image_bytes: bytes, mime_type: str,
                         categories: list[tuple[str, str]], *,
@@ -81,19 +96,32 @@ class GeminiAI:
         media_type = "document" if mime_type == "application/pdf" else "image"
         from .receipt_validation import validate_receipt_result
         correction='';last=None;previous=None;unresolved=None
-        for attempt in range(3):
+        diagnostics = getattr(self, 'prb_diagnostics', None)
+        for attempt in range(1 if diagnostics is not None else 3):
             # The same immutable original is reread, never a guessed repair or
             # an unverified crop. API/transport errors are not replayed here.
-            interaction = self.client.interactions.create(
+            interaction = self._receipt_interaction(
                 model=self.model,
                 input=[{'type':'text','text':prompt+correction},
                        {'type':media_type,'mime_type':mime_type,'data':encoded}],
                 response_format={'type':'text','mime_type':'application/json',
                                  'schema':ReceiptResult.model_json_schema()},
+                **({'automatic_continuation':False} if diagnostics is not None else {}),
             )
+            if diagnostics is not None:
+                from .receipt_review_diagnostics import AnalysisUnknown
+                if diagnostics.ai_count != 1:
+                    diagnostics.count_known = False
+                    diagnostics.event('analysis', 'UNKNOWN', category='COUNT_UNKNOWN')
+                    raise AnalysisUnknown()
+                if getattr(interaction, 'status', 'completed') != 'completed':
+                    diagnostics.event('analysis', 'UNKNOWN', category='INVALID_RESPONSE')
+                    raise AnalysisUnknown()
             try:
                 result=ReceiptResult.model_validate_json(interaction.output_text)
             except ValidationError:
+                if diagnostics is not None:
+                    raise
                 correction='\n前回の応答は指定JSON形式ではありませんでした。原本から指定形式で再読取してください。'
                 continue
             last=result
@@ -101,6 +129,10 @@ class GeminiAI:
             changed=previous is not None and any(a and a!=b for a,b in (
                 (previous.date,result.date),(previous.merchant,result.merchant),(previous.total,result.total)))
             if ok and not changed:return result
+            if diagnostics is not None:
+                from .receipt_review_diagnostics import AnalysisUnknown
+                diagnostics.event('validation', 'FAIL', category='VALIDATION')
+                raise AnalysisUnknown()
             if not ok:unresolved=result
             if changed:
                 issues=issues+['前回と日付・店舗・合計が変化。原本の印字で再確認']

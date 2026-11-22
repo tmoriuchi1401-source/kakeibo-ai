@@ -11,11 +11,26 @@ import json
 import os
 from pathlib import Path
 import time
+import logging
+
+_diagnostics = None
+
+
+def review_categories(value):
+    if (not isinstance(value, list) or not value or any(
+            not isinstance(pair, list) or len(pair) != 2 or
+            any(not isinstance(cell, str) or not cell.strip() for cell in pair)
+            for pair in value)):
+        raise ValueError('invalid_review_categories')
+    return [tuple(pair) for pair in value]
 
 def main():
+    global _diagnostics
+    logging.disable(logging.CRITICAL)  # Private allowlist replaces SDK/body logs in this runner only.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--attempt-db", required=True)
+    parser.add_argument("--diagnostic", help="New private diagnostic file; required for intake, never reuse")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("intake")
     commands.add_parser("pending")
@@ -25,6 +40,11 @@ def main():
     validate = commands.add_parser("validate")
     validate.add_argument("request_id")
     args = parser.parse_args()
+    if args.command == 'intake' and not args.diagnostic:
+        raise ValueError('private_diagnostic_required')
+    if args.diagnostic:
+        from app.receipt_review_diagnostics import ReviewDiagnostics
+        _diagnostics = ReviewDiagnostics(args.diagnostic)
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     required = {"schema","enabled","financial_write_enabled","script_id","folder_id","owner_email","categories"}
     if (set(config) != required or config["schema"] != "receipt-review-runner-b1" or config["enabled"] is not True
@@ -53,12 +73,12 @@ def main():
             from app.receipt_pipeline import ReceiptPipeline
             from app.receipt_review_cases import ReviewPipeline
             class Categories:
-                def categories(self): return config["categories"]
+                def categories(self): return review_categories(config["categories"])
             def make_ai():
                 if not ai_key: raise ValueError("explicit_review_ai_key_required")
-                return GeminiAI(ai_key,request_attempts=1)
+                return GeminiAI(ai_key,request_attempts=1,prb_diagnostics=_diagnostics)
             pipeline = ReceiptPipeline(Categories(),None,gemini_factory=make_ai)
-            review = ReviewPipeline(pipeline,port,metadata=port.metadata,fence=fence)
+            review = ReviewPipeline(pipeline,port,metadata=port.metadata,fence=fence,diagnostics=_diagnostics)
             def download(sid):
                 reply = session.get("https://www.googleapis.com/drive/v3/files/"+sid,params={"alt":"media"},
                     timeout=30,allow_redirects=False)
@@ -68,6 +88,8 @@ def main():
             try:
                 results = process_review_inbox(config["folder_id"],review,service=service,download=download)
                 for result in results: print(result["status"])
+                if any(result['status'] != 'review_created' for result in results):
+                    return 3
             finally:
                 service.close()
             return 0
@@ -92,7 +114,12 @@ def main():
 if __name__ == "__main__":
     try:
         status = main()
-    except Exception:
+    except Exception as error:
+        if _diagnostics is not None and not _diagnostics.failed:
+            try:
+                _diagnostics.failure('runner', error)
+            except Exception:
+                pass  # Failed diagnostics also stop; never repeat a side effect.
         print("停止・結果不明／自動再送禁止")
         status = 3
     raise SystemExit(status)

@@ -1,0 +1,40 @@
+name: PR-B single-send offline safety
+on:
+  push:
+    branches: [fix/pr-b-single-send-diagnostics]
+  pull_request:
+    branches: [feat/receipt-pr-b-iphone-backend]
+    paths:
+      - 'app/**'
+      - 'scripts/run_receipt_review.py'
+      - 'tests/**'
+      - 'requirements-prb-safety.txt'
+      - '.github/workflows/receipt-prb-safety.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install synthetic test dependencies
+        run: |
+          pip install -r requirements-test.txt -r requirements-prb-safety.txt
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn
+      - name: Full offline regression (no receipt or credential inputs)
+        run: python -m pytest -q --tb=short
+      - name: Compile and whitespace
+        run: |
+          python -m compileall -q app scripts tests
+          git diff --check

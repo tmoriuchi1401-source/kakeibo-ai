@@ -1,0 +1,4 @@
+# Audited only for the opt-in PR-B single-send boundary. Production unchanged.
+google-genai==3.6.1
+httpx==0.28.1
+httpcore==1.0.9

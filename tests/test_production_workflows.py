@@ -17,7 +17,8 @@ def workflows():
 
 def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
     for name, workflow in workflows().items():
-        if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
+        if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml",
+                    "receipt-prb-safety.yml"}:
             continue
         group = "kakeibo-production"
         if name == "category-sheet-request.yml":
@@ -36,6 +37,27 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
             assert "github.ref == 'refs/heads/main'" in job["if"], name
             assert "concurrency" not in job, name  # no parent/child lock deadlock
         assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}, name
+
+
+def test_prb_safety_workflow_is_secret_free_offline_ci_only():
+    workflow = workflows()['receipt-prb-safety.yml']
+    source = (ROOT / '.github/workflows/receipt-prb-safety.yml').read_text('utf-8')
+    assert set(workflow['on']) == {'push', 'pull_request'}
+    assert workflow['on']['push']['branches'] == ['fix/pr-b-single-send-diagnostics']
+    assert workflow['on']['pull_request']['branches'] == ['feat/receipt-pr-b-iphone-backend']
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert 'secrets.' not in source and 'vars.' not in source and 'environment:' not in source
+    assert 'kakeibo-production' not in source
+    assert set(workflow['jobs']) == {'offline'}
+    steps = workflow['jobs']['offline']['steps']
+    assert steps[0]['with']['persist-credentials'] == 'false'
+    assert [step['run'] for step in steps if 'run' in step] == [
+        'pip install -r requirements-test.txt -r requirements-prb-safety.txt\n'
+        'sudo apt-get update\n'
+        'sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-jpn\n',
+        'python -m pytest -q --tb=short',
+        'python -m compileall -q app scripts tests\ngit diff --check\n',
+    ]
 
 
 def test_shared_login_contract_workflow_is_credential_free_ci_only():
