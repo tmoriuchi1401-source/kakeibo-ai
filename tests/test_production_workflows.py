@@ -43,8 +43,8 @@ def test_prb_safety_workflow_is_secret_free_offline_ci_only():
     workflow = workflows()['receipt-prb-safety.yml']
     source = (ROOT / '.github/workflows/receipt-prb-safety.yml').read_text('utf-8')
     assert set(workflow['on']) == {'push', 'pull_request'}
-    assert workflow['on']['push']['branches'] == ['fix/pr-b-single-send-diagnostics']
-    assert workflow['on']['pull_request']['branches'] == ['feat/receipt-pr-b-iphone-backend']
+    assert workflow['on']['push']['branches'] == ['fix/pr-b-single-send-diagnostics','codex/pr-b-ai-free-intake']
+    assert workflow['on']['pull_request']['branches'] == ['feat/receipt-pr-b-iphone-backend','fix/pr-b-single-send-diagnostics']
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in source and 'vars.' not in source and 'environment:' not in source
     assert 'kakeibo-production' not in source
