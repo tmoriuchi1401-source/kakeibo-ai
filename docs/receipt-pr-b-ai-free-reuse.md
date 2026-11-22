@@ -1,0 +1,94 @@
+# PR-B: AI-free reuse of an existing analyzed single-item receipt
+
+Base: PR #203, d9a95b6103ad19fc9075eae394fb19b3e3b6346e. This change is opt-in
+local code and offline evidence only; no real-data intake, copy, setting, OAuth,
+gate, deployment, financial write or merge is included.
+
+## Input and ownership confirmation
+
+`receipt-review-reuse-v1` takes original and independent copy source identities
+(source_id/version/bytes SHA256/mime_type/classification/transaction_kind), raw
+selected import/receipt/expense rows, approved categories, and an explicit owner
+confirmation. Identities must be distinct PNG IDs with identical bytes SHA256.
+The source rows are linked by receipt/import IDs, date/merchant/total/payment,
+analysis status/digest and original link. Production presence is expected input,
+never a duplicate veto on this independent review-only path.
+
+Only ONE existing expense row and ONE visually confirmed original item are
+supported. More rows/items stop without truncation. The owner must confirm
+image-to-record linkage, distinction from prior UNKNOWN, categories, quantity
+and tax. Quantity is mandatory: no ReceiptItem default of one is applied.
+This minimal one-line path supports explicitly confirmed included tax only;
+unknown/external-tax allocation remains held rather than invented. Blank or
+inconsistent baseline fields stop; the original row is never corrected in place.
+
+The projection is not the original Gemini response. Its old analysis digest is
+retained as provenance, never treated as a source hash or reused to authenticate
+the new draft. Original identity, record digest, old IDs/analysis digest and
+owner-confirmation digest are frozen in import_row notes, hence in the existing
+case baseline. A new digest and UUID bind the independent copy and candidate.
+No real merchant/item/identity fixture or credential is committed to this PR.
+
+## Existing authority and safety
+
+The adapter imports neither Gemini nor ReceiptPipeline and never constructs a
+financial SheetsDB. It reuses make_case/make_row, the existing Script intake,
+snapshot_from_row/validate_snapshot and execute_review; Apps Script is unchanged.
+The item and total confirmation cells remain unchecked for explicit iPhone review.
+Tax and quantity come from prior explicit source confirmation, not inference.
+
+Privacy runs locally on both original/copy bytes. Original version/hash/owner/
+parent and copy source identity are independently checked before intake. An
+atomic persistent fence reserves original ID, copy ID and content hash AFTER
+read-only lookup, original checks, copy metadata/current bytes checks and local
+privacy/manifest validation have all passed, and BEFORE the single mutating intake.
+Preflight failures consume no keys. After commit, uncertainty retains all keys.
+When original Drive SHA256 is absent, the runner downloads current original bytes
+and hashes them between identical metadata reads (ID/version/owner/parent/MIME/
+privacy), in addition to checking local original bytes against the manifest.
+A returned but incorrect/empty checksum is rejected; no fallback overrides it.
+Missing checksum without current-byte evidence is rejected. These are read-only
+checks, not authorization for AI or source mutation. Retained old UNKNOWN hash/ID fences cannot be escaped by copying.
+The independent Script catalog is also checked before and after the single intake.
+Intake/readback or diagnostic uncertainty stops without retry; no new UUID/reset
+is used to recover UNKNOWN. The current gate/lock/immutable snapshot validation
+and backend financial-write-OFF boundaries remain unchanged.
+
+## Opt-in CLI (not executed against real data)
+
+`python -m scripts.run_receipt_review_reuse` requires explicit private paths:
+`--config`, `--manifest`, `--attempt-db`, `--diagnostic`, `--original-file`,
+`--copy-file`, `--result`, and the explicit `--enable-intake` switch.
+The diagnostic/result files must not exist. The result is a private append-only
+STARTED/terminal JSONL record; incomplete STARTED never authorizes a retry.
+
+Config exact fields: schema=receipt-review-reuse-runner-v1, enabled=true,
+financial_write_enabled=false, script_id (API DEPLOYMENT ID), folder_id,
+owner_email, original_parent_id, oauth_expiry (timezone-aware).
+Only explicit RECEIPT_REVIEW_OWNER_ACCESS_TOKEN is used, captured before settings
+can load .env. Each HTTP request checks expiry. Plain requests has no refresh or
+automatic retry; redirects and environment credentials/proxies are disabled.
+No credential issuance, Drive copy, Script configuration, Start or gate operation
+exists in this CLI. Do not use the AI-backed standard `intake` command for reuse.
+
+Prepare an independent one-copy folder/book binding only after separate approval;
+reuse existing book/Script/one ON_EDIT, without rebuilding/deploying. Never pass
+the old attempt DB as this command's writable DB; seed a new permanent DB with
+all genuine prior fences read-only, retaining the old file unchanged.
+
+## Offline and device evidence
+
+Tests use fabricated bytes, fake Drive checks and the real Apps Script in a Node
+VM. They cover one intake, iPhone-equivalent item edit and one registration,
+frozen snapshot, real backend validation and same-request result
+検証済み・未記帳. Result formulas are generated by the unchanged Script; real
+Google formula evaluation and actual iPhone behavior remain device checks.
+AI/financial constructors and sockets are blocked even if errors are swallowed.
+Duplicate/restart/content fences, original mismatch, medical, unknown intake/
+backend reply, diagnostic failure and missing inputs stop safely.
+
+Before a later real trial the owner still needs to visually establish ONE item,
+quantity/tax/category/source values and a different receipt from old UNKNOWN.
+If multiple items are found, stop this target. No broad history audit is needed.
+This code/CI does not establish the unconfirmed real receipt facts or authorize
+live execution. Live copy/config/auth/PAT/gate/intake remain separately approved.

@@ -1,12 +1,12 @@
 name: PR-B single-send offline safety
 on:
   push:
-    branches: [fix/pr-b-single-send-diagnostics]
+    branches: [fix/pr-b-single-send-diagnostics, codex/pr-b-ai-free-intake]
   pull_request:
-    branches: [feat/receipt-pr-b-iphone-backend]
+    branches: [feat/receipt-pr-b-iphone-backend, fix/pr-b-single-send-diagnostics]
     paths:
       - 'app/**'
-      - 'scripts/run_receipt_review.py'
+      - 'scripts/run_receipt_review*.py'
       - 'tests/**'
       - 'requirements-prb-safety.txt'
       - '.github/workflows/receipt-prb-safety.yml'
