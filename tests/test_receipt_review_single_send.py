@@ -28,6 +28,9 @@ def offline(monkeypatch):
         raise AssertionError('real network forbidden')
     monkeypatch.setattr(socket.socket, 'connect', deny)
     monkeypatch.setattr(socket, 'create_connection', deny)
+    from app.sheets import SheetsDB
+    monkeypatch.setattr(SheetsDB,'__init__',deny)
+    monkeypatch.setattr(ReceiptPipeline,'_materialize_result',deny)
     from app import receipt_privacy_gate, gemini_ai
     monkeypatch.setattr(receipt_privacy_gate, 'evaluate_receipt_privacy',
         lambda *a, **k: SimpleNamespace(classification='normal', gemini_allowed=True, buyback_evidence=False))
@@ -58,15 +61,20 @@ def build(tmp_path, monkeypatch, handler):
     return d, ai, port, fence, review
 
 
-@pytest.mark.parametrize('mode', ['success','401','429','503','timeout','invalid_json',
+@pytest.mark.parametrize('mode', ['success','delayed_success','401','429','503','timeout','connect_error','invalid_json',
     'model_invalid','response_loss','continuation','redirect','amount_invalid'])
 def test_real_sdk_single_http_attempt_and_preserved_fence(tmp_path, monkeypatch, capsys, mode):
     calls=[]
+    elapsed=[0.0]
+    monkeypatch.setattr('app.receipt_review_diagnostics.time.monotonic',lambda:elapsed[0])
     class LostBody(httpx.SyncByteStream):
         def __iter__(self): raise httpx.ReadError(CANARY)
     def handler(request):
         calls.append(request.method)
+        assert request.extensions['timeout']==dict(connect=60.0,read=60.0,write=60.0,pool=60.0)
+        if mode=='delayed_success': elapsed[0]+=12.0
         if mode=='timeout': raise httpx.ReadTimeout(CANARY, request=request)
+        if mode=='connect_error': raise httpx.ConnectError(CANARY, request=request)
         if mode in {'401','429','503'}:
             return httpx.Response(int(mode),json={'error':{'message':CANARY,'code':int(mode)}},request=request)
         if mode=='response_loss': return httpx.Response(200, stream=LostBody(), request=request)
@@ -77,12 +85,12 @@ def test_real_sdk_single_http_attempt_and_preserved_fence(tmp_path, monkeypatch,
         return httpx.Response(200,json=sdk_response(text,'requires_continuation' if mode=='continuation' else 'completed'),request=request)
     d,ai,port,fence,review=build(tmp_path,monkeypatch,handler)
     try:
-        if mode=='success':
+        if mode in {'success','delayed_success'}:
             assert review.process_bytes(b'fabricated image','image/png','synthetic-source-123')['status']=='review_created'
         else:
             with pytest.raises(Exception):review.process_bytes(b'fabricated image','image/png','synthetic-source-123')
         assert calls==['POST']
-        assert len(port.intake_calls)==(1 if mode=='success' else 0)
+        assert len(port.intake_calls)==(1 if mode in {'success','delayed_success'} else 0)
         assert d.ai_count==1
         with sqlite3.connect(fence.path) as db: assert db.execute('SELECT COUNT(*) FROM attempts').fetchone()[0]==2
         # Reopening does not erase history, and a rerun cannot reach HTTP.
@@ -95,10 +103,13 @@ def test_real_sdk_single_http_attempt_and_preserved_fence(tmp_path, monkeypatch,
         assert CANARY not in captured.out+captured.err
         records=[json.loads(line) for line in text.splitlines()]
         assert all(set(r)=={'stage','result','exception_class','http_status','error_category',
-            'ai_attempted','ai_http_attempt_count','intake_attempted'} for r in records)
+            'ai_attempted','ai_http_attempt_count','intake_attempted','elapsed_ms','http_elapsed_ms'} for r in records)
+        if mode=='delayed_success':
+            assert any(r['stage']=='response' and r['http_elapsed_ms']==12000 for r in records)
         if mode in {'401','429','503'}:
             assert any(r['http_status']==int(mode) for r in records)
-        if mode in {'timeout','response_loss'}: assert any(r['result']=='UNKNOWN' for r in records)
+        if mode in {'timeout','response_loss','connect_error'}:
+            assert any(r['result']=='UNKNOWN' and r['error_category']=='TRANSPORT_UNKNOWN' for r in records)
     finally:ai.client.close()
 
 
@@ -185,6 +196,43 @@ def test_offline_sdk_retry_translation_is_zero_retries():
     from google.genai._gaos.google_genai import _translate_retry_config
     from google.genai import types
     assert _translate_retry_config(types.HttpOptions(retry_options={'attempts':1})).max_retries==0
+
+
+def test_client_sdk_and_interaction_use_same_explicit_timeout(tmp_path):
+    seen=[]
+    d=ReviewDiagnostics(tmp_path/'diag')
+    client=prb_client('synthetic',d,transport=httpx.MockTransport(lambda r:
+        (seen.append(r.extensions['timeout']) or httpx.Response(200,json=sdk_response('{}')))))
+    try:
+        assert client._api_client._httpx_client.timeout.as_dict()==dict(connect=60,read=60,write=60,pool=60)
+        assert client._api_client._http_options.timeout==60000
+        assert client._api_client._http_options.retry_options.attempts==1
+        client.interactions.create(model='synthetic',input='synthetic',timeout=60,automatic_continuation=False)
+        assert seen==[dict(connect=60,read=60,write=60,pool=60)]
+    finally: client.close()
+
+
+def test_late_window_refuses_send_and_preserves_cleanup_reserve(tmp_path,monkeypatch):
+    from app.receipt_review_diagnostics import AnalysisUnknown
+    monkeypatch.setattr('app.receipt_review_diagnostics.time.time',lambda:200)
+    d=ReviewDiagnostics(tmp_path/'diag',deadline_epoch=300)
+    calls=[]
+    guard=SingleSendTransport(d,httpx.MockTransport(lambda r:calls.append(1)))
+    with pytest.raises(AnalysisUnknown):
+        guard.handle_request(httpx.Request('POST','https://generativelanguage.googleapis.com/v1/interactions'))
+    assert calls==[] and d.ai_count==0
+
+
+def test_medical_review_never_enters_ai_transport(tmp_path,monkeypatch):
+    from app import receipt_privacy_gate
+    calls=[]
+    d,ai,port,fence,review=build(tmp_path,monkeypatch,lambda r:calls.append(1))
+    monkeypatch.setattr(receipt_privacy_gate,'evaluate_receipt_privacy',lambda *a,**k:
+        SimpleNamespace(classification='medical',gemini_allowed=False,buyback_evidence=False))
+    try:
+        assert review.process_bytes(b'fabricated medical','image/png','synthetic-medical-source')['status']=='privacy_blocked'
+        assert calls==[] and d.ai_count==0 and port.intake_calls==[]
+    finally: ai.client.close()
 
 
 @pytest.mark.parametrize('mode',['success','401','429','503','timeout','response_loss','connect_error'])

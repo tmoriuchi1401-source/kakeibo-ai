@@ -130,8 +130,10 @@ def test_continuous_task_stop_and_disabled_config_never_load_credentials(tmp_pat
     monkeypatch.setattr(daily, 'access_token', lambda *_:pytest.fail('no auth before activation'))
     assert daily.main() == 0
     (tmp_path/'state'/'STOP.json').write_text('{}')
+    stopped=(tmp_path/'state'/'STOP.json').read_bytes()
     cfg.write_text(json.dumps({'enabled':True,'financial_write_enabled':False}))
     assert daily.main() == 3
+    assert (tmp_path/'state'/'STOP.json').read_bytes()==stopped
 
 
 @pytest.mark.parametrize('processing', [0, 1])

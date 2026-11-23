@@ -7,8 +7,13 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 
 import httpx
+
+# One source, one request. HTTPX/SDK units differ (seconds/milliseconds).
+PRB_TIMEOUT_SECONDS = 60.0
+PRB_FINISH_RESERVE_SECONDS = 75.0
 
 
 class DiagnosticFailure(RuntimeError):
@@ -38,13 +43,16 @@ CATEGORIES = frozenset({'NONE', 'AUTH', 'QUOTA', 'SERVER', 'HTTP_ERROR',
 
 
 class ReviewDiagnostics:
-    def __init__(self, path):
+    def __init__(self, path, *, deadline_epoch=None):
         self.path = Path(path)
         self.ai_count = 0
         self.count_known = True
         self.intake_attempted = False
         self.failed = False
         self.lock = threading.Lock()
+        self.started = time.monotonic()
+        self.http_started = None
+        self.deadline_epoch = deadline_epoch
         try:
             # Never truncate an earlier run, including an UNKNOWN run.
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -65,6 +73,8 @@ class ReviewDiagnostics:
             name = 'OtherException'
         record = dict(stage=stage, result=result, exception_class=name,
             http_status=status, error_category=category,
+            elapsed_ms=round((time.monotonic()-self.started)*1000),
+            http_elapsed_ms=None if self.http_started is None else round((time.monotonic()-self.http_started)*1000),
             ai_attempted=self.ai_count > 0 if self.count_known else None,
             ai_http_attempt_count=self.ai_count if self.count_known else None,
             intake_attempted=self.intake_attempted)
@@ -93,7 +103,8 @@ class ReviewDiagnostics:
             'SERVER' if status and status >= 500 else 'HTTP_ERROR' if status and status >= 300 else
             'INVALID_RESPONSE' if type(error).__name__ == 'ValidationError' else
             'SEND_LIMIT' if isinstance(error, SingleSendBlocked) else
-            'TRANSPORT_UNKNOWN' if isinstance(error, (httpx.TransportError, TimeoutError)) else 'LOCAL_ERROR')
+            'TRANSPORT_UNKNOWN' if isinstance(error, (httpx.TransportError, TimeoutError)) or
+                type(error).__name__ in {'APITimeoutError','APIConnectionError'} else 'LOCAL_ERROR')
         self.event(stage, 'UNKNOWN' if self.ai_count or not self.count_known else 'FAIL', error=error,
                    status=status, category=category)
 
@@ -115,11 +126,22 @@ class SingleSendTransport(httpx.BaseTransport):
                     request.url.path != '/v1/interactions'):
                 d.event('http', 'BLOCKED', category='SDK_UNSUPPORTED')
                 raise SingleSendBlocked()
+            if d.deadline_epoch is not None and (
+                    d.deadline_epoch-time.time() < PRB_TIMEOUT_SECONDS+PRB_FINISH_RESERVE_SECONDS):
+                d.event('http', 'BLOCKED', category='SEND_LIMIT')
+                raise AnalysisUnknown()
             # Commit diagnostic before delegating. Failure prevents any send.
             d.ai_count = 1
+            d.http_started = time.monotonic()
             d.event('http', 'STARTED')
         try:
             response = self.delegate.handle_request(request)
+            # Include body receipt/lost-body errors, not just response headers.
+            # HTTPX's normal non-streaming call also buffers this body.
+            try:
+                response.read()
+            finally:
+                response.close()
             d.event('response', 'PASS' if response.status_code < 300 else 'FAIL',
                 status=response.status_code, category=('AUTH' if response.status_code in (401,403) else
                 'QUOTA' if response.status_code == 429 else 'SERVER' if response.status_code >= 500 else
@@ -142,9 +164,11 @@ def prb_client(api_key, diagnostics, *, transport=None):
         diagnostics.event('analysis', 'BLOCKED', category='SDK_UNSUPPORTED')
         raise AnalysisUnknown()
     guard = SingleSendTransport(diagnostics, transport)
-    http = httpx.Client(transport=guard, follow_redirects=False, trust_env=False)
+    http = httpx.Client(transport=guard, timeout=httpx.Timeout(PRB_TIMEOUT_SECONDS),
+        follow_redirects=False, trust_env=False)
     client = genai.Client(api_key=api_key, vertexai=False, http_options={
-        'api_version':'v1', 'retry_options':{'attempts':1}, 'httpx_client':http})
+        'api_version':'v1', 'timeout':int(PRB_TIMEOUT_SECONDS*1000),
+        'retry_options':{'attempts':1}, 'httpx_client':http})
     if client._api_client._httpx_client is not http:
         http.close()
         raise AnalysisUnknown()
