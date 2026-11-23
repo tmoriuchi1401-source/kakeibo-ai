@@ -12,21 +12,25 @@ const formulas=[],batches=[],hiddenColumns=[],clearedValidations=[],notes=[],che
 let cases=clone(input.cases || [['case_id','source_id','source_version','source_sha256','case_json','case_digest','request_id']]);
 let requests=clone(input.requests || [['request_id','receipt_id','source_id','source_version','source_sha256','snapshot_json','snapshot_digest','status','validation_result','updated_at']]);
 let ui=clone(input.ui || []);
+let tax=clone(input.tax || [['correction_id','request_id','snapshot_digest','correction_no','event','payload_json','payload_digest','created_at']]);
+let taxExists=!!input.tax;
 function put(changes) {
   writes++;
   if(input.fault==='before')throw Error('lost before write');
   for(const change of changes){
-    const table=change.tab==='_receipt_cases'?cases:change.tab==='_receipt_requests'?requests:ui;
+    const table=change.tab==='_receipt_cases'?cases:change.tab==='_receipt_requests'?requests:change.tab==='_receipt_tax_corrections'?tax:ui;
     const offset=change.tab==='確認'?2:1,index=change.row-offset;
     if(index>table.length)throw Error('gap');
     if(index===table.length)table.push([]);
     table[index].splice(change.column||0,change.values.length,...clone(change.values));
   }
+  if(input.tax_recalc && tax.length>1 && ui.length)ui[0][6]='calculated-tax-result';
   if(input.fault==='after')throw Error('lost after write');
 }
-const names=['確認','_receipt_cases','_receipt_requests'];
+const names=['確認','_receipt_cases','_receipt_requests','_receipt_tax_corrections'];
 function sheet(name) {
-  const table=()=>name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:requests;
+  if(name==='_receipt_tax_corrections' && !taxExists)return null;
+  const table=()=>name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:name==='_receipt_tax_corrections'?tax:requests;
   const cached=()=>{
     spreadsheetReads++;
     if(!input.stale_spreadsheet)return table();
@@ -34,9 +38,12 @@ function sheet(name) {
     return cache.get(name);
   };
   return {getSheetId:()=>names.indexOf(name)+1,getLastRow:()=>cached().length,
+    hideSheet:()=>{},protect:()=>({getEditors:()=>[],removeEditors:()=>{},canDomainEdit:()=>false}),
     hideColumns:(start,count=1)=>hiddenColumns.push([start,count]),
     getRange:(r,c,n=1,w=1)=>({getValues:()=>Array.from({length:n},(_,i)=>Array.from({length:w},(_,j)=>cached()[r+i-1]?.[c+j-1]??'')),
       setDataValidation:()=>{validationCount++;},setFormulas:values=>formulas.push(...values[0]),
+      setFormula:value=>{if(input.fault==='setup')throw Error('setup interrupted');formulas.push(value);},setValue:()=>{},
+      setValues:values=>{if(name==='_receipt_tax_corrections' && r===1)tax=clone(values);else throw Error('unexpected setup write');},
       clearDataValidations:()=>clearedValidations.push([r,c]),setNote:value=>notes.push([r,c,value])})};
 }
 const validation={requireValueInList(){return this;},setAllowInvalid(){return this;},requireCheckbox(...args){checkboxes.push(args);return this;},build(){return {};}};
@@ -46,7 +53,9 @@ const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(m
       getTriggerSourceId:()=>config.spreadsheet_id,getEventType:()=> 'ON_EDIT'}]},
   Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_a,text)=>Array.from(createHash('sha256').update(text).digest())},
   LockService:{getScriptLock:()=>({tryLock:()=>{if(locked || input.busy)return false;locked=true;return true;},releaseLock:()=>{locked=false;}})},
-  SpreadsheetApp:{openById:()=>({getSheetByName:sheet}),newDataValidation:()=>validation,flush:()=>{}},
+  SpreadsheetApp:{openById:()=>({getSheetByName:sheet,insertSheet:name=>{
+    if(name!=='_receipt_tax_corrections' || taxExists)throw Error('unexpected sheet create');taxExists=true;return sheet(name);
+  }}),newDataValidation:()=>validation,flush:()=>{}},
   UrlFetchApp:{fetch:(url,options)=>{
     if(url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/'+config.spreadsheet_id+'?')) {
       restGets++;
@@ -55,7 +64,7 @@ const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(m
       const match=/^'([^']+)'!A1:([A-Z]+)1000$/.exec(range || '');
       if(!match || !names.includes(match[1]))throw Error('unbounded or foreign range');
       const name=match[1],width=Array.from(match[2]).reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
-      let table=clone(name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:requests);
+      let table=clone(name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:name==='_receipt_tax_corrections'?tax:requests);
       if(writes && input.fault==='readback')throw Error('private');
       if(input.stale_rest && writes)table=clone(input.stale_rest[name] || table);
       return {getResponseCode:()=>input.rest_status??200,getContentText:()=>JSON.stringify({spreadsheetId:config.spreadsheet_id,
@@ -79,7 +88,7 @@ const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(m
     if(input.fault==='gate')throw Error('private token');
     return {getResponseCode:()=>input.gate_status??200,getContentText:()=>JSON.stringify({name:'RECEIPT_VALIDATION_ENABLED',value:input.gate??'true'})};
   }}});
-for(const name of ['Code.gs','Sheets.gs','Review.gs','ReviewSetup.gs'])vm.runInContext(fs.readFileSync('apps-script/receipt-validation/'+name,'utf8'),ctx);
+for(const name of ['Code.gs','Sheets.gs','Review.gs','ReviewSetup.gs','TaxCorrection.gs'])vm.runInContext(fs.readFileSync('apps-script/receipt-validation/'+name,'utf8'),ctx);
 if(input.legacy_spreadsheet_reader) {
   // The PR205 reader, over the real REST writer and real command/comparison.
   const real=ctx.receiptReviewPorts_;
@@ -90,7 +99,7 @@ if(input.legacy_spreadsheet_reader) {
     return {...p,readCases:()=>read('_receipt_cases',7),readRequests:()=>read('_receipt_requests',10),readUI:()=>read('確認',98).slice(1)};
   };
 }
-const ports={readCases:()=>clone(cases),readRequests:()=>{
+const ports={readCases:()=>clone(cases),readTax:()=>clone(tax),readRequests:()=>{
   if(writes && input.fault==='readback')throw Error('private');return clone(requests);
 },readUI:()=>{
   captures++;
@@ -107,12 +116,13 @@ for(const command of input.commands || []) {
         getRow:()=>2,getColumn:()=>9,getNumRows:()=>1,getNumColumns:()=>1};
       outputs.push(ctx.receiptReviewEdited({range,value:'register:'+command.request_id,oldValue:'ready:'+command.request_id}));
     } else if(command.action==='start')outputs.push(ctx.receiptReviewStart());
+    else if(command.action==='tax_setup')outputs.push(ctx.receiptReviewPrepareTaxCorrections());
     else if(command.action==='stop')outputs.push(ctx.receiptReviewStop());
     else if(command.action==='snapshot')outputs.push(ctx.receiptReviewSnapshot_(command.row,command.entry));
-    else if(command.action==='formulas')outputs.push(ctx.receiptReviewFormulas_());
+    else if(command.action==='formulas')outputs.push(ctx.receiptReviewFormulas_(!!command.tax));
     else if(command.action==='layout')outputs.push(ctx.receiptReviewHideConfirmationColumns_(sheet('確認')));
     else outputs.push(ctx.receiptReviewBackend(command));
   } catch(error){errors.push(error.message);outputs.push(null);}
 }
-process.stdout.write(JSON.stringify({cases,requests,ui,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount,
+process.stdout.write(JSON.stringify({cases,requests,ui,tax,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount,
   hiddenColumns,clearedValidations,notes,checkboxes,diagnostics,restGets,spreadsheetReads}));

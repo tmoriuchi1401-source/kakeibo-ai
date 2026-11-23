@@ -7,7 +7,7 @@ function receiptReviewColumn_(number) {
   while(number>0){number--;result=String.fromCharCode(65+number%26)+result;number=Math.floor(number/26);}
   return result;
 }
-function receiptReviewFormulas_() {
+function receiptReviewFormulas_(taxCorrections=false) {
   const at=col=>'INDEX('+col+':'+col+',ROW())';
   const terms=Array.from({length:8},(_,i)=>{
     const start=10+9*i;
@@ -26,7 +26,7 @@ function receiptReviewFormulas_() {
     receipt_date_required:'日付が不明',receipt_date_invalid:'日付が不正',merchant_required:'店舗名が不明',
     category_invalid:'カテゴリが不正',receipt_validation_failed:'入力と原本を確認'}))
     reasons='SUBSTITUTE('+reasons+',"'+code+'","'+label+'")';
-  const display='=IF('+cid+'="","",IFERROR(LET(rid,'+rid+',n,COUNTIF('+tab+'A2:A1000,rid),'+
+  let display='=IF('+cid+'="","",IFERROR(LET(rid,'+rid+',n,COUNTIF('+tab+'A2:A1000,rid),'+
     'rs,FILTER('+tab+'A2:J1000,'+tab+'A2:A1000=rid),st,INDEX(rs,1,8),res,INDEX(rs,1,9),dg,INDEX(rs,1,7),'+
     'ok,AND(n=1,'+cid+'='+at(receiptReviewColumn_(82))+','+at('C')+'="https://drive.google.com/file/d/"&'+source+'&"/view",INDEX(rs,1,2)='+cid+',INDEX(rs,1,3)='+source+
     ',INDEX(rs,1,4)='+version+',INDEX(rs,1,5)='+hash+',COUNTIFS('+catalog+'A2:A1000,'+cid+','+catalog+'G2:G1000,rid)=1,'+
@@ -36,7 +36,23 @@ function receiptReviewFormulas_() {
     'REGEXMATCH(res,"""posting_authority"":false[,}]"),REGEXMATCH(res,"""financial_write_count"":0[,}]"),'+
     'REGEXMATCH(res,"""request_id"":"""&rid&""""),REGEXMATCH(res,"""snapshot_digest"":"""&dg&""""),'+
     'REGEXMATCH(res,"""state"":"""&st&"""")),st&"（登録時の内容） "&'+reasons+',"結果不明・照合待ち")))),'+
-    'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:","編集中・未登録","結果不明・照合待ち")))';
+    'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:",IF('+at('CS')+'="不明","税の扱いが不明：登録すると保留になります","編集中・未登録"),"結果不明・照合待ち")))';
+  if(taxCorrections) {
+    const tx="'_receipt_tax_corrections'!",field=(text,key)=>'REGEXEXTRACT('+text+',"""'+key+'"":""([^""]+)""")';
+    display='=IF('+cid+'="","",IFERROR(LET(base,'+display.slice(1)+',rid,'+rid+',n,COUNTIF('+tx+'B2:B1000,rid),'+
+      'IF(n=0,base,LET(tx,FILTER('+tx+'A2:H1000,'+tx+'B2:B1000=rid),'+
+      'intentRows,FILTER(tx,INDEX(tx,,5)="intent"),resultRows,FILTER(tx,INDEX(tx,,5)="result"),'+
+      'res,INDEX(resultRows,1,6),intent,INDEX(intentRows,1,6),pd,INDEX(intentRows,1,7),'+
+      'dg,INDEX(FILTER('+tab+'G2:G1000,'+tab+'A2:A1000=rid),1),st,'+field('res','state')+','+
+      'ok,AND(n=2,ROWS(intentRows)=1,ROWS(resultRows)=1,LEFT(base,2)="保留",'+
+      'INDEX(intentRows,1,1)=rid&":tax:1",INDEX(resultRows,1,1)=rid&":tax:1",'+
+      'INDEX(intentRows,1,3)=dg,INDEX(resultRows,1,3)=dg,INDEX(intentRows,1,4)="1",INDEX(resultRows,1,4)="1",'+
+      field('res','request_id')+'=rid,'+field('res','snapshot_digest')+'=dg,'+field('res','correction_id')+'=rid&":tax:1",'+
+      field('res','correction_digest')+'=pd,'+field('res','amended_snapshot_digest')+'='+field('intent','amended_snapshot_digest')+','+
+      field('res','tax_mode')+'='+field('intent','after_mode')+',REGEXMATCH(res,"""posting_authority"":false[,}]"),'+
+      'REGEXMATCH(res,"""financial_write_count"":0[,}]"),OR(st="検証済み・未記帳",st="修正が必要",st="保留")),'+
+      'IF(ok,st&"（税区分修正1・"&'+field('res','tax_mode')+'&"） "&'+reasons+',"結果不明・照合待ち")))),"結果不明・照合待ち"))';
+  }
   return ['='+terms.join('+'),'='+at('D')+'-'+at('E'),display];
 }
 function receiptReviewHideConfirmationColumns_(sheet) {
@@ -85,8 +101,9 @@ function receiptReviewDecorate_(ss,number,e) {
     sheet.getRange(number,start+8).clearDataValidations();
   }
   sheet.getRange(number,97).setDataValidation(rule(['税込','税別','不明']));
+  sheet.getRange(number,97).setNote('不明のまま登録すると保留になります。原本の印字が不十分なら不明を維持してください。');
   sheet.getRange(number,98).clearDataValidations();
   // Row() references survive complete-row sorts. Only derived cells get formulas.
-  if(e.candidate_rows.length<=8)sheet.getRange(number,5,1,3).setFormulas([receiptReviewFormulas_()]);
+  if(e.candidate_rows.length<=8)sheet.getRange(number,5,1,3).setFormulas([receiptReviewFormulas_(!!ss.getSheetByName('_receipt_tax_corrections'))]);
   SpreadsheetApp.flush();
 }
