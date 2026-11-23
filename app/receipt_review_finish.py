@@ -29,6 +29,8 @@ def _target(value):
 def prepare_finish_plan(record, rid, *, spreadsheet_id, deployment_id):
     """Pure offline PR205 validation; the returned private artifact is not authority."""
     before, entry, snapshot = checked_record(record, rid)
+    if entry['source']['mime_type'] == 'application/pdf':
+        raise ValueError('finish_baseline_validator_does_not_support_pdf')
     if before[7:9] != ['検証中', '']:
         raise ValueError('finish_requires_claimed_empty_result')
     validated = validate_snapshot(snapshot, entry)
@@ -59,6 +61,8 @@ def _checked_plan(plan, approved_digest):
         raise ValueError('finish_plan_not_approved')
     _target(plan['spreadsheet_id']); _target(plan['deployment_id'])
     row, entry, _ = checked_record({'row': plan['before'], 'entry': plan['entry']}, plan['request_id'])
+    if entry['source']['mime_type'] == 'application/pdf':
+        raise ValueError('finish_baseline_validator_does_not_support_pdf')
     result = plan['result']
     if (row[7:9] != ['検証中', ''] or digest(row) != plan['before_digest']
             or digest(entry) != plan['entry_digest'] or row[6] != plan['snapshot_digest']

@@ -46,7 +46,7 @@ function receiptReviewStop() {
   });
 }
 function receiptReviewSource_(s) {
-  receiptSheetsSource_(s);
+  receiptSheetsSource_(s,true);
   if(!/^[1-9][0-9]*$/.test(s.version || '')) throw Error('source_version_required');
 }
 function receiptReviewCase_(e) {
@@ -199,7 +199,7 @@ function receiptReviewCatalog_(ports) {
 function receiptReviewRequests_(ports,entries) {
   const rows=ports.readRequests(),seen=[new Set(),new Set(),new Set(),new Set()];
   for(const r of rows.slice(1)) {
-    receiptSheetsCheckRow_(r,receiptSheetsHash_);
+    receiptSheetsCheckRow_(r,receiptSheetsHash_,true);
     [r[0],r[1],r[2],r[4]].forEach((key,i)=>{if(seen[i].has(key))throw Error('request_duplicate');seen[i].add(key);});
     const e=entries.find(x=>x.request_id===r[0]),s=JSON.parse(r[5]);
     if(!e || s.case_id!==e.case_id || !s.inputs || s.baseline_digest!==e.baseline_digest ||
@@ -277,6 +277,10 @@ function receiptReviewBackend(command) {
 }
 function receiptReviewCommand_(command,ports,c) {
   const {rows,entries}=receiptReviewCatalog_(ports),table=receiptReviewRequests_(ports,entries);
+  if(command.action==='status')return {enabled:c.enabled,
+    stopped:!!PropertiesService.getScriptProperties().getProperty(REVIEW_STOP),
+    case_count:entries.length,request_count:table.length-1,
+    processing_count:table.slice(1).filter(r=>r[7]==='検証中').length,financial_write_count:0};
   if(command.action==='lookup')return entries.find(e=>e.source.source_id===command.source_id || e.source.sha256===command.sha256) || null;
   if(command.action==='pending')return table.slice(1).filter(r=>r[7]==='受付済み').map(r=>r[0]);
   if(command.action==='read') {
@@ -326,7 +330,7 @@ function receiptReviewCommand_(command,ports,c) {
     tail=[result.state,text,new Date().toISOString()];
   } else throw Error('review_replay_rejected');
   const after=[...before.slice(0,7),...tail];
-  receiptSheetsCheckRow_(after,receiptSheetsHash_);
+  receiptSheetsCheckRow_(after,receiptSheetsHash_,true);
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:index+1,column:7,values:tail}],()=>{
     receiptReviewReadback_([ports.readRequests()[index]],[after],'review_transition_unknown',RECEIPT_SHEETS_TAB);
   });

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import time
 import logging
+import sqlite3
 
 _diagnostics = None
 
@@ -34,22 +35,27 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("intake")
     commands.add_parser("pending")
+    commands.add_parser("cycle", help="Validate registrations and intake at most one new receipt; financial writes OFF")
     watch = commands.add_parser("watch")
     watch.add_argument("--poll-seconds",type=int,default=5)
     watch.add_argument("--max-polls",type=int,default=120)
     validate = commands.add_parser("validate")
     validate.add_argument("request_id")
     args = parser.parse_args()
-    if args.command == 'intake' and not args.diagnostic:
+    if args.command in ('intake', 'cycle') and not args.diagnostic:
         raise ValueError('private_diagnostic_required')
     if args.diagnostic:
         from app.receipt_review_diagnostics import ReviewDiagnostics
         _diagnostics = ReviewDiagnostics(args.diagnostic)
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     required = {"schema","enabled","financial_write_enabled","script_id","folder_id","owner_email","categories"}
-    if (set(config) != required or config["schema"] != "receipt-review-runner-b1" or config["enabled"] is not True
+    operational = {'production_spreadsheet_id', 'review_spreadsheet_id', 'model', 'max_case_count'}
+    if (set(config) not in (required, required | operational) or config["schema"] != "receipt-review-runner-b1" or config["enabled"] is not True
             or config["financial_write_enabled"] is not False):
         raise ValueError("review_runner_disabled_or_invalid")
+    if args.command == 'cycle' and (set(config) != required | operational
+            or type(config['max_case_count']) is not int or not 1 <= config['max_case_count'] <= 4):
+        raise ValueError('limited_operation_config_required')
     # Do not import settings/credentials or read .env for an OAuth token.
     token = os.environ.get("RECEIPT_REVIEW_OWNER_ACCESS_TOKEN", "")
     ai_key = os.environ.get("RECEIPT_REVIEW_GEMINI_API_KEY", "")
@@ -65,7 +71,28 @@ def main():
         session.headers["Authorization"] = "Bearer " + token
         # requests defaults to zero adapter retries; no AuthorizedSession refresh.
         port = ScriptPort(session,script_id=config["script_id"],folder_id=config["folder_id"],owner_email=config["owner_email"])
-        if args.command == "intake":
+        history = None
+        if set(config) == required | operational:
+            from app.receipt_review_history import ReceiptHistory
+            history = ReceiptHistory(session, config['production_spreadsheet_id'], config['review_spreadsheet_id'])
+        if args.command == 'cycle':
+            status = port.status()
+            if status['stopped']:
+                raise RuntimeError('existing_script_stop_preserved')
+            if status['processing_count']:
+                raise RuntimeError('existing_claim_outcome_unknown')
+            if status['enabled'] is not True:
+                print('受付OFF'); return 0
+            for rid in port.pending():
+                if fence.attempted(rid):
+                    raise RuntimeError('existing_unknown_attempt_preserved')
+                outcome = execute_review(rid, port=port, fence=fence, duplicate_check=history.duplicate)
+                print(outcome['state'])
+                if outcome['state'] == '結果不明・照合待ち':
+                    raise RuntimeError('backend_unknown_no_retry')
+            if port.status()['case_count'] >= config['max_case_count']:
+                print('限定件数に到達・登録分の検証は継続'); return 0
+        if args.command in ("intake", 'cycle'):
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
             from app.drive_receipts import process_review_inbox
@@ -76,19 +103,45 @@ def main():
                 def categories(self): return review_categories(config["categories"])
             def make_ai():
                 if not ai_key: raise ValueError("explicit_review_ai_key_required")
-                return GeminiAI(ai_key,request_attempts=1,prb_diagnostics=_diagnostics)
+                return GeminiAI(ai_key, model=config.get('model', 'gemini-3.5-flash-lite'),
+                    request_attempts=1,prb_diagnostics=_diagnostics)
             pipeline = ReceiptPipeline(Categories(),None,gemini_factory=make_ai)
-            review = ReviewPipeline(pipeline,port,metadata=port.metadata,fence=fence,diagnostics=_diagnostics)
+            review = ReviewPipeline(pipeline,port,metadata=port.metadata,fence=fence,diagnostics=_diagnostics,
+                already_imported=history.already_imported if history else None)
             def download(sid):
                 reply = session.get("https://www.googleapis.com/drive/v3/files/"+sid,params={"alt":"media"},
                     timeout=30,allow_redirects=False)
                 if reply.status_code != 200: raise RuntimeError("review_download_unknown")
                 return reply.content
             service = build("drive","v3",credentials=Credentials(token=token),cache_discovery=False)
+            imported_ids = {row[3] for row in history.imports()} if history else set()
+            with sqlite3.connect(args.attempt_db) as db:
+                db.execute('CREATE TABLE IF NOT EXISTS review_scan_holds (source_id TEXT PRIMARY KEY, version TEXT NOT NULL, reason TEXT NOT NULL)')
+                holds = dict((sid, (version, reason)) for sid, version, reason in db.execute('SELECT * FROM review_scan_holds'))
+                prior_sources = {key[7:] for (key,) in db.execute("SELECT request_id FROM attempts WHERE request_id LIKE 'source:%'")}
+            def eligible(source):
+                sid = source['id']
+                if [owner.get('emailAddress') for owner in source.get('owners', [])] != [config['owner_email']]:
+                    return False
+                if sid in imported_ids or sid in prior_sources:
+                    return False
+                previous = holds.get(sid)
+                if previous and (previous[0] == source.get('version') or previous[1] == 'manual_review_only'):
+                    return False
+                return port.lookup_source(sid, '') is None
+            def record_hold(source, result):
+                if result['status'] in ('privacy_blocked', 'held'):
+                    if result.get('reason') not in ('manual_review_only', 'pdf_manual_structure_review'):
+                        raise RuntimeError('source_or_analysis_changed_no_retry')
+                    with sqlite3.connect(args.attempt_db) as db:
+                        db.execute('INSERT OR REPLACE INTO review_scan_holds VALUES (?,?,?)',
+                            (source['id'], source['version'], result['reason']))
             try:
-                results = process_review_inbox(config["folder_id"],review,service=service,download=download)
+                results = process_review_inbox(config["folder_id"],review,service=service,download=download,
+                    eligible=eligible if args.command == 'cycle' else None,
+                    on_result=record_hold if args.command == 'cycle' else None)
                 for result in results: print(result["status"])
-                if any(result['status'] != 'review_created' for result in results):
+                if args.command != 'cycle' and any(result['status'] != 'review_created' for result in results):
                     return 3
             finally:
                 service.close()

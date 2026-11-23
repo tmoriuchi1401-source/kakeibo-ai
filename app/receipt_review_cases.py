@@ -29,7 +29,7 @@ LABELS = {"product": "商品", "tax": "外税", "discount": "値引き"}
 
 
 def source_identity(source):
-    checked_source(source)
+    checked_source(source, allow_single_page_pdf=True)
     if not re.fullmatch(r"[1-9][0-9]*", source.get("version", "")):
         raise ValueError("source_version_required")
     return deepcopy(source)
@@ -227,10 +227,11 @@ def validate_snapshot(snapshot, entry):
 
 class ReviewPipeline:
     """Drive process_inbox adapter: analysis only, never _materialize_result."""
-    def __init__(self, pipeline, port, *, metadata, fence, diagnostics=None):
+    def __init__(self, pipeline, port, *, metadata, fence, diagnostics=None, already_imported=None):
         self.pipeline, self.port, self.metadata, self.fence = pipeline, port, metadata, fence
         self._source_privacy = {}
         self.diagnostics = diagnostics
+        self.already_imported = already_imported
         self.stage = 'runner'
 
     def checkpoint(self, stage):
@@ -252,13 +253,24 @@ class ReviewPipeline:
 
     def _process_bytes(self, raw, mime, sid, image_url="", *, known_source_classification=None):
         from .receipt_privacy_gate import evaluate_receipt_privacy, require_receipt_ai_permission
-        # PDFs are held in full, including mixed documents. No PDF AI fallback.
-        if mime not in {"image/png","image/jpeg","image/heic","image/heif"}:
+        if mime not in {"image/png","image/jpeg","image/heic","image/heif","application/pdf"}:
             return dict(status="held", reason="pdf_manual_structure_review")
         self.checkpoint('lookup')
+        if self.already_imported is not None and self.already_imported(sid):
+            return dict(status="skipped", reason="already_imported")
         prior = self.port.lookup_source(sid, sha256(raw).hexdigest())
         if prior is not None:
             return dict(status="skipped", reason="review_case_exists")
+        if mime == 'application/pdf':
+            # One complete original, one case. Never send a partial/mixed PDF.
+            from .pdf_intake_production import page_count
+            from .drive_run_state import StateError
+            try:
+                single_page = page_count(raw) == 1
+            except StateError:
+                single_page = False
+            if not single_page:
+                return dict(status="held", reason="pdf_manual_structure_review")
         known_source_classification = self._source_privacy.get(sid, known_source_classification)
         if known_source_classification not in (None,"normal"):
             self._source_privacy[sid] = known_source_classification
@@ -266,7 +278,7 @@ class ReviewPipeline:
         gate = evaluate_receipt_privacy(raw, mime, known_source_classification=known_source_classification)
         if gate.classification != "normal" or not gate.gemini_allowed or gate.buyback_evidence:
             self._source_privacy[sid] = gate.classification
-            return dict(status="privacy_blocked", reason="manual_review_only")
+            return dict(status="privacy_blocked", reason="manual_review_only", classification=gate.classification)
         self.checkpoint('source_metadata')
         before = self.metadata(sid)
         self.checkpoint('privacy')
@@ -291,6 +303,8 @@ class ReviewPipeline:
                     result.payment_method,"要確認","",analysis_hash,""]
         self.checkpoint('candidate')
         entry = make_case(source, imported, candidate_rows(cid,analysis_hash,result), cats)
+        if self.already_imported is not None and self.already_imported(sid):
+            raise RuntimeError('receipt_import_history_changed')
         if self.diagnostics is not None:
             self.diagnostics.intake_attempted = True
         self.checkpoint('intake')

@@ -21,6 +21,7 @@ function receiptReviewFormulas_() {
     tax_treatment_unknown:'税処理が不明',included_tax_not_additive:'税込の税額を重複加算',
     tax_discount_allocation_review:'税・値引きの配賦を確認',source_identity_mismatch:'原本ID・版・hashを確認',
     snapshot_validation_failed:'入力版・カテゴリ・金額を確認',receipt_total_owner_confirmation_required:'総額の原本照合が必要',
+    existing_receipt_duplicate:'取込済みレシートとの重複を確認',
     quantity_line_amount_confirmation_required:'数量変更後の行金額を確認',category_not_in_master:'カテゴリを確認',
     receipt_date_required:'日付が不明',receipt_date_invalid:'日付が不正',merchant_required:'店舗名が不明',
     category_invalid:'カテゴリが不正',receipt_validation_failed:'入力と原本を確認'}))

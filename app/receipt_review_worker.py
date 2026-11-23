@@ -59,7 +59,7 @@ def checked_record(record, rid):
     return deepcopy(row), deepcopy(entry), snapshot
 
 
-def execute_review(rid, *, port, fence):
+def execute_review(rid, *, port, fence, duplicate_check=None):
     """One attempt, zero retry. Only read-only inspection is allowed after UNKNOWN."""
     request_id(rid)
     try:
@@ -83,6 +83,9 @@ def execute_review(rid, *, port, fence):
                 plan = validate_snapshot(snapshot, entry)
             except (ValueError, KeyError, TypeError):
                 plan = dict(state="修正が必要",issues=["snapshot_validation_failed"],financial_write_count=0,posting_authority=False)
+            if duplicate_check is not None and duplicate_check(entry, snapshot):
+                plan = dict(state='保留', issues=['existing_receipt_duplicate'],
+                    financial_write_count=0, posting_authority=False)
             # A network failure is UNKNOWN; a definite mismatch is a reasoned hold.
             try:
                 port.source_check(entry["source"])
@@ -128,6 +131,7 @@ class ScriptPort:
         return body["response"].get("result")
 
     def lookup_source(self, sid, hashed): return self.rpc("lookup",source_id=sid,sha256=hashed)
+    def status(self): return self.rpc("status")
     def pending(self): return self.rpc("pending")
     def intake(self, entry, row): return self.rpc("intake",entry=entry,row=row)
     def read(self, rid): return self.rpc("read",request_id=rid)
@@ -158,3 +162,7 @@ class ScriptPort:
             raise RuntimeError("source_read_unknown")
         if sha256(response.content).hexdigest() != source["sha256"] or before != self.metadata(source["source_id"]):
             raise SourceMismatch("source_identity_mismatch")
+        if source['mime_type'] == 'application/pdf':
+            from .pdf_intake_production import page_count
+            if page_count(response.content) != 1:
+                raise SourceMismatch('source_pdf_structure_mismatch')
