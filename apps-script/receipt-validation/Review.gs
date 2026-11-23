@@ -130,9 +130,35 @@ function receiptReviewSnapshot_(row,e) {
 function receiptReviewPorts_(c) {
   const ss=SpreadsheetApp.openById(c.spreadsheet_id);
   function read(name,width,headers) {
-    const sheet=ss.getSheetByName(name);
-    if(!sheet || sheet.getLastRow()>1000)throw Error('review_table_invalid');
-    const rows=sheet.getRange(1,1,Math.max(1,sheet.getLastRow()),width).getValues();
+    // Never verify a REST write through SpreadsheetApp's execution-local cache.
+    // Fetch effective typed values and bounds independently, without retry.
+    const range="'"+name.replace(/'/g,"''")+"'!A1:"+receiptReviewColumn_(width)+'1000';
+    const fields='spreadsheetId,sheets(properties(title,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(effectiveValue))))';
+    const reply=UrlFetchApp.fetch('https://sheets.googleapis.com/v4/spreadsheets/'+c.spreadsheet_id+
+      '?ranges='+encodeURIComponent(range)+'&fields='+encodeURIComponent(fields),
+      {method:'get',followRedirects:false,muteHttpExceptions:true,headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()}});
+    if(reply.getResponseCode()!==200)throw Error('review_read_unknown');
+    const body=JSON.parse(reply.getContentText()),s=body.sheets?.[0],g=s?.properties?.gridProperties;
+    if(body.spreadsheetId!==c.spreadsheet_id || body.sheets?.length!==1 || s.properties.title!==name ||
+       !Number.isInteger(g?.rowCount) || g.rowCount<1 || g.rowCount>1000 || g.columnCount<width ||
+       s.data?.length!==1 || (s.data[0].startRow || 0)!==0 || (s.data[0].startColumn || 0)!==0)
+      throw Error('review_table_invalid');
+    const raw=s.data[0].rowData || [];
+    if(raw.length>g.rowCount)throw Error('review_table_invalid');
+    const rows=raw.map(row=>{
+      const cells=row.values || [];
+      if(cells.length>width)throw Error('review_table_invalid');
+      return Array.from({length:width},(_,i)=>{
+        const value=cells[i]?.effectiveValue || {},keys=Object.keys(value);
+        if(!keys.length)return '';
+        if(keys.length!==1 || !['stringValue','numberValue','boolValue'].includes(keys[0]) ||
+           typeof value[keys[0]]!==({stringValue:'string',numberValue:'number',boolValue:'boolean'})[keys[0]])
+          throw Error('review_cell_invalid');
+        return value[keys[0]];
+      });
+    });
+    while(rows.length>1 && rows[rows.length-1].every(v=>v===''))rows.pop();
+    if(!rows.length)rows.push(Array(width).fill(''));
     if(headers && receiptCanonical_(rows[0])!==receiptCanonical_(headers))throw Error('review_header_invalid');
     return rows;
   }
@@ -191,6 +217,21 @@ function receiptReviewChange_(ports,changes,verify) {
   props.deleteProperty(REVIEW_STOP);
 }
 
+function receiptReviewReadback_(actual,expected,code,table) {
+  if(receiptCanonical_(actual.map(row=>row??null))===receiptCanonical_(expected))return;
+  const columns=new Set();
+  for(let r=0;r<Math.max(actual.length,expected.length);r++) {
+    const a=actual[r] || [],e=expected[r] || [];
+    for(let col=0;col<Math.max(a.length,e.length);col++)
+      if(receiptCanonical_(a[col]??null)!==receiptCanonical_(e[col]??null))columns.add(col+1);
+  }
+  // Only static table/error names and column numbers; never IDs, cell values,
+  // hashes, snapshots, exception messages, or credentials.
+  try { console.warn(JSON.stringify({event:'review_readback_mismatch',code,table,columns:[...columns].sort((a,b)=>a-b)})); }
+  catch(_) {} // Failed diagnostics must not clear STOP or replace the error.
+  throw Error(code);
+}
+
 function receiptReviewRegister_(rid,ports) {
   const {entries}=receiptReviewCatalog_(ports),table=receiptReviewRequests_(ports,entries);
   const e=entries.find(x=>x.request_id===rid);
@@ -210,7 +251,7 @@ function receiptReviewRegister_(rid,ports) {
   const s=e.source,row=[rid,e.case_id,s.source_id,s.version,s.sha256,text,hash,'受付済み','',new Date().toISOString()];
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:table.length+1,values:row}],()=>{
     const actual=receiptReviewRequests_(ports,entries);
-    if(receiptCanonical_(actual)!==receiptCanonical_([...table,row]))throw Error('review_readback_unknown');
+    receiptReviewReadback_(actual,[...table,row],'review_readback_unknown',RECEIPT_SHEETS_TAB);
   });
   return {request_id:rid,state:'受付済み'};
 }
@@ -257,8 +298,8 @@ function receiptReviewCommand_(command,ports,c) {
     const uiBefore=ports.readUI();
     receiptReviewChange_(ports,[{tab:REVIEW_CASE_TAB,row:rows.length+1,values:stored},
       {tab:'確認',row:uiBefore.length+2,values:row}],()=>{
-      if(receiptCanonical_(ports.readCases())!==receiptCanonical_([...rows,stored]) ||
-         receiptCanonical_(ports.readUI())!==receiptCanonical_([...uiBefore,row]))throw Error('review_intake_readback_unknown');
+      receiptReviewReadback_(ports.readCases(),[...rows,stored],'review_intake_readback_unknown',REVIEW_CASE_TAB);
+      receiptReviewReadback_(ports.readUI(),[...uiBefore,row],'review_intake_readback_unknown','確認');
     });
     // Decoration failures stop intake; no automatic rerender or overwrite of drafts.
     const props=PropertiesService.getScriptProperties();
@@ -287,7 +328,7 @@ function receiptReviewCommand_(command,ports,c) {
   const after=[...before.slice(0,7),...tail];
   receiptSheetsCheckRow_(after,receiptSheetsHash_);
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:index+1,column:7,values:tail}],()=>{
-    if(receiptCanonical_(ports.readRequests()[index])!==receiptCanonical_(after))throw Error('review_transition_unknown');
+    receiptReviewReadback_([ports.readRequests()[index]],[after],'review_transition_unknown',RECEIPT_SHEETS_TAB);
   });
   return after;
 }

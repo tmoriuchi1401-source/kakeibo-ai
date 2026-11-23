@@ -6,7 +6,8 @@ const config={enabled:true,folder_id:'synthetic-folder-b',owner_email:'owner@syn
 const properties={RECEIPT_REVIEW_CONFIG_JSON:JSON.stringify(config),RECEIPT_GITHUB_TOKEN:'github_pat_DUMMY',...input.properties};
 if(input.config)properties.RECEIPT_REVIEW_CONFIG_JSON=JSON.stringify(config);
 const props={getProperty:k=>properties[k]??null,setProperty:(k,v)=>{properties[k]=v;},deleteProperty:k=>{delete properties[k];}};
-let locked=false,writes=0,gateGets=0,captures=0,decorations=0,validationCount=0;
+let locked=false,writes=0,gateGets=0,captures=0,decorations=0,validationCount=0,restGets=0,spreadsheetReads=0;
+const diagnostics=[],cache=new Map();
 const formulas=[],batches=[],hiddenColumns=[],clearedValidations=[],notes=[],checkboxes=[];
 let cases=clone(input.cases || [['case_id','source_id','source_version','source_sha256','case_json','case_digest','request_id']]);
 let requests=clone(input.requests || [['request_id','receipt_id','source_id','source_version','source_sha256','snapshot_json','snapshot_digest','status','validation_result','updated_at']]);
@@ -26,14 +27,20 @@ function put(changes) {
 const names=['確認','_receipt_cases','_receipt_requests'];
 function sheet(name) {
   const table=()=>name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:requests;
-  return {getSheetId:()=>names.indexOf(name)+1,getLastRow:()=>table().length,
+  const cached=()=>{
+    spreadsheetReads++;
+    if(!input.stale_spreadsheet)return table();
+    if(!cache.has(name))cache.set(name,clone(table()));
+    return cache.get(name);
+  };
+  return {getSheetId:()=>names.indexOf(name)+1,getLastRow:()=>cached().length,
     hideColumns:(start,count=1)=>hiddenColumns.push([start,count]),
-    getRange:(r,c,n=1,w=1)=>({getValues:()=>Array.from({length:n},(_,i)=>Array.from({length:w},(_,j)=>table()[r+i-1]?.[c+j-1]??'')),
+    getRange:(r,c,n=1,w=1)=>({getValues:()=>Array.from({length:n},(_,i)=>Array.from({length:w},(_,j)=>cached()[r+i-1]?.[c+j-1]??'')),
       setDataValidation:()=>{validationCount++;},setFormulas:values=>formulas.push(...values[0]),
       clearDataValidations:()=>clearedValidations.push([r,c]),setNote:value=>notes.push([r,c,value])})};
 }
 const validation={requireValueInList(){return this;},setAllowInvalid(){return this;},requireCheckbox(...args){checkboxes.push(args);return this;},build(){return {};}};
-const ctx=vm.createContext({PropertiesService:{getScriptProperties:()=>props},
+const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(message))},PropertiesService:{getScriptProperties:()=>props},
   Session:{getEffectiveUser:()=>({getEmail:()=>input.owner_override || config.owner_email})},ScriptApp:{getScriptId:()=>config.script_id,
     getOAuthToken:()=> 'DUMMY',EventType:{ON_EDIT:'ON_EDIT'},getProjectTriggers:()=>input.no_trigger?[]:[{getHandlerFunction:()=> 'receiptReviewEdited',
       getTriggerSourceId:()=>config.spreadsheet_id,getEventType:()=> 'ON_EDIT'}]},
@@ -41,6 +48,21 @@ const ctx=vm.createContext({PropertiesService:{getScriptProperties:()=>props},
   LockService:{getScriptLock:()=>({tryLock:()=>{if(locked || input.busy)return false;locked=true;return true;},releaseLock:()=>{locked=false;}})},
   SpreadsheetApp:{openById:()=>({getSheetByName:sheet}),newDataValidation:()=>validation,flush:()=>{}},
   UrlFetchApp:{fetch:(url,options)=>{
+    if(url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/'+config.spreadsheet_id+'?')) {
+      restGets++;
+      if(options.method!=='get' || options.followRedirects!==false)throw Error('unsafe read HTTP');
+      const query=new URL(url).searchParams,range=query.get('ranges');
+      const match=/^'([^']+)'!A1:([A-Z]+)1000$/.exec(range || '');
+      if(!match || !names.includes(match[1]))throw Error('unbounded or foreign range');
+      const name=match[1],width=Array.from(match[2]).reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
+      let table=clone(name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:requests);
+      if(writes && input.fault==='readback')throw Error('private');
+      if(input.stale_rest && writes)table=clone(input.stale_rest[name] || table);
+      return {getResponseCode:()=>input.rest_status??200,getContentText:()=>JSON.stringify({spreadsheetId:config.spreadsheet_id,
+        sheets:[{properties:{title:name,gridProperties:{rowCount:input.grid_rows??1000,columnCount:name==='確認'?98:26}},
+          data:[{rowData:table.map(row=>({values:row.slice(0,width).map(value=>({effectiveValue:value===''?{}:
+            typeof value==='boolean'?{boolValue:value}:typeof value==='number'?{numberValue:value}:{stringValue:value}}))}))}]}]})};
+    }
     if(url==='https://sheets.googleapis.com/v4/spreadsheets/'+config.spreadsheet_id+':batchUpdate') {
       if(options.method!=='post' || options.followRedirects!==false)throw Error('unsafe HTTP');
       const batch=JSON.parse(options.payload);batches.push(batch);
@@ -58,6 +80,16 @@ const ctx=vm.createContext({PropertiesService:{getScriptProperties:()=>props},
     return {getResponseCode:()=>input.gate_status??200,getContentText:()=>JSON.stringify({name:'RECEIPT_VALIDATION_ENABLED',value:input.gate??'true'})};
   }}});
 for(const name of ['Code.gs','Sheets.gs','Review.gs','ReviewSetup.gs'])vm.runInContext(fs.readFileSync('apps-script/receipt-validation/'+name,'utf8'),ctx);
+if(input.legacy_spreadsheet_reader) {
+  // The PR205 reader, over the real REST writer and real command/comparison.
+  const real=ctx.receiptReviewPorts_;
+  ctx.receiptReviewPorts_=c=>{
+    const p=real(c),read=(name,width)=>{
+      const s=sheet(name);return s.getRange(1,1,Math.max(1,s.getLastRow()),width).getValues();
+    };
+    return {...p,readCases:()=>read('_receipt_cases',7),readRequests:()=>read('_receipt_requests',10),readUI:()=>read('確認',98).slice(1)};
+  };
+}
 const ports={readCases:()=>clone(cases),readRequests:()=>{
   if(writes && input.fault==='readback')throw Error('private');return clone(requests);
 },readUI:()=>{
@@ -83,4 +115,4 @@ for(const command of input.commands || []) {
   } catch(error){errors.push(error.message);outputs.push(null);}
 }
 process.stdout.write(JSON.stringify({cases,requests,ui,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount,
-  hiddenColumns,clearedValidations,notes,checkboxes}));
+  hiddenColumns,clearedValidations,notes,checkboxes,diagnostics,restGets,spreadsheetReads}));

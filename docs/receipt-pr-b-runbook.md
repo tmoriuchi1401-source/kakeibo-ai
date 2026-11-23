@@ -1,5 +1,8 @@
 # PR-B: 一般レシートの確認・登録・backend検証（金融write OFF）
 
+claim後UNKNOWNの読戻し修正と、実行承認を含まないfinish専用復旧の準備は
+[専用手順](receipt-pr-b-finish-only-recovery.md)を参照する。以下の過去の試験記録は変更しない。
+
 開発基準は PR #201 / `d2440c4b43c5a54411e0abd91cfa7ded0ad674c5`。
 P1のCase2成功記録（run 44907265127）は基準実績であり、このPRの実データ試験結果ではない。
 本PRはコード・合成テスト・Draft PRまで。実データ、既存ブック、デプロイ、Variables / Secrets、
