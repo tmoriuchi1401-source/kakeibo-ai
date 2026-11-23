@@ -7,7 +7,7 @@ const properties={RECEIPT_REVIEW_CONFIG_JSON:JSON.stringify(config),RECEIPT_GITH
 if(input.config)properties.RECEIPT_REVIEW_CONFIG_JSON=JSON.stringify(config);
 const props={getProperty:k=>properties[k]??null,setProperty:(k,v)=>{properties[k]=v;},deleteProperty:k=>{delete properties[k];}};
 let locked=false,writes=0,gateGets=0,captures=0,decorations=0,validationCount=0;
-const formulas=[],batches=[];
+const formulas=[],batches=[],hiddenColumns=[],clearedValidations=[],notes=[],checkboxes=[];
 let cases=clone(input.cases || [['case_id','source_id','source_version','source_sha256','case_json','case_digest','request_id']]);
 let requests=clone(input.requests || [['request_id','receipt_id','source_id','source_version','source_sha256','snapshot_json','snapshot_digest','status','validation_result','updated_at']]);
 let ui=clone(input.ui || []);
@@ -27,10 +27,12 @@ const names=['確認','_receipt_cases','_receipt_requests'];
 function sheet(name) {
   const table=()=>name==='確認'?[Array(98).fill('header'),...ui]:name==='_receipt_cases'?cases:requests;
   return {getSheetId:()=>names.indexOf(name)+1,getLastRow:()=>table().length,
+    hideColumns:(start,count=1)=>hiddenColumns.push([start,count]),
     getRange:(r,c,n=1,w=1)=>({getValues:()=>Array.from({length:n},(_,i)=>Array.from({length:w},(_,j)=>table()[r+i-1]?.[c+j-1]??'')),
-      setDataValidation:()=>{validationCount++;},setFormulas:values=>formulas.push(...values[0])})};
+      setDataValidation:()=>{validationCount++;},setFormulas:values=>formulas.push(...values[0]),
+      clearDataValidations:()=>clearedValidations.push([r,c]),setNote:value=>notes.push([r,c,value])})};
 }
-const validation={requireValueInList(){return this;},setAllowInvalid(){return this;},requireCheckbox(){return this;},build(){return {};}};
+const validation={requireValueInList(){return this;},setAllowInvalid(){return this;},requireCheckbox(...args){checkboxes.push(args);return this;},build(){return {};}};
 const ctx=vm.createContext({PropertiesService:{getScriptProperties:()=>props},
   Session:{getEffectiveUser:()=>({getEmail:()=>input.owner_override || config.owner_email})},ScriptApp:{getScriptId:()=>config.script_id,
     getOAuthToken:()=> 'DUMMY',EventType:{ON_EDIT:'ON_EDIT'},getProjectTriggers:()=>input.no_trigger?[]:[{getHandlerFunction:()=> 'receiptReviewEdited',
@@ -76,7 +78,9 @@ for(const command of input.commands || []) {
     else if(command.action==='stop')outputs.push(ctx.receiptReviewStop());
     else if(command.action==='snapshot')outputs.push(ctx.receiptReviewSnapshot_(command.row,command.entry));
     else if(command.action==='formulas')outputs.push(ctx.receiptReviewFormulas_());
+    else if(command.action==='layout')outputs.push(ctx.receiptReviewHideConfirmationColumns_(sheet('確認')));
     else outputs.push(ctx.receiptReviewBackend(command));
   } catch(error){errors.push(error.message);outputs.push(null);}
 }
-process.stdout.write(JSON.stringify({cases,requests,ui,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount}));
+process.stdout.write(JSON.stringify({cases,requests,ui,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount,
+  hiddenColumns,clearedValidations,notes,checkboxes}));

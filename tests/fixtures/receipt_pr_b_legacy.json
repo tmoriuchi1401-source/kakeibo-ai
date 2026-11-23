@@ -1,0 +1,226 @@
+{
+  "entry": {
+    "schema": "receipt-review-b1",
+    "case_id": "receipt:synthetic-source-b-legacy-synthetic",
+    "source": {
+      "source_id": "synthetic-source-b-legacy-synthetic",
+      "version": "12",
+      "sha256": "2a96c3c4114ad8fafb336e680b5f7b3aa32da119712af4110ff94c8fc69516a6",
+      "mime_type": "image/png",
+      "classification": "normal",
+      "transaction_kind": "purchase"
+    },
+    "import_row": [
+      "receipt:synthetic-source-b-legacy-synthetic",
+      "2026-11-22T10:00:00+09:00",
+      "receipt",
+      "synthetic-source-b-legacy-synthetic",
+      "2026-11-22",
+      "合成商店",
+      1000,
+      "現金",
+      "要確認",
+      "",
+      "7ea1ddb4feeecdf8041cabdf175cba41c87a5cc1f16eb6e8d683ad72ef30cf78",
+      ""
+    ],
+    "candidate_rows": [
+      [
+        "receipt:synthetic-source-b-legacy-synthetic:001",
+        "receipt:synthetic-source-b-legacy-synthetic",
+        "7ea1ddb4feeecdf8041cabdf175cba41c87a5cc1f16eb6e8d683ad72ef30cf78",
+        1,
+        "合成商品0",
+        1,
+        600,
+        "食費",
+        "食品",
+        "",
+        1000
+      ],
+      [
+        "receipt:synthetic-source-b-legacy-synthetic:002",
+        "receipt:synthetic-source-b-legacy-synthetic",
+        "7ea1ddb4feeecdf8041cabdf175cba41c87a5cc1f16eb6e8d683ad72ef30cf78",
+        2,
+        "合成商品1",
+        1,
+        400,
+        "食費",
+        "食品",
+        "",
+        1000
+      ]
+    ],
+    "categories": [
+      [
+        "食費",
+        "食品"
+      ],
+      [
+        "日用品",
+        "消耗品"
+      ]
+    ],
+    "rules": [],
+    "request_id": "11111111-1111-4111-8111-111111111111",
+    "slots": [
+      "receipt:synthetic-source-b-legacy-synthetic:001",
+      "receipt:synthetic-source-b-legacy-synthetic:002",
+      "new:f985c16e4287c3383b2dad48",
+      "new:2fc075b8c134f2603356c970",
+      "new:5beef038c646d65600d83d73",
+      "new:949afe75441551af65586338",
+      "new:7823df4912815a40569b2f0b",
+      "new:29cf996e1bb206d0b6482f34"
+    ],
+    "baseline_digest": "be922f96e96e9caf1a3e55865a99e70af9f65aecbf8988b8b337478f329bcf39"
+  },
+  "snapshot": {
+    "schema": "receipt-review-b1",
+    "case_id": "receipt:synthetic-source-b-legacy-synthetic",
+    "source": {
+      "source_id": "synthetic-source-b-legacy-synthetic",
+      "version": "12",
+      "sha256": "2a96c3c4114ad8fafb336e680b5f7b3aa32da119712af4110ff94c8fc69516a6",
+      "mime_type": "image/png",
+      "classification": "normal",
+      "transaction_kind": "purchase"
+    },
+    "baseline_digest": "be922f96e96e9caf1a3e55865a99e70af9f65aecbf8988b8b337478f329bcf39",
+    "input_version": "28eb956d84cce073eed89d9480a2836a438c014a7e9a7412f6509d079236a100",
+    "inputs": {
+      "items": [
+        {
+          "_item_id": "receipt:synthetic-source-b-legacy-synthetic:001",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "旧方式で修正した合成商品",
+          "quantity": 1,
+          "amount": 600,
+          "category": [
+            "食費",
+            "食品"
+          ],
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": true
+        },
+        {
+          "_item_id": "receipt:synthetic-source-b-legacy-synthetic:002",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "合成商品1",
+          "quantity": 1,
+          "amount": 400,
+          "category": [
+            "食費",
+            "食品"
+          ],
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": true
+        },
+        {
+          "_item_id": "new:f985c16e4287c3383b2dad48",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        },
+        {
+          "_item_id": "new:2fc075b8c134f2603356c970",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        },
+        {
+          "_item_id": "new:5beef038c646d65600d83d73",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        },
+        {
+          "_item_id": "new:949afe75441551af65586338",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        },
+        {
+          "_item_id": "new:7823df4912815a40569b2f0b",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        },
+        {
+          "_item_id": "new:29cf996e1bb206d0b6482f34",
+          "_binding": "0d4ebf8479cb09f43670a3d9050829551bb62bb723f86cabcb9a0dfbbac8a93f",
+          "name": "",
+          "quantity": "",
+          "amount": "",
+          "category": null,
+          "kind": "product",
+          "target": "",
+          "mode": "採用",
+          "confirmed": false
+        }
+      ],
+      "receipt_total": 1000,
+      "tax_mode": "税込",
+      "total_confirmed": true,
+      "note": ""
+    },
+    "operations": [
+      {
+        "action": "edit",
+        "item_id": "receipt:synthetic-source-b-legacy-synthetic:001",
+        "changes": {
+          "name": "旧方式で修正した合成商品",
+          "category": [
+            "食費",
+            "食品"
+          ]
+        },
+        "evidence": "原本照合済み（入力者の申告・本人認証ではない）"
+      }
+    ]
+  },
+  "result": {
+    "state": "検証済み・未記帳",
+    "issues": [],
+    "receipt_total": 1000,
+    "item_total": 1000,
+    "difference": 0,
+    "posting_authority": false,
+    "financial_write_count": 0
+  }
+}

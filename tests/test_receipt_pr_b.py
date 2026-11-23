@@ -17,7 +17,7 @@ from app.models import ReceiptItem, ReceiptResult
 from app.page_receipt_model import digest
 from app.receipt_pipeline import ReceiptPipeline
 from app.receipt_review_cases import (MAX_ITEMS, MACHINE_START, WIDTH, ReviewPipeline, check_case,
-    make_case, make_row, snapshot_from_row, validate_snapshot)
+    APPROVAL_METHOD, APPROVAL_EVIDENCE, make_case, make_row, snapshot_from_row, validate_snapshot)
 from app.receipt_review_snapshot import candidate_rows
 from app.receipt_review_worker import AttemptFence, ScriptPort, SourceMismatch, execute_review
 from app.receipt_sheets_authority import HEADERS, UNKNOWN, canonical
@@ -28,11 +28,15 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture(autouse=True)
 def deny_finance_and_network(monkeypatch):
     from app.sheets import SheetsDB
+    from app.gemini_ai import GeminiAI
+    from google import genai
     calls=[]
     def deny(*args, **kwargs):
         calls.append(True)
         raise AssertionError('financial/network call forbidden')
     monkeypatch.setattr(SheetsDB,'__init__',deny)
+    monkeypatch.setattr(GeminiAI,'__init__',deny)
+    monkeypatch.setattr(genai.Client,'__init__',deny)
     monkeypatch.setattr(socket.socket,'connect',deny)
     monkeypatch.setattr(socket,'create_connection',deny)
     yield
@@ -58,9 +62,7 @@ def case(suffix='one', amounts=(600,400), total=1000):
 def ready(entry,row,tax='税込'):
     row=deepcopy(row)
     row[8]='register:'+entry['request_id']
-    row[-2:]=[tax,True]
-    for i in range(min(len(entry['candidate_rows']),8)):
-        row[17+i*9]=True
+    row[-2]=tax
     recalc(row)
     return row
 
@@ -155,7 +157,7 @@ def test_item_edits_add_exclude_quantity_tax_discount_match_js(operation):
 @pytest.mark.parametrize('change,state,issue',[
     ('amount','修正が必要','item_total_mismatch'),('category','修正が必要','category_not_in_master'),
     ('quantity','修正が必要','quantity_line_amount_confirmation_required'),
-    ('unknown_tax','保留','tax_treatment_unknown'),('unconfirmed_total','修正が必要','receipt_total_owner_confirmation_required'),
+    ('unknown_tax','保留','tax_treatment_unknown'),
     ('included_tax','保留','included_tax_not_additive'),('mixed_discount','保留','tax_discount_allocation_review')])
 def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     entry,row=case()
@@ -164,7 +166,6 @@ def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     if change=='category':row[12:14]=['不正','カテゴリ']
     if change=='quantity':row[10]=2
     if change=='unknown_tax':row[-2]='不明'
-    if change=='unconfirmed_total':row[-1]=False
     if change in {'included_tax','mixed_discount'}:
         row[11]=500 if change=='included_tax' else 700
         if change=='mixed_discount':row[21:23]=['日用品','消耗品']
@@ -383,7 +384,12 @@ def test_actual_sheet_port_raw_batches_validations_and_formula_safety(tmp_path):
     row[7]='=IMPORTXML("https://invalid.invalid","x")'
     reply=js(http_ports=True,commands=[dict(action='intake',entry=entry,row=row)])
     assert not reply['errors'] and reply['writes']==1
-    assert reply['validationCount']==51 and len(reply['formulas'])==3
+    assert reply['validationCount']==42 and len(reply['formulas'])==3
+    assert reply['checkboxes']==[['register:'+entry['request_id'],'ready:'+entry['request_id']]]
+    assert reply['clearedValidations']==[[2,18+9*i] for i in range(8)]+[[2,98]]
+    assert reply['hiddenColumns']==[[82,15]]+[[18+9*i,1] for i in range(8)]+[[98,1]]
+    assert reply['ui']==[row]  # Decoration never approves or changes draft inputs.
+    assert reply['notes'][0][:2]==[2,9] and '一括承認' in reply['notes'][0][2]
     note=reply['batches'][0]['requests'][1]['updateCells']['rows'][0]['values'][7]
     assert note=={'userEnteredValue':{'stringValue':row[7]}}
     port=JsPort();port.http_ports=True
@@ -409,14 +415,17 @@ def test_safe_start_stop_preserves_latches_requests_drafts_and_gate_off():
     assert not json.loads(enabled['properties']['RECEIPT_REVIEW_CONFIG_JSON'])['enabled']
 
 
-def test_draft_regeneration_is_rejected_and_exclusion_requires_source_check():
+def test_draft_regeneration_is_rejected_and_exclusion_is_batch_approved():
     entry,row=case();p=JsPort();p.intake(entry,row)
     p.state['ui'][0][7]='編集中の値を保持'
     with pytest.raises(RuntimeError):p.intake(entry,row)
     assert p.state['ui'][0][7]=='編集中の値を保持'
     edited=ready(entry,row);edited[16]='除外';edited[17]=False;recalc(edited)
-    with pytest.raises(ValueError,match='original_check_required'):snapshot_from_row(edited,entry)
-    assert js(commands=[dict(action='snapshot',row=edited,entry=entry)])['errors']
+    snapshot=snapshot_from_row(edited,entry)
+    assert snapshot['inputs']['items'][0]['confirmed'] is True
+    assert snapshot['operations'][0]['action']=='remove'
+    assert snapshot['operations'][0]['evidence']==APPROVAL_EVIDENCE
+    assert js(commands=[dict(action='snapshot',row=edited,entry=entry)])['outputs'][0]==snapshot
 
 
 def test_decimal_quantity_and_unknown_response_are_not_rounded_or_replayed(tmp_path):
@@ -503,3 +512,83 @@ def test_watch_stops_on_unknown_without_poll_or_mutation_retry(monkeypatch,tmp_p
     monkeypatch.setattr(sys,'argv',['runner','--config',str(path),'--attempt-db',str(tmp_path/'attempts.db'),'watch','--max-polls','2'])
     assert main()==3 and calls==['pending','execute']
     assert UNKNOWN in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('count',[1,2,8])
+def test_one_registration_zero_individual_checks_all_used_slots_frozen(count,tmp_path):
+    entry,row=case('batch-'+str(count),amounts=(100,)*count,total=100*count)
+    before=deepcopy(row)
+    assert len(row)==98 and row[-1] is False
+    assert all(row[17+9*i] is False for i in range(8))
+    with pytest.raises(ValueError,match='row_binding_invalid'):
+        snapshot_from_row(row,entry)  # Never approve before a register event.
+    port=JsPort();port.http_ports=True;port.intake(entry,row)
+    assert port.state['ui'][0]==before
+    # Known tax is an ordinary correction. No hidden confirmation cell is edited.
+    port.state['ui'][0][-2]='税込'
+    port.state['ui'][0][8]='register:'+entry['request_id']
+    draft=deepcopy(port.state['ui'][0])
+    result=port.invoke(dict(action='register',request_id=entry['request_id']))
+    assert result['state']=='受付済み' and port.calls.count('register')==1
+    assert port.state['ui'][0]==draft
+    snapshot=json.loads(port.state['requests'][1][5])
+    assert snapshot==snapshot_from_row(draft,entry)
+    inputs=snapshot['inputs']
+    assert inputs['approval_method']==APPROVAL_METHOD and inputs['total_confirmed'] is True
+    assert [item['confirmed'] for item in inputs['items']]==[True]*count+[False]*(8-count)
+    assert inputs['receipt_total']==100*count and inputs['tax_mode']=='税込'
+    assert snapshot['input_version']==digest(inputs)
+    frozen=deepcopy(port.state['requests'][1][:7])
+    port.state['ui'][0][11]=999
+    port.state['ui'][0][-2]='不明'
+    assert execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'batch.db'))['state']=='検証済み・未記帳'
+    assert port.state['requests'][1][:7]==frozen
+    with pytest.raises(RuntimeError,match='replay_or_duplicate'):
+        port.invoke(dict(action='register',request_id=entry['request_id']))
+    assert port.state['requests'][1][:7]==frozen
+
+
+def test_hidden_legacy_flags_do_not_claim_visual_checks_or_approve_empty_slots():
+    entry,row=case();row=ready(entry,row)
+    row[9]='一括承認で修正した商品'
+    row[17]=False;row[26]='';row[-1]=''
+    row[35]=True  # A stale hidden flag cannot manufacture an approved item.
+    snapshot=snapshot_from_row(row,entry)
+    assert js(commands=[dict(action='snapshot',row=row,entry=entry)])['outputs'][0]==snapshot
+    assert snapshot['inputs']['items'][2]['confirmed'] is False
+    assert snapshot['operations'][0]['evidence']==APPROVAL_EVIDENCE
+    assert '原本照合済み' not in canonical(snapshot)
+    assert validate_snapshot(snapshot,entry)['state']=='検証済み・未記帳'
+
+
+@pytest.mark.parametrize('change',['method','null_method','total','used','empty','count','evidence'])
+def test_batch_approval_tampering_rejected_even_with_rehashed_inputs(change):
+    entry,row=case();row=ready(entry,row);row[9]='修正した商品'
+    snapshot=snapshot_from_row(row,entry)
+    inputs=snapshot['inputs']
+    if change=='method':inputs['approval_method']='visual_original_checked'
+    if change=='null_method':inputs['approval_method']=None
+    if change=='total':inputs['total_confirmed']=False
+    if change=='used':inputs['items'][0]['confirmed']=False
+    if change=='empty':inputs['items'][2]['confirmed']=True
+    if change=='count':inputs['items'].pop()
+    if change=='evidence':snapshot['operations'][0]['evidence']='原本照合済み'
+    snapshot['input_version']=digest(inputs)
+    with pytest.raises(ValueError):validate_snapshot(snapshot,entry)
+
+
+def test_pre_change_legacy_snapshot_and_result_remain_unchanged(tmp_path):
+    # Synthetic golden captured using PR #204's unmodified code, no real records.
+    fixture=json.loads((ROOT/'tests/fixtures/receipt_pr_b_legacy.json').read_text(encoding='utf-8'))
+    before=deepcopy(fixture);entry=fixture['entry'];snapshot=fixture['snapshot']
+    assert 'approval_method' not in snapshot['inputs']
+    assert validate_snapshot(snapshot,entry)==fixture['result']
+    port=JsPort();port.intake(entry,make_row(entry))
+    stored=[entry['request_id'],entry['case_id'],entry['source']['source_id'],entry['source']['version'],
+        entry['source']['sha256'],canonical(snapshot),digest(snapshot),'受付済み','','2026-11-22T00:00:00.000Z']
+    port.state['requests'].append(stored)
+    assert port.read(entry['request_id'])['row']==stored
+    assert execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'legacy.db'))['state']==fixture['result']['state']
+    assert port.state['requests'][1][:7]==stored[:7] and fixture==before
+    # New parsing must not reinterpret legacy operation evidence as batch approval.
+    assert snapshot_from_row(ready(entry,make_row(entry)),entry)['inputs']['approval_method']==APPROVAL_METHOD

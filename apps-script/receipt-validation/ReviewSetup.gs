@@ -38,6 +38,12 @@ function receiptReviewFormulas_() {
     'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:","編集中・未登録","結果不明・照合待ち")))';
   return ['='+terms.join('+'),'='+at('D')+'-'+at('E'),display];
 }
+function receiptReviewHideConfirmationColumns_(sheet) {
+  // Keep the 98-column storage contract and all existing draft values intact.
+  sheet.hideColumns(82,15);
+  for(let i=0;i<8;i++)sheet.hideColumns(18+9*i);
+  sheet.hideColumns(98);
+}
 function receiptReviewPrepare() {
   return receiptSheetsLocked_(()=>{
     const c=receiptReviewConfig_();
@@ -47,12 +53,12 @@ function receiptReviewPrepare() {
     const ui=ss.getSheetByName('確認');
     if(!ui || ui.getLastRow()>1)throw Error('review_prepare_requires_empty_independent_ui');
     if(ui.getMaxColumns()<98)ui.insertColumnsAfter(ui.getMaxColumns(),98-ui.getMaxColumns());
-    const headers=['案件ID','種別','原本','支払総額','商品合計','差額','結果（登録時）','途中メモ','登録'];
+    const headers=['案件ID','種別','原本','支払総額','商品合計','差額','結果（登録時）','途中メモ','登録（表示内容を一括承認）'];
     for(let i=1;i<=8;i++)headers.push(...['商品名','数量','行金額','大カテゴリ','小カテゴリ','種類','対象商品','採用／除外','原本照合'].map(x=>'商品'+i+' '+x));
     headers.push('固定案件ID','原本ID','原本版','原本hash',...Array.from({length:8},(_,i)=>'商品ID'+(i+1)),
       '要求UUID','入力形式版','基準digest','税の扱い','総額の原本照合');
     ui.getRange(1,1,1,98).setValues([headers]);ui.setFrozenRows(1);ui.setFrozenColumns(1);
-    ui.hideColumns(82,15);
+    receiptReviewHideConfirmationColumns_(ui);
     ui.getRange(1,1,1000,98).setWrap(true);
     for(const [name,h] of [[REVIEW_CASE_TAB,REVIEW_CASE_HEADERS],[RECEIPT_SHEETS_TAB,RECEIPT_SHEETS_HEADERS]]) {
       const sheet=ss.insertSheet(name);sheet.getRange(1,1,1,h.length).setValues([h]);sheet.hideSheet();
@@ -64,8 +70,10 @@ function receiptReviewPrepare() {
 }
 function receiptReviewDecorate_(ss,number,e) {
   const sheet=ss.getSheetByName('確認'),rule=values=>SpreadsheetApp.newDataValidation().requireValueInList(values,true).setAllowInvalid(false).build();
+  receiptReviewHideConfirmationColumns_(sheet);
   sheet.getRange(number,9).setDataValidation(SpreadsheetApp.newDataValidation()
     .requireCheckbox('register:'+e.request_id,'ready:'+e.request_id).build());
+  sheet.getRange(number,9).setNote('表示中の全明細・支払総額・税の扱いを一括承認して登録します。原本の目視確認を証明する操作ではありません。');
   for(let i=0;i<8;i++) {
     const start=10+i*9;
     sheet.getRange(number,start+3).setDataValidation(rule([...new Set(e.categories.map(c=>c[0]))]));
@@ -73,10 +81,10 @@ function receiptReviewDecorate_(ss,number,e) {
     sheet.getRange(number,start+5).setDataValidation(rule(['商品','外税','値引き']));
     sheet.getRange(number,start+6).setDataValidation(rule(['指定なし',...Array.from({length:8},(_,j)=>'商品'+(j+1))]));
     sheet.getRange(number,start+7).setDataValidation(rule(['採用','除外']));
-    sheet.getRange(number,start+8).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+    sheet.getRange(number,start+8).clearDataValidations();
   }
   sheet.getRange(number,97).setDataValidation(rule(['税込','税別','不明']));
-  sheet.getRange(number,98).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  sheet.getRange(number,98).clearDataValidations();
   // Row() references survive complete-row sorts. Only derived cells get formulas.
   if(e.candidate_rows.length<=8)sheet.getRange(number,5,1,3).setFormulas([receiptReviewFormulas_()]);
   SpreadsheetApp.flush();

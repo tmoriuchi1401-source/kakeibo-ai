@@ -7,6 +7,8 @@ const REVIEW_CASE_HEADERS=['case_id','source_id','source_version','source_sha256
 const REVIEW_CASE_TAB='_receipt_cases';
 const REVIEW_WIDTH=98, REVIEW_MACHINE=81, REVIEW_LIMIT=8;
 const REVIEW_STOP='RECEIPT_REVIEW_STOPPED';
+const REVIEW_APPROVAL_METHOD='register_all_displayed_v1';
+const REVIEW_APPROVAL_EVIDENCE='登録による表示内容の一括承認（原本の目視確認・本人認証を証明しない）';
 
 function receiptReviewConfig_() {
   const c=JSON.parse(PropertiesService.getScriptProperties().getProperty('RECEIPT_REVIEW_CONFIG_JSON') || 'null');
@@ -96,10 +98,9 @@ function receiptReviewSnapshot_(row,e) {
     const key=e.slots[i],old=originals.find(x=>x.item_id===key),blank=v=>v==='' || v===null;
     if(!old && blank(name) && blank(quantity) && blank(amount)) {
       if(!blank(major) || !blank(minor) || ![null,'','商品'].includes(kind) ||
-         ![null,'','指定なし'].includes(target) || ![null,'','採用'].includes(mode) ||
-         ![null,'',false].includes(confirmed))throw Error('empty_addition_invalid');
+         ![null,'','指定なし'].includes(target) || ![null,'','採用'].includes(mode))throw Error('empty_addition_invalid');
       name='';quantity='';amount='';major='';minor='';kind='商品';target='';mode='採用';confirmed=false;
-    } else if(confirmed!==true)throw Error('original_check_required');
+    } else confirmed=true; // Registration approves used slots, never empty ones.
     if(!['商品','外税','値引き'].includes(kind) || ![null,'','指定なし',...Array.from({length:8},(_,j)=>'商品'+(j+1))].includes(target))
       throw Error('item_controls_invalid');
     if(name)quantity=receiptQuantity_(quantity);
@@ -109,15 +110,19 @@ function receiptReviewSnapshot_(row,e) {
   }
   const total=items.filter(x=>x.name && x.mode==='採用').reduce((s,x)=>s+x.amount,0);
   if(!Number.isSafeInteger(total) || row[4]!==total || row[5]!==row[3]-total)throw Error('display_total_mismatch');
-  if(!['税込','税別','不明'].includes(row[96]) || typeof row[97]!=='boolean')throw Error('total_controls_invalid');
+  if(!['税込','税別','不明'].includes(row[96]))throw Error('total_controls_invalid');
   const draft={case_id:e.case_id,source:e.source,items};
   const categories=e.categories.map(x=>x.slice());
   for(const item of items)if(item.category && item.category.every(x=>typeof x==='string' && x) &&
     !categories.some(x=>same(x,item.category)))categories.push(item.category);
   const converted=receiptSnapshot_({draft,original_items:originals,categories,context_digest:e.baseline_digest},receiptSheetsHash_);
-  for(const op of converted.operations)if(op.action==='edit' && 'name' in op.changes)
-    op.changes.category=items.find(i=>i._item_id===op.item_id).category;
-  const inputs={items,receipt_total:row[3],tax_mode:row[96],total_confirmed:row[97],note:row[7]};
+  for(const op of converted.operations) {
+    op.evidence=REVIEW_APPROVAL_EVIDENCE;
+    if(op.action==='edit' && 'name' in op.changes)
+      op.changes.category=items.find(i=>i._item_id===op.item_id).category;
+  }
+  const inputs={items,receipt_total:row[3],tax_mode:row[96],total_confirmed:true,note:row[7],
+    approval_method:REVIEW_APPROVAL_METHOD};
   return {schema:e.schema,case_id:e.case_id,source:e.source,baseline_digest:e.baseline_digest,
     input_version:receiptSheetsHash_(receiptCanonical_(inputs)),inputs,operations:converted.operations};
 }
