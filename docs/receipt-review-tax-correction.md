@@ -1,5 +1,9 @@
 # Registered receipt: tax-only correction (code/CI only)
 
+Tax unknown alone is now a nonblocking warning under the amount-first policy.
+See [policy recheck](receipt-review-policy-recheck.md) for historical holds.
+Never infer a known tax mode without printed evidence.
+
 Keep the original request UUID, all ten ledger cells, snapshot JSON/digest,
 result JSON and catalog unchanged. Do not register again, re-intake, issue a new
 UUID, resend Gemini, move the source or post finance.

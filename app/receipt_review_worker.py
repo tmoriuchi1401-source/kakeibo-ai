@@ -97,6 +97,9 @@ def execute_review(rid, *, port, fence, duplicate_check=None):
         for key in ("receipt_total","item_total","difference"):
             if key in plan:
                 result[key] = plan[key]
+        for key in ("warnings", "validator_revision"):
+            if key in plan:
+                result[key] = plan[key]
         finished = port.finish(rid, claimed, result)
         actual, actual_entry, actual_snapshot = checked_record(port.read(rid), rid)
         if (finished != actual or actual[:7] != row[:7] or actual_entry != entry or actual_snapshot != snapshot

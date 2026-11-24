@@ -155,9 +155,9 @@ def test_item_edits_add_exclude_quantity_tax_discount_match_js(operation):
 
 
 @pytest.mark.parametrize('change,state,issue',[
-    ('amount','修正が必要','item_total_mismatch'),('category','修正が必要','category_not_in_master'),
+    ('amount','保留','item_total_mismatch'),('category','修正が必要','category_not_in_master'),
     ('quantity','修正が必要','quantity_line_amount_confirmation_required'),
-    ('unknown_tax','保留','tax_treatment_unknown'),
+    ('unknown_tax','検証済み・未記帳','tax_treatment_unknown'),
     ('included_tax','保留','included_tax_not_additive'),('mixed_discount','保留','tax_discount_allocation_review')])
 def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     entry,row=case()
@@ -176,8 +176,9 @@ def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     port.invoke(dict(action='register',request_id=entry['request_id']))
     result=execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'attempts.db'))
     assert result['state']==state
-    assert any(x.startswith(issue) for x in result['issues'])
+    assert any(x.startswith(issue) for x in result.get('issues',[])+result.get('warnings',[]))
     assert result['financial_write_count']==0
+    assert 'RECEIPT_REVIEW_STOPPED' not in port.state['properties']
 
 
 @pytest.mark.parametrize('field',[0,1,2,3,MACHINE_START,MACHINE_START+1,MACHINE_START+2,MACHINE_START+3,MACHINE_START+12,MACHINE_START+14])
@@ -582,7 +583,9 @@ def test_pre_change_legacy_snapshot_and_result_remain_unchanged(tmp_path):
     fixture=json.loads((ROOT/'tests/fixtures/receipt_pr_b_legacy.json').read_text(encoding='utf-8'))
     before=deepcopy(fixture);entry=fixture['entry'];snapshot=fixture['snapshot']
     assert 'approval_method' not in snapshot['inputs']
-    assert validate_snapshot(snapshot,entry)==fixture['result']
+    revised=validate_snapshot(snapshot,entry)
+    assert {k:v for k,v in revised.items() if k not in {'warnings','validator_revision'}}==fixture['result']
+    assert revised['warnings']==[]
     port=JsPort();port.intake(entry,make_row(entry))
     stored=[entry['request_id'],entry['case_id'],entry['source']['source_id'],entry['source']['version'],
         entry['source']['sha256'],canonical(snapshot),digest(snapshot),'受付済み','','2026-11-22T00:00:00.000Z']

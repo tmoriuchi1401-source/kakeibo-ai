@@ -26,6 +26,7 @@ SCHEMA = "receipt-review-b1"
 APPROVAL_METHOD = "register_all_displayed_v1"
 APPROVAL_EVIDENCE = "登録による表示内容の一括承認（原本の目視確認・本人認証を証明しない）"
 LABELS = {"product": "商品", "tax": "外税", "discount": "値引き"}
+VALIDATOR_REVISION = "receipt-review-amount-v2"
 
 
 def source_identity(source):
@@ -215,12 +216,20 @@ def validate_snapshot(snapshot, entry):
               "店舗名不明":"merchant_required", "明細なし":"no_items", "合計金額不正":"receipt_total_invalid", "明細不正":"item_invalid"}
     issues = [closed.get(issue, issue if re.fullmatch(r"[a-z0-9_:.-]+",issue) else "receipt_validation_failed")
               for issue in plan["issues"]]
-    if inputs["tax_mode"] == "不明":
-        issues.append("tax_treatment_unknown")
+    warnings = ["tax_treatment_unknown"] if inputs["tax_mode"] == "不明" else []
     if inputs["tax_mode"] == "税込" and any(i["kind"] == "tax" for i in plan["items"]):
         issues.append("included_tax_not_additive")
-    hold = any(any(word in issue for word in ("tax_", "included_tax", "allocation")) for issue in issues)
+    # A visibly separate external-tax candidate cannot disappear simply by
+    # increasing a product amount to make the arithmetic look balanced.
+    adopted = {i["item_id"] for i in plan["items"]}
+    if any(i["kind"] == "tax" and "外税" in i["name"] and i["item_id"] not in adopted
+           for i in plan["original_items"]):
+        issues.append("external_tax_addition_missing")
+    # An unknown tax label is auditable, but cannot excuse any amount issue.
+    # A separate tax/discount allocation problem still blocks validation.
+    hold = plan["difference"] != 0 or any(any(word in issue for word in ("tax_", "included_tax", "allocation")) for issue in issues)
     return dict(state="保留" if hold else "修正が必要" if issues else "検証済み・未記帳", issues=issues,
+        warnings=warnings, validator_revision=VALIDATOR_REVISION,
         receipt_total=plan["receipt_total"], item_total=plan["item_total"], difference=plan["difference"],
         posting_authority=False, financial_write_count=0)
 

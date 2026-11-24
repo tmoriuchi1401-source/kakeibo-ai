@@ -97,8 +97,9 @@ function receiptReviewPrepareTaxCorrections() {
     for(let i=0;i<ui.length;i++)if(ui[i][0]) {
       const entry=entries.find(e=>e.case_id===ui[i][0]);
       if(!entry)throw Error('tax_setup_case_missing');
-      if(entry.candidate_rows.length<=8)sheet.getRange(i+2,7).setFormula(receiptReviewFormulas_(true)[2]);
-      sheet.getRange(i+2,97).setNote('不明のまま登録すると保留になります。原本の印字が不十分なら不明を維持してください。');
+      if(entry.candidate_rows.length<=8)sheet.getRange(i+2,7).setFormula(receiptReviewFormulas_(true,
+        !!ss.getSheetByName('_receipt_policy_reviews'))[2]);
+      sheet.getRange(i+2,97).setNote('税区分は任意です。不明でも支払総額と明細が一致すれば登録できます。');
     }
     SpreadsheetApp.flush();receiptReviewTaxHistory_(ports);
     receiptReviewReadback_(ports.readRequests(),originals,'tax_setup_original_changed',RECEIPT_SHEETS_TAB);

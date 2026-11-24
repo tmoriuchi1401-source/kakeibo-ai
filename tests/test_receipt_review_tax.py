@@ -46,7 +46,13 @@ def held(tmp_path,tax_line=False):
     p.intake(e,row);p.state['ui'][0]=ready(e,row,tax='不明')
     p.invoke(dict(action='register',request_id=e['request_id']))
     result=execute_review(e['request_id'],port=p,fence=AttemptFence(tmp_path/'base.db'))
-    assert result['issues']==['tax_treatment_unknown']
+    # Historical result as written by the previous validator, kept immutable
+    # during a later tax correction or policy recheck.
+    assert result['warnings']==['tax_treatment_unknown']
+    old={k:v for k,v in result.items() if k not in {'warnings','validator_revision'}}
+    old['state']='保留';old['issues']=['tax_treatment_unknown']
+    p.state['requests'][1][7]='保留'
+    p.state['requests'][1][8]=json.dumps(old,ensure_ascii=False,sort_keys=True,separators=(',',':'))
     return e,p,Reader(p)
 
 
@@ -149,7 +155,7 @@ def test_result_binding_and_finish_replay_rejected(tmp_path):
 def test_warning_and_effective_result_formula_preserve_98_columns():
     formulas=js(commands=[dict(action='formulas',tax=True)])['outputs'][0]
     assert len(formulas)==3
-    assert '登録すると保留になります' in formulas[2] and 'CS:CS' in formulas[2]
+    assert '金額が一致すれば登録可能' in formulas[2] and 'CS:CS' in formulas[2]
     for required in ['_receipt_tax_corrections','correction_digest','amended_snapshot_digest','financial_write_count','posting_authority','税区分修正1']:
         assert required in formulas[2]
     # Native formula lexical structure, including escaped quotes in regexes.

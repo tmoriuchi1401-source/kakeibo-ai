@@ -7,7 +7,7 @@ function receiptReviewColumn_(number) {
   while(number>0){number--;result=String.fromCharCode(65+number%26)+result;number=Math.floor(number/26);}
   return result;
 }
-function receiptReviewFormulas_(taxCorrections=false) {
+function receiptReviewFormulas_(taxCorrections=false,policyReviews=false) {
   const at=col=>'INDEX('+col+':'+col+',ROW())';
   const terms=Array.from({length:8},(_,i)=>{
     const start=10+9*i;
@@ -19,6 +19,7 @@ function receiptReviewFormulas_(taxCorrections=false) {
   let reasons='REGEXEXTRACT(res,"""issues"":\\[([^]]*)\\]")';
   for(const [code,label] of Object.entries({item_total_mismatch:'商品合計と総額が不一致',
     tax_treatment_unknown:'税処理が不明',included_tax_not_additive:'税込の税額を重複加算',
+    external_tax_addition_missing:'外税の加算漏れを確認',
     tax_discount_allocation_review:'税・値引きの配賦を確認',source_identity_mismatch:'原本ID・版・hashを確認',
     snapshot_validation_failed:'入力版・カテゴリ・金額を確認',receipt_total_owner_confirmation_required:'総額の原本照合が必要',
     existing_receipt_duplicate:'取込済みレシートとの重複を確認',
@@ -35,8 +36,8 @@ function receiptReviewFormulas_(taxCorrections=false) {
     'IF(AND(OR(st="検証済み・未記帳",st="修正が必要",st="保留"),'+
     'REGEXMATCH(res,"""posting_authority"":false[,}]"),REGEXMATCH(res,"""financial_write_count"":0[,}]"),'+
     'REGEXMATCH(res,"""request_id"":"""&rid&""""),REGEXMATCH(res,"""snapshot_digest"":"""&dg&""""),'+
-    'REGEXMATCH(res,"""state"":"""&st&"""")),st&"（登録時の内容） "&'+reasons+',"結果不明・照合待ち")))),'+
-    'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:",IF('+at('CS')+'="不明","税の扱いが不明：登録すると保留になります","編集中・未登録"),"結果不明・照合待ち")))';
+    'REGEXMATCH(res,"""state"":"""&st&"""")),st&"（登録時の内容） "&'+reasons+'&IF(REGEXMATCH(res,"""tax_treatment_unknown""")," 税区分未確定",""),"結果不明・照合待ち")))),'+
+    'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:",IF('+at('CS')+'="不明","税区分が不明でも、金額が一致すれば登録可能","編集中・未登録"),"結果不明・照合待ち")))';
   if(taxCorrections) {
     const tx="'_receipt_tax_corrections'!",field=(text,key)=>'REGEXEXTRACT('+text+',"""'+key+'"":""([^""]+)""")';
     display='=IF('+cid+'="","",IFERROR(LET(base,'+display.slice(1)+',rid,'+rid+',n,COUNTIF('+tx+'B2:B1000,rid),'+
@@ -52,6 +53,18 @@ function receiptReviewFormulas_(taxCorrections=false) {
       field('res','tax_mode')+'='+field('intent','after_mode')+',REGEXMATCH(res,"""posting_authority"":false[,}]"),'+
       'REGEXMATCH(res,"""financial_write_count"":0[,}]"),OR(st="検証済み・未記帳",st="修正が必要",st="保留")),'+
       'IF(ok,st&"（税区分修正1・"&'+field('res','tax_mode')+'&"） "&'+reasons+',"結果不明・照合待ち")))),"結果不明・照合待ち"))';
+  }
+  if(policyReviews) {
+    const tab2="'_receipt_policy_reviews'!",field=(value,key)=>'REGEXEXTRACT('+value+',"""'+key+'"":""([^""]+)""")';
+    display='=IF('+cid+'="","",IFERROR(LET(base,'+display.slice(1)+',rid,'+rid+',n,COUNTIF('+tab2+'A2:A1000,rid),'+
+      'IF(n=0,base,LET(pr,FILTER('+tab2+'A2:G1000,'+tab2+'A2:A1000=rid),res,INDEX(pr,1,5),'+
+      'dg,INDEX(FILTER('+tab+'G2:G1000,'+tab+'A2:A1000=rid),1),st,'+field('res','state')+','+
+      'ok,AND(n=1,LEFT(base,2)="保留",INDEX(pr,1,2)=dg,INDEX(pr,1,3)="receipt-review-amount-v2",'+
+      field('res','request_id')+'=rid,'+field('res','snapshot_digest')+'=dg,'+
+      field('res','validator_revision')+'=INDEX(pr,1,3),'+field('res','original_result_digest')+'=INDEX(pr,1,4),'+
+      'REGEXMATCH(res,"""posting_authority"":false[,}]"),REGEXMATCH(res,"""financial_write_count"":0[,}]"),'+
+      'REGEXMATCH(res,"""tax_treatment_unknown"""),OR(st="検証済み・未記帳",st="修正が必要",st="保留")),'+
+      'IF(ok,st&"（再評価・税区分未確定） "&'+reasons+',"結果不明・照合待ち")))) ,"結果不明・照合待ち"))';
   }
   return ['='+terms.join('+'),'='+at('D')+'-'+at('E'),display];
 }
@@ -101,9 +114,10 @@ function receiptReviewDecorate_(ss,number,e) {
     sheet.getRange(number,start+8).clearDataValidations();
   }
   sheet.getRange(number,97).setDataValidation(rule(['税込','税別','不明']));
-  sheet.getRange(number,97).setNote('不明のまま登録すると保留になります。原本の印字が不十分なら不明を維持してください。');
+  sheet.getRange(number,97).setNote('税区分は任意です。不明でも支払総額と明細が一致すれば登録できます。');
   sheet.getRange(number,98).clearDataValidations();
   // Row() references survive complete-row sorts. Only derived cells get formulas.
-  if(e.candidate_rows.length<=8)sheet.getRange(number,5,1,3).setFormulas([receiptReviewFormulas_(!!ss.getSheetByName('_receipt_tax_corrections'))]);
+  if(e.candidate_rows.length<=8)sheet.getRange(number,5,1,3).setFormulas([receiptReviewFormulas_(
+    !!ss.getSheetByName('_receipt_tax_corrections'),!!ss.getSheetByName('_receipt_policy_reviews'))]);
   SpreadsheetApp.flush();
 }

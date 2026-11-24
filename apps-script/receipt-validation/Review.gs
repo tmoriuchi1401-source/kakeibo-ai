@@ -166,6 +166,8 @@ function receiptReviewPorts_(c) {
     readCases:()=>read(REVIEW_CASE_TAB,7,REVIEW_CASE_HEADERS),
     readRequests:()=>read(RECEIPT_SHEETS_TAB,10,RECEIPT_SHEETS_HEADERS),
     readTax:()=>read('_receipt_tax_corrections',8,REVIEW_TAX_HEADERS),
+    readTaxIfPresent:()=>ss.getSheetByName('_receipt_tax_corrections')?read('_receipt_tax_corrections',8,REVIEW_TAX_HEADERS):[REVIEW_TAX_HEADERS],
+    readPolicy:()=>read(REVIEW_POLICY_TAB,7,REVIEW_POLICY_HEADERS),
     readUI:()=>read('確認',98).slice(1),
     decorate:(number,e)=>receiptReviewDecorate_(ss,number,e),
     // One batch, one attempt. stringValue prevents names/notes becoming formulas.
@@ -279,6 +281,7 @@ function receiptReviewBackend(command) {
 function receiptReviewCommand_(command,ports,c) {
   const {rows,entries}=receiptReviewCatalog_(ports),table=receiptReviewRequests_(ports,entries);
   if(['tax_begin','tax_finish'].includes(command.action))return receiptReviewTaxCommand_(command,ports,c,entries,table);
+  if(command.action==='policy_recheck')return receiptReviewPolicyCommand_(command,ports,c,entries,table);
   if(command.action==='status')return {enabled:c.enabled,
     stopped:!!PropertiesService.getScriptProperties().getProperty(REVIEW_STOP),
     case_count:entries.length,request_count:table.length-1,
