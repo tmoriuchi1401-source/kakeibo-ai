@@ -74,8 +74,9 @@ def execute_review(rid, *, port, fence, duplicate_check=None):
         current, current_entry, frozen = checked_record(port.read(rid), rid)
         if current != claimed or current_entry != entry or frozen != snapshot:
             raise ValueError("context_changed")
+        source_audit = None
         try:
-            port.source_check(entry["source"])
+            source_audit = port.source_check(entry["source"])
         except SourceMismatch:
             plan = dict(state="保留",issues=["source_identity_mismatch"],financial_write_count=0,posting_authority=False)
         else:
@@ -88,9 +89,12 @@ def execute_review(rid, *, port, fence, duplicate_check=None):
                     financial_write_count=0, posting_authority=False)
             # A network failure is UNKNOWN; a definite mismatch is a reasoned hold.
             try:
-                port.source_check(entry["source"])
+                recheck_audit = port.source_check(entry["source"])
+                if recheck_audit != source_audit:
+                    raise RuntimeError("source_identity_changed_during_validation")
             except SourceMismatch:
                 plan = dict(state="保留",issues=["source_identity_mismatch"],financial_write_count=0,posting_authority=False)
+                source_audit = None
         result = dict(request_id=rid,snapshot_digest=row[6],state=plan["state"],issues=plan["issues"],
             posting_authority=False,financial_write_count=0)
         # Totals are frozen in the snapshot and kept distinct in the result.
@@ -100,6 +104,8 @@ def execute_review(rid, *, port, fence, duplicate_check=None):
         for key in ("warnings", "validator_revision"):
             if key in plan:
                 result[key] = plan[key]
+        if source_audit is not None:
+            result.update(source_audit)
         finished = port.finish(rid, claimed, result)
         actual, actual_entry, actual_snapshot = checked_record(port.read(rid), rid)
         if (finished != actual or actual[:7] != row[:7] or actual_entry != entry or actual_snapshot != snapshot
@@ -157,15 +163,31 @@ class ScriptPort:
     def source_check(self, source):
         source_identity(source)
         before = self.metadata(source["source_id"])
-        if before["version"] != source["version"] or before["mimeType"] != source["mime_type"]:
+        if (before["mimeType"] != source["mime_type"]
+                or not re.fullmatch(r"[1-9][0-9]*", before["version"])):
             raise SourceMismatch("source_identity_mismatch")
+        pinned = getattr(self, "_source_current", {}).get(source["source_id"])
+        if pinned is not None and pinned != (source["version"], source["sha256"], before["version"]):
+            raise RuntimeError("source_identity_changed_during_validation")
         response = self.session.get("https://www.googleapis.com/drive/v3/files/"+source["source_id"],
             params={"alt":"media"},timeout=20,allow_redirects=False)
         if response.status_code != 200:
             raise RuntimeError("source_read_unknown")
-        if sha256(response.content).hexdigest() != source["sha256"] or before != self.metadata(source["source_id"]):
+        current_hash = sha256(response.content).hexdigest()
+        if current_hash != source["sha256"]:
             raise SourceMismatch("source_identity_mismatch")
+        try:
+            after = self.metadata(source["source_id"])
+        except SourceMismatch as exc:
+            raise RuntimeError("source_identity_changed_during_check") from exc
+        if before != after:
+            raise RuntimeError("source_identity_changed_during_check")
         if source['mime_type'] == 'application/pdf':
             from .pdf_intake_production import page_count
             if page_count(response.content) != 1:
                 raise SourceMismatch('source_pdf_structure_mismatch')
+        if not hasattr(self, "_source_current"):
+            self._source_current = {}
+        self._source_current[source["source_id"]] = (source["version"], source["sha256"], before["version"])
+        return dict(source_saved_version=source["version"], source_current_version=before["version"],
+            source_metadata_drift=before["version"] != source["version"])

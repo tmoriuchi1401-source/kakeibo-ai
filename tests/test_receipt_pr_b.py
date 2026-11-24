@@ -471,8 +471,57 @@ def test_actual_source_port_rejects_changed_identity_and_unknown_http(fault):
     class Session:
         def get(self,*args,**kwargs):calls.append((args,kwargs));return Response()
     port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
-    with pytest.raises(RuntimeError if fault=='network' else ValueError):port.source_check(s)
+    with pytest.raises(RuntimeError if fault in {'network','after'} else ValueError):port.source_check(s)
     assert len(calls)<=3
+
+
+@pytest.mark.parametrize('current_version,drift',[('12',False),('5',True)])
+def test_source_port_accepts_stable_bytes_and_audits_version_drift(current_version,drift):
+    entry,_=case();source=entry['source'];calls=[]
+    class Session:
+        def get(self,url,**kwargs):
+            calls.append(url)
+            if kwargs.get('params')=={'alt':'media'}:
+                return SimpleNamespace(status_code=200,content=source['source_id'].encode())
+            return SimpleNamespace(status_code=200,json=lambda:dict(id=source['source_id'],version=current_version,
+                mimeType=source['mime_type'],trashed=False,parents=['synthetic-folder-b'],
+                owners=[dict(emailAddress='owner@synthetic.invalid')]))
+    port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
+    audit=port.source_check(source)
+    assert audit==dict(source_saved_version='12',source_current_version=current_version,
+        source_metadata_drift=drift)
+    assert port.source_check(source)==audit and len(calls)==6
+
+
+@pytest.mark.parametrize('change',['hash','during_call','between_checks'])
+def test_source_port_rejects_changed_bytes_or_live_version(change):
+    entry,_=case();source=entry['source'];metadata_calls=0
+    class Session:
+        def get(self,url,**kwargs):
+            nonlocal metadata_calls
+            if kwargs.get('params')=={'alt':'media'}:
+                content=b'changed' if change=='hash' else source['source_id'].encode()
+                return SimpleNamespace(status_code=200,content=content)
+            metadata_calls+=1
+            version='6' if change=='during_call' and metadata_calls==2 or change=='between_checks' and metadata_calls>=3 else '5'
+            return SimpleNamespace(status_code=200,json=lambda:dict(id=source['source_id'],version=version,
+                mimeType=source['mime_type'],trashed=False,parents=['synthetic-folder-b'],
+                owners=[dict(emailAddress='owner@synthetic.invalid')]))
+    port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
+    if change=='between_checks':port.source_check(source)
+    with pytest.raises(SourceMismatch if change=='hash' else RuntimeError):port.source_check(source)
+
+
+def test_version_audit_is_kept_in_result_without_changing_snapshot(tmp_path):
+    entry,port=registered();original=deepcopy(port.state['requests'][1][:7])
+    audit=dict(source_saved_version='3',source_current_version='5',source_metadata_drift=True)
+    port.source_check=lambda source:audit
+    result=execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'attempts.db'))
+    assert result['state']=='検証済み・未記帳',result
+    assert {k:result[k] for k in audit}==audit
+    assert port.state['requests'][1][:7]==original
+    assert {k:json.loads(port.state['requests'][1][8])[k] for k in audit}==audit
+    assert result['financial_write_count']==0 and result['posting_authority'] is False
 
 
 @pytest.mark.parametrize('mode',['disabled','financial','missing_token'])
