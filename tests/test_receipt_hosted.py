@@ -235,6 +235,18 @@ def test_existing_bound_analysis_is_reused_without_ai(monkeypatch):
     assert ai.analyze_receipt.call_count == 0 and review.intakes == 1 and writer.db.plan == []
 
 
+def test_existing_manual_medical_writer_survives_normal_owner_cutover():
+    from test_receipt_confirmation import medical, confirm
+    service, store, db, _, _ = medical()
+    confirm(db)
+    service.capture_inputs()
+    old = dict(kind='normal', status='pending')
+    store.value['confirmation_items']['legacy-normal'] = deepcopy(old)
+    assert service.apply_confirmations(kinds={'medical'}) == 1
+    assert len(db.rows['支出明細']) == 1
+    assert store.value['confirmation_items']['legacy-normal'] == old
+
+
 def test_state_missing_corrupt_stopped_or_live_write_enabled_fails_closed(monkeypatch):
     runtime, _, _, _, _, _, args = setup(monkeypatch)
     original = deepcopy(runtime.owner.store.value)

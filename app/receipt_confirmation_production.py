@@ -247,6 +247,10 @@ def execute(env,apply,diagnostic=lambda _:None):
         ReceiptOwner(store)  # Corrupt/OFF/UNKNOWN new state cannot fall back to legacy posting.
     if not hosted:
         counts['written']+=review.apply_confirmations()
+    else:
+        # Medical remains on its existing complete-manual native contract;
+        # the new normal owner cannot ingest/AI/post medical originals.
+        counts['written']+=review.apply_confirmations(kinds={'medical'})
     counts['archived']+=archive()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     diagnostic('confirmation_ui')

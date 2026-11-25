@@ -75,7 +75,7 @@ def receipts(settings, *, apply: bool) -> dict:
             if result.get("medical_shadow_status") == "handoff_failed":
                 counts["failure"] += 1
         try:
-            approved=None;multipage=[]
+            approved=None;multipage=[];hosted=False
             if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
                 if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
                 scan_plan=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())
@@ -83,6 +83,7 @@ def receipts(settings, *, apply: bool) -> dict:
             pipeline = make_receipt_pipeline(settings, db, None)
             pipeline.verify_materialization = True
             if approved is not None and scan_plan.get('hosted_receipts') is True:
+                hosted=True
                 from .receipt_hosted import open_pipeline
                 pipeline = open_pipeline(settings, pipeline, approved, dict(os.environ))
                 pipeline.process_pending()
@@ -91,7 +92,11 @@ def receipts(settings, *, apply: bool) -> dict:
                 settings.processed_drive_folder_id, progress=progress,
                 **({'approved_sources':approved} if approved is not None else {}),
             )
-            if multipage:
+            if multipage and hosted:
+                # Do not bypass the whole-source owner via the native Unit
+                # branch until complete partition/ownership proof is connected.
+                counts['needs_review'] += len(multipage)
+            elif multipage:
                 from .pdf_intake_production import Context,process
                 stage='pdf_page_intake'
                 pdf_counts=process(Context(dict(os.environ),settings,db,writable=True),settings,multipage,apply=True)

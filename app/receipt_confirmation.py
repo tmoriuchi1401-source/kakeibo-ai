@@ -399,10 +399,12 @@ class ReceiptConfirmation:
             if len(matches)!=1 or not same_row(title,matches[0],expected):return False
         return True
 
-    def apply_confirmations(self, *, dry_run=False):
+    def apply_confirmations(self, *, dry_run=False, kinds=None):
         self.close_keep_existing()
         written=0
         for key,old in list(self.items.items()):
+            if kinds is not None and old['kind'] not in kinds:
+                continue
             if old['kind']=='medical' and old.get('decision_origin')=='automatic' and old['status']=='pending':
                 continue  # Freeze legacy AUTO intents; do not finalize, retry or discard.
             if (old['status']=='superseded' and old.get('error')=='原本の版が変更。新しい対象で再確認してください'

@@ -32,6 +32,8 @@ decoder, source checks and case/snapshot validator. The case file omits the old
 all-receipt ReviewPipeline and reuses its UUID check without importing the P1
 trial authority/context machinery. Windows task/DPAPI/SQLite/permit code and its
 new CI/workflow/credentials are not imported. Existing original PRs stay intact.
+The existing #201 test-only httpx compatibility dependency is also selected;
+current GenAI SDKs no longer install the older test import transitively.
 
 Registration consumes a frozen management snapshot, claims once, revalidates
 source/category/amount/tax/duplicate conditions, reaches the unchanged
@@ -39,6 +41,9 @@ source/category/amount/tax/duplicate conditions, reaches the unchanged
 independently compares every generated row, and publishes the same-case result.
 Synthetic completion is permanently distinguished from accounting completion;
 it grants neither source movement nor deletion. Financial write remains OFF.
+Existing medical complete-manual confirmations keep their native writer during
+the normal-owner cutover. Unconnected multipage ownership remains held rather
+than bypassing the whole-source owner through the old Unit branch.
 
 ## Connection dependency explicitly stopped
 
