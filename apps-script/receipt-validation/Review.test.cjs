@@ -145,6 +145,8 @@ for(const command of input.commands || []) {
     } else if(command.action==='start')outputs.push(ctx.receiptReviewStart());
     else if(command.action==='registration_enable')outputs.push(ctx.receiptReviewRegistrationEnable());
     else if(command.action==='registration_disable')outputs.push(ctx.receiptReviewRegistrationDisable());
+    else if(command.action==='registration_status')outputs.push(ctx.receiptReviewRegistrationStatus(command.request_id,
+      command.verify_source));
     else if(command.action==='tax_setup')outputs.push(ctx.receiptReviewPrepareTaxCorrections());
     else if(command.action==='policy_setup')outputs.push(ctx.receiptReviewPreparePolicyRecheck());
     else if(command.action==='stop')outputs.push(ctx.receiptReviewStop());

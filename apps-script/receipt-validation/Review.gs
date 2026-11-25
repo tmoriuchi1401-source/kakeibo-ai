@@ -50,6 +50,21 @@ function receiptReviewRegistrationDisable() {
     return {registration_enabled:false,financial_write_count:0};
   });
 }
+function receiptReviewRegistrationStatus(requestId,verifySource) {
+  return receiptSheetsLocked_(()=>{
+    if(typeof verifySource!=='boolean')throw Error('review_status_argument_invalid');
+    const c=receiptReviewConfig_(),props=PropertiesService.getScriptProperties();
+    const ports=receiptReviewPorts_(c),entries=receiptReviewCatalog_(ports).entries;
+    const requests=receiptReviewRequests_(ports,entries).slice(1);
+    const entry=entries.find(x=>x.request_id===requestId);
+    if(!entry)throw Error('review_request_missing');
+    if(verifySource)receiptReviewSourceAtRegistration_(entry.source,c);
+    return {registration_enabled:props.getProperty(REVIEW_REGISTER_ALLOWED)==='true',
+      backend_enabled:c.enabled,stopped:!!props.getProperty(REVIEW_STOP),
+      target_request_count:requests.filter(x=>x[0]===requestId).length,
+      source_verified:verifySource,financial_write_count:0};
+  });
+}
 function receiptReviewStart() {
   return receiptSheetsLocked_(()=>{
     const props=PropertiesService.getScriptProperties(),c=receiptReviewConfig_();

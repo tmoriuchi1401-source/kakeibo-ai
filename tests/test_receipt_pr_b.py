@@ -25,6 +25,17 @@ from app.receipt_sheets_authority import HEADERS, UNKNOWN, canonical
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_receipt_validation_manifest_has_readonly_drive_scope_only():
+    manifest=json.loads((ROOT/'apps-script/receipt-validation/appsscript.json').read_text(encoding='utf-8'))
+    assert manifest['oauthScopes']==[
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/script.scriptapp',
+        'https://www.googleapis.com/auth/script.external_request',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/drive.readonly']
+    assert manifest['executionApi']=={'access':'MYSELF'}
+
+
 @pytest.fixture(autouse=True)
 def deny_finance_and_network(monkeypatch):
     from app.sheets import SheetsDB
@@ -278,6 +289,21 @@ def test_iphone_register_offline_backend_later_and_stop_controls(tmp_path):
     assert result['state']=='検証済み・未記帳' and result['financial_write_count']==0
     assert p.state['requests'][1][:7]==frozen
     assert p.calls.count('claim')==p.calls.count('finish')==1
+
+
+def test_registration_readonly_source_and_permission_status():
+    entry,row=case();p=JsPort();p.intake(entry,row)
+    off={**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None,'RECEIPT_REVIEW_REGISTER_ENABLED':None}
+    result=js(**{**p.state,'properties':off},config={'enabled':False},gate='false',
+              commands=[dict(action='registration_status',request_id=entry['request_id'],verify_source=True),
+                        dict(action='registration_enable'),
+                        dict(action='registration_status',request_id=entry['request_id'],verify_source=False)])
+    assert result['errors']==[] and result['writes']==0 and result['gateGets']==0
+    assert result['driveGets']==3 and result['outputs'][0]=={
+        'registration_enabled':False,'backend_enabled':False,'stopped':False,
+        'target_request_count':0,'source_verified':True,'financial_write_count':0}
+    assert result['outputs'][2]['registration_enabled'] is True
+    assert result['outputs'][2]['source_verified'] is False
 
 
 def test_registration_unknown_and_source_mismatch_never_resend():
