@@ -27,7 +27,7 @@ $taskArguments = @('-B', '-m', 'scripts.run_receipt_review_daily', '--config', $
 $argumentText = ($taskArguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $action = New-ScheduledTaskAction -Execute $Python -Argument $argumentText -WorkingDirectory $repoPath
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Minutes 5)
-$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
+$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 12) `
     -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden
 $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) `
     -LogonType Interactive -RunLevel Limited

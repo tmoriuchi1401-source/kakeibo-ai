@@ -136,8 +136,8 @@ def test_continuous_task_stop_and_disabled_config_never_load_credentials(tmp_pat
     assert (tmp_path/'state'/'STOP.json').read_bytes()==stopped
 
 
-@pytest.mark.parametrize('processing', [0, 1])
-def test_cycle_owner_and_history_selection_or_unknown_stop(processing, tmp_path, monkeypatch):
+@pytest.mark.parametrize('processing,completed,open_limit', [(0, 0, 50), (1, 0, 50), (0, 100, 50), (0, 100, 1)])
+def test_cycle_owner_and_history_selection_or_unknown_stop(processing, completed, open_limit, tmp_path, monkeypatch):
     import json, sys
     from scripts import run_receipt_review as runner
     from app import receipt_review_worker as worker, receipt_review_cases as cases, receipt_review_history as history
@@ -150,7 +150,8 @@ def test_cycle_owner_and_history_selection_or_unknown_stop(processing, tmp_path,
                           ('synthetic-imported',owner),('synthetic-new-owner',owner)]]
     class Port:
         def __init__(self, *args, **kwargs): pass
-        def status(self): return dict(enabled=True, stopped=False, processing_count=processing, case_count=1)
+        def status(self): return dict(enabled=True, stopped=False, processing_count=processing,
+                                     case_count=completed+1, request_count=completed)
         def pending(self): return []
         def lookup_source(self, sid, hashed): return None
         def metadata(self, sid): return dict(id=sid, version='1', mimeType='image/png', trashed=False)
@@ -177,7 +178,7 @@ def test_cycle_owner_and_history_selection_or_unknown_stop(processing, tmp_path,
     config = {'schema':'receipt-review-runner-b1','enabled':True,'financial_write_enabled':False,
         'script_id':'synthetic-deployment','folder_id':'synthetic-folder','owner_email':owner,
         'categories':[['食費','食品']], 'production_spreadsheet_id':'synthetic-production',
-        'review_spreadsheet_id':'synthetic-review','model':'synthetic-model','max_case_count':4}
+        'review_spreadsheet_id':'synthetic-review','model':'synthetic-model','max_open_case_count':open_limit}
     path = tmp_path/'config.json'; path.write_text(json.dumps(config),encoding='utf-8')
     monkeypatch.setattr(sys, 'argv', ['runner','--config',str(path),'--attempt-db',str(tmp_path/'attempts.sqlite'),
         '--diagnostic',str(tmp_path/'cycle.jsonl'),'cycle'])
@@ -185,4 +186,5 @@ def test_cycle_owner_and_history_selection_or_unknown_stop(processing, tmp_path,
         with pytest.raises(RuntimeError, match='existing_claim_outcome_unknown'): runner.main()
         assert seen == []
     else:
-        assert runner.main() == 0 and seen == ['synthetic-new-owner']
+        assert runner.main() == 0
+        assert seen == ([] if open_limit == 1 else ['synthetic-new-owner'])

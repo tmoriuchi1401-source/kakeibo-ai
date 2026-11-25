@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+from .receipt_review_credentials import load_owner
+
 
 REQUIRED_SCOPES = {'openid'} | {'https://www.googleapis.com/auth/' + name for name in
     ('spreadsheets', 'script.scriptapp', 'script.external_request', 'userinfo.email', 'drive.readonly')}
@@ -49,6 +51,39 @@ def access_token(client, owner, expected_owner, session):
     return token
 
 
+def close_remote(session, config):
+    """One OFF attempt per service, followed by independent reads. No ON path."""
+    from app.receipt_review_worker import ScriptPort
+    result = {'github_off': False, 'backend_off': False, 'pat_copy_removed': False}
+    endpoint = 'repos/tmoriuchi1401-source/kakeibo-ai/actions/variables/RECEIPT_VALIDATION_ENABLED'
+    try:
+        patch = subprocess.run(['gh', 'api', endpoint, '--method', 'PATCH', '--input', '-'],
+            input=json.dumps({'name': 'RECEIPT_VALIDATION_ENABLED', 'value': 'false'}),
+            text=True, capture_output=True, timeout=25)
+        read = subprocess.run(['gh', 'api', endpoint, '--jq', '.value'],
+            text=True, capture_output=True, timeout=25)
+        result['github_off'] = patch.returncode == read.returncode == 0 and read.stdout.strip() == 'false'
+    except Exception:
+        pass
+    def rpc(name):
+        reply = session.post('https://script.googleapis.com/v1/scripts/' + config['script_id'] + ':run',
+            json={'function': name, 'parameters': [], 'devMode': False}, timeout=45, allow_redirects=False)
+        body = reply.json()
+        if reply.status_code != 200 or body.get('done') is not True or 'error' in body:
+            raise RuntimeError('remote_close_unknown')
+        return body['response']['result']
+    try:
+        if rpc('receiptReviewStop') != {'state': '受付OFF・金融write OFF'}:
+            raise RuntimeError('remote_close_unknown')
+        port = ScriptPort(session, script_id=config['script_id'], folder_id=config['folder_id'], owner_email=config['owner_email'])
+        status = port.status()
+        result['backend_off'] = status['enabled'] is False and status['financial_write_count'] == 0
+        result['pat_copy_removed'] = rpc('receiptReviewStartPreflight')['pat_present'] is False
+    except Exception:
+        pass
+    return result
+
+
 def main():
     logging.disable(logging.CRITICAL)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -58,14 +93,22 @@ def main():
     state = Path(args.state_dir)
     state.mkdir(parents=True, exist_ok=True)
     stop = state / 'STOP.json'
+    running = state / 'RUNNING.json'
     if stop.exists():
         print('STOP保持・自動再送なし'); return 3
-    config = load(args.config)
-    if config.get('financial_write_enabled') is not False:
-        raise ValueError('financial_write_must_remain_off')
-    if config.get('enabled') is not True:
-        print('限定実運用OFF'); return 0
+    token, config = None, None
+    cleanup = None
     try:
+        config = load(args.config)
+        if config.get('financial_write_enabled') is not False:
+            raise ValueError('financial_write_must_remain_off')
+        if config.get('enabled') is not True:
+            print('日常運用OFF'); return 0
+        # Commit before OAuth or effects. A killed/interrupted process leaves
+        # this fence; restart stops and requires read-only owner reconciliation.
+        with running.open('x', encoding='utf-8') as out:
+            json.dump({'epoch': time.time(), 'retry': False}, out)
+            out.flush(); os.fsync(out.fileno())
         repo = Path(__file__).resolve().parents[1]
         if (not re.fullmatch('[a-f0-9]{40}', args.expected_sha)
                 or subprocess.check_output(['git','rev-parse','HEAD'], cwd=repo, text=True).strip() != args.expected_sha
@@ -81,7 +124,7 @@ def main():
         import requests
         with requests.Session() as session:
             session.trust_env = False
-            token = access_token(load(args.client), load(args.owner_token), config['owner_email'], session)
+            token = access_token(load(args.client), load_owner(args.owner_token), config['owner_email'], session)
         # Explicit values are captured by the existing runner before its imports.
         os.environ['RECEIPT_REVIEW_OWNER_ACCESS_TOKEN'] = token
         os.environ['RECEIPT_REVIEW_GEMINI_API_KEY'] = Path(args.gemini_key).read_text(encoding='utf-8').strip()
@@ -92,14 +135,35 @@ def main():
             raise RuntimeError('financial_write_disabled_for_receipt_review')
         SheetsDB.__init__ = ReceiptPipeline._materialize_result = deny_financial_write
         sys.argv = ['receipt-review', '--config', args.config, '--attempt-db', args.attempt_db,
-            '--diagnostic', str(state / ('cycle-' + str(time.time_ns()) + '.jsonl')), 'cycle']
+            '--diagnostic', str(state / ('cycle-' + str(time.time_ns()) + '.jsonl')),
+            '--deadline-epoch', str(time.time() + 240), 'cycle']
         code = cycle()
         if code:
             raise RuntimeError('receipt_cycle_stopped')
+        with requests.Session() as session:
+            session.trust_env = False
+            session.headers['Authorization'] = 'Bearer ' + token
+            cleanup = close_remote(session, config)
+        if not all(cleanup.values()):
+            raise RuntimeError('remote_close_not_verified')
+        with (state / ('closed-' + str(time.time_ns()) + '.json')).open('x', encoding='utf-8') as out:
+            json.dump(cleanup, out)
+        running.unlink()
         return 0
     except Exception as error:
-        with stop.open('x', encoding='utf-8') as out:
-            json.dump({'exception_type': type(error).__name__, 'epoch': time.time(), 'retry': False}, out)
+        if token and cleanup is None:
+            import requests
+            with requests.Session() as session:
+                session.trust_env = False
+                session.headers['Authorization'] = 'Bearer ' + token
+                cleanup = close_remote(session, config)
+        try:
+            with stop.open('x', encoding='utf-8') as out:
+                json.dump({'exception_type': type(error).__name__, 'epoch': time.time(),
+                           'retry': False, 'cleanup': cleanup, 'owner_reconciliation_required': True}, out)
+                out.flush(); os.fsync(out.fileno())
+        except FileExistsError:
+            pass  # Never replace an earlier STOP, even on concurrent launch.
         print('STOP保持・結果不明の再送なし')
         return 3
     finally:
