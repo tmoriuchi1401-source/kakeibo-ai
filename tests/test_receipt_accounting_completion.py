@@ -39,4 +39,3 @@ def test_materializer_requires_exact_accounting_before_original_completion(corru
     else:
         result = pipeline._materialize_result(parsed, 'synthetic-source', '', [])
         assert should_archive_result(result)
-

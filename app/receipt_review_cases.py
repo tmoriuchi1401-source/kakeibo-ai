@@ -238,4 +238,3 @@ def validate_snapshot(snapshot, entry):
         warnings=warnings, validator_revision=VALIDATOR_REVISION,
         receipt_total=plan["receipt_total"], item_total=plan["item_total"], difference=plan["difference"],
         posting_authority=False, financial_write_count=0)
-
