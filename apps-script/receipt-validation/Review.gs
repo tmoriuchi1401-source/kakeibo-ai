@@ -293,11 +293,13 @@ function receiptReviewEditor_(event,c) {
   if(email!==owner && !editors.includes(email))throw Error('review_editor_not_authorized');
 }
 function receiptReviewChange_(ports,changes,verify) {
+  if(ports.beforeChange)ports.beforeChange();
   const props=PropertiesService.getScriptProperties();
   props.setProperty(REVIEW_STOP,'outcome_unconfirmed');
   // If *any* response is lost the durable stop stays set, including process death.
   ports.write(changes);
   verify();
+  if(ports.afterChange)ports.afterChange();
   props.deleteProperty(REVIEW_STOP);
 }
 
@@ -370,7 +372,8 @@ function receiptReviewBackend(command) {
     return receiptReviewCommand_(command,ports,c);
   });
 }
-function receiptReviewCommand_(command,ports,c) {
+function receiptReviewCommand_(command,ports,c,authority=null) {
+  if(authority)authority.check('command');
   const {rows,entries}=receiptReviewCatalog_(ports),table=receiptReviewRequests_(ports,entries);
   if(['tax_begin','tax_finish'].includes(command.action))return receiptReviewTaxCommand_(command,ports,c,entries,table);
   if(command.action==='policy_recheck')return receiptReviewPolicyCommand_(command,ports,c,entries,table);
@@ -404,8 +407,10 @@ function receiptReviewCommand_(command,ports,c) {
     });
     // Decoration failures stop intake; no automatic rerender or overwrite of drafts.
     const props=PropertiesService.getScriptProperties();
+    if(ports.beforeDecoration)ports.beforeDecoration();
     props.setProperty(REVIEW_STOP,'decoration_unconfirmed');
     ports.decorate(uiBefore.length+2,e);
+    if(ports.afterDecoration)ports.afterDecoration();
     props.deleteProperty(REVIEW_STOP);
     return {case_id:e.case_id};
   }
@@ -413,7 +418,8 @@ function receiptReviewCommand_(command,ports,c) {
   if(index<1 || receiptCanonical_(before)!==receiptCanonical_(command.before))throw Error('review_stale_request');
   let tail;
   if(command.action==='claim' && before[7]==='受付済み') {
-    receiptSheetsAcceptance_(c,PropertiesService.getScriptProperties());
+    if(authority)authority.acceptance();
+    else receiptSheetsAcceptance_(c,PropertiesService.getScriptProperties());
     tail=['検証中','',new Date().toISOString()];
   } else if(command.action==='finish' && before[7]==='検証中') {
     const result=command.result;

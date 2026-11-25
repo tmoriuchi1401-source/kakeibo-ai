@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--config", required=True)
     parser.add_argument("--attempt-db", required=True)
     parser.add_argument("--diagnostic", help="New private diagnostic file; required for intake, never reuse")
+    parser.add_argument('--deadline-epoch', type=float)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("intake")
     commands.add_parser("pending")
@@ -46,16 +47,21 @@ def main():
         raise ValueError('private_diagnostic_required')
     if args.diagnostic:
         from app.receipt_review_diagnostics import ReviewDiagnostics
-        _diagnostics = ReviewDiagnostics(args.diagnostic)
+        _diagnostics = ReviewDiagnostics(args.diagnostic, deadline_epoch=args.deadline_epoch)
     config = json.loads(Path(args.config).read_text(encoding="utf-8"))
     required = {"schema","enabled","financial_write_enabled","script_id","folder_id","owner_email","categories"}
     operational = {'production_spreadsheet_id', 'review_spreadsheet_id', 'model', 'max_case_count'}
-    if (set(config) not in (required, required | operational) or config["schema"] != "receipt-review-runner-b1" or config["enabled"] is not True
+    daily = operational - {'max_case_count'} | {'max_open_case_count'}
+    if (set(config) not in (required, required | operational, required | daily) or config["schema"] != "receipt-review-runner-b1" or config["enabled"] is not True
             or config["financial_write_enabled"] is not False):
         raise ValueError("review_runner_disabled_or_invalid")
-    if args.command == 'cycle' and (set(config) != required | operational
-            or type(config['max_case_count']) is not int or not 1 <= config['max_case_count'] <= 4):
-        raise ValueError('limited_operation_config_required')
+    if args.command == 'cycle':
+        if set(config) == required | daily:
+            if type(config['max_open_case_count']) is not int or not 1 <= config['max_open_case_count'] <= 50:
+                raise ValueError('daily_operation_bounds_invalid')
+        elif (set(config) != required | operational or type(config['max_case_count']) is not int
+                or not 1 <= config['max_case_count'] <= 4):
+            raise ValueError('limited_operation_config_required')
     # Do not import settings/credentials or read .env for an OAuth token.
     token = os.environ.get("RECEIPT_REVIEW_OWNER_ACCESS_TOKEN", "")
     ai_key = os.environ.get("RECEIPT_REVIEW_GEMINI_API_KEY", "")
@@ -72,7 +78,7 @@ def main():
         # requests defaults to zero adapter retries; no AuthorizedSession refresh.
         port = ScriptPort(session,script_id=config["script_id"],folder_id=config["folder_id"],owner_email=config["owner_email"])
         history = None
-        if set(config) == required | operational:
+        if set(config) in (required | operational, required | daily):
             from app.receipt_review_history import ReceiptHistory
             history = ReceiptHistory(session, config['production_spreadsheet_id'], config['review_spreadsheet_id'])
         if args.command == 'cycle':
@@ -83,15 +89,37 @@ def main():
                 raise RuntimeError('existing_claim_outcome_unknown')
             if status['enabled'] is not True:
                 print('受付OFF'); return 0
-            for rid in port.pending():
+            pending = port.pending()
+            if len(pending) != len(set(pending)):
+                raise RuntimeError('duplicate_pending_request')
+            # Bound validation IO and let registrations made while the PC was
+            # offline remain in the immutable Script ledger for later cycles.
+            for rid in pending[:1]:
                 if fence.attempted(rid):
                     raise RuntimeError('existing_unknown_attempt_preserved')
                 outcome = execute_review(rid, port=port, fence=fence, duplicate_check=history.duplicate)
                 print(outcome['state'])
                 if outcome['state'] == '結果不明・照合待ち':
                     raise RuntimeError('backend_unknown_no_retry')
-            if port.status()['case_count'] >= config['max_case_count']:
+                if 'existing_receipt_duplicate' in outcome.get('issues', []):
+                    raise RuntimeError('backend_duplicate_no_retry')
+            status = port.status()
+            if status['stopped'] or status['processing_count'] or status['enabled'] is not True:
+                raise RuntimeError('backend_state_changed')
+            if 'max_open_case_count' in config:
+                # Historical results consume no daily allowance. Keep a reserve
+                # below the existing Script's 1,000-row read/identity boundary.
+                if status['case_count'] >= 900:
+                    print('保存容量の確認が必要・新規取込停止'); return 0
+                if status['case_count'] - status['request_count'] >= config['max_open_case_count']:
+                    print('未登録件数の上限・登録分の検証は継続'); return 0
+            elif status['case_count'] >= config['max_case_count']:
                 print('限定件数に到達・登録分の検証は継続'); return 0
+            # Pending backend work takes priority over another AI request.
+            if len(pending) > 1:
+                print('受付済み案件を次回へ保持'); return 0
+            if args.deadline_epoch is not None and args.deadline_epoch - time.time() < 180:
+                print('今回の取込を見送り・原本保持'); return 0
         if args.command in ("intake", 'cycle'):
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build

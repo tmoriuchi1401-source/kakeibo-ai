@@ -42,15 +42,37 @@ def process_review_inbox(folder_id, review, *, service, download, limit="1", eli
     only saves cases to an approved independent review book, never a ledger.
     """
     folder_id = normalize_folder_id(folder_id)
-    reply = service.files().list(q=f"'{folder_id}' in parents and trashed=false",
-        fields="nextPageToken,files(id,mimeType,version,appProperties,owners(emailAddress))",
-        orderBy="createdTime", pageSize=100).execute()
-    if reply.get("nextPageToken"):
-        raise RuntimeError("receipt_inbox_collection_incomplete")
+    files, page_token, seen_tokens = [], None, set()
+    # Read bounded pages before effects; never save a cursor that could skip
+    # originals after a crash. AI/intake stay limited to one source by caller.
+    for _ in range(10):
+        options = dict(q=f"'{folder_id}' in parents and trashed=false",
+            fields="nextPageToken,files(id,mimeType,version,appProperties,owners(emailAddress))",
+            orderBy="createdTime", pageSize=100)
+        if page_token:
+            options['pageToken'] = page_token
+        reply = service.files().list(**options).execute()  # SDK default: zero retries.
+        files.extend(reply.get('files', []))
+        page_token = reply.get('nextPageToken')
+        if not page_token:
+            break
+        if page_token in seen_tokens:
+            raise RuntimeError('receipt_inbox_pagination_unknown')
+        seen_tokens.add(page_token)
+    else:
+        raise RuntimeError('receipt_inbox_collection_incomplete')
+    if len(files) != len({source['id'] for source in files}):
+        raise RuntimeError('receipt_inbox_duplicate_identity')
     results = []
-    files = reply.get('files', [])
     if eligible is not None:
-        files = [source for source in files if eligible(source)]
+        receipt_batch([], limit)  # Validate before any eligibility RPC.
+        selected = []
+        for source in files:
+            if is_supported_receipt_mime(source['mimeType']) and eligible(source):
+                selected.append(source)
+                if len(selected) == int(limit):
+                    break
+        files = selected
     for source in receipt_batch(files, limit):
         before = review.metadata(source["id"])
         raw = download(source["id"])

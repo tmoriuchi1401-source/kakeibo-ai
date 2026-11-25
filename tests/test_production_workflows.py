@@ -43,9 +43,12 @@ def test_prb_safety_workflow_is_secret_free_offline_ci_only():
     workflow = workflows()['receipt-prb-safety.yml']
     source = (ROOT / '.github/workflows/receipt-prb-safety.yml').read_text('utf-8')
     assert set(workflow['on']) == {'push', 'pull_request'}
-    assert workflow['on']['push']['branches'] == ['fix/pr-b-single-send-diagnostics','codex/pr-b-ai-free-intake','codex/pr-b-single-approval-ui']
+    assert workflow['on']['push']['branches'] == ['fix/pr-b-single-send-diagnostics','codex/pr-b-ai-free-intake',
+                                                'codex/pr-b-single-approval-ui','codex/receipt-daily-operation']
     assert workflow['on']['pull_request']['branches'] == ['feat/receipt-pr-b-iphone-backend','fix/pr-b-single-send-diagnostics','codex/pr-b-ai-free-intake']
     assert 'apps-script/receipt-validation/**' in workflow['on']['pull_request']['paths']
+    assert {'scripts/authorize_receipt_review_daily.py', 'scripts/receipt_review_credentials.py',
+            'scripts/install_receipt_review_daily.ps1'} <= set(workflow['on']['pull_request']['paths'])
     assert workflow['permissions'] == {'contents': 'read'}
     assert 'secrets.' not in source and 'vars.' not in source and 'environment:' not in source
     assert 'kakeibo-production' not in source
