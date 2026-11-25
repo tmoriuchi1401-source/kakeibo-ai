@@ -121,6 +121,8 @@ def test_exception_reuses_analysis_one_registration_reaches_writer_and_same_resu
     fresh = restored(runtime, transport, args)
     result = fresh.register(rid)
     assert result['state'] == '検証済み・未記帳'
+    assert result['warnings'] == ['tax_treatment_unknown']
+    assert result['receipt_total'] == result['item_total'] == 100 and result['difference'] == 0
     assert writer.db.plan[1][1][4] == 100
     assert review.registrations == review.claims == review.finishes == 1
     assert json.loads(review.read(rid)['row'][8]) == result
@@ -245,6 +247,14 @@ def test_existing_manual_medical_writer_survives_normal_owner_cutover():
     assert service.apply_confirmations(kinds={'medical'}) == 1
     assert len(db.rows['支出明細']) == 1
     assert store.value['confirmation_items']['legacy-normal'] == old
+
+
+@pytest.mark.parametrize('kind', ['unknown', 'buyback'])
+def test_analysis_kind_cannot_be_relabelled_as_purchase_authority(monkeypatch, kind):
+    runtime, _, ai, review, writer, _, _ = setup(monkeypatch)
+    ai.analyze_receipt.return_value.transaction_kind = kind
+    assert runtime.process_bytes(RAW, 'image/png', SID)['status'] == 'privacy_blocked'
+    assert review.intakes == 0 and writer.db.plan == []
 
 
 def test_state_missing_corrupt_stopped_or_live_write_enabled_fails_closed(monkeypatch):

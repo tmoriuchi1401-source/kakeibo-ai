@@ -168,8 +168,11 @@ class HostedReceiptPipeline:
         categories = self.pipeline.db.categories()
         valid, issues = validate_receipt_result(parsed, categories)
         if parsed.transaction_kind != 'purchase':
-            valid = False
-            issues.append('purchase_required')
+            # Do not mint purchase identity/authority from an unknown/buyback
+            # analysis. Its native income/manual handling is a separate unit.
+            record.update(state='held', issues=['purchase_required'])
+            self.owner.save(state)
+            return dict(status='privacy_blocked', classification='transaction_kind_unresolved')
         if self.duplicate_check is not None and self.duplicate_check(source, parsed):
             valid = False
             issues.append('existing_receipt_duplicate')
@@ -253,6 +256,9 @@ class HostedReceiptPipeline:
                 self._post(state, record, parsed, make_row(entry)[2])
         result = dict(request_id=rid, snapshot_digest=row[6], state=validation['state'],
                       issues=validation['issues'], posting_authority=False, financial_write_count=0)
+        for key in ('warnings', 'validator_revision', 'receipt_total', 'item_total', 'difference'):
+            if key in validation:
+                result[key] = validation[key]
         record['state'] = 'publishing'
         self.owner.save(state)
         finished = self.review.finish(rid, claimed, result)

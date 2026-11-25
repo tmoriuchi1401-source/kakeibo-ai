@@ -114,10 +114,14 @@ actual Variables/enabled states/pending/ACL are not inferred from old logs.
 
 | IDs | Implementation evidence / remaining acceptance |
 |---|---|
-| A01/A02 | Existing hosted receipt entry and explicit github-hosted/Linux guard; no Windows/local-state dependency in new composition. Actual PC-OFF schedule untested. |
-| A03/A08 | Existing one-registration snapshot through revalidation/materializer/readback/result in isolation. Live port/native authority/iPhone acceptance outstanding. |
+| A01 | Existing hosted receipt entry and explicit github-hosted/Linux guard. Actual production connection outstanding. |
+| A02 | No Windows/local-state dependency in new composition. Actual PC-OFF schedule untested. |
+| A03 | Existing 98-column/one-registration UI contract retained; actual iPhone acceptance outstanding. |
 | A04 | Existing inbox/Gmail workflows unchanged; flags remain unchanged. Actual current operation unverified. |
-| A05/A06/A07 | Normal bypasses review and reaches existing isolated materializer; exceptions retain/reuse parsed output. Live financial adapter remains OFF. |
+| A05 | Existing analysis/validator/category/duplicate checks reused; complete live/native ownership proof outstanding. |
+| A06 | Normal reaches the existing isolated materializer without human registration; live financial adapter remains OFF. |
+| A07 | Normal never creates a review case; exceptions retain/reuse parsed output. Live exception port outstanding. |
+| A08 | One frozen registration through revalidation/materializer/readback/same-case result in isolation; live port/native authority outstanding. |
 | A09 | Missing/all-member-unknown completion denies archive/retention, including legacy processed files. Actual originals untouched. |
 | A10 | Existing privacy/manual medical boundaries retained and negative tested; no real AI. |
 | A11 | Bank/Payroll separation unchanged; receipt-buyback issue explicitly outstanding as separate unit. |
@@ -143,6 +147,10 @@ normal CI runs the repository suites once. No old real UNKNOWN case is retried.
 No new full device/Cloud experiments or repeated unchanged real canaries.
 
 Local/CI outcomes are recorded in the Draft PR against the actual head SHA.
+Local checks include 35 new architecture/completion/retention execution cases,
+123 focused registration/medical/compatibility regressions on the preceding
+safety revision, existing subsystem selection (176 cases, overlapping), Node 13,
+compile and whitespace. Counts from overlapping runs are not added together.
 Remaining acceptance: authenticated PAT-free review port, existing native writer
 authority adapter, all legacy/whole-Unit ownership/in-flight audit, real Google
 crash recovery, iPhone registration, normal unassisted posting and exception-only
