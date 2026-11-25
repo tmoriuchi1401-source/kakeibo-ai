@@ -1,5 +1,7 @@
 # 一般レシート・core・PayPayの日次再開（有効化前）
 
+上位要件は [architecture-contract.md](architecture-contract.md)。以下の段階制限や過去観測値は恒久仕様・現在値の保証ではない。
+
 既存 unified production の経路を再利用する。新writer・authority・Secretsは追加しない。本PRはscheduleの本番有効化、金融Apply、原本移動、外部AI送信の実行承認ではない。
 
 | 経路 | JST / UTC cron | 専用Variable |

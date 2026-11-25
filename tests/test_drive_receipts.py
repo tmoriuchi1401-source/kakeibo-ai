@@ -22,9 +22,7 @@ def test_reject_invalid_drive_folder_id():
 @pytest.mark.parametrize(
     "result",
     [
-        {"status": "imported"},
-        {"status": "needs_review"},
-        {"status": "skipped", "reason": "already_imported"},
+        {"status": "imported", "accounting_readback_complete": True},
     ],
 )
 def test_archive_recorded_receipt_results(result):
@@ -35,6 +33,9 @@ def test_archive_recorded_receipt_results(result):
     "result",
     [
         {"status": "skipped", "reason": "unsupported"},
+        {"status": "imported"},
+        {"status": "needs_review"},
+        {"status": "skipped", "reason": "already_imported"},
         {"status": "privacy_blocked"},
         {"status": "error"},
         {},
@@ -85,7 +86,7 @@ def test_archive_failure_reports_completed_receipt_once_without_retry(monkeypatc
     service.files().update().execute.side_effect=TimeoutError('private response')
     monkeypatch.setattr(m,'drive_service',lambda:service)
     monkeypatch.setattr(m,'download_drive_file',lambda *a:b'synthetic')
-    pipeline=Mock();pipeline.process_bytes.return_value={'status':'imported','total':123,'receipt':'private values'}
+    pipeline=Mock();pipeline.process_bytes.return_value={'status':'imported','total':123,'receipt':'private values','accounting_readback_complete':True}
     progress=[]
     with pytest.raises(TimeoutError):
         m.process_inbox('synthetic-inbox',pipeline,'synthetic-archive',

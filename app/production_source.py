@@ -61,7 +61,8 @@ def receipts(settings, *, apply: bool) -> dict:
                 counts["written"] += 1
             elif status in {"needs_review", "privacy_blocked"}:
                 counts["needs_review"] += 1
-            elif status == "skipped" and result.get("reason") == "already_imported":
+            elif status == "skipped" and result.get("reason") in {
+                    "already_imported", "durable_receipt_exists", "financial_write_off", "synthetic_complete"}:
                 counts["unchanged"] += 1
             elif status == 'deferred':
                 counts['deferred']=counts.get('deferred',0)+1
@@ -79,8 +80,14 @@ def receipts(settings, *, apply: bool) -> dict:
                 if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
                 scan_plan=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())
                 approved=scan_plan['sources'];multipage=scan_plan.get('multipage_sources',[])
+            pipeline = make_receipt_pipeline(settings, db, None)
+            pipeline.verify_materialization = True
+            if approved is not None and scan_plan.get('hosted_receipts') is True:
+                from .receipt_hosted import open_pipeline
+                pipeline = open_pipeline(settings, pipeline, approved, dict(os.environ))
+                pipeline.process_pending()
             process_inbox(
-                settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
+                settings.receipt_drive_folder_id, pipeline,
                 settings.processed_drive_folder_id, progress=progress,
                 **({'approved_sources':approved} if approved is not None else {}),
             )

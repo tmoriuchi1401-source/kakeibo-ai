@@ -1,5 +1,10 @@
 # 家計簿AI — 無料運用を前提にした初期実装
 
+設計の唯一の上位正本は [architecture contract（A01～A15）](docs/architecture-contract.md)。
+Windowsは開発・保守、日常本番はPC非依存のGitHub-hosted Actionsとする。
+正常案件は無人記帳、例外のみiPhone確認。下記の過去運用記録・試験制限は上位要件を変更しない。
+Issue #207の修正範囲・未接続事項は[実装記録](docs/issue-207-implementation.md)を参照。
+
 銀行入金だけを家計簿収入へ記録する実装とPayroll分離については
 [銀行収入・Payroll分離](docs/bank_income_payroll_separation.md)を参照してください。
 `python -m app.cli bank-income-preview`は保存済み取込行のread-only計画を表示します。

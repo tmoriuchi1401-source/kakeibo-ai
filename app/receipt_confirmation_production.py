@@ -239,7 +239,14 @@ def execute(env,apply,diagnostic=lambda _:None):
             review.observe_intake_hold(source,folder,gate)
     diagnostic('confirmation_apply')
     review.finish_intake_scan(blocked_sources)
-    counts['written']+=review.apply_confirmations()
+    # Optional new owner uses the SAME Actions receipt scope. Never let the
+    # legacy confirmation writer and the new owner both post these originals.
+    hosted = 'receipt_hosted_v1' in store.value
+    if hosted:
+        from .receipt_hosted import ReceiptOwner
+        ReceiptOwner(store)  # Corrupt/OFF/UNKNOWN new state cannot fall back to legacy posting.
+    if not hosted:
+        counts['written']+=review.apply_confirmations()
     counts['archived']+=archive()
     counts['medical_pending']=sum(x['kind']=='medical' and x['status']=='waiting' for x in review.items.values())
     diagnostic('confirmation_ui')
@@ -252,7 +259,10 @@ def execute(env,apply,diagnostic=lambda _:None):
     sync_review_visibility(review)
     counts.update(review.review_counts())
     if env.get('RECEIPT_SCAN_PLAN'):
-        path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps({'sources':plans,'multipage_sources':multipage_plans}),encoding='utf-8');path.chmod(0o600)
+        plan={'sources':plans,'multipage_sources':multipage_plans}
+        if hosted:
+            plan['hosted_receipts']=True
+        path=Path(env['RECEIPT_SCAN_PLAN']);path.write_text(json.dumps(plan),encoding='utf-8');path.chmod(0o600)
     if review.refresh_needed():
         # Existing display writer, only after actual accounting changes.
         from .expense_view import ExpenseViewPipeline

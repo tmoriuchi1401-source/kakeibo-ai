@@ -67,7 +67,7 @@ def test_cleanup_preview_selects_only_proven_normal_receipts_older_than_retentio
     ]}])
     now = datetime(2026, 8, 18, tzinfo=timezone.utc)
     result = cleanup_processed_receipts(
-        FOLDER_ID, now=now, service=drive,
+        FOLDER_ID, now=now, service=drive, completion_check=lambda _: True,
     )
     assert result == {"mode": "preview", "retention_days": 365, "expired": 1, "deleted": 0}
     assert drive.resource.deletes == []
