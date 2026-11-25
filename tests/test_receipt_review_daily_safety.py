@@ -49,12 +49,44 @@ def test_cleanup_attempts_both_services_once_and_reads_back(monkeypatch, github_
                 json=lambda:dict(done=True, response={'result':result}))
     class Port:
         def __init__(self, *a, **k): pass
-        def status(self): calls.append('status'); return dict(enabled=False, financial_write_count=0)
+        def status(self): calls.append('status'); return dict(enabled=not script_ok, financial_write_count=0)
     monkeypatch.setattr(worker, 'ScriptPort', Port)
     result = daily.close_remote(Session(), dict(script_id='synthetic-script', folder_id='synthetic-folder', owner_email='owner@synthetic.invalid'))
     assert result == dict(github_off=github_ok, backend_off=script_ok, pat_copy_removed=script_ok)
     assert calls[:3] == ['gate_off', 'gate_read', 'receiptReviewStop']
     assert calls.count('receiptReviewStop') == 1
+
+
+@pytest.mark.parametrize('lost_response', ['patch', 'stop', 'status'])
+def test_cleanup_readbacks_survive_lost_off_reply_without_resend(monkeypatch, lost_response):
+    from app import receipt_review_worker as worker
+    calls = []
+    def gh(args, **kwargs):
+        operation = 'patch' if '--method' in args else 'gate_read'
+        calls.append(operation)
+        if operation == lost_response:
+            raise daily.subprocess.TimeoutExpired('gh', 25)
+        return SimpleNamespace(returncode=0, stdout='false')
+    monkeypatch.setattr(daily.subprocess, 'run', gh)
+    class Session:
+        def post(self, url, *, json, **kwargs):
+            name = json['function']
+            calls.append(name)
+            if name == 'receiptReviewStop' and lost_response == 'stop':
+                raise TimeoutError('SYNTHETIC_ONLY')
+            result = {'state':'受付OFF・金融write OFF'} if name == 'receiptReviewStop' else {'pat_present':False}
+            return SimpleNamespace(status_code=200, json=lambda:dict(done=True, response={'result':result}))
+    class Port:
+        def __init__(self, *a, **k): pass
+        def status(self):
+            calls.append('status')
+            if lost_response == 'status':
+                raise TimeoutError('SYNTHETIC_ONLY')
+            return dict(enabled=False, financial_write_count=0)
+    monkeypatch.setattr(worker, 'ScriptPort', Port)
+    result = daily.close_remote(Session(), dict(script_id='synthetic-script', folder_id='synthetic-folder', owner_email='owner@synthetic.invalid'))
+    assert result == dict(github_off=True, backend_off=lost_response != 'status', pat_copy_removed=True)
+    assert calls == ['patch', 'gate_read', 'receiptReviewStop', 'status', 'receiptReviewStartPreflight']
 
 
 def test_daily_refuses_legacy_plaintext_owner_file(tmp_path):

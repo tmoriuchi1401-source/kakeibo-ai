@@ -57,12 +57,15 @@ def close_remote(session, config):
     result = {'github_off': False, 'backend_off': False, 'pat_copy_removed': False}
     endpoint = 'repos/tmoriuchi1401-source/kakeibo-ai/actions/variables/RECEIPT_VALIDATION_ENABLED'
     try:
-        patch = subprocess.run(['gh', 'api', endpoint, '--method', 'PATCH', '--input', '-'],
+        subprocess.run(['gh', 'api', endpoint, '--method', 'PATCH', '--input', '-'],
             input=json.dumps({'name': 'RECEIPT_VALIDATION_ENABLED', 'value': 'false'}),
             text=True, capture_output=True, timeout=25)
+    except Exception:
+        pass  # An unknown OFF response permits reads, never another PATCH.
+    try:
         read = subprocess.run(['gh', 'api', endpoint, '--jq', '.value'],
             text=True, capture_output=True, timeout=25)
-        result['github_off'] = patch.returncode == read.returncode == 0 and read.stdout.strip() == 'false'
+        result['github_off'] = read.returncode == 0 and read.stdout.strip() == 'false'
     except Exception:
         pass
     def rpc(name):
@@ -75,9 +78,15 @@ def close_remote(session, config):
     try:
         if rpc('receiptReviewStop') != {'state': '受付OFF・金融write OFF'}:
             raise RuntimeError('remote_close_unknown')
+    except Exception:
+        pass  # Read back even if the one Stop response was lost.
+    try:
         port = ScriptPort(session, script_id=config['script_id'], folder_id=config['folder_id'], owner_email=config['owner_email'])
         status = port.status()
         result['backend_off'] = status['enabled'] is False and status['financial_write_count'] == 0
+    except Exception:
+        pass
+    try:
         result['pat_copy_removed'] = rpc('receiptReviewStartPreflight')['pat_present'] is False
     except Exception:
         pass

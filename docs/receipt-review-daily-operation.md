@@ -30,6 +30,7 @@ Script内のPATコピーを削除するが、登録許可と既存STOP・受付�
   次回STOPにし、処理を自動再開しない。通常完了だけでRUNNINGを除去する。
 - 通常の完了・例外終了ではGitHubゲートOFFと `receiptReviewStop` を各1回試み、
   独立読取でbackend OFF・PATコピーなしを確認する。確認不明はSTOPを保持する。
+  OFF応答が途切れても操作は再送せず、各状態の読戻しを別々に実行する。
   登録常時ONを解除する呼出しは追加しない。
 - 医療・混在・sensitive unknownを外部AIへ送る許可は追加しない。
   `SheetsDB` と `_materialize_result` を日常runnerで遮断し、金融writeを接続しない。
@@ -92,6 +93,45 @@ GitHubゲートON・Script内PATが必要だが、PC電源断時は `finally` �
    OFFを維持したままタスクだけを有効にしてもbackend検証は開始しない。
 4. 変更後SHAのCI確認・owner承認済みコード配置。必要なら既存Scriptへの最小変更と
    配備も別途具体化・承認する。新規環境を作らない。
+
+### 電源断の安全条件を解消する変更案（未承認・未実装）
+
+PC上の停止処理だけでは解決できないため、既存Scriptと既存GitHub変数を使う次の案を
+コード準備の承認対象とする。新規サーバー・アカウント・時間トリガーは追加しない。
+この段落は実装済み・配備済み・開始可能の証拠ではない。
+
+1. サイクルごとに最大5分の許可を作り、乱数ID・開始時刻・有効期限・コードSHA・
+   Script／確認ブックの識別を結び付ける。同じ許可の延長・再利用・不明時再発行は禁止する。
+2. 既存 `RECEIPT_VALIDATION_ENABLED` には秘密を含まない期限付き許可のJSONを置く。
+   日常運用では文字列 `true` を使わず、通常終了時に `false` へ戻す。
+   旧workflowと旧workerが `true` 以外を拒否する契約は維持する。
+   PC電源断で期限切れJSONが残っても有効なONと扱わない。従来の文字列OFFとは
+   表現が変わるため、この変更にはownerの承認と全利用箇所の整合確認が必要。
+3. 既存Scriptの受信側がGitHubの許可と一致する期限を自身の時計で各操作時に検証する。
+   期限超過・時計不整合・読取不明は拒否する。書込み直前も残時間を確認する。
+   実行済み・進行中のSheets処理を期限到達だけで取消せるとは仮定しない。
+4. PATは承認済みPCのDPAPI保存先からメモリに読み、RPCの実行中にだけ使用する。
+   Script Properties／Cache／シート／診断／CIには保存しない。
+   GoogleへPATを送る経路になるため、送信先・実行ログへの非露出を個別に検証する。
+   検証できなければこの案もNO-GO。金融writerとworkflow dispatchは追加しない。
+5. PC側のRUNNING・STOP・UUID／原本フェンスは維持する。電源断後の中断案件は
+   自動再送しない。Google側の期限切れ確認と旧許可の照合後にownerが復旧判断する。
+   既存の登録常時ONと98列UIは変更しない。
+
+GitHubの変数更新APIは `name` と `value` を受け取り、有効期限欄を持たない。
+したがってJSONの期限はGitHub自体による自動削除ではなく、受信側の検証として実装・
+検証する必要がある。[GitHub公式API仕様](https://docs.github.com/en/rest/actions/variables#update-a-repository-variable)
+
+時間トリガーの `after` は最小待ち時間を指定する機能で、実行の遅延があり得る。
+定刻のPAT削除だけを安全境界にしない。
+[Apps Script公式仕様](https://developers.google.com/apps-script/reference/script/clock-trigger-builder#afterdurationmilliseconds)
+
+必要な承認は段階を分ける。まずこの既存Script／ゲート契約のコード準備を承認する。
+コードとCIの確認後、実Script配備、Google継続認証のDPAPI保存、専用PATの権限・期限・
+保存とGoogleへの実行時送信、Windowsタスク有効化をそれぞれ個別に承認する。
+Google認証には既存clientを再利用し、PATは対象リポジトリのVariables読書きに限定する案。
+ただしこの権限は変数1個に限定できないため、設定改変リスクと既存tokenの用途をownerが確認する。
+コード準備の承認だけで上記の実操作を開始しない。
 
 ## 監視・PC停止・復旧
 
