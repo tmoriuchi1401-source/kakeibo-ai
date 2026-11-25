@@ -70,6 +70,18 @@ def test_receiver_rejects_envelope_replay_closed_id_and_clock_rollback():
         assert len(result['errors']) == 1 and result['writes'] == 0
 
 
+@pytest.mark.parametrize('change,sequence',[({'sequence':None},1),({'sequence':True},2),({'inflight':'false'},2)])
+def test_corrupt_saved_fence_is_not_coerced_or_replaced(change,sequence):
+    first=invoke([daily()])
+    properties=deepcopy(first['properties'])
+    key='RECEIPT_REVIEW_DAILY_USED_'+PID
+    record=json.loads(properties[key]);record.update(change)
+    properties[key]=canonical(record)
+    result=invoke([daily(sequence=sequence)],properties=properties)
+    assert result['errors']==['daily_fence_invalid'] and result['writes']==0
+    assert result['properties']==properties
+
+
 @pytest.mark.parametrize('gate', ['false', 'true', '{}', 'not-json', canonical(permit(worker_sha='b'*40))])
 def test_new_receiver_cannot_reinterpret_old_or_mismatched_gate(gate):
     result = invoke([daily(gate=gate)])

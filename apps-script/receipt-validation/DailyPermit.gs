@@ -73,6 +73,10 @@ function receiptReviewDailyRun_(envelope,ports,c,runtime) {
   const key=REVIEW_DAILY_PREFIX+p.permit_id,raw=props.getProperty(key);
   let record=null;
   try {record=raw?JSON.parse(raw):null;} catch(_) {throw Error('daily_fence_invalid');}
+  if(raw && (!record || Object.keys(record).sort().join(',')!=='closed,inflight,permit,sequence' ||
+     typeof record.permit!=='string' || typeof record.closed!=='boolean' || typeof record.inflight!=='boolean' ||
+     !Number.isInteger(record.sequence) || record.sequence<1 || record.sequence>32 ||
+     receiptCanonical_(record)!==raw))throw Error('daily_fence_invalid');
   const active=props.getProperty(REVIEW_DAILY_ACTIVE),previousClock=props.getProperty(REVIEW_DAILY_CLOCK);
   if(previousClock!==null && (!/^\d+$/.test(previousClock) || start<Number(previousClock)))
     throw Error('daily_clock_invalid');
