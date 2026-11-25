@@ -7,6 +7,9 @@ const REVIEW_CASE_HEADERS=['case_id','source_id','source_version','source_sha256
 const REVIEW_CASE_TAB='_receipt_cases';
 const REVIEW_WIDTH=98, REVIEW_MACHINE=81, REVIEW_LIMIT=8;
 const REVIEW_STOP='RECEIPT_REVIEW_STOPPED';
+const REVIEW_REGISTER_ALLOWED='RECEIPT_REVIEW_REGISTER_ENABLED';
+const REVIEW_APPROVAL_METHOD='register_all_displayed_v1';
+const REVIEW_APPROVAL_EVIDENCE='登録による表示内容の一括承認（原本の目視確認・本人認証を証明しない）';
 
 function receiptReviewConfig_() {
   const c=JSON.parse(PropertiesService.getScriptProperties().getProperty('RECEIPT_REVIEW_CONFIG_JSON') || 'null');
@@ -19,6 +22,48 @@ function receiptReviewConfig_() {
 }
 function receiptReviewEnabled_(c) {
   if(!c.enabled || PropertiesService.getScriptProperties().getProperty(REVIEW_STOP)) throw Error('review_disabled_or_unknown');
+}
+function receiptReviewRegisterAllowed_() {
+  const props=PropertiesService.getScriptProperties();
+  if(props.getProperty(REVIEW_STOP))throw Error('review_disabled_or_unknown');
+  if(props.getProperty(REVIEW_REGISTER_ALLOWED)!=='true')throw Error('review_registration_disabled');
+}
+function receiptReviewRegistrationEnable() {
+  return receiptSheetsLocked_(()=>{
+    const c=receiptReviewConfig_(),props=PropertiesService.getScriptProperties();
+    if(props.getProperty(REVIEW_STOP) || props.getProperty(REVIEW_REGISTER_ALLOWED)==='true')
+      throw Error('review_registration_not_ready');
+    const triggers=ScriptApp.getProjectTriggers();
+    if(triggers.length!==1 || triggers[0].getHandlerFunction()!=='receiptReviewEdited' ||
+       triggers[0].getTriggerSourceId()!==c.spreadsheet_id || triggers[0].getEventType()!==ScriptApp.EventType.ON_EDIT)
+      throw Error('review_existing_trigger_required');
+    const ports=receiptReviewPorts_(c),catalog=receiptReviewCatalog_(ports);
+    receiptReviewRequests_(ports,catalog.entries);
+    props.setProperty(REVIEW_REGISTER_ALLOWED,'true');
+    return {registration_enabled:true,financial_write_count:0};
+  });
+}
+function receiptReviewRegistrationDisable() {
+  return receiptSheetsLocked_(()=>{
+    receiptReviewConfig_();
+    PropertiesService.getScriptProperties().deleteProperty(REVIEW_REGISTER_ALLOWED);
+    return {registration_enabled:false,financial_write_count:0};
+  });
+}
+function receiptReviewRegistrationStatus(requestId,verifySource) {
+  return receiptSheetsLocked_(()=>{
+    if(typeof verifySource!=='boolean')throw Error('review_status_argument_invalid');
+    const c=receiptReviewConfig_(),props=PropertiesService.getScriptProperties();
+    const ports=receiptReviewPorts_(c),entries=receiptReviewCatalog_(ports).entries;
+    const requests=receiptReviewRequests_(ports,entries).slice(1);
+    const entry=entries.find(x=>x.request_id===requestId);
+    if(!entry)throw Error('review_request_missing');
+    if(verifySource)receiptReviewSourceAtRegistration_(entry.source,c);
+    return {registration_enabled:props.getProperty(REVIEW_REGISTER_ALLOWED)==='true',
+      backend_enabled:c.enabled,stopped:!!props.getProperty(REVIEW_STOP),
+      target_request_count:requests.filter(x=>x[0]===requestId).length,
+      source_verified:verifySource,financial_write_count:0};
+  });
 }
 function receiptReviewStart() {
   return receiptSheetsLocked_(()=>{
@@ -44,7 +89,7 @@ function receiptReviewStop() {
   });
 }
 function receiptReviewSource_(s) {
-  receiptSheetsSource_(s);
+  receiptSheetsSource_(s,true);
   if(!/^[1-9][0-9]*$/.test(s.version || '')) throw Error('source_version_required');
 }
 function receiptReviewCase_(e) {
@@ -96,10 +141,9 @@ function receiptReviewSnapshot_(row,e) {
     const key=e.slots[i],old=originals.find(x=>x.item_id===key),blank=v=>v==='' || v===null;
     if(!old && blank(name) && blank(quantity) && blank(amount)) {
       if(!blank(major) || !blank(minor) || ![null,'','商品'].includes(kind) ||
-         ![null,'','指定なし'].includes(target) || ![null,'','採用'].includes(mode) ||
-         ![null,'',false].includes(confirmed))throw Error('empty_addition_invalid');
+         ![null,'','指定なし'].includes(target) || ![null,'','採用'].includes(mode))throw Error('empty_addition_invalid');
       name='';quantity='';amount='';major='';minor='';kind='商品';target='';mode='採用';confirmed=false;
-    } else if(confirmed!==true)throw Error('original_check_required');
+    } else confirmed=true; // Registration approves used slots, never empty ones.
     if(!['商品','外税','値引き'].includes(kind) || ![null,'','指定なし',...Array.from({length:8},(_,j)=>'商品'+(j+1))].includes(target))
       throw Error('item_controls_invalid');
     if(name)quantity=receiptQuantity_(quantity);
@@ -109,15 +153,19 @@ function receiptReviewSnapshot_(row,e) {
   }
   const total=items.filter(x=>x.name && x.mode==='採用').reduce((s,x)=>s+x.amount,0);
   if(!Number.isSafeInteger(total) || row[4]!==total || row[5]!==row[3]-total)throw Error('display_total_mismatch');
-  if(!['税込','税別','不明'].includes(row[96]) || typeof row[97]!=='boolean')throw Error('total_controls_invalid');
+  if(!['税込','税別','不明'].includes(row[96]))throw Error('total_controls_invalid');
   const draft={case_id:e.case_id,source:e.source,items};
   const categories=e.categories.map(x=>x.slice());
   for(const item of items)if(item.category && item.category.every(x=>typeof x==='string' && x) &&
     !categories.some(x=>same(x,item.category)))categories.push(item.category);
   const converted=receiptSnapshot_({draft,original_items:originals,categories,context_digest:e.baseline_digest},receiptSheetsHash_);
-  for(const op of converted.operations)if(op.action==='edit' && 'name' in op.changes)
-    op.changes.category=items.find(i=>i._item_id===op.item_id).category;
-  const inputs={items,receipt_total:row[3],tax_mode:row[96],total_confirmed:row[97],note:row[7]};
+  for(const op of converted.operations) {
+    op.evidence=REVIEW_APPROVAL_EVIDENCE;
+    if(op.action==='edit' && 'name' in op.changes)
+      op.changes.category=items.find(i=>i._item_id===op.item_id).category;
+  }
+  const inputs={items,receipt_total:row[3],tax_mode:row[96],total_confirmed:true,note:row[7],
+    approval_method:REVIEW_APPROVAL_METHOD};
   return {schema:e.schema,case_id:e.case_id,source:e.source,baseline_digest:e.baseline_digest,
     input_version:receiptSheetsHash_(receiptCanonical_(inputs)),inputs,operations:converted.operations};
 }
@@ -125,15 +173,44 @@ function receiptReviewSnapshot_(row,e) {
 function receiptReviewPorts_(c) {
   const ss=SpreadsheetApp.openById(c.spreadsheet_id);
   function read(name,width,headers) {
-    const sheet=ss.getSheetByName(name);
-    if(!sheet || sheet.getLastRow()>1000)throw Error('review_table_invalid');
-    const rows=sheet.getRange(1,1,Math.max(1,sheet.getLastRow()),width).getValues();
+    // Never verify a REST write through SpreadsheetApp's execution-local cache.
+    // Fetch effective typed values and bounds independently, without retry.
+    const range="'"+name.replace(/'/g,"''")+"'!A1:"+receiptReviewColumn_(width)+'1000';
+    const fields='spreadsheetId,sheets(properties(title,gridProperties(rowCount,columnCount)),data(startRow,startColumn,rowData(values(effectiveValue))))';
+    const reply=UrlFetchApp.fetch('https://sheets.googleapis.com/v4/spreadsheets/'+c.spreadsheet_id+
+      '?ranges='+encodeURIComponent(range)+'&fields='+encodeURIComponent(fields),
+      {method:'get',followRedirects:false,muteHttpExceptions:true,headers:{Authorization:'Bearer '+ScriptApp.getOAuthToken()}});
+    if(reply.getResponseCode()!==200)throw Error('review_read_unknown');
+    const body=JSON.parse(reply.getContentText()),s=body.sheets?.[0],g=s?.properties?.gridProperties;
+    if(body.spreadsheetId!==c.spreadsheet_id || body.sheets?.length!==1 || s.properties.title!==name ||
+       !Number.isInteger(g?.rowCount) || g.rowCount<1 || g.rowCount>1000 || g.columnCount<width ||
+       s.data?.length!==1 || (s.data[0].startRow || 0)!==0 || (s.data[0].startColumn || 0)!==0)
+      throw Error('review_table_invalid');
+    const raw=s.data[0].rowData || [];
+    if(raw.length>g.rowCount)throw Error('review_table_invalid');
+    const rows=raw.map(row=>{
+      const cells=row.values || [];
+      if(cells.length>width)throw Error('review_table_invalid');
+      return Array.from({length:width},(_,i)=>{
+        const value=cells[i]?.effectiveValue || {},keys=Object.keys(value);
+        if(!keys.length)return '';
+        if(keys.length!==1 || !['stringValue','numberValue','boolValue'].includes(keys[0]) ||
+           typeof value[keys[0]]!==({stringValue:'string',numberValue:'number',boolValue:'boolean'})[keys[0]])
+          throw Error('review_cell_invalid');
+        return value[keys[0]];
+      });
+    });
+    while(rows.length>1 && rows[rows.length-1].every(v=>v===''))rows.pop();
+    if(!rows.length)rows.push(Array(width).fill(''));
     if(headers && receiptCanonical_(rows[0])!==receiptCanonical_(headers))throw Error('review_header_invalid');
     return rows;
   }
   return {
     readCases:()=>read(REVIEW_CASE_TAB,7,REVIEW_CASE_HEADERS),
     readRequests:()=>read(RECEIPT_SHEETS_TAB,10,RECEIPT_SHEETS_HEADERS),
+    readTax:()=>read('_receipt_tax_corrections',8,REVIEW_TAX_HEADERS),
+    readTaxIfPresent:()=>ss.getSheetByName('_receipt_tax_corrections')?read('_receipt_tax_corrections',8,REVIEW_TAX_HEADERS):[REVIEW_TAX_HEADERS],
+    readPolicy:()=>read(REVIEW_POLICY_TAB,7,REVIEW_POLICY_HEADERS),
     readUI:()=>read('確認',98).slice(1),
     decorate:(number,e)=>receiptReviewDecorate_(ss,number,e),
     // One batch, one attempt. stringValue prevents names/notes becoming formulas.
@@ -168,7 +245,7 @@ function receiptReviewCatalog_(ports) {
 function receiptReviewRequests_(ports,entries) {
   const rows=ports.readRequests(),seen=[new Set(),new Set(),new Set(),new Set()];
   for(const r of rows.slice(1)) {
-    receiptSheetsCheckRow_(r,receiptSheetsHash_);
+    receiptSheetsCheckRow_(r,receiptSheetsHash_,true);
     [r[0],r[1],r[2],r[4]].forEach((key,i)=>{if(seen[i].has(key))throw Error('request_duplicate');seen[i].add(key);});
     const e=entries.find(x=>x.request_id===r[0]),s=JSON.parse(r[5]);
     if(!e || s.case_id!==e.case_id || !s.inputs || s.baseline_digest!==e.baseline_digest ||
@@ -177,6 +254,44 @@ function receiptReviewRequests_(ports,entries) {
   }
   return rows;
 }
+function receiptReviewSourceAtRegistration_(source,c) {
+  const id=source.source_id,root='https://www.googleapis.com/drive/v3/files/'+id;
+  const headers={Authorization:'Bearer '+ScriptApp.getOAuthToken()};
+  const get=(url)=>{
+    let reply;
+    try {reply=UrlFetchApp.fetch(url,{method:'get',followRedirects:false,muteHttpExceptions:true,headers});}
+    catch(_) {throw Error('review_source_unknown');}
+    if(reply.getResponseCode()!==200)throw Error('review_source_unknown');
+    return reply;
+  };
+  const metadata=()=>{
+    let m;
+    try {m=JSON.parse(get(root+'?fields=id,version,mimeType,trashed,parents,owners(emailAddress)').getContentText());}
+    catch(_) {throw Error('review_source_unknown');}
+    if(m.id!==id || m.trashed!==false || m.mimeType!==source.mime_type ||
+       receiptCanonical_(m.parents)!==receiptCanonical_([c.folder_id]) ||
+       receiptCanonical_((m.owners || []).map(x=>x.emailAddress))!==receiptCanonical_([c.owner_email]) ||
+       !/^[1-9][0-9]*$/.test(m.version || ''))throw Error('review_source_mismatch');
+    return m;
+  };
+  const before=metadata();
+  let bytes;
+  try {bytes=get(root+'?alt=media').getContent();}
+  catch(_) {throw Error('review_source_unknown');}
+  const hash=Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,bytes)
+    .map(b=>('0'+((b+256)%256).toString(16)).slice(-2)).join('');
+  if(hash!==source.sha256)throw Error('review_source_mismatch');
+  if(receiptCanonical_(metadata())!==receiptCanonical_(before))throw Error('review_source_changed');
+}
+function receiptReviewEditor_(event,c) {
+  // EffectiveUser is the installable trigger owner, never proof of who edited.
+  const email=event.user?.getEmail();
+  if(!email || email!==c.owner_email)throw Error('review_editor_unverified');
+  const ss=SpreadsheetApp.openById(c.spreadsheet_id);
+  const owner=ss.getOwner()?.getEmail();
+  const editors=ss.getEditors().map(user=>user.getEmail());
+  if(email!==owner && !editors.includes(email))throw Error('review_editor_not_authorized');
+}
 function receiptReviewChange_(ports,changes,verify) {
   const props=PropertiesService.getScriptProperties();
   props.setProperty(REVIEW_STOP,'outcome_unconfirmed');
@@ -184,6 +299,21 @@ function receiptReviewChange_(ports,changes,verify) {
   ports.write(changes);
   verify();
   props.deleteProperty(REVIEW_STOP);
+}
+
+function receiptReviewReadback_(actual,expected,code,table) {
+  if(receiptCanonical_(actual.map(row=>row??null))===receiptCanonical_(expected))return;
+  const columns=new Set();
+  for(let r=0;r<Math.max(actual.length,expected.length);r++) {
+    const a=actual[r] || [],e=expected[r] || [];
+    for(let col=0;col<Math.max(a.length,e.length);col++)
+      if(receiptCanonical_(a[col]??null)!==receiptCanonical_(e[col]??null))columns.add(col+1);
+  }
+  // Only static table/error names and column numbers; never IDs, cell values,
+  // hashes, snapshots, exception messages, or credentials.
+  try { console.warn(JSON.stringify({event:'review_readback_mismatch',code,table,columns:[...columns].sort((a,b)=>a-b)})); }
+  catch(_) {} // Failed diagnostics must not clear STOP or replace the error.
+  throw Error(code);
 }
 
 function receiptReviewRegister_(rid,ports) {
@@ -199,13 +329,18 @@ function receiptReviewRegister_(rid,ports) {
   const snap=capture(),text=receiptCanonical_(snap),hash=receiptSheetsHash_(text);
   if(text.length>40000 || table.length>=1000)throw Error('review_capacity');
   if(text!==receiptCanonical_(capture()) || receiptCanonical_(table)!==receiptCanonical_(ports.readRequests()))throw Error('review_capture_changed');
-  // Local enabled was re-read under this lock by the caller. Existing remote gate.
-  const c=receiptReviewConfig_();receiptReviewEnabled_(c);
-  receiptSheetsAcceptance_(c,PropertiesService.getScriptProperties());
+  // Registration permission is independent of backend enabled and GitHub.
+  const c=receiptReviewConfig_();receiptReviewRegisterAllowed_();
+  try {receiptReviewSourceAtRegistration_(e.source,c);}
+  catch(error) {
+    if(['review_source_unknown','review_source_changed'].includes(error.message))
+      PropertiesService.getScriptProperties().setProperty(REVIEW_STOP,'source_unconfirmed');
+    throw error;
+  }
   const s=e.source,row=[rid,e.case_id,s.source_id,s.version,s.sha256,text,hash,'受付済み','',new Date().toISOString()];
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:table.length+1,values:row}],()=>{
     const actual=receiptReviewRequests_(ports,entries);
-    if(receiptCanonical_(actual)!==receiptCanonical_([...table,row]))throw Error('review_readback_unknown');
+    receiptReviewReadback_(actual,[...table,row],'review_readback_unknown',RECEIPT_SHEETS_TAB);
   });
   return {request_id:rid,state:'受付済み'};
 }
@@ -216,8 +351,14 @@ function receiptReviewEdited(e) {
   const match=/^register:([a-f0-9-]{36})$/.exec(e.value);
   if(!match || e.oldValue!=='ready:'+match[1])return null;
   return receiptSheetsLocked_(()=>{
-    const c=receiptReviewConfig_();receiptReviewEnabled_(c);
-    if(e.range.getSheet().getParent().getId()!==c.spreadsheet_id)throw Error('review_book_mismatch');
+    const c=receiptReviewConfig_();receiptReviewRegisterAllowed_();
+    const triggers=ScriptApp.getProjectTriggers();
+    if(e.range.getSheet().getParent().getId()!==c.spreadsheet_id || e.source?.getId()!==c.spreadsheet_id ||
+       triggers.length!==1 || triggers[0].getHandlerFunction()!=='receiptReviewEdited' ||
+       triggers[0].getTriggerSourceId()!==c.spreadsheet_id ||
+       triggers[0].getEventType()!==ScriptApp.EventType.ON_EDIT ||
+       String(triggers[0].getUniqueId())!==String(e.triggerUid))throw Error('review_book_mismatch');
+    receiptReviewEditor_(e,c);
     return receiptReviewRegister_(match[1],receiptReviewPorts_(c));
   });
 }
@@ -231,6 +372,12 @@ function receiptReviewBackend(command) {
 }
 function receiptReviewCommand_(command,ports,c) {
   const {rows,entries}=receiptReviewCatalog_(ports),table=receiptReviewRequests_(ports,entries);
+  if(['tax_begin','tax_finish'].includes(command.action))return receiptReviewTaxCommand_(command,ports,c,entries,table);
+  if(command.action==='policy_recheck')return receiptReviewPolicyCommand_(command,ports,c,entries,table);
+  if(command.action==='status')return {enabled:c.enabled,
+    stopped:!!PropertiesService.getScriptProperties().getProperty(REVIEW_STOP),
+    case_count:entries.length,request_count:table.length-1,
+    processing_count:table.slice(1).filter(r=>r[7]==='検証中').length,financial_write_count:0};
   if(command.action==='lookup')return entries.find(e=>e.source.source_id===command.source_id || e.source.sha256===command.sha256) || null;
   if(command.action==='pending')return table.slice(1).filter(r=>r[7]==='受付済み').map(r=>r[0]);
   if(command.action==='read') {
@@ -252,8 +399,8 @@ function receiptReviewCommand_(command,ports,c) {
     const uiBefore=ports.readUI();
     receiptReviewChange_(ports,[{tab:REVIEW_CASE_TAB,row:rows.length+1,values:stored},
       {tab:'確認',row:uiBefore.length+2,values:row}],()=>{
-      if(receiptCanonical_(ports.readCases())!==receiptCanonical_([...rows,stored]) ||
-         receiptCanonical_(ports.readUI())!==receiptCanonical_([...uiBefore,row]))throw Error('review_intake_readback_unknown');
+      receiptReviewReadback_(ports.readCases(),[...rows,stored],'review_intake_readback_unknown',REVIEW_CASE_TAB);
+      receiptReviewReadback_(ports.readUI(),[...uiBefore,row],'review_intake_readback_unknown','確認');
     });
     // Decoration failures stop intake; no automatic rerender or overwrite of drafts.
     const props=PropertiesService.getScriptProperties();
@@ -280,9 +427,9 @@ function receiptReviewCommand_(command,ports,c) {
     tail=[result.state,text,new Date().toISOString()];
   } else throw Error('review_replay_rejected');
   const after=[...before.slice(0,7),...tail];
-  receiptSheetsCheckRow_(after,receiptSheetsHash_);
+  receiptSheetsCheckRow_(after,receiptSheetsHash_,true);
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:index+1,column:7,values:tail}],()=>{
-    if(receiptCanonical_(ports.readRequests()[index])!==receiptCanonical_(after))throw Error('review_transition_unknown');
+    receiptReviewReadback_([ports.readRequests()[index]],[after],'review_transition_unknown',RECEIPT_SHEETS_TAB);
   });
   return after;
 }

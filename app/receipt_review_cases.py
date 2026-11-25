@@ -23,11 +23,14 @@ MAX_ITEMS = 8
 MACHINE_START = 9 + 9 * MAX_ITEMS
 WIDTH = MACHINE_START + 4 + MAX_ITEMS + 3 + 2
 SCHEMA = "receipt-review-b1"
+APPROVAL_METHOD = "register_all_displayed_v1"
+APPROVAL_EVIDENCE = "登録による表示内容の一括承認（原本の目視確認・本人認証を証明しない）"
 LABELS = {"product": "商品", "tax": "外税", "discount": "値引き"}
+VALIDATOR_REVISION = "receipt-review-amount-v2"
 
 
 def source_identity(source):
-    checked_source(source)
+    checked_source(source, allow_single_page_pdf=True)
     if not re.fullmatch(r"[1-9][0-9]*", source.get("version", "")):
         raise ValueError("source_version_required")
     return deepcopy(source)
@@ -118,8 +121,11 @@ def make_row(entry):
     return row
 
 
-def snapshot_from_row(row, entry):
+def snapshot_from_row(row, entry, *, approval_method=APPROVAL_METHOD):
+    """Capture registration approval; None only rebuilds pre-existing snapshots."""
     check_case(entry)
+    if approval_method not in (None, APPROVAL_METHOD):
+        raise ValueError("approval_method_invalid")
     if (type(row) is not list or len(row) != WIDTH or row[0] != entry["case_id"] or row[1] != "一般"
             or row[2] != "https://drive.google.com/file/d/"+entry["source"]["source_id"]+"/view"
             or row[MACHINE_START:-2] != machine(entry) or row[3] != entry["import_row"][6]
@@ -137,9 +143,13 @@ def snapshot_from_row(row, entry):
         if not old and name in (None, "") and qty in (None, "") and amount in (None, ""):
             if (major not in (None, "") or minor not in (None, "") or kind not in (None, "", "商品")
                     or target not in (None, "", "指定なし") or mode not in (None, "", "採用")
-                    or confirmed not in (None, "", False)):
+                    or approval_method is None and confirmed not in (None, "", False)):
                 raise ValueError("empty_addition_invalid")
             name, qty, amount, major, minor, kind, target, mode, confirmed = "", "", "", "", "", "商品", "", "採用", False
+        elif approval_method == APPROVAL_METHOD:
+            # The register event approves every used slot, including exclusions.
+            # Hidden legacy cells are neither visual evidence nor prerequisites.
+            confirmed = True
         elif type(confirmed) is not bool or not confirmed:
             raise ValueError("original_check_required")
         if kind not in LABELS.values() or target not in [None, "", "指定なし", *[f"商品{j}" for j in range(1,MAX_ITEMS+1)]]:
@@ -156,14 +166,19 @@ def snapshot_from_row(row, entry):
             capture_categories.append(cat)
     operations = operations_from_cells(dict(case_id=entry["case_id"], source=entry["source"], items=items), originals, capture_categories)
     for operation in operations:
+        if approval_method == APPROVAL_METHOD:
+            operation["evidence"] = APPROVAL_EVIDENCE
         if operation["action"] == "edit" and "name" in operation["changes"]:
             operation["changes"]["category"] = next(i["category"] for i in items if i["_item_id"] == operation["item_id"])
     item_total = sum(i["amount"] for i in items if i["name"] and i["mode"] == "採用")
     if type(row[4]) is not int or type(row[5]) is not int or row[4:6] != [item_total,row[3]-item_total]:
         raise ValueError("display_total_mismatch")
-    if row[-2] not in {"税込", "税別", "不明"} or type(row[-1]) is not bool:
+    if row[-2] not in {"税込", "税別", "不明"} or (approval_method is None and type(row[-1]) is not bool):
         raise ValueError("total_controls_invalid")
-    inputs = dict(items=items, receipt_total=row[3], tax_mode=row[-2], total_confirmed=row[-1], note=row[7])
+    inputs = dict(items=items, receipt_total=row[3], tax_mode=row[-2],
+        total_confirmed=True if approval_method == APPROVAL_METHOD else row[-1], note=row[7])
+    if approval_method == APPROVAL_METHOD:
+        inputs["approval_method"] = approval_method
     return dict(schema=SCHEMA, case_id=entry["case_id"], source=deepcopy(entry["source"]),
         baseline_digest=entry["baseline_digest"], input_version=digest(inputs), inputs=inputs, operations=operations)
 
@@ -174,6 +189,15 @@ def validate_snapshot(snapshot, entry):
     if set(snapshot) != {"schema","case_id","source","baseline_digest","input_version","inputs","operations"}:
         raise ValueError("snapshot_invalid")
     inputs = snapshot["inputs"]
+    # Preserve historical per-cell snapshots byte-for-byte. A present but unknown
+    # method must never fall back to the legacy interpretation.
+    approval_method = inputs.get("approval_method")
+    if "approval_method" in inputs and approval_method != APPROVAL_METHOD:
+        raise ValueError("approval_method_invalid")
+    if approval_method == APPROVAL_METHOD and (
+            inputs["total_confirmed"] is not True or len(inputs["items"]) != MAX_ITEMS
+            or any(type(item["confirmed"]) is not bool for item in inputs["items"])):
+        raise ValueError("approval_state_invalid")
     row = make_row(entry)
     row[8] = "register:"+entry["request_id"]
     row[3], row[7], row[-2], row[-1] = inputs["receipt_total"], inputs["note"], inputs["tax_mode"], inputs["total_confirmed"]
@@ -185,29 +209,38 @@ def validate_snapshot(snapshot, entry):
             LABELS[item["kind"]],f"商品{target}" if target else "指定なし",item["mode"],item["confirmed"]]
     row[4] = sum(i["amount"] for i in inputs["items"] if i["name"] and i["mode"] == "採用")
     row[5] = row[3]-row[4]
-    if snapshot_from_row(row, entry) != snapshot:
+    if snapshot_from_row(row, entry, approval_method=approval_method) != snapshot:
         raise ValueError("snapshot_input_version_mismatch")
     plan = preview(entry, snapshot["operations"], total_confirmed=inputs["total_confirmed"])
     closed = {"カテゴリ不正":"category_invalid", "日付不明":"receipt_date_required", "日付不正":"receipt_date_invalid",
               "店舗名不明":"merchant_required", "明細なし":"no_items", "合計金額不正":"receipt_total_invalid", "明細不正":"item_invalid"}
     issues = [closed.get(issue, issue if re.fullmatch(r"[a-z0-9_:.-]+",issue) else "receipt_validation_failed")
               for issue in plan["issues"]]
-    if inputs["tax_mode"] == "不明":
-        issues.append("tax_treatment_unknown")
+    warnings = ["tax_treatment_unknown"] if inputs["tax_mode"] == "不明" else []
     if inputs["tax_mode"] == "税込" and any(i["kind"] == "tax" for i in plan["items"]):
         issues.append("included_tax_not_additive")
-    hold = any(any(word in issue for word in ("tax_", "included_tax", "allocation")) for issue in issues)
+    # A visibly separate external-tax candidate cannot disappear simply by
+    # increasing a product amount to make the arithmetic look balanced.
+    adopted = {i["item_id"] for i in plan["items"]}
+    if any(i["kind"] == "tax" and "外税" in i["name"] and i["item_id"] not in adopted
+           for i in plan["original_items"]):
+        issues.append("external_tax_addition_missing")
+    # An unknown tax label is auditable, but cannot excuse any amount issue.
+    # A separate tax/discount allocation problem still blocks validation.
+    hold = plan["difference"] != 0 or any(any(word in issue for word in ("tax_", "included_tax", "allocation")) for issue in issues)
     return dict(state="保留" if hold else "修正が必要" if issues else "検証済み・未記帳", issues=issues,
+        warnings=warnings, validator_revision=VALIDATOR_REVISION,
         receipt_total=plan["receipt_total"], item_total=plan["item_total"], difference=plan["difference"],
         posting_authority=False, financial_write_count=0)
 
 
 class ReviewPipeline:
     """Drive process_inbox adapter: analysis only, never _materialize_result."""
-    def __init__(self, pipeline, port, *, metadata, fence, diagnostics=None):
+    def __init__(self, pipeline, port, *, metadata, fence, diagnostics=None, already_imported=None):
         self.pipeline, self.port, self.metadata, self.fence = pipeline, port, metadata, fence
         self._source_privacy = {}
         self.diagnostics = diagnostics
+        self.already_imported = already_imported
         self.stage = 'runner'
 
     def checkpoint(self, stage):
@@ -229,13 +262,24 @@ class ReviewPipeline:
 
     def _process_bytes(self, raw, mime, sid, image_url="", *, known_source_classification=None):
         from .receipt_privacy_gate import evaluate_receipt_privacy, require_receipt_ai_permission
-        # PDFs are held in full, including mixed documents. No PDF AI fallback.
-        if mime not in {"image/png","image/jpeg","image/heic","image/heif"}:
+        if mime not in {"image/png","image/jpeg","image/heic","image/heif","application/pdf"}:
             return dict(status="held", reason="pdf_manual_structure_review")
         self.checkpoint('lookup')
+        if self.already_imported is not None and self.already_imported(sid):
+            return dict(status="skipped", reason="already_imported")
         prior = self.port.lookup_source(sid, sha256(raw).hexdigest())
         if prior is not None:
             return dict(status="skipped", reason="review_case_exists")
+        if mime == 'application/pdf':
+            # One complete original, one case. Never send a partial/mixed PDF.
+            from .pdf_intake_production import page_count
+            from .drive_run_state import StateError
+            try:
+                single_page = page_count(raw) == 1
+            except StateError:
+                single_page = False
+            if not single_page:
+                return dict(status="held", reason="pdf_manual_structure_review")
         known_source_classification = self._source_privacy.get(sid, known_source_classification)
         if known_source_classification not in (None,"normal"):
             self._source_privacy[sid] = known_source_classification
@@ -243,7 +287,7 @@ class ReviewPipeline:
         gate = evaluate_receipt_privacy(raw, mime, known_source_classification=known_source_classification)
         if gate.classification != "normal" or not gate.gemini_allowed or gate.buyback_evidence:
             self._source_privacy[sid] = gate.classification
-            return dict(status="privacy_blocked", reason="manual_review_only")
+            return dict(status="privacy_blocked", reason="manual_review_only", classification=gate.classification)
         self.checkpoint('source_metadata')
         before = self.metadata(sid)
         self.checkpoint('privacy')
@@ -268,6 +312,8 @@ class ReviewPipeline:
                     result.payment_method,"要確認","",analysis_hash,""]
         self.checkpoint('candidate')
         entry = make_case(source, imported, candidate_rows(cid,analysis_hash,result), cats)
+        if self.already_imported is not None and self.already_imported(sid):
+            raise RuntimeError('receipt_import_history_changed')
         if self.diagnostics is not None:
             self.diagnostics.intake_attempted = True
         self.checkpoint('intake')

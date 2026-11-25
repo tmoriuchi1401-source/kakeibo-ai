@@ -35,7 +35,7 @@ def receipt_batch(files, limit="1", *, excluded=()):
             and f["id"] not in excluded][:int(limit)]
 
 
-def process_review_inbox(folder_id, review, *, service, download, limit="1"):
+def process_review_inbox(folder_id, review, *, service, download, limit="1", eligible=None, on_result=None):
     """PR-B opt-in entry. A read-only Drive service; no processed-folder option.
 
     Reuses the existing bounded intake selection. The supplied review adapter
@@ -43,12 +43,15 @@ def process_review_inbox(folder_id, review, *, service, download, limit="1"):
     """
     folder_id = normalize_folder_id(folder_id)
     reply = service.files().list(q=f"'{folder_id}' in parents and trashed=false",
-        fields="nextPageToken,files(id,mimeType,version,appProperties)",
+        fields="nextPageToken,files(id,mimeType,version,appProperties,owners(emailAddress))",
         orderBy="createdTime", pageSize=100).execute()
     if reply.get("nextPageToken"):
         raise RuntimeError("receipt_inbox_collection_incomplete")
     results = []
-    for source in receipt_batch(reply.get("files", []), limit):
+    files = reply.get('files', [])
+    if eligible is not None:
+        files = [source for source in files if eligible(source)]
+    for source in receipt_batch(files, limit):
         before = review.metadata(source["id"])
         raw = download(source["id"])
         if before != review.metadata(source["id"]) or before.get("version") != source.get("version"):
@@ -57,6 +60,8 @@ def process_review_inbox(folder_id, review, *, service, download, limit="1"):
         result = review.process_bytes(raw, source["mimeType"], source["id"],
                                      known_source_classification=known)
         results.append(result)
+        if on_result is not None:
+            on_result(source, result)
     return results
 
 

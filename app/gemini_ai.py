@@ -33,9 +33,10 @@ class GeminiAI:
             return self.client.interactions.create(**kwargs)
         # SDK warning strings are not part of the private diagnostic allowlist.
         import warnings
+        from .receipt_review_diagnostics import PRB_TIMEOUT_SECONDS
         with warnings.catch_warnings(record=True):
             warnings.simplefilter('always')
-            return self.client.interactions.create(**kwargs)
+            return self.client.interactions.create(timeout=PRB_TIMEOUT_SECONDS, **kwargs)
 
     def analyze_receipt(self, image_bytes: bytes, mime_type: str,
                         categories: list[tuple[str, str]], *,

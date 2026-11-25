@@ -17,7 +17,7 @@ from app.models import ReceiptItem, ReceiptResult
 from app.page_receipt_model import digest
 from app.receipt_pipeline import ReceiptPipeline
 from app.receipt_review_cases import (MAX_ITEMS, MACHINE_START, WIDTH, ReviewPipeline, check_case,
-    make_case, make_row, snapshot_from_row, validate_snapshot)
+    APPROVAL_METHOD, APPROVAL_EVIDENCE, make_case, make_row, snapshot_from_row, validate_snapshot)
 from app.receipt_review_snapshot import candidate_rows
 from app.receipt_review_worker import AttemptFence, ScriptPort, SourceMismatch, execute_review
 from app.receipt_sheets_authority import HEADERS, UNKNOWN, canonical
@@ -25,14 +25,29 @@ from app.receipt_sheets_authority import HEADERS, UNKNOWN, canonical
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_receipt_validation_manifest_has_readonly_drive_scope_only():
+    manifest=json.loads((ROOT/'apps-script/receipt-validation/appsscript.json').read_text(encoding='utf-8'))
+    assert manifest['oauthScopes']==[
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/script.scriptapp',
+        'https://www.googleapis.com/auth/script.external_request',
+        'https://www.googleapis.com/auth/userinfo.email',
+        'https://www.googleapis.com/auth/drive.readonly']
+    assert manifest['executionApi']=={'access':'MYSELF'}
+
+
 @pytest.fixture(autouse=True)
 def deny_finance_and_network(monkeypatch):
     from app.sheets import SheetsDB
+    from app.gemini_ai import GeminiAI
+    from google import genai
     calls=[]
     def deny(*args, **kwargs):
         calls.append(True)
         raise AssertionError('financial/network call forbidden')
     monkeypatch.setattr(SheetsDB,'__init__',deny)
+    monkeypatch.setattr(GeminiAI,'__init__',deny)
+    monkeypatch.setattr(genai.Client,'__init__',deny)
     monkeypatch.setattr(socket.socket,'connect',deny)
     monkeypatch.setattr(socket,'create_connection',deny)
     yield
@@ -58,9 +73,7 @@ def case(suffix='one', amounts=(600,400), total=1000):
 def ready(entry,row,tax='税込'):
     row=deepcopy(row)
     row[8]='register:'+entry['request_id']
-    row[-2:]=[tax,True]
-    for i in range(min(len(entry['candidate_rows']),8)):
-        row[17+i*9]=True
+    row[-2]=tax
     recalc(row)
     return row
 
@@ -86,9 +99,11 @@ class JsPort:
         self.source_fault=None
         self.checks=0
         self.http_ports=False
+        self.source_bytes=None  # Fabricated original bytes supplied by integration tests.
     def invoke(self,command):
         self.calls.append(command['action'])
-        reply=js(**self.state,commands=[command],fault=self.fault,http_ports=self.http_ports)
+        reply=js(**self.state,commands=[command],fault=self.fault,http_ports=self.http_ports,
+                 drive_bytes=list(self.source_bytes) if self.source_bytes is not None else None)
         self.state={k:reply[k] for k in ('cases','requests','ui','properties')}
         if reply['errors']:
             raise RuntimeError(reply['errors'][0])
@@ -153,9 +168,9 @@ def test_item_edits_add_exclude_quantity_tax_discount_match_js(operation):
 
 
 @pytest.mark.parametrize('change,state,issue',[
-    ('amount','修正が必要','item_total_mismatch'),('category','修正が必要','category_not_in_master'),
+    ('amount','保留','item_total_mismatch'),('category','修正が必要','category_not_in_master'),
     ('quantity','修正が必要','quantity_line_amount_confirmation_required'),
-    ('unknown_tax','保留','tax_treatment_unknown'),('unconfirmed_total','修正が必要','receipt_total_owner_confirmation_required'),
+    ('unknown_tax','検証済み・未記帳','tax_treatment_unknown'),
     ('included_tax','保留','included_tax_not_additive'),('mixed_discount','保留','tax_discount_allocation_review')])
 def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     entry,row=case()
@@ -164,7 +179,6 @@ def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     if change=='category':row[12:14]=['不正','カテゴリ']
     if change=='quantity':row[10]=2
     if change=='unknown_tax':row[-2]='不明'
-    if change=='unconfirmed_total':row[-1]=False
     if change in {'included_tax','mixed_discount'}:
         row[11]=500 if change=='included_tax' else 700
         if change=='mixed_discount':row[21:23]=['日用品','消耗品']
@@ -175,8 +189,9 @@ def test_reasoned_corrections_and_holds(change,state,issue,tmp_path):
     port.invoke(dict(action='register',request_id=entry['request_id']))
     result=execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'attempts.db'))
     assert result['state']==state
-    assert any(x.startswith(issue) for x in result['issues'])
+    assert any(x.startswith(issue) for x in result.get('issues',[])+result.get('warnings',[]))
     assert result['financial_write_count']==0
+    assert 'RECEIPT_REVIEW_STOPPED' not in port.state['properties']
 
 
 @pytest.mark.parametrize('field',[0,1,2,3,MACHINE_START,MACHINE_START+1,MACHINE_START+2,MACHINE_START+3,MACHINE_START+12,MACHINE_START+14])
@@ -215,22 +230,99 @@ def test_persistent_intake_duplicates_even_after_restart(duplicate):
 
 
 @pytest.mark.parametrize('gate',['false','TRUE','',None])
-def test_double_acceptance_gate_before_first_mutation(gate):
+def test_registration_permission_is_independent_of_backend_gate(gate):
     entry,row=case();p=JsPort();p.intake(entry,row)
     p.state['ui'][0]=ready(entry,row)
-    reply=js(**p.state,gate=gate,commands=[dict(action='register',request_id=entry['request_id'])])
-    if gate is None: # null in a fake response is not an enabled string
-        # Harness default uses ??; use malformed definite value instead.
-        reply=js(**p.state,gate='unknown',commands=[dict(action='register',request_id=entry['request_id'])])
-    assert reply['errors'] and reply['writes']==0 and len(reply['requests'])==1
+    reply=js(**{**p.state,'properties':{**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None}},
+             config={'enabled':False},gate=gate,
+             commands=[dict(action='register',request_id=entry['request_id'])])
+    assert not reply['errors'] and reply['writes']==1 and len(reply['requests'])==2
+    assert reply['requests'][1][7]=='受付済み' and reply['gateGets']==0 and reply['driveGets']==3
     assert 'RECEIPT_REVIEW_STOPPED' not in reply['properties']
 
 
 def test_local_off_busy_conflict_and_capture_change():
     entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
-    for options in [dict(config={'enabled':False}),dict(busy=True),dict(fault='capture'),dict(fault='gate'),dict(gate_status=503)]:
-        reply=js(**p.state,**options,commands=[dict(action='register',request_id=entry['request_id'])])
+    for options in [dict(properties={**p.state['properties'],'RECEIPT_REVIEW_REGISTER_ENABLED':'false'}),
+                    dict(busy=True),dict(fault='capture'),dict(drive_fault='hash'),
+                    dict(editor_missing=True),dict(editor_override='stranger@synthetic.invalid'),
+                    dict(sheet_owner='other@synthetic.invalid',sheet_editors=[]),
+                    dict(event_book='foreign-book'),dict(event_trigger='foreign-trigger')]:
+        reply=js(**{**p.state,**options},commands=[dict(action='register',request_id=entry['request_id'])])
         assert reply['errors'] and reply['writes']==0
+
+
+def test_iphone_register_offline_backend_later_and_stop_controls(tmp_path):
+    entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
+    off={**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None}
+    off['RECEIPT_REVIEW_REGISTER_ENABLED']=None
+    denied=js(**{**p.state,'properties':off},config={'enabled':False},
+              commands=[dict(action='register',request_id=entry['request_id'])])
+    assert denied['errors']==['review_registration_disabled'] and denied['writes']==0
+    enabled=js(**{**p.state,'properties':off},config={'enabled':False},
+               commands=[dict(action='registration_enable'),dict(action='register',request_id=entry['request_id'])],gate='false')
+    assert enabled['errors']==[] and enabled['gateGets']==0 and len(enabled['requests'])==2
+    frozen=deepcopy(enabled['requests'][1][:7])
+    assert enabled['requests'][1][7]=='受付済み'
+    disabled=js(**{**p.state,'properties':off},config={'enabled':False},
+                commands=[dict(action='registration_enable'),dict(action='registration_disable'),
+                          dict(action='register',request_id=entry['request_id'])])
+    assert disabled['errors']==['review_registration_disabled'] and disabled['writes']==0
+    stop=js(**{**p.state,'properties':{**off,'RECEIPT_REVIEW_STOPPED':'unconfirmed'}},
+            config={'enabled':False},commands=[dict(action='registration_enable')])
+    assert stop['errors']==['review_registration_not_ready'] and stop['writes']==0
+    stopped=js(cases=enabled['cases'],requests=enabled['requests'],ui=enabled['ui'],
+               config={'enabled':False},properties=enabled['properties'],
+               commands=[dict(action='pending'),dict(action='read',request_id=entry['request_id'])])
+    assert stopped['outputs'][0]==[entry['request_id']]
+    assert stopped['outputs'][1]['row'][:7]==frozen and stopped['writes']==0
+    duplicate=js(cases=enabled['cases'],requests=enabled['requests'],ui=enabled['ui'],
+                 config={'enabled':False},properties=enabled['properties'],
+                 commands=[dict(action='register',request_id=entry['request_id'])])
+    assert duplicate['errors']==['review_replay_or_duplicate'] and duplicate['writes']==0
+    # Later backend activation uses the existing claim/finish and local fence.
+    p.state={k:enabled[k] for k in ('cases','requests','ui','properties')}
+    config=json.loads(p.state['properties']['RECEIPT_REVIEW_CONFIG_JSON']);config['enabled']=True
+    p.state['properties']['RECEIPT_REVIEW_CONFIG_JSON']=json.dumps(config)
+    p.state['properties']['RECEIPT_GITHUB_TOKEN']='github_pat_DUMMY'
+    result=execute_review(entry['request_id'],port=p,fence=AttemptFence(tmp_path/'attempts.db'))
+    assert result['state']=='検証済み・未記帳' and result['financial_write_count']==0
+    assert p.state['requests'][1][:7]==frozen
+    assert p.calls.count('claim')==p.calls.count('finish')==1
+
+
+def test_registration_readonly_source_and_permission_status():
+    entry,row=case();p=JsPort();p.intake(entry,row)
+    off={**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None,'RECEIPT_REVIEW_REGISTER_ENABLED':None}
+    result=js(**{**p.state,'properties':off},config={'enabled':False},gate='false',
+              commands=[dict(action='registration_status',request_id=entry['request_id'],verify_source=True),
+                        dict(action='registration_enable'),
+                        dict(action='registration_status',request_id=entry['request_id'],verify_source=False)])
+    assert result['errors']==[] and result['writes']==0 and result['gateGets']==0
+    assert result['driveGets']==3 and result['outputs'][0]=={
+        'registration_enabled':False,'backend_enabled':False,'stopped':False,
+        'target_request_count':0,'source_verified':True,'financial_write_count':0}
+    assert result['outputs'][2]['registration_enabled'] is True
+    assert result['outputs'][2]['source_verified'] is False
+
+
+def test_registration_unknown_and_source_mismatch_never_resend():
+    entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
+    drift=js(**p.state,drive_current_version='5',
+             commands=[dict(action='register',request_id=entry['request_id'])])
+    assert not drift['errors'] and len(drift['requests'])==2
+    for fault,error in [('hash','review_source_mismatch'),('owner','review_source_mismatch'),
+                        ('parent','review_source_mismatch'),('network','review_source_unknown'),
+                        ('version','review_source_changed')]:
+        reply=js(**p.state,drive_fault=fault,
+                 commands=[dict(action='register',request_id=entry['request_id'])])
+        assert reply['errors']==[error] and reply['writes']==0 and len(reply['requests'])==1
+        if fault in {'network','version'}:assert reply['properties']['RECEIPT_REVIEW_STOPPED']=='source_unconfirmed'
+    unknown=js(**p.state,fault='after',commands=[dict(action='register',request_id=entry['request_id']),
+                                                dict(action='register',request_id=entry['request_id'])])
+    assert unknown['writes']==1 and len(unknown['requests'])==2
+    assert unknown['properties']['RECEIPT_REVIEW_STOPPED']=='outcome_unconfirmed'
+    assert unknown['errors']==['lost after write','review_disabled_or_unknown']
 
 
 @pytest.mark.parametrize('fault',['before','after','readback'])
@@ -370,7 +462,7 @@ def test_script_port_single_attempt_rpc_and_source_version(monkeypatch):
 def test_production_workflows_and_writer_files_unchanged_from_p1a():
     paths=['.github/workflows','app/sheets.py','app/receipt_pipeline.py','app/receipt_sheets_worker.py',
            'app/receipt_sheets_authority.py','app/receipt_sheets_context.py','app/receipt_sheet_cells.py',
-           'apps-script/receipt-validation/Code.gs','apps-script/receipt-validation/Sheets.gs',
+           'apps-script/receipt-validation/Code.gs',
            # New secret-free CI only; all existing production entries stay byte-identical.
            ':(exclude).github/workflows/receipt-prb-safety.yml']
     completed=subprocess.run(['git','diff','d2440c4b43c5a54411e0abd91cfa7ded0ad674c5','--',*paths],
@@ -383,7 +475,12 @@ def test_actual_sheet_port_raw_batches_validations_and_formula_safety(tmp_path):
     row[7]='=IMPORTXML("https://invalid.invalid","x")'
     reply=js(http_ports=True,commands=[dict(action='intake',entry=entry,row=row)])
     assert not reply['errors'] and reply['writes']==1
-    assert reply['validationCount']==51 and len(reply['formulas'])==3
+    assert reply['validationCount']==42 and len(reply['formulas'])==3
+    assert reply['checkboxes']==[['register:'+entry['request_id'],'ready:'+entry['request_id']]]
+    assert reply['clearedValidations']==[[2,18+9*i] for i in range(8)]+[[2,98]]
+    assert reply['hiddenColumns']==[[82,15]]+[[18+9*i,1] for i in range(8)]+[[98,1]]
+    assert reply['ui']==[row]  # Decoration never approves or changes draft inputs.
+    assert reply['notes'][0][:2]==[2,9] and '一括承認' in reply['notes'][0][2]
     note=reply['batches'][0]['requests'][1]['updateCells']['rows'][0]['values'][7]
     assert note=={'userEnteredValue':{'stringValue':row[7]}}
     port=JsPort();port.http_ports=True
@@ -409,14 +506,17 @@ def test_safe_start_stop_preserves_latches_requests_drafts_and_gate_off():
     assert not json.loads(enabled['properties']['RECEIPT_REVIEW_CONFIG_JSON'])['enabled']
 
 
-def test_draft_regeneration_is_rejected_and_exclusion_requires_source_check():
+def test_draft_regeneration_is_rejected_and_exclusion_is_batch_approved():
     entry,row=case();p=JsPort();p.intake(entry,row)
     p.state['ui'][0][7]='編集中の値を保持'
     with pytest.raises(RuntimeError):p.intake(entry,row)
     assert p.state['ui'][0][7]=='編集中の値を保持'
     edited=ready(entry,row);edited[16]='除外';edited[17]=False;recalc(edited)
-    with pytest.raises(ValueError,match='original_check_required'):snapshot_from_row(edited,entry)
-    assert js(commands=[dict(action='snapshot',row=edited,entry=entry)])['errors']
+    snapshot=snapshot_from_row(edited,entry)
+    assert snapshot['inputs']['items'][0]['confirmed'] is True
+    assert snapshot['operations'][0]['action']=='remove'
+    assert snapshot['operations'][0]['evidence']==APPROVAL_EVIDENCE
+    assert js(commands=[dict(action='snapshot',row=edited,entry=entry)])['outputs'][0]==snapshot
 
 
 def test_decimal_quantity_and_unknown_response_are_not_rounded_or_replayed(tmp_path):
@@ -461,8 +561,57 @@ def test_actual_source_port_rejects_changed_identity_and_unknown_http(fault):
     class Session:
         def get(self,*args,**kwargs):calls.append((args,kwargs));return Response()
     port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
-    with pytest.raises(RuntimeError if fault=='network' else ValueError):port.source_check(s)
+    with pytest.raises(RuntimeError if fault in {'network','after'} else ValueError):port.source_check(s)
     assert len(calls)<=3
+
+
+@pytest.mark.parametrize('current_version,drift',[('12',False),('5',True)])
+def test_source_port_accepts_stable_bytes_and_audits_version_drift(current_version,drift):
+    entry,_=case();source=entry['source'];calls=[]
+    class Session:
+        def get(self,url,**kwargs):
+            calls.append(url)
+            if kwargs.get('params')=={'alt':'media'}:
+                return SimpleNamespace(status_code=200,content=source['source_id'].encode())
+            return SimpleNamespace(status_code=200,json=lambda:dict(id=source['source_id'],version=current_version,
+                mimeType=source['mime_type'],trashed=False,parents=['synthetic-folder-b'],
+                owners=[dict(emailAddress='owner@synthetic.invalid')]))
+    port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
+    audit=port.source_check(source)
+    assert audit==dict(source_saved_version='12',source_current_version=current_version,
+        source_metadata_drift=drift)
+    assert port.source_check(source)==audit and len(calls)==6
+
+
+@pytest.mark.parametrize('change',['hash','during_call','between_checks'])
+def test_source_port_rejects_changed_bytes_or_live_version(change):
+    entry,_=case();source=entry['source'];metadata_calls=0
+    class Session:
+        def get(self,url,**kwargs):
+            nonlocal metadata_calls
+            if kwargs.get('params')=={'alt':'media'}:
+                content=b'changed' if change=='hash' else source['source_id'].encode()
+                return SimpleNamespace(status_code=200,content=content)
+            metadata_calls+=1
+            version='6' if change=='during_call' and metadata_calls==2 or change=='between_checks' and metadata_calls>=3 else '5'
+            return SimpleNamespace(status_code=200,json=lambda:dict(id=source['source_id'],version=version,
+                mimeType=source['mime_type'],trashed=False,parents=['synthetic-folder-b'],
+                owners=[dict(emailAddress='owner@synthetic.invalid')]))
+    port=ScriptPort(Session(),script_id='synthetic-script-b',folder_id='synthetic-folder-b',owner_email='owner@synthetic.invalid')
+    if change=='between_checks':port.source_check(source)
+    with pytest.raises(SourceMismatch if change=='hash' else RuntimeError):port.source_check(source)
+
+
+def test_version_audit_is_kept_in_result_without_changing_snapshot(tmp_path):
+    entry,port=registered();original=deepcopy(port.state['requests'][1][:7])
+    audit=dict(source_saved_version='3',source_current_version='5',source_metadata_drift=True)
+    port.source_check=lambda source:audit
+    result=execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'attempts.db'))
+    assert result['state']=='検証済み・未記帳',result
+    assert {k:result[k] for k in audit}==audit
+    assert port.state['requests'][1][:7]==original
+    assert {k:json.loads(port.state['requests'][1][8])[k] for k in audit}==audit
+    assert result['financial_write_count']==0 and result['posting_authority'] is False
 
 
 @pytest.mark.parametrize('mode',['disabled','financial','missing_token'])
@@ -503,3 +652,85 @@ def test_watch_stops_on_unknown_without_poll_or_mutation_retry(monkeypatch,tmp_p
     monkeypatch.setattr(sys,'argv',['runner','--config',str(path),'--attempt-db',str(tmp_path/'attempts.db'),'watch','--max-polls','2'])
     assert main()==3 and calls==['pending','execute']
     assert UNKNOWN in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('count',[1,2,8])
+def test_one_registration_zero_individual_checks_all_used_slots_frozen(count,tmp_path):
+    entry,row=case('batch-'+str(count),amounts=(100,)*count,total=100*count)
+    before=deepcopy(row)
+    assert len(row)==98 and row[-1] is False
+    assert all(row[17+9*i] is False for i in range(8))
+    with pytest.raises(ValueError,match='row_binding_invalid'):
+        snapshot_from_row(row,entry)  # Never approve before a register event.
+    port=JsPort();port.http_ports=True;port.intake(entry,row)
+    assert port.state['ui'][0]==before
+    # Known tax is an ordinary correction. No hidden confirmation cell is edited.
+    port.state['ui'][0][-2]='税込'
+    port.state['ui'][0][8]='register:'+entry['request_id']
+    draft=deepcopy(port.state['ui'][0])
+    result=port.invoke(dict(action='register',request_id=entry['request_id']))
+    assert result['state']=='受付済み' and port.calls.count('register')==1
+    assert port.state['ui'][0]==draft
+    snapshot=json.loads(port.state['requests'][1][5])
+    assert snapshot==snapshot_from_row(draft,entry)
+    inputs=snapshot['inputs']
+    assert inputs['approval_method']==APPROVAL_METHOD and inputs['total_confirmed'] is True
+    assert [item['confirmed'] for item in inputs['items']]==[True]*count+[False]*(8-count)
+    assert inputs['receipt_total']==100*count and inputs['tax_mode']=='税込'
+    assert snapshot['input_version']==digest(inputs)
+    frozen=deepcopy(port.state['requests'][1][:7])
+    port.state['ui'][0][11]=999
+    port.state['ui'][0][-2]='不明'
+    assert execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'batch.db'))['state']=='検証済み・未記帳'
+    assert port.state['requests'][1][:7]==frozen
+    with pytest.raises(RuntimeError,match='replay_or_duplicate'):
+        port.invoke(dict(action='register',request_id=entry['request_id']))
+    assert port.state['requests'][1][:7]==frozen
+
+
+def test_hidden_legacy_flags_do_not_claim_visual_checks_or_approve_empty_slots():
+    entry,row=case();row=ready(entry,row)
+    row[9]='一括承認で修正した商品'
+    row[17]=False;row[26]='';row[-1]=''
+    row[35]=True  # A stale hidden flag cannot manufacture an approved item.
+    snapshot=snapshot_from_row(row,entry)
+    assert js(commands=[dict(action='snapshot',row=row,entry=entry)])['outputs'][0]==snapshot
+    assert snapshot['inputs']['items'][2]['confirmed'] is False
+    assert snapshot['operations'][0]['evidence']==APPROVAL_EVIDENCE
+    assert '原本照合済み' not in canonical(snapshot)
+    assert validate_snapshot(snapshot,entry)['state']=='検証済み・未記帳'
+
+
+@pytest.mark.parametrize('change',['method','null_method','total','used','empty','count','evidence'])
+def test_batch_approval_tampering_rejected_even_with_rehashed_inputs(change):
+    entry,row=case();row=ready(entry,row);row[9]='修正した商品'
+    snapshot=snapshot_from_row(row,entry)
+    inputs=snapshot['inputs']
+    if change=='method':inputs['approval_method']='visual_original_checked'
+    if change=='null_method':inputs['approval_method']=None
+    if change=='total':inputs['total_confirmed']=False
+    if change=='used':inputs['items'][0]['confirmed']=False
+    if change=='empty':inputs['items'][2]['confirmed']=True
+    if change=='count':inputs['items'].pop()
+    if change=='evidence':snapshot['operations'][0]['evidence']='原本照合済み'
+    snapshot['input_version']=digest(inputs)
+    with pytest.raises(ValueError):validate_snapshot(snapshot,entry)
+
+
+def test_pre_change_legacy_snapshot_and_result_remain_unchanged(tmp_path):
+    # Synthetic golden captured using PR #204's unmodified code, no real records.
+    fixture=json.loads((ROOT/'tests/fixtures/receipt_pr_b_legacy.json').read_text(encoding='utf-8'))
+    before=deepcopy(fixture);entry=fixture['entry'];snapshot=fixture['snapshot']
+    assert 'approval_method' not in snapshot['inputs']
+    revised=validate_snapshot(snapshot,entry)
+    assert {k:v for k,v in revised.items() if k not in {'warnings','validator_revision'}}==fixture['result']
+    assert revised['warnings']==[]
+    port=JsPort();port.intake(entry,make_row(entry))
+    stored=[entry['request_id'],entry['case_id'],entry['source']['source_id'],entry['source']['version'],
+        entry['source']['sha256'],canonical(snapshot),digest(snapshot),'受付済み','','2026-11-22T00:00:00.000Z']
+    port.state['requests'].append(stored)
+    assert port.read(entry['request_id'])['row']==stored
+    assert execute_review(entry['request_id'],port=port,fence=AttemptFence(tmp_path/'legacy.db'))['state']==fixture['result']['state']
+    assert port.state['requests'][1][:7]==stored[:7] and fixture==before
+    # New parsing must not reinterpret legacy operation evidence as batch approval.
+    assert snapshot_from_row(ready(entry,make_row(entry)),entry)['inputs']['approval_method']==APPROVAL_METHOD
