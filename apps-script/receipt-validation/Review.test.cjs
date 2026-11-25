@@ -9,6 +9,7 @@ if(input.config)properties.RECEIPT_REVIEW_CONFIG_JSON=JSON.stringify(config);
 const props={getProperty:k=>properties[k]??null,setProperty:(k,v)=>{properties[k]=v;},deleteProperty:k=>{delete properties[k];}};
 let locked=false,writes=0,gateGets=0,driveGets=0,captures=0,decorations=0,validationCount=0,restGets=0,spreadsheetReads=0;
 const diagnostics=[],cache=new Map();
+let dailyNow=input.daily_now??1800000000000;
 const formulas=[],batches=[],hiddenColumns=[],clearedValidations=[],notes=[],checkboxes=[];
 let cases=clone(input.cases || [['case_id','source_id','source_version','source_sha256','case_json','case_digest','request_id']]);
 let requests=clone(input.requests || [['request_id','receipt_id','source_id','source_version','source_sha256','snapshot_json','snapshot_digest','status','validation_result','updated_at']]);
@@ -112,7 +113,7 @@ const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(m
     if(input.fault==='gate')throw Error('private token');
     return {getResponseCode:()=>input.gate_status??200,getContentText:()=>JSON.stringify({name:'RECEIPT_VALIDATION_ENABLED',value:input.gate??'true'})};
   }}});
-for(const name of ['Code.gs','Sheets.gs','Review.gs','ReviewSetup.gs','TaxCorrection.gs','PolicyRecheck.gs'])vm.runInContext(fs.readFileSync('apps-script/receipt-validation/'+name,'utf8'),ctx);
+for(const name of ['Code.gs','Sheets.gs','Review.gs','ReviewSetup.gs','TaxCorrection.gs','PolicyRecheck.gs','DailyPermit.gs'])vm.runInContext(fs.readFileSync('apps-script/receipt-validation/'+name,'utf8'),ctx);
 if(input.legacy_spreadsheet_reader) {
   // The PR205 reader, over the real REST writer and real command/comparison.
   const real=ctx.receiptReviewPorts_;
@@ -135,7 +136,24 @@ if(!input.http_ports)ctx.receiptReviewPorts_=()=>ports;
 const errors=[],outputs=[];
 for(const command of input.commands || []) {
   try {
-    if(command.action==='register') {
+    if(command.action==='daily_public')outputs.push(ctx.receiptReviewDailyBackend(command));
+    else if(command.action==='daily') {
+      if(command.now!==undefined)dailyNow=command.now;
+      const dailyPorts=input.http_ports?ctx.receiptReviewPorts_(config):ports;
+      const wrapped=Object.fromEntries(Object.entries(dailyPorts).map(([key,value])=>[key,(...args)=>{
+        if(input.daily_expire_during===key)dailyNow=input.daily_expire_at;
+        return value(...args);
+      }]));
+      // Advance before the real command's pre-write hook, not inside the fake
+      // writer after its last authority check.
+      if(input.daily_before_write!==undefined)wrapped.readUI=()=>{
+        const value=dailyPorts.readUI();dailyNow=input.daily_before_write;return value;
+      };
+      const runtime={props,now:()=>dailyNow,binding:input.daily_binding || {
+        worker_sha:'a'.repeat(40),script_id:config.script_id,review_spreadsheet_id:config.spreadsheet_id},
+        gate:()=>{if(input.daily_gate_fault)throw Error(input.daily_gate_fault);return command.gate??input.gate;}};
+      outputs.push(ctx.receiptSheetsLocked_(()=>ctx.receiptReviewDailyRun_(command.envelope,wrapped,config,runtime)));
+    } else if(command.action==='register') {
       const range={getSheet:()=>({getName:()=> '確認',getParent:()=>({getId:()=>config.spreadsheet_id})}),
         getRow:()=>2,getColumn:()=>9,getNumRows:()=>1,getNumColumns:()=>1};
       outputs.push(ctx.receiptReviewEdited({range,source:{getId:()=>input.event_book || config.spreadsheet_id},

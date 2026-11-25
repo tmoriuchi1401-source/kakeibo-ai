@@ -118,6 +118,11 @@ def main():
         with running.open('x', encoding='utf-8') as out:
             json.dump({'epoch': time.time(), 'retry': False}, out)
             out.flush(); os.fsync(out.fileno())
+        # Offline expiry kernel is prepared; no safe live gate reader exists.
+        # Stop BEFORE OAuth, PAT access or remote effects rather than falling
+        # back to the old unbounded backend activation contract.
+        from app.receipt_review_daily_permit import require_daily_transport
+        require_daily_transport()
         repo = Path(__file__).resolve().parents[1]
         if (not re.fullmatch('[a-f0-9]{40}', args.expected_sha)
                 or subprocess.check_output(['git','rev-parse','HEAD'], cwd=repo, text=True).strip() != args.expected_sha
