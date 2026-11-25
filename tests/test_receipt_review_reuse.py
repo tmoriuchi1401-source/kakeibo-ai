@@ -53,6 +53,7 @@ def manifest():
 
 def perform(tmp_path, *, data=None, port=None, original_check=lambda s:True):
     data=data or manifest();port=port or JsPort()
+    port.source_bytes=RAW
     fence=ReuseFence(tmp_path/'attempts.sqlite');diag=ReviewDiagnostics(tmp_path/'private.jsonl')
     result=intake_reused(data,original_bytes=RAW,copy_bytes=RAW,original_check=original_check,
         port=port,fence=fence,diagnostics=diag,clock=lambda:'2026-11-22 12:00:00')

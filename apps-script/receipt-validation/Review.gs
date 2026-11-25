@@ -7,6 +7,7 @@ const REVIEW_CASE_HEADERS=['case_id','source_id','source_version','source_sha256
 const REVIEW_CASE_TAB='_receipt_cases';
 const REVIEW_WIDTH=98, REVIEW_MACHINE=81, REVIEW_LIMIT=8;
 const REVIEW_STOP='RECEIPT_REVIEW_STOPPED';
+const REVIEW_REGISTER_ALLOWED='RECEIPT_REVIEW_REGISTER_ENABLED';
 const REVIEW_APPROVAL_METHOD='register_all_displayed_v1';
 const REVIEW_APPROVAL_EVIDENCE='登録による表示内容の一括承認（原本の目視確認・本人認証を証明しない）';
 
@@ -21,6 +22,33 @@ function receiptReviewConfig_() {
 }
 function receiptReviewEnabled_(c) {
   if(!c.enabled || PropertiesService.getScriptProperties().getProperty(REVIEW_STOP)) throw Error('review_disabled_or_unknown');
+}
+function receiptReviewRegisterAllowed_() {
+  const props=PropertiesService.getScriptProperties();
+  if(props.getProperty(REVIEW_STOP))throw Error('review_disabled_or_unknown');
+  if(props.getProperty(REVIEW_REGISTER_ALLOWED)!=='true')throw Error('review_registration_disabled');
+}
+function receiptReviewRegistrationEnable() {
+  return receiptSheetsLocked_(()=>{
+    const c=receiptReviewConfig_(),props=PropertiesService.getScriptProperties();
+    if(props.getProperty(REVIEW_STOP) || props.getProperty(REVIEW_REGISTER_ALLOWED)==='true')
+      throw Error('review_registration_not_ready');
+    const triggers=ScriptApp.getProjectTriggers();
+    if(triggers.length!==1 || triggers[0].getHandlerFunction()!=='receiptReviewEdited' ||
+       triggers[0].getTriggerSourceId()!==c.spreadsheet_id || triggers[0].getEventType()!==ScriptApp.EventType.ON_EDIT)
+      throw Error('review_existing_trigger_required');
+    const ports=receiptReviewPorts_(c),catalog=receiptReviewCatalog_(ports);
+    receiptReviewRequests_(ports,catalog.entries);
+    props.setProperty(REVIEW_REGISTER_ALLOWED,'true');
+    return {registration_enabled:true,financial_write_count:0};
+  });
+}
+function receiptReviewRegistrationDisable() {
+  return receiptSheetsLocked_(()=>{
+    receiptReviewConfig_();
+    PropertiesService.getScriptProperties().deleteProperty(REVIEW_REGISTER_ALLOWED);
+    return {registration_enabled:false,financial_write_count:0};
+  });
 }
 function receiptReviewStart() {
   return receiptSheetsLocked_(()=>{
@@ -211,6 +239,44 @@ function receiptReviewRequests_(ports,entries) {
   }
   return rows;
 }
+function receiptReviewSourceAtRegistration_(source,c) {
+  const id=source.source_id,root='https://www.googleapis.com/drive/v3/files/'+id;
+  const headers={Authorization:'Bearer '+ScriptApp.getOAuthToken()};
+  const get=(url)=>{
+    let reply;
+    try {reply=UrlFetchApp.fetch(url,{method:'get',followRedirects:false,muteHttpExceptions:true,headers});}
+    catch(_) {throw Error('review_source_unknown');}
+    if(reply.getResponseCode()!==200)throw Error('review_source_unknown');
+    return reply;
+  };
+  const metadata=()=>{
+    let m;
+    try {m=JSON.parse(get(root+'?fields=id,version,mimeType,trashed,parents,owners(emailAddress)').getContentText());}
+    catch(_) {throw Error('review_source_unknown');}
+    if(m.id!==id || m.trashed!==false || m.mimeType!==source.mime_type ||
+       receiptCanonical_(m.parents)!==receiptCanonical_([c.folder_id]) ||
+       receiptCanonical_((m.owners || []).map(x=>x.emailAddress))!==receiptCanonical_([c.owner_email]) ||
+       !/^[1-9][0-9]*$/.test(m.version || ''))throw Error('review_source_mismatch');
+    return m;
+  };
+  const before=metadata();
+  let bytes;
+  try {bytes=get(root+'?alt=media').getContent();}
+  catch(_) {throw Error('review_source_unknown');}
+  const hash=Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,bytes)
+    .map(b=>('0'+((b+256)%256).toString(16)).slice(-2)).join('');
+  if(hash!==source.sha256)throw Error('review_source_mismatch');
+  if(receiptCanonical_(metadata())!==receiptCanonical_(before))throw Error('review_source_changed');
+}
+function receiptReviewEditor_(event,c) {
+  // EffectiveUser is the installable trigger owner, never proof of who edited.
+  const email=event.user?.getEmail();
+  if(!email || email!==c.owner_email)throw Error('review_editor_unverified');
+  const ss=SpreadsheetApp.openById(c.spreadsheet_id);
+  const owner=ss.getOwner()?.getEmail();
+  const editors=ss.getEditors().map(user=>user.getEmail());
+  if(email!==owner && !editors.includes(email))throw Error('review_editor_not_authorized');
+}
 function receiptReviewChange_(ports,changes,verify) {
   const props=PropertiesService.getScriptProperties();
   props.setProperty(REVIEW_STOP,'outcome_unconfirmed');
@@ -248,9 +314,14 @@ function receiptReviewRegister_(rid,ports) {
   const snap=capture(),text=receiptCanonical_(snap),hash=receiptSheetsHash_(text);
   if(text.length>40000 || table.length>=1000)throw Error('review_capacity');
   if(text!==receiptCanonical_(capture()) || receiptCanonical_(table)!==receiptCanonical_(ports.readRequests()))throw Error('review_capture_changed');
-  // Local enabled was re-read under this lock by the caller. Existing remote gate.
-  const c=receiptReviewConfig_();receiptReviewEnabled_(c);
-  receiptSheetsAcceptance_(c,PropertiesService.getScriptProperties());
+  // Registration permission is independent of backend enabled and GitHub.
+  const c=receiptReviewConfig_();receiptReviewRegisterAllowed_();
+  try {receiptReviewSourceAtRegistration_(e.source,c);}
+  catch(error) {
+    if(['review_source_unknown','review_source_changed'].includes(error.message))
+      PropertiesService.getScriptProperties().setProperty(REVIEW_STOP,'source_unconfirmed');
+    throw error;
+  }
   const s=e.source,row=[rid,e.case_id,s.source_id,s.version,s.sha256,text,hash,'受付済み','',new Date().toISOString()];
   receiptReviewChange_(ports,[{tab:RECEIPT_SHEETS_TAB,row:table.length+1,values:row}],()=>{
     const actual=receiptReviewRequests_(ports,entries);
@@ -265,8 +336,14 @@ function receiptReviewEdited(e) {
   const match=/^register:([a-f0-9-]{36})$/.exec(e.value);
   if(!match || e.oldValue!=='ready:'+match[1])return null;
   return receiptSheetsLocked_(()=>{
-    const c=receiptReviewConfig_();receiptReviewEnabled_(c);
-    if(e.range.getSheet().getParent().getId()!==c.spreadsheet_id)throw Error('review_book_mismatch');
+    const c=receiptReviewConfig_();receiptReviewRegisterAllowed_();
+    const triggers=ScriptApp.getProjectTriggers();
+    if(e.range.getSheet().getParent().getId()!==c.spreadsheet_id || e.source?.getId()!==c.spreadsheet_id ||
+       triggers.length!==1 || triggers[0].getHandlerFunction()!=='receiptReviewEdited' ||
+       triggers[0].getTriggerSourceId()!==c.spreadsheet_id ||
+       triggers[0].getEventType()!==ScriptApp.EventType.ON_EDIT ||
+       String(triggers[0].getUniqueId())!==String(e.triggerUid))throw Error('review_book_mismatch');
+    receiptReviewEditor_(e,c);
     return receiptReviewRegister_(match[1],receiptReviewPorts_(c));
   });
 }

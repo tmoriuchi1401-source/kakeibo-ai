@@ -3,10 +3,11 @@ const fs=require('node:fs'),vm=require('node:vm'),{createHash}=require('node:cry
 const input=JSON.parse(fs.readFileSync(0,'utf8')),clone=x=>JSON.parse(JSON.stringify(x));
 const config={enabled:true,folder_id:'synthetic-folder-b',owner_email:'owner@synthetic.invalid',
   repository:'tmoriuchi1401-source/kakeibo-ai',script_id:'synthetic-script-b',spreadsheet_id:'synthetic-sheet-b',...input.config};
-const properties={RECEIPT_REVIEW_CONFIG_JSON:JSON.stringify(config),RECEIPT_GITHUB_TOKEN:'github_pat_DUMMY',...input.properties};
+const properties={RECEIPT_REVIEW_CONFIG_JSON:JSON.stringify(config),RECEIPT_GITHUB_TOKEN:'github_pat_DUMMY',
+  RECEIPT_REVIEW_REGISTER_ENABLED:'true',...input.properties};
 if(input.config)properties.RECEIPT_REVIEW_CONFIG_JSON=JSON.stringify(config);
 const props={getProperty:k=>properties[k]??null,setProperty:(k,v)=>{properties[k]=v;},deleteProperty:k=>{delete properties[k];}};
-let locked=false,writes=0,gateGets=0,captures=0,decorations=0,validationCount=0,restGets=0,spreadsheetReads=0;
+let locked=false,writes=0,gateGets=0,driveGets=0,captures=0,decorations=0,validationCount=0,restGets=0,spreadsheetReads=0;
 const diagnostics=[],cache=new Map();
 const formulas=[],batches=[],hiddenColumns=[],clearedValidations=[],notes=[],checkboxes=[];
 let cases=clone(input.cases || [['case_id','source_id','source_version','source_sha256','case_json','case_digest','request_id']]);
@@ -54,15 +55,32 @@ const validation={requireValueInList(){return this;},setAllowInvalid(){return th
 const ctx=vm.createContext({console:{warn:message=>diagnostics.push(JSON.parse(message))},PropertiesService:{getScriptProperties:()=>props},
   Session:{getEffectiveUser:()=>({getEmail:()=>input.owner_override || config.owner_email})},ScriptApp:{getScriptId:()=>config.script_id,
     getOAuthToken:()=> 'DUMMY',EventType:{ON_EDIT:'ON_EDIT'},getProjectTriggers:()=>input.no_trigger?[]:[{getHandlerFunction:()=> 'receiptReviewEdited',
-      getTriggerSourceId:()=>config.spreadsheet_id,getEventType:()=> 'ON_EDIT'}]},
-  Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_a,text)=>Array.from(createHash('sha256').update(text).digest())},
+      getTriggerSourceId:()=>config.spreadsheet_id,getEventType:()=> 'ON_EDIT',getUniqueId:()=> 'synthetic-trigger'}]},
+  Utilities:{DigestAlgorithm:{SHA_256:'sha256'},Charset:{UTF_8:'utf8'},computeDigest:(_a,text)=>Array.from(createHash('sha256').update(Buffer.isBuffer(text)?text:typeof text==='string'?text:Buffer.from(text)).digest())},
   LockService:{getScriptLock:()=>({tryLock:()=>{if(locked || input.busy)return false;locked=true;return true;},releaseLock:()=>{locked=false;}})},
-  SpreadsheetApp:{openById:()=>({getSheetByName:sheet,insertSheet:name=>{
+  SpreadsheetApp:{openById:()=>({getId:()=>config.spreadsheet_id,
+    getOwner:()=>({getEmail:()=>input.sheet_owner || config.owner_email}),
+    getEditors:()=> (input.sheet_editors || [config.owner_email]).map(email=>({getEmail:()=>email})),
+    getSheetByName:sheet,insertSheet:name=>{
     if(name==='_receipt_tax_corrections' && !taxExists){taxExists=true;return sheet(name);}
     if(name==='_receipt_policy_reviews' && !policyExists){policyExists=true;return sheet(name);}
     throw Error('unexpected sheet create');
   }}),newDataValidation:()=>validation,flush:()=>{}},
   UrlFetchApp:{fetch:(url,options)=>{
+    if(url.startsWith('https://www.googleapis.com/drive/v3/files/')) {
+      driveGets++;
+      const parsed=new URL(url),sid=decodeURIComponent(parsed.pathname.split('/').pop());
+      const source=cases.slice(1).map(row=>JSON.parse(row[4]).source).find(s=>s.source_id===sid);
+      if(!source || options.method!=='get' || options.followRedirects!==false)throw Error('forbidden source read');
+      const fault=input.drive_fault;
+      if(fault==='network')return {getResponseCode:()=>503};
+      if(parsed.searchParams.get('alt')==='media')return {getResponseCode:()=>200,
+        getContent:()=>fault==='hash'?Array.from(Buffer.from('changed')):(input.drive_bytes || Array.from(Buffer.from(sid)))};
+      const meta={id:sid,version:fault==='version' && driveGets>1?'13':input.drive_current_version || source.version,
+        mimeType:source.mime_type,trashed:false,parents:[fault==='parent'?'other-folder':config.folder_id],
+        owners:[{emailAddress:fault==='owner'?'other@synthetic.invalid':config.owner_email}]};
+      return {getResponseCode:()=>200,getContentText:()=>JSON.stringify(meta)};
+    }
     if(url.startsWith('https://sheets.googleapis.com/v4/spreadsheets/'+config.spreadsheet_id+'?')) {
       restGets++;
       if(options.method!=='get' || options.followRedirects!==false)throw Error('unsafe read HTTP');
@@ -120,8 +138,13 @@ for(const command of input.commands || []) {
     if(command.action==='register') {
       const range={getSheet:()=>({getName:()=> '確認',getParent:()=>({getId:()=>config.spreadsheet_id})}),
         getRow:()=>2,getColumn:()=>9,getNumRows:()=>1,getNumColumns:()=>1};
-      outputs.push(ctx.receiptReviewEdited({range,value:'register:'+command.request_id,oldValue:'ready:'+command.request_id}));
+      outputs.push(ctx.receiptReviewEdited({range,source:{getId:()=>input.event_book || config.spreadsheet_id},
+        triggerUid:input.event_trigger || 'synthetic-trigger',
+        user:input.editor_missing?undefined:{getEmail:()=>input.editor_override || config.owner_email},
+        value:'register:'+command.request_id,oldValue:'ready:'+command.request_id}));
     } else if(command.action==='start')outputs.push(ctx.receiptReviewStart());
+    else if(command.action==='registration_enable')outputs.push(ctx.receiptReviewRegistrationEnable());
+    else if(command.action==='registration_disable')outputs.push(ctx.receiptReviewRegistrationDisable());
     else if(command.action==='tax_setup')outputs.push(ctx.receiptReviewPrepareTaxCorrections());
     else if(command.action==='policy_setup')outputs.push(ctx.receiptReviewPreparePolicyRecheck());
     else if(command.action==='stop')outputs.push(ctx.receiptReviewStop());
@@ -131,5 +154,5 @@ for(const command of input.commands || []) {
     else outputs.push(ctx.receiptReviewBackend(command));
   } catch(error){errors.push(error.message);outputs.push(null);}
 }
-process.stdout.write(JSON.stringify({cases,requests,ui,tax,policy,outputs,errors,writes,gateGets,decorations,properties,formulas,batches,validationCount,
+process.stdout.write(JSON.stringify({cases,requests,ui,tax,policy,outputs,errors,writes,gateGets,driveGets,decorations,properties,formulas,batches,validationCount,
   hiddenColumns,clearedValidations,notes,checkboxes,diagnostics,restGets,spreadsheetReads}));

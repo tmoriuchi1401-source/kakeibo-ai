@@ -88,9 +88,11 @@ class JsPort:
         self.source_fault=None
         self.checks=0
         self.http_ports=False
+        self.source_bytes=None  # Fabricated original bytes supplied by integration tests.
     def invoke(self,command):
         self.calls.append(command['action'])
-        reply=js(**self.state,commands=[command],fault=self.fault,http_ports=self.http_ports)
+        reply=js(**self.state,commands=[command],fault=self.fault,http_ports=self.http_ports,
+                 drive_bytes=list(self.source_bytes) if self.source_bytes is not None else None)
         self.state={k:reply[k] for k in ('cases','requests','ui','properties')}
         if reply['errors']:
             raise RuntimeError(reply['errors'][0])
@@ -217,22 +219,84 @@ def test_persistent_intake_duplicates_even_after_restart(duplicate):
 
 
 @pytest.mark.parametrize('gate',['false','TRUE','',None])
-def test_double_acceptance_gate_before_first_mutation(gate):
+def test_registration_permission_is_independent_of_backend_gate(gate):
     entry,row=case();p=JsPort();p.intake(entry,row)
     p.state['ui'][0]=ready(entry,row)
-    reply=js(**p.state,gate=gate,commands=[dict(action='register',request_id=entry['request_id'])])
-    if gate is None: # null in a fake response is not an enabled string
-        # Harness default uses ??; use malformed definite value instead.
-        reply=js(**p.state,gate='unknown',commands=[dict(action='register',request_id=entry['request_id'])])
-    assert reply['errors'] and reply['writes']==0 and len(reply['requests'])==1
+    reply=js(**{**p.state,'properties':{**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None}},
+             config={'enabled':False},gate=gate,
+             commands=[dict(action='register',request_id=entry['request_id'])])
+    assert not reply['errors'] and reply['writes']==1 and len(reply['requests'])==2
+    assert reply['requests'][1][7]=='受付済み' and reply['gateGets']==0 and reply['driveGets']==3
     assert 'RECEIPT_REVIEW_STOPPED' not in reply['properties']
 
 
 def test_local_off_busy_conflict_and_capture_change():
     entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
-    for options in [dict(config={'enabled':False}),dict(busy=True),dict(fault='capture'),dict(fault='gate'),dict(gate_status=503)]:
-        reply=js(**p.state,**options,commands=[dict(action='register',request_id=entry['request_id'])])
+    for options in [dict(properties={**p.state['properties'],'RECEIPT_REVIEW_REGISTER_ENABLED':'false'}),
+                    dict(busy=True),dict(fault='capture'),dict(drive_fault='hash'),
+                    dict(editor_missing=True),dict(editor_override='stranger@synthetic.invalid'),
+                    dict(sheet_owner='other@synthetic.invalid',sheet_editors=[]),
+                    dict(event_book='foreign-book'),dict(event_trigger='foreign-trigger')]:
+        reply=js(**{**p.state,**options},commands=[dict(action='register',request_id=entry['request_id'])])
         assert reply['errors'] and reply['writes']==0
+
+
+def test_iphone_register_offline_backend_later_and_stop_controls(tmp_path):
+    entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
+    off={**p.state['properties'],'RECEIPT_GITHUB_TOKEN':None}
+    off['RECEIPT_REVIEW_REGISTER_ENABLED']=None
+    denied=js(**{**p.state,'properties':off},config={'enabled':False},
+              commands=[dict(action='register',request_id=entry['request_id'])])
+    assert denied['errors']==['review_registration_disabled'] and denied['writes']==0
+    enabled=js(**{**p.state,'properties':off},config={'enabled':False},
+               commands=[dict(action='registration_enable'),dict(action='register',request_id=entry['request_id'])],gate='false')
+    assert enabled['errors']==[] and enabled['gateGets']==0 and len(enabled['requests'])==2
+    frozen=deepcopy(enabled['requests'][1][:7])
+    assert enabled['requests'][1][7]=='受付済み'
+    disabled=js(**{**p.state,'properties':off},config={'enabled':False},
+                commands=[dict(action='registration_enable'),dict(action='registration_disable'),
+                          dict(action='register',request_id=entry['request_id'])])
+    assert disabled['errors']==['review_registration_disabled'] and disabled['writes']==0
+    stop=js(**{**p.state,'properties':{**off,'RECEIPT_REVIEW_STOPPED':'unconfirmed'}},
+            config={'enabled':False},commands=[dict(action='registration_enable')])
+    assert stop['errors']==['review_registration_not_ready'] and stop['writes']==0
+    stopped=js(cases=enabled['cases'],requests=enabled['requests'],ui=enabled['ui'],
+               config={'enabled':False},properties=enabled['properties'],
+               commands=[dict(action='pending'),dict(action='read',request_id=entry['request_id'])])
+    assert stopped['outputs'][0]==[entry['request_id']]
+    assert stopped['outputs'][1]['row'][:7]==frozen and stopped['writes']==0
+    duplicate=js(cases=enabled['cases'],requests=enabled['requests'],ui=enabled['ui'],
+                 config={'enabled':False},properties=enabled['properties'],
+                 commands=[dict(action='register',request_id=entry['request_id'])])
+    assert duplicate['errors']==['review_replay_or_duplicate'] and duplicate['writes']==0
+    # Later backend activation uses the existing claim/finish and local fence.
+    p.state={k:enabled[k] for k in ('cases','requests','ui','properties')}
+    config=json.loads(p.state['properties']['RECEIPT_REVIEW_CONFIG_JSON']);config['enabled']=True
+    p.state['properties']['RECEIPT_REVIEW_CONFIG_JSON']=json.dumps(config)
+    p.state['properties']['RECEIPT_GITHUB_TOKEN']='github_pat_DUMMY'
+    result=execute_review(entry['request_id'],port=p,fence=AttemptFence(tmp_path/'attempts.db'))
+    assert result['state']=='検証済み・未記帳' and result['financial_write_count']==0
+    assert p.state['requests'][1][:7]==frozen
+    assert p.calls.count('claim')==p.calls.count('finish')==1
+
+
+def test_registration_unknown_and_source_mismatch_never_resend():
+    entry,row=case();p=JsPort();p.intake(entry,row);p.state['ui'][0]=ready(entry,row)
+    drift=js(**p.state,drive_current_version='5',
+             commands=[dict(action='register',request_id=entry['request_id'])])
+    assert not drift['errors'] and len(drift['requests'])==2
+    for fault,error in [('hash','review_source_mismatch'),('owner','review_source_mismatch'),
+                        ('parent','review_source_mismatch'),('network','review_source_unknown'),
+                        ('version','review_source_changed')]:
+        reply=js(**p.state,drive_fault=fault,
+                 commands=[dict(action='register',request_id=entry['request_id'])])
+        assert reply['errors']==[error] and reply['writes']==0 and len(reply['requests'])==1
+        if fault in {'network','version'}:assert reply['properties']['RECEIPT_REVIEW_STOPPED']=='source_unconfirmed'
+    unknown=js(**p.state,fault='after',commands=[dict(action='register',request_id=entry['request_id']),
+                                                dict(action='register',request_id=entry['request_id'])])
+    assert unknown['writes']==1 and len(unknown['requests'])==2
+    assert unknown['properties']['RECEIPT_REVIEW_STOPPED']=='outcome_unconfirmed'
+    assert unknown['errors']==['lost after write','review_disabled_or_unknown']
 
 
 @pytest.mark.parametrize('fault',['before','after','readback'])

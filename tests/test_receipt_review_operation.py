@@ -45,7 +45,7 @@ def test_complete_single_page_pdf_uses_existing_privacy_and_one_check(text, expe
         items=[ReceiptItem(name='合成商品', amount=1000, major_category='食費', minor_category='食品')])
     class AI:
         def analyze_receipt(self, *args, **kwargs): calls.append('AI'); return result
-    p = JsPort(); raw = pdf(); sid = 'synthetic-pdf-operation'
+    p = JsPort(); raw = pdf(); p.source_bytes = raw; sid = 'synthetic-pdf-operation'
     pipeline = ReceiptPipeline(SimpleNamespace(categories=lambda:[['食費','食品']]), AI())
     review = ReviewPipeline(pipeline, p, metadata=lambda _:dict(id=sid, version='1', mimeType='application/pdf', trashed=False),
         fence=AttemptFence(tmp_path/'attempts.sqlite'))
