@@ -1,6 +1,6 @@
 # KakeiboAI：iPhone領収書・PDF確認 MVP 仕様と開発方針
 
-- **更新日**：2026-10-22（事前許可・個別承認廃止は第12節、合成限定の実Google接続は第13節）
+- **更新日**：2026-10-22（事前許可は第12節、合成実Google接続は第13節、実機受入完了と無人runnerは第14節）
 - **状態**：Google Sheetsアプリ（A方式）の合成確認UIは、ユーザーのiPhone実機評価により基本操作性を採用可能と判断。確定仕様は第10節。認証付き確定処理・本番接続の完成や承認ではなく、**デプロイ・本番書込み・処理コードのmain mergeの承認でもない**（今回のPhase 1 Markdown専用PRは差分・CI正常後のmergeが個別承認済み）。
 - **適用範囲**：家計簿管理の領収書確認、PDFページ確認、医療領収書の手入力、関連するiPhone UI／認証／既存記帳処理との接続。
 - **優先原則**：**iPhoneで実際に使える最小機能を早く完成させる**。ただし、医療情報の保護、二重記帳防止、原本・権限の整合性は簡略化しない。
@@ -190,3 +190,21 @@ Phase 1はAGENTS.mdと本仕様のMarkdown専用PRとし、差分・CIが正常�
   従来4処理・新R1のNO-GOを維持する。merge/常駐運用/本番接続/金融有効化は別承認。
 
 構成、実通信の確認結果と限界、合成checkpointの履歴保全、実機手順、残工程は `docs/live-synthetic-sheets-registration.md`。
+
+## 14. iPhone受入完了と無人runner（2026-10-22・ユーザー明示指示）
+
+PR #159の説明へユーザー報告として、Sheetsアプリの完全終了/再起動、SYN-M101の金額135と登録2の保持、
+「登録検証済み・未記帳」の保持、合成原本往復後の保持をすべて合格と記録する。
+既確認の入力/原本往復/登録操作と合わせ今回の対象範囲は受入完了。ログ/機種/バージョンは推測しない。
+通信断復帰・2台同時編集・実金融記帳は未検証。#159のコード/head/既存CI 1,072件は無変更。
+
+- #159最終headから独立Draftで、既定OFF・短時間・合成専用runnerとUbuntuオフラインCIを開発する。
+- 既存GitHub Actionsの定期起動を第一候補として評価する。新サーバー/有料サービスを安易に追加しない。
+- 取引ごとの本人承認やSafari UIは不要。既存transport/polling/adapter/CAS/journal/原本照合/publisherを再利用する。
+- 実認証・実Google書込み・schedule設定・有効化は今回行わない。Secrets/IAM/OAuth/共有変更は最小権限とrollbackを示して別承認。
+- 停止/時間上限/全run排他/復元/重複/失効/競合/容量を検証する。UNKNOWN/pendingを自動解除・再送しない。
+  ローカル保存やActions concurrencyだけを分散CAS・旧writer共有排他の証明にしない。
+- 本番金融write/authority/原本移動/医療AI送信、本番Variables/Secrets/validated SHA、本番workflow dispatch/再実行、main/既存PR head変更は禁止。
+  従来4処理・新R1 NO-GOを維持する。merge/実backend接続/定期有効化/金融接続は別承認。
+
+推奨間隔、実装範囲、永続stateの差込み口、権限と承認対象、最小残工程は `docs/unattended-sheets-registration-runner.md`。
