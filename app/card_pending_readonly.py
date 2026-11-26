@@ -128,6 +128,12 @@ def main():
         result=dict(success=False,error='existing_gmail_secret_auth_unavailable' if isinstance(error,GmailPreviewAuthError)
             else str(error) if isinstance(error,StateError) else 'card_evidence_failed_private_details_suppressed',
             financial_write_count=0,state_writes=0,real_ai_requests=0)
+        if isinstance(error,GmailPreviewAuthError):
+            allowed={'gmail_token_status: invalid_json','gmail_token_status: invalid',
+                'gmail_token_status: expired','gmail_token_status: refresh_failed',
+                'gmail_token_status: invalid_or_revoked','gmail_scope_status: insufficient_or_unexpected',
+                'gmail_scope_status: insufficient'}
+            result['auth_error_code']=str(error) if str(error) in allowed else 'unclassified_auth_failure'
     print(json.dumps(result,ensure_ascii=True,sort_keys=True))
     return 0 if result['success'] else 1
 

@@ -44,6 +44,11 @@ this operation. Drive ACL/bindings are verified by the existing context opener.
                 or self.env.get('KAKEIBO_LEGACY_DISABLED') != 'true' or self.env.get('RUNNER_DEBUG') == '1'):
             raise StateError('receipt_native_workflow_required')
         value = validate_ledger(self.ledger.transport.read(), self.ledger.binding)
+        # A source-only selector is not a proof that abandoned shared card
+        # candidates are disjoint. Preserve UNKNOWN until that proof exists.
+        if any(item['phase'] != 'ready' or item['attempt'] or item['error']
+                for name, item in value['sources'].items() if name != 'receipts'):
+            raise StateError('source_reconciliation_required')
         current = value['sources']['receipts']
         if (not self.attempt or self.env.get('RECEIPT_PARENT_ATTEMPT') != self.attempt
                 or current['phase'] != 'pending' or current['attempt'] != self.attempt

@@ -91,7 +91,16 @@ def test_auth_failure_is_reported_without_exception_or_credential_text(monkeypat
     assert audit.main()==1
     result=json.loads(capsys.readouterr().out)
     assert result['error']=='existing_gmail_secret_auth_unavailable'
+    assert result['auth_error_code']=='unclassified_auth_failure'
     assert result['financial_write_count']==result['state_writes']==result['real_ai_requests']==0
+
+
+def test_known_auth_scope_failure_can_be_distinguished_from_revocation(monkeypatch,capsys):
+    from app.amazon_gmail_preview import GmailPreviewAuthError
+    def failed(_):raise GmailPreviewAuthError('gmail_token_status: refresh_failed')
+    monkeypatch.setattr(audit,'run',failed)
+    audit.main()
+    assert json.loads(capsys.readouterr().out)['auth_error_code']=='gmail_token_status: refresh_failed'
 
 
 def test_workflow_keeps_evidence_secrets_separate_from_synthetic_receipt_job():
