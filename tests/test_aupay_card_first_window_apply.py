@@ -376,7 +376,7 @@ def test_whole_entry_uses_one_collection_existing_durable_stores_and_real_clock(
     if recovery_result is not None:
         import app.aupay_card_incremental_guard as incremental_guard
         import app.aupay_card_incremental_recovery as recovery
-        monkeypatch.setattr(incremental_guard, "controls", lambda *args: True)
+        monkeypatch.setattr(incremental_guard, "controls", lambda *args, **kwargs: True)
         def proof(native, parent, expected_checkpoint):
             assert native["phase"] == parent["sources"]["aupay_card"]["phase"] == "ready"
             assert expected_checkpoint == apply.END
