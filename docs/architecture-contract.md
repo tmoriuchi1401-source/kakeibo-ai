@@ -99,8 +99,11 @@ also inspect the real workflow/entry wiring; document existence is insufficient.
 Existing sensitive/network-denial, writer/state and subsystem regressions remain.
 
 Implementation and limitations: [Issue #207 implementation record](issue-207-implementation.md).
+Subsequent adapter evidence and activation conditions:
+[PR #208 connection results](receipt-hosted-connection.md).
 Existing cash/category PAT migration and receipt-buyback income reconciliation
 are separate changes. Their known violations do not become approved exceptions.
-Production remains **NO-GO** until live/native financial authority, PAT-free
-review transport, actual Google durability, iPhone and PC-OFF schedule acceptance
-are independently demonstrated under separate owner approval.
+Production remains **NO-GO** until the implemented native financial adapter and
+PAT-free review transport are accepted live, and actual Google durability,
+iPhone and PC-OFF schedule acceptance are independently demonstrated under
+separate owner approval.

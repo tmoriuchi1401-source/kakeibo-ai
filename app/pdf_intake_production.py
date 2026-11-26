@@ -40,8 +40,14 @@ def page_count(raw):
     except Exception:raise StateError('pdf_intake_source_structure_invalid') from None
 
 
+class UnavailableProof:
+    """Keep unsupported human page/Unit authority held; no remote fallback."""
+    def verify(self, *args, **kwargs):
+        raise StateError('pdf_intake_authenticated_connection_required')
+
+
 class Context:
-    def __init__(self,env,settings,db,*,writable):
+    def __init__(self,env,settings,db,*,writable,remote_proof=True):
         from .settings import service_account_source
         from .google_clients import read_only_drive_service,download_drive_file
         path,info=service_account_source();self.info=info or json.loads(Path(path).read_bytes())
@@ -67,8 +73,13 @@ class Context:
         self.config,self.db=config,db
         self.io=DriveRegistryIO(config['registry'],self.info,writable=writable)
         self.store=RegistryStore(self.io,self.io.anchor);self.store.load()
-        from .pdf_intake_proof_client import ProofClient
-        self.proof=ProofClient(config['origin'],self.info)
+        if remote_proof:
+            from .pdf_intake_proof_client import ProofClient
+            self.proof=ProofClient(config['origin'],self.info)
+        else:
+            # Hosted receipts reuse native page/Unit processing without
+            # adopting the historical Cloud Run authentication dependency.
+            self.proof=UnavailableProof()
 
     def source(self,sid):
         from .google_clients import download_drive_file,read_only_drive_service
@@ -174,7 +185,7 @@ class Projection:
             self.batch([{'updateDimensionProperties':{'range':{'sheetId':SHEET_ID,'dimension':'ROWS','startIndex':indices[0],'endIndex':indices[-1]+1},'properties':{'hiddenByUser':True},'fields':'hiddenByUser'}}])
 
 
-def process(context,settings,plans,*,apply):
+def process(context,settings,plans,*,apply,financial_write=True):
     runner=context.runner(settings);projection=Projection(context)
     counts={'found':0,'written':0,'needs_review':0,'unchanged':0,'failure':0}
     started=monotonic();analyzed=0
@@ -226,11 +237,11 @@ def process(context,settings,plans,*,apply):
                     unit=context.store.load()['pages'][key]['units'][uid]
                     if unit['candidate'].get('ui_projected'):
                         snapshot=projection.snapshot(key,uid)
-                        outcome=runner.post_manual(key,uid,snapshot,apply=apply)
-                        if outcome.get('status')=='posting_authority_required' and apply:
+                        outcome=runner.post_manual(key,uid,snapshot,apply=apply and financial_write)
+                        if outcome.get('status')=='posting_authority_required' and apply and financial_write:
                             prepared=runner.prepare_manual(key,uid,snapshot)
                             if prepared['status']=='awaiting_authenticated_confirmation':projection.confirmation_link(key,uid)
-                    else:outcome=runner.post_normal(key,uid,apply=apply)
+                    else:outcome=runner.post_normal(key,uid,apply=apply and financial_write)
                     status=outcome['status']
                     if status=='imported':counts['written']+=1;projection.hide(key,uid)
                     elif status in {'complete','terminal'}:
@@ -244,7 +255,7 @@ def process(context,settings,plans,*,apply):
                     counts['needs_review']+=1
                     if apply:projection.unit(key,uid)
                 except Exception:counts['failure']+=1
-        if apply:
+        if apply and financial_write:
             try:
                 current=context.store.load();pages=[r for r in current['pages'].values() if r['page']['source']['source_file_id']==source['source_id']]
                 if len(pages)==source['page_count'] and all(r['units'] and all(u['status'] in TERMINAL for u in r['units'].values()) for r in pages):

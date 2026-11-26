@@ -93,9 +93,9 @@ def receipts(settings, *, apply: bool) -> dict:
                 **({'approved_sources':approved} if approved is not None else {}),
             )
             if multipage and hosted:
-                # Do not bypass the whole-source owner via the native Unit
-                # branch until complete partition/ownership proof is connected.
-                counts['needs_review'] += len(multipage)
+                stage='pdf_page_intake'
+                pdf_counts=pipeline.process_multipage(settings,multipage,dict(os.environ))
+                for key,value in pdf_counts.items():counts[key]=counts.get(key,0)+value
             elif multipage:
                 from .pdf_intake_production import Context,process
                 stage='pdf_page_intake'

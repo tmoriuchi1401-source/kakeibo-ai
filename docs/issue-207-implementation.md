@@ -1,5 +1,9 @@
 # Issue #207 implementation and acceptance record
 
+This record describes baseline `416c6f43`. The subsequent PAT-free/native
+connection implementation, current read-only findings and remaining approvals
+are recorded in [PR #208 connection results](receipt-hosted-connection.md).
+
 Normative requirements: [architecture-contract.md](architecture-contract.md).
 Base main: `fa7ac9378ef51e4a51258dd6053afe52ed0a2bb8`.
 Reviewed #205 `b69590d298c36895945327ff1c0f9412e22b5e7e` and #206

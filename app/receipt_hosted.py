@@ -21,12 +21,13 @@ from .utils import canonical_hash
 
 KEY = 'receipt_hosted_v1'
 BUSY = {'ai_started', 'review_started', 'writer_started', 'publishing'}
-STATES = BUSY | {'analyzed', 'review', 'held', 'validated_unposted', 'synthetic_complete'}
+STATES = BUSY | {'analyzed', 'review', 'held', 'validated_unposted', 'synthetic_complete', 'posted'}
 
 
 class ReceiptOwner:
-    def __init__(self, store):
+    def __init__(self, store, *, financial_apply=False):
         self.store = store
+        self.financial_apply = financial_apply
         self.read()
 
     def read(self):
@@ -34,7 +35,8 @@ class ReceiptOwner:
         if (type(value) is not dict or set(value) != {
                 'schema', 'enabled', 'financial_write_enabled', 'records', 'requests', 'stopped'}
                 or value['schema'] != KEY or value['enabled'] is not True
-                or value['financial_write_enabled'] is not False
+                or type(value['financial_write_enabled']) is not bool
+                or value['financial_write_enabled'] and not self.financial_apply
                 or type(value['records']) is not dict or type(value['requests']) is not dict
                 or type(value['stopped']) is not bool):
             raise StateError('receipt_hosted_state_missing_or_invalid')
@@ -93,15 +95,16 @@ class IsolatedReceiptWriter:
 
 class HostedReceiptPipeline:
     def __init__(self, store, pipeline, *, sources, verify_source, review=None,
-                 writer=None, duplicate_check=None):
-        self.owner = ReceiptOwner(store)
+                 writer=None, duplicate_check=None, native_apply=False, pdf_owner_check=None):
+        self.owner = ReceiptOwner(store, financial_apply=native_apply)
         self.pipeline, self.sources = pipeline, sources
         self.verify_source, self.review = verify_source, review
-        # Production never constructs the isolated sink. Live writer remains
-        # disconnected until its native authority contract is separately proved.
-        if writer is not None and type(writer) is not IsolatedReceiptWriter:
+        from .receipt_hosted_writer import NativeReceiptWriter
+        if writer is not None and type(writer) not in {IsolatedReceiptWriter, NativeReceiptWriter}:
             raise StateError('receipt_hosted_live_write_disabled')
         self.writer, self.duplicate_check = writer, duplicate_check
+        self.native_apply = native_apply
+        self.pdf_owner_check = pdf_owner_check
 
     def _fresh(self, source):
         if self.verify_source(deepcopy(source)) is not True:
@@ -120,6 +123,8 @@ class HostedReceiptPipeline:
             from .pdf_intake_production import page_count
             if page_count(raw) != 1:
                 return dict(status='privacy_blocked', reason='whole_source_manual_structure_required')
+            if self.pdf_owner_check is not None and self.pdf_owner_check(source) is not True:
+                return dict(status='privacy_blocked', reason='native_pdf_owner_or_unconfirmed')
         gate = evaluate_receipt_privacy(raw, mime, known_source_classification=known_source_classification)
         if gate.classification != 'normal' or not gate.gemini_allowed or gate.buyback_evidence:
             return dict(status='privacy_blocked', classification=gate.classification)
@@ -204,6 +209,33 @@ class HostedReceiptPipeline:
             record['state'] = 'validated_unposted'
             self.owner.save(state)
             return dict(status='skipped', reason='financial_write_off', accounting_readback_complete=False)
+        from .receipt_hosted_writer import NativeReceiptWriter
+        if type(self.writer) is NativeReceiptWriter:
+            plan = self.writer.prepare(parsed, record['source'], link)
+            record.update(native_plan=plan, state='validated_unposted')
+            self.owner.save(state)
+            if not self.native_apply or state['financial_write_enabled'] is not True:
+                return dict(status='skipped', reason='financial_write_off', accounting_readback_complete=False)
+            record['state'] = 'writer_started'
+            self.owner.save(state)
+            def verify_intent(expected):
+                if (self.owner.store.transport.read() != self.owner.store.payload
+                        or state['stopped'] or record['state'] != 'writer_started'
+                        or record['native_plan'] != expected):
+                    raise StateError('receipt_native_durable_intent_changed')
+                self._fresh(record['source'])
+                rid = record.get('active_request')
+                if rid:
+                    frozen = self.review.read(rid)
+                    if (frozen['entry'] != record['entry'] or frozen['row'][7:9] != ['検証中', '']
+                            or frozen['row'][6] != state['requests'][rid]['snapshot_digest']):
+                        raise StateError('receipt_native_snapshot_changed')
+            record['native_readback'] = self.writer.apply(plan, verify_intent=verify_intent)
+            self._fresh(record['source'])
+            record['state'] = 'posted'
+            self.owner.save(state)
+            return dict(status='imported', accounting_readback_complete=True,
+                        financial_write_count=len(plan['rows']), **record['native_readback'])
         record['state'] = 'writer_started'
         self.owner.save(state)
         record['synthetic_readback'] = self.writer.write(parsed, record['source']['source_id'], link)
@@ -244,6 +276,7 @@ class HostedReceiptPipeline:
             raise StateError('receipt_hosted_claim_unknown')
         if self.review.read(rid) != dict(entry=entry, row=claimed):
             raise StateError('receipt_hosted_snapshot_changed')
+        posted = None
         if validation['state'] == '検証済み・未記帳':
             corrected = preview(entry, snapshot['operations'], total_confirmed=True)
             original = ReceiptResult.model_validate(record['parsed'])
@@ -253,12 +286,16 @@ class HostedReceiptPipeline:
             if not validate_receipt_result(parsed, self.pipeline.db.categories())[0]:
                 validation.update(state='修正が必要', issues=['current_category_or_amount_invalid'])
             else:
-                self._post(state, record, parsed, make_row(entry)[2])
+                record['active_request'] = rid
+                posted = self._post(state, record, parsed, make_row(entry)[2])
         result = dict(request_id=rid, snapshot_digest=row[6], state=validation['state'],
                       issues=validation['issues'], posting_authority=False, financial_write_count=0)
         for key in ('warnings', 'validator_revision', 'receipt_total', 'item_total', 'difference'):
             if key in validation:
                 result[key] = validation[key]
+        if posted and posted.get('accounting_readback_complete') is True:
+            result.update(state='記帳済み', financial_write_count=posted['financial_write_count'],
+                          exact_readback=True, plan_digest=posted['plan_digest'])
         record['state'] = 'publishing'
         self.owner.save(state)
         finished = self.review.finish(rid, claimed, result)
@@ -266,9 +303,28 @@ class HostedReceiptPipeline:
         if (actual != dict(entry=entry, row=finished) or finished[:7] != row[:7]
                 or finished[7] != result['state'] or json.loads(finished[8]) != result):
             raise StateError('receipt_hosted_result_unknown')
-        record['state'] = 'synthetic_complete' if 'synthetic_readback' in record else 'held' if result['issues'] else 'validated_unposted'
+        record['state'] = ('posted' if 'native_readback' in record else 'synthetic_complete'
+            if 'synthetic_readback' in record else 'held' if result['issues'] else 'validated_unposted')
         state['requests'][rid]['state'] = 'complete'
+        state['requests'][rid]['result'] = deepcopy(result)
         self.owner.save(state)
+        # Only a definite validation failure with zero writer attempts may be
+        # rearmed. Keep the old UUID/snapshot/result immutable in both stores.
+        if (result['issues'] and 'native_plan' not in record and 'synthetic_readback' not in record
+                and 'existing_receipt_duplicate' not in result['issues']
+                and hasattr(self.review, 'rearm')):
+            from uuid import uuid4
+            replacement = deepcopy(entry)
+            replacement['request_id'] = str(uuid4())
+            record.update(state='review_started', next_entry=replacement)
+            self.owner.save(state)
+            self.review.rearm(rid, finished, replacement)
+            if self.review.lookup_source(entry['source']['source_id'], entry['source']['sha256']) != replacement:
+                raise StateError('receipt_hosted_rearm_unknown')
+            record.setdefault('entry_history', []).append(deepcopy(entry))
+            record.update(state='review', entry=replacement)
+            record.pop('next_entry')
+            self.owner.save(state)
         return result
 
     def process_pending(self):
@@ -284,19 +340,57 @@ class HostedReceiptPipeline:
             self.register(rid)
         return min(len(pending), 1)
 
+    def process_multipage(self, settings, plans, env):
+        """Keep the existing page/Unit engine and its purpose/privacy gates.
+
+        Native PDF authority is not converted into whole-source permission.
+        An unavailable native connection holds these PDFs only. During this
+        phase native page writes and original archival remain disabled.
+        """
+        from .pdf_intake_production import Context, process
+        state = self.owner.read()
+        legacy = self.owner.store.value.get('confirmation_items', {}).values()
+        safe, held = [], 0
+        for source in plans:
+            conflicts = [r['source'] for r in state['records'].values()]
+            conflicts += [r.get('source', {}) for r in legacy]
+            if any(s.get('source_id') == source['source_id'] or s.get('sha256') == source['sha256']
+                   for s in conflicts):
+                held += 1
+            else:
+                safe.append(source)
+        counts = dict(needs_review=held)
+        if safe:
+            try:
+                context = Context(env, settings, self.pipeline.db, writable=True, remote_proof=False)
+            except Exception:
+                counts['needs_review'] += len(safe)
+                return counts
+            native = process(context, settings, safe, apply=True, financial_write=False)
+            for key, value in native.items(): counts[key] = counts.get(key, 0) + value
+        return counts
+
 
 def open_pipeline(settings, pipeline, sources, env):
-    """Existing hosted production entry; no Windows/SQLite or credential load.
-
-    Private Google state is opt-in. The old receiver's PAT gate is NOT bypassed
-    or relayed: live review transport/native financial authority stay closed.
-    """
+    """Existing hosted entry. Owner review connected; native financial apply OFF."""
     from .production_flow import verify_execution_boundary
     verify_execution_boundary(env, env.get('GITHUB_SHA', ''))
     if env.get('RUNNER_ENVIRONMENT') != 'github-hosted' or env.get('RUNNER_OS') != 'Linux':
         raise StateError('receipt_hosted_runner_required')
     from .receipt_confirmation_production import open_context
     _, store, _, verify = open_context(env, apply=True)
+    from .receipt_hosted_review import open_review
+    from .drive_receipts import normalize_folder_id
+    review = open_review(env, store.value['manifest'], settings.spreadsheet_id,
+                         normalize_folder_id(settings.receipt_drive_folder_id))
+    from .drive_run_state import StateBinding, DriveStateTransport
+    from .google_clients import read_only_drive_service
+    from .production_ledger import ProductionLedger
+    from .receipt_hosted_writer import NativeReceiptWriter, ProductionReceiptAuthority
+    binding = StateBinding('production_run', settings.spreadsheet_id,
+        env['KAKEIBO_STATE_FOLDER_ID'], env['KAKEIBO_RUN_LEDGER_FILE_ID'])
+    ledger = ProductionLedger(DriveStateTransport(read_only_drive_service(), binding), binding)
+    writer = NativeReceiptWriter(pipeline.db, ProductionReceiptAuthority(env, ledger), clock=pipeline.clock)
     by_id = {s['source_id']: s for s in sources}
     def fresh(source):
         verify(source, settings.receipt_drive_folder_id)
@@ -308,5 +402,15 @@ def open_pipeline(settings, pipeline, sources, env):
             return False
         except StateError:
             return True
+    def pdf_owner_check(source):
+        from .pdf_intake_production import Context
+        try:
+            context = Context(env, settings, pipeline.db, writable=False, remote_proof=False)
+            pages = context.store.load()['pages'].values()
+            return not any(r['page']['source']['source_file_id'] == source['source_id']
+                or r['page']['source']['source_content_hash'] == source['sha256'] for r in pages)
+        except Exception:
+            return False  # Hold this PDF only; no whole-document AI fallback.
     return HostedReceiptPipeline(store, pipeline, sources=by_id, verify_source=fresh,
-                                 duplicate_check=duplicate)
+                                 duplicate_check=duplicate, review=review, writer=writer,
+                                 native_apply=False, pdf_owner_check=pdf_owner_check)

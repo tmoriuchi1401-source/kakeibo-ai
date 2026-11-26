@@ -55,3 +55,21 @@ def test_selected_pr_logic_excludes_trial_runtime_and_keeps_ui_width():
     assert not any(isinstance(n, ast.ClassDef) and n.name == 'ReviewPipeline' for n in module.body)
     # Windows development helpers may exist elsewhere. Only actual production
     # dependencies are restricted by the import/entry tests above.
+
+
+def test_native_factory_is_connected_but_apply_cannot_be_enabled_by_environment():
+    factory = next(n for n in tree('app/receipt_hosted.py').body
+                   if isinstance(n, ast.FunctionDef) and n.name == 'open_pipeline')
+    calls = [n for n in ast.walk(factory) if isinstance(n, ast.Call)]
+    assert any(isinstance(n.func, ast.Name) and n.func.id == 'NativeReceiptWriter' for n in calls)
+    assert any(isinstance(n.func, ast.Name) and n.func.id == 'open_review' for n in calls)
+    assembly = next(n for n in calls if isinstance(n.func, ast.Name) and n.func.id == 'HostedReceiptPipeline')
+    assert next(k.value for k in assembly.keywords if k.arg == 'native_apply').value is False
+    for path in ('app/receipt_hosted_review.py', 'apps-script/receipt-validation/Hosted.gs',
+                 'apps-script/receipt-validation/Sheets.gs'):
+        source = (ROOT/path).read_text(encoding='utf-8')
+        assert 'api.github.com' not in source and 'RECEIPT_GITHUB_TOKEN' not in source
+    manifest = __import__('json').loads((ROOT/'apps-script/receipt-validation/appsscript.json').read_text())
+    assert manifest['executionApi'] == {'access':'MYSELF'}
+    script = (ROOT/'apps-script/receipt-validation/Hosted.gs').read_text(encoding='utf-8')
+    assert 'receiptSheetsLocked_' in script and 'receiptReviewRegisterAllowed_' in script

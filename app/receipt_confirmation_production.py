@@ -126,6 +126,9 @@ def execute(env,apply,diagnostic=lambda _:None):
     receipt_batch([],env.get('RECEIPT_INTAKE_LIMIT','1'))
     from .google_clients import read_only_drive_service,download_drive_file
     settings,store,db,metadata=open_context(env,apply)
+    if apply and 'receipt_hosted_v1' in store.value:
+        from .receipt_hosted import ReceiptOwner
+        ReceiptOwner(store)  # STOP/UNKNOWN before any legacy/UI/PDF mutation.
     reader=read_only_drive_service()
     review=ReceiptConfirmation(store,db,metadata)
     # Medical is owner-confirmed only; legacy automatic/AI policy variables
@@ -172,12 +175,23 @@ def execute(env,apply,diagnostic=lambda _:None):
     if result.get('nextPageToken'):raise StateError('receipt_inbox_collection_incomplete')
     plans=[];multipage_plans=[];pdf_context=None;blocked_sources=set();counts={'found':0,'medical_detected':0,'blocked':0,'written':0,'medical_local_written':0,'failure':0,'archived':resumed_archives}
     previous_medical={x['source']['source_id'] for x in review.items.values() if x['kind']=='medical'}
+    hosted_mode='receipt_hosted_v1' in store.value
     files=result.get('files',[])
     # Existing unchanged holds already have a durable review row. Do not let
     # them monopolize the bounded scan; owner answers are still processed.
     held={(x['source']['source_id'],x['source']['version']) for x in review.items.values()
           if x['kind']=='medical' or (x['kind']=='intake' and x['status']=='waiting' and not any(x['inputs']))}
     excluded={f['id'] for f in files if (f['id'],f.get('version')) in held}
+    if hosted_mode:
+        # Preserve old normal owners/inputs; a known legacy hold is not an
+        # ambiguous new attempt and must not monopolize the new intake slot.
+        excluded.update(x['source']['source_id'] for x in review.items.values() if x['kind']=='normal')
+    # Durable review/unposted holds have their own polling path. They must not
+    # occupy every bounded inbox slot and starve independent normal originals.
+    hosted_records=store.value.get('receipt_hosted_v1',{}).get('records',{})
+    excluded.update(f['id'] for f in files if f['id'] in hosted_records
+        and hosted_records[f['id']].get('state') in {'review','held','validated_unposted','synthetic_complete','posted'}
+        and hosted_records[f['id']]['source']['version']==f.get('version'))
     batch=receipt_batch(files,env.get('RECEIPT_INTAKE_LIMIT','1'),excluded=excluded)
     selected={f['id'] for f in batch}
     # A partial scan must never close a review for an unexamined original.
@@ -199,12 +213,19 @@ def execute(env,apply,diagnostic=lambda _:None):
             except StateError:
                 counts['blocked']+=1;blocked_sources.add(f['id']);continue
             if number>1:
+                # Whole-source/legacy ownership cannot be bypassed by changing
+                # the PDF route or minting new Unit IDs in the native registry.
+                old_sources=[r.get('source',{}) for r in review.items.values()]
+                old_sources += [r['source'] for r in store.value.get('receipt_hosted_v1',{}).get('records',{}).values()]
+                if hosted_mode and any(s.get('source_id')==f['id'] or s.get('sha256')==source['sha256'] for s in old_sources):
+                    counts['blocked']+=1;blocked_sources.add(f['id']);continue
                 intake_enabled=(env.get('PDF_INTAKE_AUTOMATION_ENABLED')=='true' or env.get('GITHUB_EVENT_NAME')=='workflow_dispatch')
                 if not intake_enabled or not env.get('PDF_INTAKE_CONFIG_FILE_ID') or len(multipage_plans)>=MAX_FILES:
                     counts['blocked']+=1;blocked_sources.add(f['id']);continue
-                if pdf_context is None:pdf_context=Context(env,settings,db,writable=True)
+                if pdf_context is None:
+                    pdf_context=Context(env,settings,db,writable=True,**({'remote_proof':False} if hosted_mode else {}))
                 from .pdf_intake_runner import observe_source
-                archived=pdf_context.proof.archive(f['id'],source['sha256'])
+                archived=pdf_context.proof.archive(f['id'],source['sha256']) if not hosted_mode else {'archive_allowed':False}
                 if archived['archive_allowed']:
                     from .pdf_intake_production import archive_terminal
                     archive_terminal(pdf_context,f['id'],source['sha256'])
@@ -225,6 +246,9 @@ def execute(env,apply,diagnostic=lambda _:None):
             review.observe_medical(source,folder);counts['medical_detected']+=1
             review.resolve_intake_kind(source,folder,gate)
         elif gate.classification=='normal' and gate.gemini_allowed:
+            if hosted_mode and any(x['source'].get('source_id')==source['source_id']
+                    or x['source'].get('sha256')==source['sha256'] for x in review.items.values()):
+                counts['blocked']+=1;blocked_sources.add(f['id']);continue
             review.resolve_intake_kind(source,folder,gate)
             if env.get('RECEIPT_SCAN_PLAN'):
                 directory=Path(env['RECEIPT_SCAN_PLAN']).parent
