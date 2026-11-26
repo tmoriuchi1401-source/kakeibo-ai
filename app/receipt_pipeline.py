@@ -17,6 +17,7 @@ class ReceiptPipeline:
         self.db=db; self.ai=ai; self.clock=clock or (lambda: now_jst_string())
         self.medical_review_observer=medical_review_observer
         self._gemini_factory=gemini_factory
+        self.verify_materialization = False
         # Restrictive source provenance survives retries within this pipeline.
         # Callers carry known_source_classification across pipeline lifetimes.
         self._source_privacy: dict[str, Classification] = {}
@@ -158,5 +159,15 @@ class ReceiptPipeline:
         self.db.append("支出明細",[row for row in rows if row[0] not in existing_expense_ids])
         # A present import ID means all earlier receipt materialization completed.
         self.db.append("取込データ",[import_row])
-        return {"status":"imported","items":len(rows),"total":result.total}
+        outcome = {"status":"imported","items":len(rows),"total":result.total}
+        if self.verify_materialization:
+            from .receipt_confirmation import same_row
+            expected = [('レシート', receipt_row), *[('支出明細', row) for row in rows],
+                        ('取込データ', import_row)]
+            for title, row in expected:
+                matches = [r for r in self.db.get_raw(f"'{title}'!A2:T") if r and r[0] == row[0]]
+                if len(matches) != 1 or not same_row(title, matches[0], row):
+                    raise RuntimeError('receipt_accounting_readback_mismatch')
+            outcome['accounting_readback_complete'] = True
+        return outcome
 

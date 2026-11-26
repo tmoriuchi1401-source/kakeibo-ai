@@ -56,7 +56,7 @@ def test_transient_extraction_failure_preserves_completed_receipt_and_defers_rem
     monkeypatch.setattr(drive_receipts, 'drive_service', lambda: service)
     monkeypatch.setattr(drive_receipts, 'download_drive_file', lambda *a: b'synthetic')
     pipeline = Mock()
-    pipeline.process_bytes.side_effect = [{'status': 'imported'}, error]
+    pipeline.process_bytes.side_effect = [{'status': 'imported', 'accounting_readback_complete': True}, error]
     results = drive_receipts.process_inbox('synthetic-inbox', pipeline, 'synthetic-archive')
     assert [result['status'] for _, result in results] == ['imported', 'deferred', 'deferred']
     assert [result['gemini_api_status'] for _, result in results[1:]] == [status, status]

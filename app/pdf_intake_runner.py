@@ -182,6 +182,8 @@ class PageIntake:
         from .page_receipt_readonly import ReadonlyPageReceipts
         from .page_receipt_ai import authorize_payload
         record=self.store.load()['pages'][key];page=record['page']
+        if record['status']=='analysis_started':
+            raise StateError('pdf_intake_analysis_unknown_no_retry')
         if record['status'] in TERMINAL:return {'status':'terminal','units':len(record['units'])}
         if (record['status']=='privacy_observation_changed' or page['automatic_classification'] in {'medical','payroll'} or page['clearly_sensitive']
                 or not page['observation_complete']):
@@ -190,6 +192,12 @@ class PageIntake:
         if record['analysis']:
             # Keep approved human values and frozen identities; no silent reanalysis.
             return {'status':record['status'],'units':len(record['units'])}
+        # Reuse the existing Google CAS registry as the pre-AI fence. A lost
+        # response or runner death must not repeat a native page analysis.
+        latest=self.store.load()
+        if latest['pages'][key]!=record:raise StateError('pdf_intake_page_changed_before_analysis')
+        record['status']='analysis_started'
+        latest['pages'][key]=deepcopy(record);latest['generation']+=1;self.store.save(latest)
         def permission(p,png):
             self.gate().authorize(p.model_dump())
             return authorize_payload(p,png,current_page=lambda sid,n:PageUnit.model_validate(self.current_page(sid,n)),

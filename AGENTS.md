@@ -1,5 +1,14 @@
 # Codex working guidance (KakeiboAI)
 
+## Mandatory system architecture
+
+Read [docs/architecture-contract.md](docs/architecture-contract.md) before planning
+or changing execution paths. A01–A15 apply globally and take precedence over
+historical subsystem plans. Separate permanent requirements from phase limits.
+Do not promote a Windows trial, all-receipt review or validation-only result to
+production behavior. Preserve existing safety tests and keep production NO-GO
+until the contract's acceptance and separate activation approval are satisfied.
+
 ## Receipt/PDF review and iPhone UI work
 
 Before planning or changing the receipt-review, medical manual-entry, PDF page/grouping, unified review, authentication/confirmation UI, or related Cloud deployment path:

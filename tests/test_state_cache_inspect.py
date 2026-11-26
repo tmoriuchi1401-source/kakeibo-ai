@@ -92,7 +92,10 @@ def test_workflow_is_manual_main_inspect_only_with_exact_restore_and_no_google()
     job = workflow["jobs"]["inspect"]
     assert "github.sha == inputs.expected_sha" in job["if"]
     assert "github.ref == 'refs/heads/main'" in job["if"]
-    assert "secrets." not in raw
+    # The existing cache inspection job remains entirely credential-free;
+    # isolated receipt auth is a separate, owner/branch/SHA-scoped job.
+    assert 'env' not in workflow and 'env' not in job
+    assert "secrets." not in yaml.dump(job)
     assert "restore-keys" not in raw
     assert "cache/save" not in raw and "upload-artifact" not in raw and "app.cli" not in raw
     restores = [step for step in job["steps"] if step.get("uses", "").startswith("actions/cache/restore")]

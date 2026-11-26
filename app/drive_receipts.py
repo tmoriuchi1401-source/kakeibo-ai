@@ -18,9 +18,9 @@ def normalize_folder_id(value:str)->str:
 def should_archive_result(result: dict) -> bool:
     """Return whether an inbox image was safely recorded and can be archived."""
     status = result.get("status")
-    return status in {"imported", "needs_review"} or (
-        status == "skipped" and result.get("reason") == "already_imported"
-    )
+    # Import IDs and needs_review are NOT proof of final accounting. Legacy
+    # originals stay safely in place until independently reconciled.
+    return status == 'imported' and result.get('accounting_readback_complete') is True
 
 
 def is_supported_receipt_mime(mime_type: str) -> bool:

@@ -61,7 +61,8 @@ def receipts(settings, *, apply: bool) -> dict:
                 counts["written"] += 1
             elif status in {"needs_review", "privacy_blocked"}:
                 counts["needs_review"] += 1
-            elif status == "skipped" and result.get("reason") == "already_imported":
+            elif status == "skipped" and result.get("reason") in {
+                    "already_imported", "durable_receipt_exists", "financial_write_off", "synthetic_complete"}:
                 counts["unchanged"] += 1
             elif status == 'deferred':
                 counts['deferred']=counts.get('deferred',0)+1
@@ -74,17 +75,28 @@ def receipts(settings, *, apply: bool) -> dict:
             if result.get("medical_shadow_status") == "handoff_failed":
                 counts["failure"] += 1
         try:
-            approved=None;multipage=[]
+            approved=None;multipage=[];hosted=False
             if os.environ.get('RECEIPT_CONFIRMATION_BINDING'):
                 if not os.environ.get('RECEIPT_SCAN_PLAN'):raise RuntimeError('receipt_preflight_required')
                 scan_plan=json.loads(Path(os.environ['RECEIPT_SCAN_PLAN']).read_bytes())
                 approved=scan_plan['sources'];multipage=scan_plan.get('multipage_sources',[])
+            pipeline = make_receipt_pipeline(settings, db, None)
+            pipeline.verify_materialization = True
+            if approved is not None and scan_plan.get('hosted_receipts') is True:
+                hosted=True
+                from .receipt_hosted import open_pipeline
+                pipeline = open_pipeline(settings, pipeline, approved, dict(os.environ))
+                pipeline.process_pending()
             process_inbox(
-                settings.receipt_drive_folder_id, make_receipt_pipeline(settings, db, None),
+                settings.receipt_drive_folder_id, pipeline,
                 settings.processed_drive_folder_id, progress=progress,
                 **({'approved_sources':approved} if approved is not None else {}),
             )
-            if multipage:
+            if multipage and hosted:
+                stage='pdf_page_intake'
+                pdf_counts=pipeline.process_multipage(settings,multipage,dict(os.environ))
+                for key,value in pdf_counts.items():counts[key]=counts.get(key,0)+value
+            elif multipage:
                 from .pdf_intake_production import Context,process
                 stage='pdf_page_intake'
                 pdf_counts=process(Context(dict(os.environ),settings,db,writable=True),settings,multipage,apply=True)

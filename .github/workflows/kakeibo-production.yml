@@ -172,6 +172,10 @@ jobs:
       KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
       # Dedicated review store: encrypted ID plus pinned existing manifest hash.
       RECEIPT_CONFIRMATION_BINDING: ${{ vars.RECEIPT_CONFIRMATION_BINDING }}
+      # Existing owner authorized-user OAuth, never a GitHub token or SA fallback.
+      # Missing binding/credential fails closed; financial apply stays hard OFF.
+      RECEIPT_HOSTED_REVIEW_BINDING: ${{ vars.RECEIPT_HOSTED_REVIEW_BINDING }}
+      GOOGLE_RECEIPT_OWNER_TOKEN_JSON: ${{ secrets.GOOGLE_RECEIPT_OWNER_TOKEN_JSON }}
       # Private configuration reference only; no session or page binding in GitHub.
       PDF_INTAKE_CONFIG_FILE_ID: ${{ vars.PDF_INTAKE_CONFIG_FILE_ID }}
       PDF_INTAKE_AUTOMATION_ENABLED: ${{ vars.PDF_INTAKE_AUTOMATION_ENABLED || 'false' }}

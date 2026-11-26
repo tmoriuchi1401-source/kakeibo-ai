@@ -1,4 +1,5 @@
 -r requirements.txt
 PyYAML>=6.0
-opencv-python==5.0.0.93
+# Existing compatibility tests construct httpx responses; newer GenAI SDKs use httpx2.
 httpx==0.28.1
+opencv-python==5.0.0.93

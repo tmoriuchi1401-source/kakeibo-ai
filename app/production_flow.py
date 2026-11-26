@@ -137,6 +137,8 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
     # Keep both in memory, never tee/upload/cache them. Disable legacy job summary.
     child_env = dict(env)
     child_env.pop("GITHUB_STEP_SUMMARY", None)
+    if source != 'receipts' or not apply:
+        child_env.pop('GOOGLE_RECEIPT_OWNER_TOKEN_JSON', None)
     if source in {"receipt_reimport", "receipt_confirmation"}:
         for name in ("GOOGLE_GMAIL_TOKEN_JSON", "AUPAY_CARD_AUDIT_KEY_JSON",
                      "AUPAY_CARD_RECURRING_AUTHORITY_JSON", "BANK_AUDIT_KEY_JSON",
@@ -295,6 +297,11 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
     def execute(source):
         effective_apply = apply and (source != "bank" or bank_apply)
         if source not in STATE_SOURCES:
+            if source == 'receipts' and effective_apply and ledger is not None:
+                # Bind the child to THIS private parent attempt, never adopt an
+                # abandoned pending attempt discovered by a fresh child.
+                prepared = dict(env, RECEIPT_PARENT_ATTEMPT=ledger.value['sources']['receipts']['attempt'])
+                return invoke(source, apply=True, env=prepared)
             return invoke(source, apply=effective_apply, env=env)
         private = directory / source
         private.mkdir()

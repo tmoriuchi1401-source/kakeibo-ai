@@ -25,6 +25,12 @@ on:
         description: Exact bank-pdf-recurring-state-run_id-attempt cache key
         type: string
         required: true
+      receipt_e2e_phase:
+        description: Isolated receipt connection only; no financial write or real AI
+        type: choice
+        required: false
+        default: none
+        options: [none, auth, preflight, intake, process, restore, unknown-create, unknown-restore]
 
 permissions:
   contents: read
@@ -36,6 +42,48 @@ concurrency:
   queue: max
 
 jobs:
+  receipt-isolated-e2e:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/codex/issue-207-hosted-receipts' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      github.run_attempt == 1 && github.sha == inputs.expected_sha &&
+      contains(fromJSON('["auth","preflight","intake","process","restore","unknown-create","unknown-restore"]'), inputs.receipt_e2e_phase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Reject debug before credentials
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install existing dependencies before credentials
+        run: pip install -r requirements.txt
+      - name: Execute fixed synthetic phase without financial or AI capability
+        env:
+          E2E_PHASE: ${{ inputs.receipt_e2e_phase }}
+          E2E_EXPECTED_SHA: ${{ inputs.expected_sha }}
+          GOOGLE_RECEIPT_OWNER_TOKEN_JSON: ${{ secrets.GOOGLE_RECEIPT_E2E_OWNER_TOKEN_JSON }}
+          RECEIPT_HOSTED_REVIEW_BINDING: ${{ inputs.receipt_e2e_phase != 'auth' && vars.RECEIPT_HOSTED_E2E_REVIEW_BINDING || '' }}
+          RECEIPT_HOSTED_E2E_CONFIG_JSON: ${{ inputs.receipt_e2e_phase != 'auth' && secrets.RECEIPT_HOSTED_E2E_CONFIG_JSON || '' }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ inputs.receipt_e2e_phase != 'auth' && secrets.GOOGLE_SERVICE_ACCOUNT_JSON || '' }}
+          SPREADSHEET_ID: ${{ inputs.receipt_e2e_phase != 'auth' && secrets.SPREADSHEET_ID || '' }}
+          RECEIPT_DRIVE_FOLDER_ID: ${{ inputs.receipt_e2e_phase != 'auth' && secrets.RECEIPT_DRIVE_FOLDER_ID || '' }}
+          PROCESSED_DRIVE_FOLDER_ID: ${{ inputs.receipt_e2e_phase != 'auth' && secrets.PROCESSED_DRIVE_FOLDER_ID || '' }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ inputs.receipt_e2e_phase != 'auth' && vars.KAKEIBO_STATE_FOLDER_ID || '' }}
+          AMAZON_STATE_FILE_ID: ${{ inputs.receipt_e2e_phase != 'auth' && vars.AMAZON_STATE_FILE_ID || '' }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ inputs.receipt_e2e_phase != 'auth' && vars.AUPAY_CARD_STATE_FILE_ID || '' }}
+          BANK_STATE_FILE_ID: ${{ inputs.receipt_e2e_phase != 'auth' && vars.BANK_STATE_FILE_ID || '' }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ inputs.receipt_e2e_phase != 'auth' && vars.KAKEIBO_RUN_LEDGER_FILE_ID || '' }}
+          RECEIPT_CONFIRMATION_BINDING: ${{ inputs.receipt_e2e_phase != 'auth' && vars.RECEIPT_CONFIRMATION_BINDING || '' }}
+        run: python -m app.receipt_hosted_e2e
   inspect:
     if: >-
       github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&

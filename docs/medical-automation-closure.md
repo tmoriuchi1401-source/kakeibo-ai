@@ -1,5 +1,7 @@
 # Medical＝完全手入力
 
+上位要件は [architecture-contract.md](architecture-contract.md) A10/A15。新確認経路でもこの完全手入力・AI禁止と既存履歴保持を維持する。
+
 2026-10-02の正式方針。Medicalの自動化研究を終了し、医療原本を人間が確認して必要情報を完全手入力・確定する。OCR候補による半自動記帳、OCR authority、Vision、外部AI、Gemini、crop・mask・allowlist画像送信、Medical AUTOは本番へ導入しない。新しい確認Web UIやiPhone UIは今回の範囲に含めない。
 
 ## 本番の境界
