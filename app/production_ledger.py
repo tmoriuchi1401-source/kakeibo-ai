@@ -66,13 +66,17 @@ class ProductionLedger:
         self.payload = transport.read()  # Missing state is never initialized here.
         self.value = validate_ledger(self.payload, binding)
 
-    def _save(self, value: dict) -> None:
+    def _save(self, value: dict, *, observe=None) -> None:
+        if observe: observe("validate")
         value["generation"] += 1
         proposed = _encode(value)
         validate_ledger(proposed, self.binding)
+        if observe: observe("prewrite_read")
         if self.transport.read() != self.payload:
             raise StateError("ledger_changed_since_read")
+        if observe: observe("write")
         self.transport.write(proposed)
+        if observe: observe("transport_readback")
         if self.transport.read() != proposed:
             raise StateError("ledger_readback_failed")
         self.payload, self.value = proposed, value

@@ -16,6 +16,7 @@ import time
 import zlib
 
 from .aupay_card_window_preview import FLAGS, REPO, ROOT, GitHub, require
+from .aupay_card_reconciliation_diagnostics import ReconciliationDiagnostics
 
 WORKFLOW="aupay-card-reconciliation-once.yml"
 CONFIRM="APPLY_FIXED_CARD_RECONCILIATION_ONCE"
@@ -87,8 +88,11 @@ def decode_capsule(text,key,tree,now):
     return record,att
 
 
-def run(env,head,github):
+def run(env,head,github,diagnostics=None):
+    diagnostics = diagnostics or ReconciliationDiagnostics()
+    diagnostics.mark("release_guard")
     boundary(env,head,github)
+    diagnostics.mark("dependencies")
     from cryptography.hazmat.primitives import serialization
     from .aupay_card_reconciliation_apply import execute_reconciliation,read_financial_and_review,prepare_reconciliation
     from .aupay_card_batch import ProtectedBatchApprovalProvider
@@ -109,7 +113,9 @@ def run(env,head,github):
     info=json.loads(env["GOOGLE_SERVICE_ACCOUNT_JSON"])
     key=serialization.load_pem_private_key(info["private_key"].encode(),password=None)
     tree=subprocess.check_output(["git","rev-parse","HEAD^{tree}"],cwd=ROOT,text=True).strip()
+    diagnostics.mark("capsule_decode")
     record,att=decode_capsule(env["REPAIR_CAPSULE"],key,tree,datetime.now(timezone.utc))
+    diagnostics.mark("bindings")
     bindings=record["bindings"]
     require(bindings["spreadsheet_id"]==env["SPREADSHEET_ID"],"repair_target_changed")
     for name,field in (("KAKEIBO_STATE_FOLDER_ID","folder_id"),("AUPAY_CARD_STATE_FILE_ID","card_id"),
@@ -121,6 +127,7 @@ def run(env,head,github):
     cb=StateBinding("au_pay_card_gmail",bindings["spreadsheet_id"],bindings["folder_id"],bindings["card_id"])
     pb=StateBinding("production_run",bindings["spreadsheet_id"],bindings["folder_id"],bindings["parent_id"])
     card_read,parent_read=ReadOnlyState(ro_drive,cb),ReadOnlyState(ro_drive,pb)
+    diagnostics.mark("state_revision")
     require(card_read.observe()[1]["metadata_digest"]==record["native_before_metadata_digest"]
         and parent_read.observe()[1]["metadata_digest"]==record["parent_before_metadata_digest"],
         "repair_state_revision_changed")
@@ -161,6 +168,7 @@ def run(env,head,github):
             value=validate(raw,binding)
             require(hashlib.sha256(raw).hexdigest()==item["sha256"] and value["phase"]=="ready"
                 and not value["attempt"],"repair_peer_native_pending_or_changed")
+    diagnostics.mark("runtime_clients")
     readonly=SheetsDB(env["SPREADSHEET_ID"],service=ro_sheets,read_retry_attempts=1)
     class LiteralDB:
         sid=readonly.sid
@@ -182,6 +190,7 @@ def run(env,head,github):
                    if r["status"] in {"complete","noop"}]
         cached=SimpleNamespace(successful_window_end=lambda:datetime.fromisoformat(cp[0]["successful_window_end"]),
             alias_registry=lambda:merge_registry(e for s in summaries for e in s.get("card_aliases",[])))
+        diagnostics.mark("cached_projection")
         projected=prepare_reconciliation(record,db,cached,audit.load())["projection"]
         require(att["approval"]["batch_size"]==record["import_count"],"repair_signed_count_changed")
         # The owner's signed fixed record authorizes these exact candidates.
@@ -194,21 +203,26 @@ def run(env,head,github):
             approval_provider=ProtectedBatchApprovalProvider(private/"approval.json",repo_root=ROOT),
             state_dir=private/"state",repo_root=ROOT,native_read=card_read.read,parent_read=parent_read.read,
             financial_read=lambda:read_financial_and_review(ro_sheets,db.sid),documents_check=documents_check,
-            source_check=source_check,guard=guard)
+            source_check=source_check,guard=guard,diagnostics=diagnostics)
 
 
 def main():
     logging.disable(logging.CRITICAL);socket.setdefaulttimeout(30)
+    diagnostics=ReconciliationDiagnostics()
     try:
         with redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
             env=dict(os.environ)
             head=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
             require(sys.argv[1:] in ([],["--guard-only"]),"repair_arguments_forbidden")
             github=GitHub(env)
-            if sys.argv[1:]:boundary(env,head,github);result=dict(success=True,guard=True)
-            else:result=run(env,head,github)
-    except BaseException:
-        result=dict(success=False,outcome="UNKNOWN_NO_REPLAY",automatic_retry=False,rollback=False)
+            if sys.argv[1:]:
+                diagnostics.mark("release_guard")
+                boundary(env,head,github);result=dict(success=True,guard=True)
+            else:result=run(env,head,github,diagnostics=diagnostics)
+        result["diagnostics"]=diagnostics.report()
+    except BaseException as error:
+        result=dict(success=False,outcome="UNKNOWN_NO_REPLAY",automatic_retry=False,rollback=False,
+            diagnostics=diagnostics.report(error))
     print(json.dumps(result,sort_keys=True))
     return 0 if result["success"] else 1
 

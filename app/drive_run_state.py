@@ -347,11 +347,15 @@ class DurableState:
             stage.rename(destination)
         self._loaded = payload
 
-    def _replace(self, expected: bytes, proposed: bytes) -> None:
+    def _replace(self, expected: bytes, proposed: bytes, *, observe=None) -> None:
+        if observe: observe("validate")
         validate(proposed, self.binding)
+        if observe: observe("prewrite_read")
         if self.transport.read() != expected:
             raise StateError("state_changed_since_restore")
+        if observe: observe("write")
         self.transport.write(proposed)
+        if observe: observe("transport_readback")
         if self.transport.read() != proposed:
             raise StateError("state_save_readback_mismatch")
 
