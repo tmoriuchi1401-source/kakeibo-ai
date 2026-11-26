@@ -6,7 +6,7 @@ on:
       operation:
         description: Read-only cache inspection before stopping any legacy entry
         type: choice
-        options: [inspect]
+        options: [inspect, card-pending-evidence]
         default: inspect
         required: true
       expected_sha:
@@ -42,6 +42,39 @@ concurrency:
   queue: max
 
 jobs:
+  card-pending-evidence:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/codex/receipt-canary-resume' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      github.run_attempt == 1 && github.sha == inputs.expected_sha &&
+      inputs.operation == 'card-pending-evidence' && inputs.receipt_e2e_phase == 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reject debug before credentials
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install existing dependencies before credentials
+        run: pip install -r requirements.txt
+      - name: Read fixed failed-card evidence without writer capability
+        env:
+          CARD_EVIDENCE_SHA: ${{ inputs.expected_sha }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+        run: python -m app.card_pending_readonly
   receipt-isolated-e2e:
     if: >-
       github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&

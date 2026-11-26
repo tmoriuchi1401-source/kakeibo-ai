@@ -226,6 +226,7 @@ def test_recurring_cli_renders_summary_without_json_scope_error(monkeypatch, tmp
         "manifest_final": "not_created", "capability_final": "not_issued",
         "journal_final": "not_started", "lease_final": "not_acquired",
         "failure_reason": "",
+        "card_aliases": [{"private_source_identity": "must-not-reach-cli"}],
     }
     monkeypatch.setattr(cli, "Settings", FakeSettings)
     monkeypatch.setattr(cli, "SheetsDB", lambda *_args, **_kwargs: object())
@@ -246,6 +247,20 @@ def test_recurring_cli_renders_summary_without_json_scope_error(monkeypatch, tmp
 
     cli.main()
 
-    rendered = json.loads(capsys.readouterr().out)
+    output = capsys.readouterr().out
+    rendered = json.loads(output)
     assert rendered["status"] == "dry_run_ready"
     assert rendered["failure"] == 0
+    assert "card_aliases" not in rendered and "must-not-reach-cli" not in output
+
+
+def test_unknown_attempt_refuses_new_uuid_before_collection_or_resend(tmp_path):
+    parts = components(tmp_path)
+    parts[2].record(dict(run_id="old-unknown", status="failed", write_requests=1,
+        manifest_final="persisted", source_window_start=NOW.isoformat(), source_window_end=NOW.isoformat()),
+        advance_checkpoint=False)
+    gmail = Gmail(raw_message())
+    result = run(parts, gmail)
+    assert result["status"] == "failed" and result["failure_reason"] == "card_unknown_no_replay"
+    assert not gmail.api.list_calls and parts[5].write_calls == 0
+    assert parts[2].successful_window_end() is None

@@ -74,6 +74,25 @@ class SqliteRecurringRunState:
                 BEFORE DELETE ON recurring_runs BEGIN SELECT RAISE(ABORT,'append_only_run'); END;
             """)
 
+    def alias_registry(self):
+        from .aupay_card_aliases import merge_registry
+        with closing(sqlite3.connect(self.path)) as connection:
+            rows = connection.execute(
+                "SELECT summary_json FROM recurring_runs WHERE status IN ('complete','noop') "
+                "ORDER BY rowid"
+            ).fetchall()
+        return merge_registry(entry for row in rows
+                              for entry in json.loads(row[0]).get("card_aliases", []))
+
+    def require_no_unknown_write(self):
+        with closing(sqlite3.connect(self.path)) as connection:
+            rows = connection.execute("SELECT summary_json FROM recurring_runs WHERE status='failed'").fetchall()
+        for row in rows:
+            summary = json.loads(row[0])
+            if (summary.get("manifest_final", "not_created") != "not_created"
+                    or summary.get("write_requests", 0)):
+                raise RuntimeError("card_unknown_no_replay")
+
     def successful_window_end(self) -> datetime | None:
         with closing(sqlite3.connect(self.path)) as connection:
             row = connection.execute(
@@ -286,6 +305,7 @@ def run_recurring_ingestion(
     journal = None
     execution = None
     try:
+        state.require_no_unknown_write()
         from .amazon_money_runtime import money_enabled,money_writer,run_money_records
         monetary=(money_writer(db, **({"preview_only":True} if preview_window is not None else {}))
                   if money_enabled() else None)
@@ -315,7 +335,8 @@ def run_recurring_ingestion(
             state.record(summary,advance_checkpoint=False)
             return summary
         existing = db.get("取込データ!A2:L")
-        reconciliation = reconcile_transactions(transactions, existing)
+        registry = state.alias_registry()
+        reconciliation = reconcile_transactions(transactions, existing, alias_registry=registry)
         plan = build_canonical_apply_plan(collection, reconciliation)
         statuses, amazon_review = _classify_candidates(plan, db)
         summary.update(
@@ -352,6 +373,11 @@ def run_recurring_ingestion(
             if not dry_run and summary.get("money_posted",0):summary["status"]="complete"
             summary["journal_final"] = "not_needed"
             summary["lease_final"] = "not_needed"
+            if not dry_run:
+                from .aupay_card_aliases import confirmed_alias_updates
+                summary["card_aliases"] = confirmed_alias_updates(transactions, reconciliation,
+                    db.get("取込データ!A2:L"), registry,
+                    {i for item in reconciliation["transactions"] for i in item.existing_source_identities})
             state.record(summary, advance_checkpoint=not dry_run)
             return summary
         if dry_run:
@@ -410,6 +436,15 @@ def run_recurring_ingestion(
             journal_final="confirmed" if execution.exact else "outcome_unknown",
             lease_final="released",
         )
+        if execution.exact:
+            history = journal.history(run_id, execution.attempt_id)
+            if not any(h[0:2] == ("write_result", "acknowledged") for h in history):
+                raise RuntimeError("card_write_unknown_no_checkpoint")
+            from .aupay_card_aliases import confirmed_alias_updates
+            summary["card_aliases"] = confirmed_alias_updates(transactions, reconciliation,
+                db.get("取込データ!A2:L"), registry, set(statuses) | {
+                    i for item in reconciliation["transactions"] for i in item.existing_source_identities},
+                expected_rows=transport.dispatched_rows)
         state.record(summary, advance_checkpoint=execution.exact)
         return summary
     except Exception as exc:

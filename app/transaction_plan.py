@@ -177,9 +177,14 @@ def _cross_source_evidence(tx: Transaction, existing_rows: list[list]) -> CrossS
     return CrossSourceEvidence("cross_source_no_match")
 
 
-def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | None = None) -> dict:
+def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | None = None,
+                           *, alias_registry=None) -> dict:
     """Project source records into deterministic, evidence-preserving candidates."""
     existing_rows = existing_rows or []
+    aliases = {}
+    if alias_registry is not None:
+        from .aupay_card_aliases import resolve_aliases
+        aliases = resolve_aliases(raw_rows, existing_rows, alias_registry)
     existing_identities = {
         _text(row[0]) for row in existing_rows if row and _text(row[0])
     }
@@ -245,10 +250,10 @@ def reconcile_transactions(raw_rows: list[dict], existing_rows: list[list] | Non
                 canonical=canonical,
                 state="probable_resend" if probable else ("needs_review" if len(rows) > 1 else "new"),
                 source_identities=projected_identities,
-                existing_source_identities=tuple(
-                    identity for identity in projected_identities
-                    if identity in existing_identities
-                ),
+                existing_source_identities=tuple(sorted({
+                    aliases.get(identity, identity) for identity in projected_identities
+                    if identity in existing_identities or identity in aliases
+                })),
                 cross_source=_cross_source_evidence(canonical, existing_rows),
             ))
         if probable:

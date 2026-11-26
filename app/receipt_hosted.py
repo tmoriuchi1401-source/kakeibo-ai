@@ -7,6 +7,7 @@ intent. The existing Actions lock is REQUIRED; this store is not a CAS lock.
 from copy import deepcopy
 from hashlib import sha256
 import json
+import re
 
 from .drive_run_state import StateError
 from .models import ReceiptItem, ReceiptResult
@@ -32,14 +33,21 @@ class ReceiptOwner:
 
     def read(self):
         value = self.store.value.get(KEY)
-        if (type(value) is not dict or set(value) != {
-                'schema', 'enabled', 'financial_write_enabled', 'records', 'requests', 'stopped'}
+        base = {'schema', 'enabled', 'financial_write_enabled', 'records', 'requests', 'stopped'}
+        fences = {'legacy_source_fences', 'legacy_hash_fences'}
+        if (type(value) is not dict or set(value) not in (base, base | fences)
                 or value['schema'] != KEY or value['enabled'] is not True
                 or type(value['financial_write_enabled']) is not bool
                 or value['financial_write_enabled'] and not self.financial_apply
                 or type(value['records']) is not dict or type(value['requests']) is not dict
                 or type(value['stopped']) is not bool):
             raise StateError('receipt_hosted_state_missing_or_invalid')
+        for key, pattern in (('legacy_source_fences', r'[A-Za-z0-9_-]{1,150}'),
+                             ('legacy_hash_fences', r'[a-f0-9]{64}')):
+            if key in value and (type(value[key]) is not list
+                    or any(type(v) is not str or not re.fullmatch(pattern, v) for v in value[key])
+                    or len(set(value[key])) != len(value[key])):
+                raise StateError('receipt_hosted_legacy_fence_inventory_invalid')
         hashes = set()
         for sid, record in value['records'].items():
             source_identity(record['source'])
@@ -62,6 +70,10 @@ class ReceiptOwner:
         # ReimportStore.save already checks the old payload, writes once and
         # independently reads the same Drive file back. Preserve all old keys.
         whole = deepcopy(self.store.value)
+        old = whole.get(KEY, {})
+        for key in ('legacy_source_fences', 'legacy_hash_fences'):
+            if key in old and (type(value.get(key)) is not list or not set(old[key]) <= set(value[key])):
+                raise StateError('receipt_hosted_legacy_fence_removal_forbidden')
         whole[KEY] = deepcopy(value)
         self.store.save(whole)
 
@@ -112,6 +124,9 @@ class HostedReceiptPipeline:
 
     def process_bytes(self, raw, mime, sid, image_url='', *, known_source_classification=None):
         state = self.owner.read()
+        if (sid in state.get('legacy_source_fences', [])
+                or sha256(raw).hexdigest() in state.get('legacy_hash_fences', [])):
+            raise StateError('receipt_hosted_legacy_attempt_fenced')
         before = self.sources[sid]
         source = dict(source_id=sid, version=before['version'], sha256=sha256(raw).hexdigest(),
                       mime_type=mime, classification='normal', transaction_kind='purchase')
@@ -379,6 +394,8 @@ def open_pipeline(settings, pipeline, sources, env):
         raise StateError('receipt_hosted_runner_required')
     from .receipt_confirmation_production import open_context
     _, store, _, verify = open_context(env, apply=True)
+    if not {'legacy_source_fences', 'legacy_hash_fences'} <= store.value.get(KEY, {}).keys():
+        raise StateError('receipt_hosted_legacy_fence_inventory_required')
     from .receipt_hosted_review import open_review
     from .drive_receipts import normalize_folder_id
     review = open_review(env, store.value['manifest'], settings.spreadsheet_id,
