@@ -170,6 +170,110 @@ def successful_checkpoint(native):
     return checkpoint(native, rows[0]["successful_window_end"])
 
 
+def preserved_unknown_proofs(native, parent, expected_checkpoint):
+    """Read-only proof for a NEW completed reconciliation, never old success.
+
+    The old exact pending native/card and append-only tables remain evidence.
+    This does not reserve, repair, release pending, or change a checkpoint.
+    Current readiness and every existing journal/capability guard still apply.
+    """
+    from .aupay_card_window_preview import checkpoint
+    from .aupay_card_aliases import merge_registry
+    from .drive_run_state import CARD_FILES, _validate_file
+
+    checkpoint(native, expected_checkpoint)
+    card = parent["sources"]["aupay_card"]
+    require(card["phase"] == "ready" and not card["attempt"] and not card["error"],
+            "reconciliation_parent_pending")
+    runs = _rows(native, "recurring.sqlite3", "recurring_runs")
+    summaries = {r["run_id"]: json.loads(r["summary_json"]) for r in runs}
+    proofs = {}
+    for archive_row in runs:
+        archive = summaries[archive_row["run_id"]]
+        if archive_row["status"] != "UNKNOWN_NO_REPLAY":
+            continue
+        require(archive["status"] == "UNKNOWN_NO_REPLAY" and archive["replay_allowed"] is False,
+                "reconciliation_unknown_not_preserved")
+        old, old_card = archive["native_before"], archive["parent_card_before"]
+        if archive.get("archive_schema") == 2:
+            old_raw = base64.b64decode(archive["native_before_raw_b64"], validate=True)
+            parent_raw = base64.b64decode(archive["parent_before_raw_b64"], validate=True)
+            require(hashlib.sha256(old_raw).hexdigest() == archive["native_before_bytes_sha256"]
+                    and json.loads(old_raw) == old
+                    and hashlib.sha256(parent_raw).hexdigest() == archive["parent_before_bytes_sha256"]
+                    and json.loads(parent_raw)["sources"]["aupay_card"] == old_card,
+                    "reconciliation_exact_archive_changed")
+        require(_hash(old) == archive["native_sha256"] and _hash(old_card) == archive["parent_card_sha256"]
+                and old["binding"] == native["binding"] and old["source"] == native["source"]
+                and old["schema"] == native["schema"] and old["phase"] == "pending" and old["attempt"]
+                and old_card["phase"] == "pending" and old_card["attempt"]
+                and native["generation"] >= old["generation"] + 2,
+                "reconciliation_archive_changed")
+        for file, item in old["files"].items():
+            require(file in CARD_FILES and file in native["files"], "reconciliation_old_file_missing")
+            raw = base64.b64decode(item["data"], validate=True)
+            require(hashlib.sha256(raw).hexdigest() == item["sha256"], "reconciliation_old_file_changed")
+            _validate_file(old["source"], file, raw)
+            for table in CARD_FILES[file] - {"recurring_checkpoint"}:
+                retained = {_hash(r) for r in _rows(native, file, table)}
+                require(all(_hash(r) in retained for r in _rows(old, file, table)),
+                        "reconciliation_old_history_changed")
+        old_cp = _rows(old, "recurring.sqlite3", "recurring_checkpoint")
+        require(len(old_cp) == 1 and old_cp[0]["successful_window_end"] == archive["checkpoint_before"],
+                "reconciliation_old_checkpoint_changed")
+        repair = summaries.get(archive["repair_run_id"], {})
+        certificate = repair.get("checkpoint_reconciliation", {})
+        require(repair.get("status") == "complete" and repair.get("failure") == 0
+                and repair.get("run_id") not in {archive["run_id"], old["attempt"], old_card["attempt"]}
+                and certificate.get("archive_id") == archive["run_id"]
+                and certificate.get("evidence_sha256") == archive["evidence_sha256"]
+                and len(archive["evidence_sha256"]) == 64
+                and repair["source_window_end"] == archive["checkpoint_after"]
+                and datetime.fromisoformat(expected_checkpoint) >= datetime.fromisoformat(archive["checkpoint_after"])
+                    > datetime.fromisoformat(archive["checkpoint_before"]),
+                "reconciliation_new_completion_missing")
+        aliases = merge_registry(repair.get("card_aliases", []))
+        require(aliases and _hash(list(aliases)) == certificate.get("aliases_sha256"),
+                "reconciliation_alias_proof_missing")
+        rid = repair["run_id"]
+        manifests = [r for r in _rows(native, "manifests.sqlite3", "batch_manifests") if r["run_id"] == rid]
+        caps = [r for r in _rows(native, "capabilities.sqlite3", "batch_capabilities") if r["run_id"] == rid]
+        events = sorted((r for r in _rows(native, "journal.sqlite3", "batch_events") if r["run_id"] == rid),
+                        key=lambda r: r["seq"])
+        require(len(manifests) == len(caps) == 1 and caps[0]["state"] == "sealed"
+                and manifests[0]["payload_hash"] == certificate.get("manifest_sha256")
+                and hashlib.sha256(manifests[0]["payload"].encode()).hexdigest() == manifests[0]["payload_hash"]
+                and _hash(caps[0]) == certificate.get("capability_sha256")
+                and _hash(events) == certificate.get("journal_sha256")
+                and any((e["stage"], e["state"]) == ("write_result", "acknowledged") for e in events)
+                and events[-1]["stage"] == "final" and events[-1]["state"] == "confirmed",
+                "reconciliation_new_batch_unproven")
+        manifest = json.loads(manifests[0]["payload"])
+        require(manifest["run_id"] == rid and caps[0]["batch_ref"] == manifest["batch_ref"]
+                and manifest["batch_size"] == repair["written"] == repair["new_eligible"]
+                and repair["write_requests"] == 1 and manifest["source_window"]["end"] == archive["checkpoint_after"]
+                and manifest["source_window"]["start"] == repair["source_window_start"],
+                "reconciliation_new_batch_mismatch")
+        start = datetime.fromisoformat(repair["source_window_start"])
+        end = datetime.fromisoformat(repair["source_window_end"])
+        require((datetime.fromisoformat(archive["checkpoint_before"]) - start).total_seconds() == 172800
+                and 0 < (end - start).total_seconds() <= 1209600,
+                "reconciliation_coverage_unproven")
+        prior = archive["github_failure"]
+        require(set(prior) == {"id", "head_sha", "head_branch", "run_attempt", "status", "conclusion",
+                              "event", "path", "created_at"}
+                and len(prior["head_sha"]) == 40 and prior["event"] in {"schedule", "workflow_dispatch"}
+                and prior["id"] not in proofs and prior["run_attempt"] == 1
+                and prior["status"] == "completed" and prior["conclusion"] == "failure"
+                and prior["head_branch"] == "main"
+                and prior["path"] == ".github/workflows/aupay-card-incremental-apply.yml"
+                and datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00"))
+                    < datetime.fromisoformat(archive["checkpoint_after"]),
+                "reconciliation_failed_identity_invalid")
+        proofs[prior["id"]] = prior
+    return proofs
+
+
 def verify_reconciled_state(native, parent, expected_checkpoint):
     """Before prepare/pending/write, require the exact completed native proof."""
     from .production_run import COUNT_KEYS

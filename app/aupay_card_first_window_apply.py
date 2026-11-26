@@ -123,7 +123,8 @@ def prepare(*, gmail, db, writer, policy, state, now, key, sleeper=None, expecte
     require((incremental or sum(bool(v.records) for v in identities.values()) == 6) and all(
         not v.records or v.records == (ExistingCanonicalRecord.from_candidate(normalized[k]),)
         for k, v in identities.items()), "existing_identity_content_mismatch")
-    reconciliation = reconcile_transactions(transactions, existing)
+    registry = state.alias_registry()
+    reconciliation = reconcile_transactions(transactions, existing, alias_registry=registry)
     plan = validate_canonical_apply_plan(build_canonical_apply_plan(collection, reconciliation))
     statuses, amazon_review = _classify_candidates(plan, db)
     require(not amazon_review and set(statuses.values()).issubset(policy.allowed_statuses),
@@ -161,7 +162,8 @@ def prepare(*, gmail, db, writer, policy, state, now, key, sleeper=None, expecte
     return dict(window=window, transactions=transactions, collection=collection, plan=plan,
         statuses=statuses, projection=projection, decisions=decisions, existing=existing,
         evidence=capture.inventory, totals=totals, money_book=deepcopy(writer._book()),
-        incremental=incremental, checkpoint=expected_checkpoint,
+        incremental=incremental, checkpoint=expected_checkpoint, alias_registry=registry,
+        reconciliation=reconciliation,
         full_plan_ref=full_plan_binding_reference_v2(plan, key))
 
 
@@ -181,7 +183,8 @@ def fixed_totals(totals, capture):
 
 def recheck(prepared, db, writer, key):
     require(db.get("取込データ!A2:L") == prepared["existing"], "existing_rows_changed")
-    reconciliation = reconcile_transactions(prepared["transactions"], db.get("取込データ!A2:L"))
+    reconciliation = reconcile_transactions(prepared["transactions"], db.get("取込データ!A2:L"),
+                                            alias_registry=prepared["alias_registry"])
     plan = validate_canonical_apply_plan(build_canonical_apply_plan(prepared["collection"], reconciliation))
     statuses, reviews = _classify_candidates(plan, db)
     projection = (create_batch_projection(plan, candidate_identities=tuple(statuses), statuses=statuses,
@@ -381,6 +384,11 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
         lease_final="released" if count else "not_needed",
         source_window_start=prepared["window"].start.isoformat(), source_window_end=end, run_id=run_id)
     # Checkpoint is last in the native state, after all accounting proofs.
+    from .aupay_card_aliases import confirmed_alias_updates
+    result["card_aliases"] = confirmed_alias_updates(prepared["transactions"],
+        prepared["reconciliation"], db.get("取込データ!A2:L"), prepared["alias_registry"],
+        set(prepared["statuses"]) | {i for item in prepared["reconciliation"]["transactions"]
+                                   for i in item.existing_source_identities}, expected_rows=rows)
     state.record(result, advance_checkpoint=True)
     durable.commit(path)
     final_read(card_only=True)
@@ -399,7 +407,8 @@ def run(env, head, github, *, incremental=False):
     boundary = controls
     if incremental:
         from .aupay_card_incremental_guard import controls as boundary
-    recovered_failure = boundary(env, head, github)
+    boundary_args = {"defer_reconciliation": True} if incremental else {}
+    recovered_failure = boundary(env, head, github, **boundary_args)
     expected_cp = (None if scheduled else env["EXPECTED_CHECKPOINT"]) if incremental else CHECKPOINT
     require(env.get("KAKEIBO_AMAZON_MONEY_MODE") == "confirmed-v1", "money_mode_required")
     from .amazon_gmail_preview import gmail_readonly_service
@@ -434,9 +443,10 @@ def run(env, head, github, *, incremental=False):
         initial_parent = validate_ledger(parent_raw, parent_binding)
         if scheduled:
             expected_cp = successful_checkpoint(native_before)
-            recovered_failure = boundary(env, head, github, expected_checkpoint=expected_cp)
         require(all(v["phase"] == "ready" and not v["attempt"] and not v["error"]
                     for v in initial_parent["sources"].values()), "parent_pending")
+        boundary_args = {"reconciliation_state": (native_before, initial_parent)}
+        recovered_failure = boundary(env, head, github, expected_checkpoint=expected_cp, **boundary_args)
         if recovered_failure:
             verify_reconciled_state(native_before, initial_parent, expected_cp)
     backing = store_from_environment(sid, env)
@@ -470,9 +480,9 @@ def run(env, head, github, *, incremental=False):
 
         def guard():
             if scheduled:
-                boundary(env, head, github, expected_checkpoint=expected_cp)
+                boundary(env, head, github, expected_checkpoint=expected_cp, **boundary_args)
             else:
-                boundary(env, head, github)
+                boundary(env, head, github, **boundary_args)
             now = datetime.now(JST)
             require(authority.load() == policy and policy.valid_from <= now < policy.expires_at,
                     "authority_changed_or_expired")

@@ -149,9 +149,11 @@ def test_500_mail_boundary_all_pages_are_fetched(tmp_path):
         raw = original.replace(b"<first-window-0-0@example.invalid>", f"<resend-{i}@example.invalid>".encode())
         gmail.raws.append(base64.urlsafe_b64encode(raw).decode())
     gmail.gets.clear()
-    result = apply.prepare(**p.args)
-    assert result["collection"]["found"] == result["collection"]["fetched"] == len(gmail.gets) == 500
-    assert result["projection"] is None and p.db.write_calls == 0
+    with pytest.raises(RuntimeError, match="card_alias_unresolved_no_checkpoint"):
+        apply.prepare(**p.args)
+    assert len(gmail.gets) == 500
+    assert p.db.write_calls == 0
+    assert p.state.successful_window_end().isoformat() == apply.END
 
 
 @pytest.mark.parametrize("new,review,allowed", [(96, False, True), (97, False, False), (96, True, False)])

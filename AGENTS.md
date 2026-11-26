@@ -1,5 +1,12 @@
 # Codex working guidance (KakeiboAI)
 
+## Mandatory system architecture
+
+Read [docs/architecture-contract.md](docs/architecture-contract.md) before planning
+or changing execution paths. A01–A15 apply globally and take precedence over
+historical subsystem plans. Preserve STOP/UNKNOWN/permanent fences. The fixed
+card repair approval does not activate receipt connection or any schedule.
+
 ## Receipt/PDF review and iPhone UI work
 
 Before planning or changing the receipt-review, medical manual-entry, PDF page/grouping, unified review, authentication/confirmation UI, or related Cloud deployment path:
