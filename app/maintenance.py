@@ -67,7 +67,8 @@ def backup_spreadsheet(spreadsheet_id: str, folder_id: str,
 
 
 def list_expired_receipts(folder_id: str, *, retention_days: int = 365,
-                          now: datetime | None = None, service=None) -> list[dict]:
+                          now: datetime | None = None, service=None,
+                          completion_check=None) -> list[dict]:
     folder_id = normalize_folder_id(folder_id)
     now = now or datetime.now(timezone.utc)
     cutoff = now.astimezone(timezone.utc) - timedelta(days=retention_days)
@@ -97,24 +98,65 @@ def list_expired_receipts(folder_id: str, *, retention_days: int = 365,
             continue
         archived_at = properties.get("kakeiboProcessedAt")
         reference = archived_at
-        if reference and _drive_time(reference) <= cutoff:
-            expired.append(item)
+        try:
+            if (reference and _drive_time(reference) <= cutoff
+                    and completion_check is not None and completion_check(item) is True):
+                expired.append(item)
+        except Exception:
+            # Missing/unknown evidence retains even legacy processed originals.
+            continue
     return expired
 
 
 def cleanup_processed_receipts(folder_id: str, *, apply: bool = False,
                                retention_days: int = 365,
-                               now: datetime | None = None, service=None) -> dict:
+                               now: datetime | None = None, service=None,
+                               completion_check=None) -> dict:
     svc = service or drive_service()
     expired = list_expired_receipts(
         folder_id, retention_days=retention_days, now=now, service=svc,
+        completion_check=completion_check,
     )
+    deleted = 0
     if apply:
         for item in expired:
-            svc.files().delete(fileId=item["id"], supportsAllDrives=True).execute()
+            # Re-read native/source/ALL-member accounting evidence immediately
+            # before deletion. The processed folder/normal flag cannot authorize it.
+            if completion_check(item) is True:
+                svc.files().delete(fileId=item["id"], supportsAllDrives=True).execute()
+                deleted += 1
     return {
         "mode": "apply" if apply else "preview",
         "retention_days": retention_days,
         "expired": len(expired),
-        "deleted": len(expired) if apply else 0,
+        "deleted": deleted if apply else 0,
     }
+
+
+def receipt_completion_check(env):
+    """Fresh existing Google confirmation/ledger proof; absence is a hold.
+
+    No new state/resource or legacy migration. Whole PDFs cannot be approved by
+    one completed Unit; until all-member native evidence is connected, retain.
+    """
+    def complete(item):
+        if item.get('mimeType') == 'application/pdf':
+            return False
+        try:
+            from .receipt_confirmation_production import open_context
+            from .receipt_confirmation import ReceiptConfirmation
+            _, store, db, verify = open_context(env, apply=False)
+            members = [r for r in store.value.get('confirmation_items', {}).values()
+                       if r.get('source', {}).get('source_id') == item['id']]
+            if not members or any(r.get('status') != 'applied' or not r.get('plan')
+                    or r.get('decision_origin') == 'automatic' for r in members):
+                return False
+            review = ReceiptConfirmation(store, db, verify)
+            for member in members:
+                verify(member['source'], member['folder_id'])
+                if not review._complete(member['plan']):
+                    return False
+            return True
+        except Exception:
+            return False
+    return complete

@@ -1,3 +1,4 @@
 -r requirements.txt
 PyYAML>=6.0
 opencv-python==5.0.0.93
+httpx==0.28.1

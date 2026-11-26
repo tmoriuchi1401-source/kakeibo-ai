@@ -1153,9 +1153,13 @@ def main():
         print(f"Driveバックアップ用トークンを保存しました: {args.token_output}")
     elif args.cmd=="receipts-cleanup-preview":
         s=Settings(); s.validate(need_processed=True)
-        print(cleanup_processed_receipts(s.processed_drive_folder_id))
+        from .maintenance import receipt_completion_check
+        print(cleanup_processed_receipts(s.processed_drive_folder_id,
+            completion_check=receipt_completion_check(dict(os.environ))))
     elif args.cmd=="receipts-cleanup":
         s=Settings(); s.validate(need_processed=True)
-        print(cleanup_processed_receipts(s.processed_drive_folder_id,apply=True))
+        from .maintenance import receipt_completion_check
+        print(cleanup_processed_receipts(s.processed_drive_folder_id,apply=True,
+            completion_check=receipt_completion_check(dict(os.environ))))
 
 if __name__=="__main__":main()
