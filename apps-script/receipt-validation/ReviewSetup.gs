@@ -27,6 +27,20 @@ function receiptReviewFormulas_(taxCorrections=false,policyReviews=false) {
     receipt_date_required:'日付が不明',receipt_date_invalid:'日付が不正',merchant_required:'店舗名が不明',
     category_invalid:'カテゴリが不正',receipt_validation_failed:'入力と原本を確認'}))
     reasons='SUBSTITUTE('+reasons+',"'+code+'","'+label+'")';
+  const draft='IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:",IF('+at('CS')+'="不明","税区分が不明でも、金額が一致すれば登録可能","編集中・未登録"),"結果不明・照合待ち")';
+  // Rearming changes only the next UUID. Keep the preceding failure visible
+  // until that next request exists, bound to this case/source/baseline/history.
+  const previous='IFERROR(LET(h,FILTER('+tab+'A2:J1000,'+tab+'B2:B1000='+cid+','+tab+'C2:C1000='+source+','+
+    tab+'D2:D1000='+version+','+tab+'E2:E1000='+hash+'),last,ROWS(h),prid,INDEX(h,last,1),'+
+    'st,INDEX(h,last,8),res,INDEX(h,last,9),dg,INDEX(h,last,7),'+
+    'ok,AND(LEFT(TO_TEXT('+at('I')+'),6)="ready:",'+cid+'='+at(receiptReviewColumn_(82))+','+
+    at('C')+'="https://drive.google.com/file/d/"&'+source+'&"/view",'+
+    'COUNTIFS('+catalog+'A2:A1000,'+cid+','+catalog+'G2:G1000,prid)=1,'+
+    'REGEXMATCH(INDEX(h,last,6),"""baseline_digest"":"""&'+baseline+'&""""),'+
+    'OR(st="修正が必要",st="保留"),REGEXMATCH(res,"""posting_authority"":false[,}]"),'+
+    'REGEXMATCH(res,"""financial_write_count"":0[,}]"),REGEXMATCH(res,"""request_id"":"""&prid&""""),'+
+    'REGEXMATCH(res,"""snapshot_digest"":"""&dg&""""),REGEXMATCH(res,"""state"":"""&st&"""")),'+
+    'IF(ok,"前回 "&st&" "&'+reasons+'&" / 修正後に登録",'+draft+')),'+draft+')';
   let display='=IF('+cid+'="","",IFERROR(LET(rid,'+rid+',n,COUNTIF('+tab+'A2:A1000,rid),'+
     'rs,FILTER('+tab+'A2:J1000,'+tab+'A2:A1000=rid),st,INDEX(rs,1,8),res,INDEX(rs,1,9),dg,INDEX(rs,1,7),'+
     'ok,AND(n=1,'+cid+'='+at(receiptReviewColumn_(82))+','+at('C')+'="https://drive.google.com/file/d/"&'+source+'&"/view",INDEX(rs,1,2)='+cid+',INDEX(rs,1,3)='+source+
@@ -37,7 +51,7 @@ function receiptReviewFormulas_(taxCorrections=false,policyReviews=false) {
     'REGEXMATCH(res,"""posting_authority"":false[,}]"),IF(st="記帳済み",AND(REGEXMATCH(res,"""financial_write_count"":[1-9][0-9]*[,}]"),REGEXMATCH(res,"""exact_readback"":true[,}]"),REGEXMATCH(res,"""plan_digest"":""[a-f0-9]{64}""")),REGEXMATCH(res,"""financial_write_count"":0[,}]")),'+
     'REGEXMATCH(res,"""request_id"":"""&rid&""""),REGEXMATCH(res,"""snapshot_digest"":"""&dg&""""),'+
     'REGEXMATCH(res,"""state"":"""&st&"""")),IF(st="記帳済み","記帳済み（読戻し確認済み）",st&"（登録時の内容） "&'+reasons+'&IF(REGEXMATCH(res,"""tax_treatment_unknown""")," 税区分未確定","")),"結果不明・照合待ち")))),'+
-    'IF(LEFT(TO_TEXT('+at('I')+'),6)="ready:",IF('+at('CS')+'="不明","税区分が不明でも、金額が一致すれば登録可能","編集中・未登録"),"結果不明・照合待ち")))';
+    previous+'))';
   if(taxCorrections) {
     const tx="'_receipt_tax_corrections'!",field=(text,key)=>'REGEXEXTRACT('+text+',"""'+key+'"":""([^""]+)""")';
     display='=IF('+cid+'="","",IFERROR(LET(base,'+display.slice(1)+',rid,'+rid+',n,COUNTIF('+tx+'B2:B1000,rid),'+

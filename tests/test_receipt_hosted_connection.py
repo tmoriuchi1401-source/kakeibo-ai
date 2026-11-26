@@ -386,3 +386,21 @@ def test_explicit_hosted_start_needs_owner_existing_trigger_and_never_clears_sto
         assert json.loads(denied['properties']['RECEIPT_REVIEW_CONFIG_JSON'])['enabled'] is False
         if 'properties' in fault:
             assert denied['properties']['RECEIPT_REVIEW_STOPPED'] == 'outcome_unconfirmed'
+
+
+def test_result_formula_keeps_bound_rejection_visible_after_rearm_and_native_completion():
+    result = script([dict(action='formulas')])
+    assert result['errors'] == []
+    formula = result['outputs'][0][2]
+    assert '前回 ' in formula and '修正後に登録' in formula and '記帳済み（読戻し確認済み）' in formula
+    assert 'baseline_digest' in formula and 'snapshot_digest' in formula and 'financial_write_count' in formula
+    # Verify generated Sheets syntax as well as JS syntax. Ignore quoted Sheets
+    # strings (including doubled quote escapes) while balancing expression ().
+    quoted = False
+    depth = 0
+    for char in formula:
+        if char == '"': quoted = not quoted
+        if not quoted:
+            depth += int(char == '(') - int(char == ')')
+            assert depth >= 0
+    assert not quoted and depth == 0
