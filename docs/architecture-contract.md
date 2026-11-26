@@ -34,9 +34,12 @@ version control. Never infer an exception from credentials being available.
 
 ## Phase restrictions, implementation choices and approvals
 
-* **Current phase:** financial writes OFF, no real AI, deployment, credential
-  issuance, configuration changes, original moves/deletes, dispatch or fence
-  release. Isolated memory writers may exercise the real materializer. Their
+* **Current phase:** financial writes OFF; no real AI, new credentials, original
+  moves/deletes or fence release. The subsequent 2026-11-26 owner instruction
+  permits fixed isolated Google connections/settings and synthetic hosted E2E
+  dispatch. Production Script overwrite, scope expansion, new grants/infra,
+  production schedules, main merge and validated-SHA promotion remain excluded.
+  Isolated memory writers may exercise the real materializer. Their
   successful readback is NOT production posting/completion authority.
 * **Temporary safety bounds:** limited intake/pending counts, capacity stops,
   fixed test cases, time windows and existing permissions remain enforced.
@@ -44,9 +47,11 @@ version control. Never infer an exception from credentials being available.
 * **Implementation choices:** prefer existing receipt scope, workflow, validator,
   writer, category master, Google store and UI. Polling interval/workflow split
   is a measured choice, not a new invariant. Do not fix a 30-minute interval.
-* **Separate approvals:** main merge, live connection/deployment, Google state
-  setup or migration, Secrets/Variables/ACL/token changes, real canary financial
-  authority, and scheduled activation. A code/CI approval grants none of these.
+* **Separate approvals:** main merge, production connection/deployment/state
+  migration, scope/new credential changes, real canary financial authority and
+  scheduled activation. The fixed isolated connection authorization is recorded
+  in [live connection status](receipt-live-connection-status.md); it grants none
+  of those production operations.
 * New infrastructure, a major authentication change, or weakened safety contract
   stops that dependency only; continue independent authorized implementation.
 

@@ -18,16 +18,19 @@ SCOPES = (
 
 
 class OwnerReviewPort:
-    def __init__(self, session, script_id):
-        if not re.fullmatch(r'[A-Za-z0-9_-]{10,150}', script_id):
+    def __init__(self, session, script_id, deployment_id):
+        if (not re.fullmatch(r'[A-Za-z0-9_-]{10,150}', script_id)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{10,150}', deployment_id)
+                or script_id == deployment_id):
             raise StateError('receipt_review_script_binding_invalid')
         self.session, self.script_id = session, script_id
+        self.deployment_id = deployment_id
 
     def rpc(self, action, **data):
         if action not in {'lookup', 'pending', 'read', 'intake', 'claim', 'finish', 'rearm', 'status'}:
             raise StateError('receipt_review_command_forbidden')
         response = self.session.post(
-            'https://script.googleapis.com/v1/scripts/' + self.script_id + ':run',
+            'https://script.googleapis.com/v1/scripts/' + self.deployment_id + ':run',
             json={'function': 'receiptHostedBackend', 'parameters': [dict(action=action, **data)]},
             timeout=30, allow_redirects=False)
         if response.status_code != 200:
@@ -54,7 +57,7 @@ def open_review(env, manifest, spreadsheet_id, folder_id):
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import AuthorizedSession
     config = json.loads(env.get('RECEIPT_HOSTED_REVIEW_BINDING', 'null'))
-    if (type(config) is not dict or set(config) != {'script_id', 'owner_email', 'spreadsheet_id', 'folder_id'}
+    if (type(config) is not dict or set(config) != {'script_id', 'deployment_id', 'owner_email', 'spreadsheet_id', 'folder_id'}
             or config['owner_email'] != manifest['owner_email']
             or not re.fullmatch(r'[A-Za-z0-9_-]{10,150}', config['spreadsheet_id'])
             or config['folder_id'] != folder_id or manifest['spreadsheet_id'] != spreadsheet_id):
@@ -69,9 +72,10 @@ def open_review(env, manifest, spreadsheet_id, folder_id):
     # AuthorizedSession normally retries an RPC after refreshing a rejected
     # token. Refresh before the request instead; never replay a Sheets command.
     session = AuthorizedSession(credentials, max_refresh_attempts=0)
-    port = OwnerReviewPort(session, config['script_id'])
+    port = OwnerReviewPort(session, config['script_id'], config['deployment_id'])
     status = port.rpc('status')
     if (type(status) is not dict or status.get('enabled') is not True or status.get('stopped') is not False
-            or status.get('binding') != config or status.get('financial_write_count') != 0):
+            or status.get('binding') != {k:v for k,v in config.items() if k != 'deployment_id'}
+            or status.get('financial_write_count') != 0):
         raise StateError('receipt_review_receiver_not_ready')
     return port

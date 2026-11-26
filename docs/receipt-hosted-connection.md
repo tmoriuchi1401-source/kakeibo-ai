@@ -176,7 +176,8 @@ Cloud、ルールエンジン、旧stackの一括取り込みは省略。writer�
 3. Repository Secret `GOOGLE_RECEIPT_OWNER_TOKEN_JSON` に既存資格を別承認で保存。
    今回資格の発行・取得・保存なし。値をPR/Google Properties/ログへ出さない。
 4. Repository Variable `RECEIPT_HOSTED_REVIEW_BINDING`：JSONキーは
-   `script_id,owner_email,spreadsheet_id,folder_id`。spreadsheet_idは確認book、folder_idはinbox。
+   `script_id,deployment_id,owner_email,spreadsheet_id,folder_id`。script_idはScript project、
+   deployment_idはAPI executableの配備IDで別物。spreadsheet_idは確認book、folder_idはinbox。
    receiver statusと完全一致を要する。金融台帳IDは既存manifest/SPREADSHEET_IDと照合。
 5. 既存Google stateの現binding/ACL/schema/旧historyを確定し、別承認でreceipt_hosted_v1を追加。
    値はschema=receipt_hosted_v1、enabled=true、financial_write_enabled=false、records/requests空dict、stopped=false。
@@ -201,3 +202,6 @@ PayPay単独成功だけではcoreの後続reconcile/auto_expense/表示更新�
 全体GOの別変更単位：現金/カテゴリPAT依存解消、買取票収入と銀行正本の整合、
 旧Cloud権限が必要なPDF例外のpurpose/Unitを守るPAT不要接続、main retention保護、
 未確認の権限/STOP/UNKNOWN及び実機受入。履歴を書き換えて解決しない。
+
+この基準記録の後に許可された実接続・実認証・hotfixの結果は
+[live connection status](receipt-live-connection-status.md) を参照する。

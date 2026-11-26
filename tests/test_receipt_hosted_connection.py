@@ -177,9 +177,10 @@ def test_owner_rpc_has_one_attempt_no_redirect_and_no_github_material():
     session = Mock()
     session.post.return_value = SimpleNamespace(status_code=200, json=lambda: {
         'done':True, 'response':{'@type':'type.googleapis.com/google.apps.script.v1.ExecutionResponse', 'result':[]}})
-    port = OwnerReviewPort(session, 'synthetic-script-id')
+    port = OwnerReviewPort(session, 'synthetic-script-id', 'synthetic-deployment-id')
     assert port.pending() == []
     args = session.post.call_args
+    assert args.args[0] == 'https://script.googleapis.com/v1/scripts/synthetic-deployment-id:run'
     assert args.kwargs == dict(json={'function':'receiptHostedBackend','parameters':[{'action':'pending'}]},
                                timeout=30,allow_redirects=False)
     session.post.return_value.status_code = 401
@@ -196,9 +197,9 @@ def test_existing_owner_oauth_scope_and_exact_receiver_binding(monkeypatch, expl
     session = Mock()
     factory = Mock(return_value=session)
     monkeypatch.setattr(transport, 'AuthorizedSession', factory)
-    config = dict(script_id='synthetic-script-id', owner_email='synthetic@example.invalid',
+    config = dict(script_id='synthetic-script-id', deployment_id='synthetic-deployment-id',owner_email='synthetic@example.invalid',
                   spreadsheet_id='synthetic-review-book', folder_id='synthetic-folder')
-    response = dict(enabled=True,stopped=False,binding=config,financial_write_count=0)
+    response = dict(enabled=True,stopped=False,binding={k:v for k,v in config.items() if k!='deployment_id'},financial_write_count=0)
     session.post.return_value = SimpleNamespace(status_code=200,json=lambda:dict(done=True,response={
         '@type':'type.googleapis.com/google.apps.script.v1.ExecutionResponse','result':response}))
     info = dict(type='authorized_user',token_uri='https://oauth2.googleapis.com/token',scopes=list(SCOPES),
