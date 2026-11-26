@@ -185,8 +185,14 @@ def setup_entry(monkeypatch, tmp_path, *, new=2):
         def now(cls, tz): return p.now.astimezone(tz)
     monkeypatch.setattr(apply, "datetime", Clock)
     p.guard_checkpoints = []; p.proofs = []
-    def auth(values, head, github, *, expected_checkpoint=None):
+    def auth(values, head, github, *, expected_checkpoint=None, reconciliation_state=None,
+             defer_reconciliation=False):
         assert values["GITHUB_EVENT_NAME"] == "schedule"
+        if defer_reconciliation:
+            assert reconciliation_state is None and expected_checkpoint is None
+        else:
+            assert reconciliation_state is not None and expected_checkpoint is not None
+            assert reconciliation_state[0]["phase"] == "ready"
         p.guard_checkpoints.append(expected_checkpoint)
         return True
     monkeypatch.setattr(guard, "controls", auth)
