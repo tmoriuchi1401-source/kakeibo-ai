@@ -1,8 +1,8 @@
 """Only the new live-connection boundary is tested; no network or Google writes."""
 from copy import deepcopy
 import json
+from hashlib import sha256
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -28,14 +28,16 @@ def environment():
 
 def test_existing_readonly_job_and_inputs_are_unchanged():
     path='.github/workflows/state-cache-inspect.yml'
-    baseline=subprocess.check_output(['git','show','fef0d0a:'+path],cwd=ROOT).decode()
-    before=yaml.load(baseline,Loader=yaml.BaseLoader)
     current=yaml.load((ROOT/path).read_text(encoding='utf-8'),Loader=yaml.BaseLoader)
-    assert current['jobs']['inspect'] == before['jobs']['inspect']
-    for k,v in before['on']['workflow_dispatch']['inputs'].items():
-        assert current['on']['workflow_dispatch']['inputs'][k] == v
-    assert current['permissions'] == before['permissions']
-    assert current['concurrency'] == before['concurrency']
+    # Freeze the exact fef0d0a production job/inputs without requiring history
+    # in Actions' normal shallow checkout. Semantic checks remain in the
+    # existing production/state-cache tests and the new isolated execution tests.
+    fingerprint=lambda value:sha256(json.dumps(value,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    assert fingerprint(current['jobs']['inspect']) == '2e883de9c0c12595785e47e69c033b0afa31ff7c10aaff171ad15fe11c369a91'
+    original_inputs={k:v for k,v in current['on']['workflow_dispatch']['inputs'].items() if k!='receipt_e2e_phase'}
+    assert fingerprint(original_inputs) == 'dada58469dbd230fd61c8ceeaf755fb8025556feaf22e59e39d4d58ed5250db5'
+    assert current['permissions'] == {'contents':'read','actions':'read'}
+    assert current['concurrency'] == {'group':'kakeibo-production','cancel-in-progress':'false','queue':'max'}
     job=current['jobs']['receipt-isolated-e2e']
     assert job['runs-on']=='ubuntu-latest'
     assert "github.ref == 'refs/heads/codex/issue-207-hosted-receipts'" in job['if']

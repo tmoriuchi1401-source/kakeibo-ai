@@ -20,8 +20,23 @@ def test_all_existing_production_entries_share_top_level_lock_and_main_guard():
         if name in {"synthetic-tests.yml", "bank-pdf-diagnose.yml", "hga-shared-session-checks.yml"}:
             continue
         assert workflow["concurrency"] == {"group": "kakeibo-production", "cancel-in-progress": "false", "queue": "max"}, name
-        for job in workflow["jobs"].values():
-            assert "github.ref == 'refs/heads/main'" in job["if"], name
+        for job_id,job in workflow["jobs"].items():
+            if (name,job_id)==('state-cache-inspect.yml','receipt-isolated-e2e'):
+                # Explicitly authorized isolated branch is not a production
+                # entry. Enforce all its actual guards instead of weakening the
+                # main requirement for any existing or future production job.
+                for guard in ("github.repository == 'tmoriuchi1401-source/kakeibo-ai'",
+                    "github.ref == 'refs/heads/codex/issue-207-hosted-receipts'",
+                    "github.event_name == 'workflow_dispatch'", 'github.actor == github.repository_owner',
+                    'github.triggering_actor == github.repository_owner', 'github.run_attempt == 1',
+                    'github.sha == inputs.expected_sha'):
+                    assert guard in job['if']
+                assert 'inputs.receipt_e2e_phase' in job['if']
+                assert job['steps'][-1]['run']=='python -m app.receipt_hosted_e2e'
+                assert 'env' not in workflow and 'env' not in job
+                assert job['runs-on']=='ubuntu-latest'
+            else:
+                assert "github.ref == 'refs/heads/main'" in job["if"], name
             assert "concurrency" not in job, name  # no parent/child lock deadlock
         assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}, name
 

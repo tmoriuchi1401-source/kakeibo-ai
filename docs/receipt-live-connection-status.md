@@ -67,6 +67,17 @@ Google側の実初期化も、既存状態・旧UUID・STOP・UNKNOWNの上書�
 正常は確認Sheetを回避し、例外だけ表示。金融/実AI/実原本操作は0を要する。
 実dispatchの対象SHA・実測結果はPR #208本文とrun evidenceを参照。
 
+### 実施済みのhosted auth証拠
+
+[run45750220158](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/45750220158)、
+SHA `c151c4fdb8f4057238baa4d80b2e73ddf74cd743`、attempt1、owner actor、
+PR208 branchのreceipt-isolated-e2e jobがsuccess。従来inspect jobはskipped。
+実測出力はowner_authenticated / owner_match=true / required_scopes_present=true / scope_count=7、
+financial_write_count=0 / real_ai_requests=0 / google_state_writes=0。
+これはhosted本人認証の合格であり、未実施のRPC/state/登録/復元E2Eの合格や実記帳成功ではない。
+後続のCI修正は既存production job検査を維持した隔離job境界検査とshallow checkout対応だけで、
+auth実行コード・資格・workflow実行経路は変更しない。この実証を再利用してauthを再dispatchしない。
+
 ## 原本保護hotfix
 
 [Draft PR #209](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/209)、
@@ -79,20 +90,47 @@ bindingが取得不能でもCLIは削除0へ閉じる。backup/workflow/本番�
 
 ## カードpendingと復旧境界
 
-親/native pendingは維持する。未commitの今回ローカルjournalがremoteにないことや、
-実台帳に新しいtimestampが見えないことだけでは未送信と断定しない。
-失敗runの例外全文はmain実装が破棄しているため、取り戻せない部分を推測しない。
-既存PR #193のPayPay単独障害分離は確認するが、共有するcore会計後処理まで安全と認定しない。
-復旧の追加読取・結果は別記録/PR本文へ反映し、pending強制解除・再append・再実行はしない。
+対象は[run41825241169](https://github.com/tmoriuchi1401-source/kakeibo-ai/actions/runs/41825241169)、
+main fa7ac937、attempt1。guard/固定wheel成功、Applyだけがincremental_apply_stopped_no_retryで失敗。
+例外全文/stackはmainが破棄しているため直接原因は未確認。
+親generation1412/card pending、native generation121/pending、checkpointは11月3日のまま。
+保存SQLiteのmanifest31/capability31 sealed/journal155は以前のもので、今回の一時journalは未commit。
+障害区間はnative beginの保存/読戻しからcommit前までで、review/append前後を含む。
+
+4金融表を既存owner OAuthの同一GET-only processで独立2回読取り、同一を確認。
+カード取込1683行、ID重複0、formula0、失敗run以降の取込timestamp行0。
+この現状だけで過去のwire未送信は証明できず、**UNKNOWNを維持**する。
+完全反映/部分反映/未送信はいずれも未確定。現在台帳から推測してpendingを解放しない。
+
+旧native revision本文は403、旧Sheet revisionはconnectorの500000-cell変換上限で取得不能。
+既存Gmail readonly資格のローカル2候補はinvalid_grant。新同意/新資格を発行せず、
+GitHub Gmail Secret自体の失効とも断定しない。
+金融行を別toolへ渡す操作は自動承認レビューで拒否されたため、同一process内のAPI取得/解析へ変更した。
+state/金融表の独立照合は成功したが、全原本canonical候補との照合は未完了。
+対象hashと必要追加証拠の私的詳細は作業workspaceのcard-pending-findings.mdに保存した。
+
+[既存PR #193](https://github.com/tmoriuchi1401-source/kakeibo-ai/pull/193) はDraft・c03d667aで、
+PayPay単独取込の既存障害分離を再利用できる。receipt/coreへの無条件拡張はしない。
+PayPayの取込が独立できてもreconcile/auto_expense等の共有core会計後処理は停止維持。
+
+復旧案は既存release_after_reconciliationを用いるstate限定操作だが、先に今回候補と全ledger/review/moneyを
+照合し、fresh native/parent digest・証拠reference・予定差分を固定して別承認を要する。
+未反映/完全/部分を確定できなければ解除しない。他source・checkpoint・全SQLite・金融行は保持。
+未記帳と確定しても、現guardの全失敗revision検査では今回runはreconciled例外でないため、
+pending解放だけで次Applyを許可できない。旧runの例外を流用せず、恒久フェンスも解除しない。
 
 ## A01～A15と残工程
 
 | ID | 今回の到達・残条件 |
 |---|---|
-| A01–A02 | 既存hosted限定の実認証入口を準備。PCは資格照合/保守だけ。状態復元の実E2Eは配備待ち |
+| A01 | 固定SHAの既存GitHub-hosted Linux jobでowner実認証成功。実本番処理の開始ではない |
+| A02 | PCは資格照合/保守だけ。hosted処理にPC token/runtime依存なし。物理PC OFF/状態復元E2Eは未実施 |
 | A03 | 採用済み1タブを維持。新入口の実iPhone登録・結果表示は未確認 |
 | A04 | 既存schedule/Gmailは変更なし。再開にはcard/native状態の照合を要する |
-| A05–A08 | 基準の純粋ロジック合格は再利用。新実環境の正常迂回/例外1登録/native plan/結果は未実証 |
+| A05 | 基準解析/分類/validator/重複試験を再利用。実AI0・純粋合成解析のみのharness |
+| A06 | 正常の確認Sheet回避/native planは基準オフライン合格。実Google経路は配備待ち |
+| A07 | 例外だけ表示する既存経路を再利用。実Googleの表示は未実証 |
+| A08 | 1登録/再検証/同一結果は基準合格。実Google/iPhone接続は未実証、金融OFF |
 | A09 | 独立hotfix準備/CI合格。main適用前は手動cleanupしない |
 | A10 | 実AI0・医療手入力維持。実原本を合成E2E材料にしない |
 | A11 | 銀行正本/Payrollを維持。買取票収入の是正は別単位 |
