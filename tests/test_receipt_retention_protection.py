@@ -48,3 +48,22 @@ def test_pdf_requires_all_member_proof_and_missing_google_state_is_closed():
     check = receipt_completion_check({})
     assert check(dict(original(), mimeType='application/pdf')) is False
     assert check(original()) is False
+
+
+@pytest.mark.parametrize('command', ['receipts-cleanup', 'receipts-cleanup-preview'])
+def test_real_cleanup_cli_retains_legacy_processed_when_proof_binding_is_unavailable(monkeypatch, capsys, command):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from app import cli, maintenance, receipt_confirmation_production
+    from app.drive_run_state import StateError
+    drive = FakeDrive([{'files': [original()]}])
+    context = Mock(side_effect=StateError('missing_binding'))
+    monkeypatch.setattr(receipt_confirmation_production, 'open_context', context)
+    monkeypatch.setattr(maintenance, 'drive_service', lambda: drive)
+    monkeypatch.setattr(cli, 'Settings', lambda: SimpleNamespace(
+        processed_drive_folder_id=FOLDER_ID, validate=Mock()))
+    monkeypatch.setattr('sys.argv', ['kakeibo-ai', command])
+    cli.main()
+    assert context.call_count == 1 and drive.resource.deletes == []
+    output = capsys.readouterr().out
+    assert "'expired': 0" in output and "'deleted': 0" in output
