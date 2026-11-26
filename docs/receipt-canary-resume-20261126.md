@@ -46,7 +46,7 @@ owner OAuth、Gemini、test OAuthは渡さず、原本・明細・資格・artif
 既存Gmail connectorの原本を別解析toolへ転送する方法は、以前の自動承認レビューで
 機微データ転送として拒否されている。その方法を再試行せず、資格の復旧が必要なら以下を本人操作案とする。
 
-- 既存の本番Gmail clientと同じownerを使い、既存 `gmail-auth` の同意画面で
+- 既存の本番Gmail clientと同じownerを使い、既存 `python -m app.cli gmail-authorize <既存client JSON> <新しい非公開出力先>` の同意画面で
   `gmail.readonly` だけを確認する。新client・test OAuth・scope追加・既存grant失効は行わない。
 - 新しいauthorized-user JSONは管理下のローカル非公開ファイルへ直接保存する。
   token/refresh token/client secret/認証URLをチャット・logへ貼らない。
