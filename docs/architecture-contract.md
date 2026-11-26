@@ -39,6 +39,11 @@ version control. Never infer an exception from credentials being available.
   permits fixed isolated Google connections/settings and synthetic hosted E2E
   dispatch. Production Script overwrite, scope expansion, new grants/infra,
   production schedules, main merge and validated-SHA promotion remain excluded.
+  A later explicit owner instruction permits a test-only standard Google
+  project, dedicated OAuth client and grant within the existing scopes if no
+  safe existing isolated Script is available. This exception is limited to
+  authentication isolation; existing production OAuth/project/Secrets remain
+  unchanged. See [isolated authentication setup](receipt-isolated-auth-setup.md).
   Isolated memory writers may exercise the real materializer. Their
   successful readback is NOT production posting/completion authority.
 * **Temporary safety bounds:** limited intake/pending counts, capacity stops,

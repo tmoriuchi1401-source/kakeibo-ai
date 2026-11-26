@@ -43,6 +43,11 @@ def test_existing_readonly_job_and_inputs_are_unchanged():
     assert "github.ref == 'refs/heads/codex/issue-207-hosted-receipts'" in job['if']
     assert 'github.sha == inputs.expected_sha' in job['if']
     assert all('GEMINI_API_KEY' not in s.get('env',{}) for s in job['steps'])
+    live = next(s['env'] for s in job['steps'] if s.get('run') == 'python -m app.receipt_hosted_e2e')
+    assert live['GOOGLE_RECEIPT_OWNER_TOKEN_JSON'] == '${{ secrets.GOOGLE_RECEIPT_E2E_OWNER_TOKEN_JSON }}'
+    assert 'vars.RECEIPT_HOSTED_E2E_REVIEW_BINDING' in live['RECEIPT_HOSTED_REVIEW_BINDING']
+    assert 'secrets.GOOGLE_RECEIPT_OWNER_TOKEN_JSON' not in str(job)
+    assert 'vars.RECEIPT_HOSTED_REVIEW_BINDING' not in str(job)
 
 
 @pytest.mark.parametrize('key,value', [('GITHUB_REF','refs/heads/main'),('GITHUB_RUN_ATTEMPT','2'),
