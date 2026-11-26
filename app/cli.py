@@ -954,7 +954,8 @@ def main():
                 "journal_final":"not_started","lease_final":"not_acquired",
                 "failure_reason":str(exc),
             }
-        rendered=json.dumps(result,ensure_ascii=False,sort_keys=True)
+        rendered=json.dumps({k:v for k,v in result.items() if k != "card_aliases"},
+                            ensure_ascii=False,sort_keys=True)
         print(rendered)
         step_summary=os.getenv("GITHUB_STEP_SUMMARY","")
         if step_summary:

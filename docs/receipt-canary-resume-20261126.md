@@ -1,5 +1,8 @@
 # 限定実記帳canary：再開準備の差分
 
+2026-11-27追補：[カードalias最小修正・2行修復・新checkpointとreceipt残条件](card-alias-reconciliation-20261127.md)。
+Gmail復旧/原本照合/隔離E2E/PR209は完了済みとして再利用する。以下は前段の記録。
+
 2026-11-26。PR208基準 `81a25f859f29e9ba407408261363d4ac15f970ac`、
 main/validated `70a6181fb7658a8a8d1885fa5d7ab9eb8d74d9b1`。
 この文書は[前回の停止記録](receipt-production-canary-status.md)の後続である。

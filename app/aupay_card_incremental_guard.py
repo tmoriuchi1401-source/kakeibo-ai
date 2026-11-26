@@ -37,7 +37,8 @@ def verify_skipped_run(github, prior):
             "skipped_apply_body_unproven")
 
 
-def controls(env, head, github, *, expected_checkpoint=None):
+def controls(env, head, github, *, expected_checkpoint=None, reconciliation_state=None,
+             defer_reconciliation=False):
     scheduled = env.get("GITHUB_EVENT_NAME") == "schedule"
     require(len(head) == 40 and all(c in "0123456789abcdef" for c in head), "commit_invalid")
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPO
@@ -91,6 +92,11 @@ def controls(env, head, github, *, expected_checkpoint=None):
     seen, page, total = set(), 1, None
     recovered_failure = False
     no_write_failure = False
+    proofs = {}
+    if reconciliation_state is not None:
+        require(cp is not None, "reconciliation_checkpoint_required")
+        from .aupay_card_incremental_recovery import preserved_unknown_proofs
+        proofs = preserved_unknown_proofs(*reconciliation_state, checkpoint_value)
     while True:
         result = github.get(f"actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}")
         if total is None:
@@ -126,6 +132,20 @@ def controls(env, head, github, *, expected_checkpoint=None):
                 require(prior["run_attempt"] == 1, "skipped_attempt_unproven")
                 verify_skipped_run(github, prior)
                 continue
+            if prior["status"] == "completed" and prior["conclusion"] == "failure":
+                # Precredential inspection may defer proof, never authorize an
+                # effect. The runtime repeats this with protected Google state
+                # BEFORE prepare/begin/writer. Default callers still deny it.
+                require(isinstance(prior.get("created_at"), str), "previous_dispatch_no_retry")
+                require(prior["run_attempt"] == 1
+                        and (cp is None or datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) < cp),
+                        "previous_dispatch_no_retry")
+                if not defer_reconciliation:
+                    actual = github.get(f"actions/runs/{prior['id']}") if prior["id"] in proofs else {}
+                    require(prior["id"] in proofs and all(prior.get(k) == actual.get(k) == v
+                            for k, v in proofs[prior["id"]].items()),
+                            "previous_dispatch_no_retry")
+                continue
             require(prior["status"] == "completed" and prior["conclusion"] == "success"
                     and prior["run_attempt"] == 1
                     and (cp is None or datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) < cp),
@@ -150,7 +170,7 @@ def main():
             require(not sys.argv[1:], "arguments_forbidden")
             env = dict(os.environ)
             head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-            controls(env, head, GitHub(env))
+            controls(env, head, GitHub(env), defer_reconciliation=True)
         result = dict(success=True, guard=True)
     except BaseException:
         result = dict(success=False, error="incremental_guard_stopped_no_retry")
