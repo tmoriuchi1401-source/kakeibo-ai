@@ -115,7 +115,8 @@ def _pending_cache(native, destination, repo_root):
 def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_provider,
         approval_provider,state_dir,repo_root,native_read,parent_read,financial_read,
         documents_check,source_check,guard,clock=lambda:datetime.now(timezone.utc),
-        boundary=lambda _stage:None,diagnostics=None,state_observe=None,execution_identity=None):
+        boundary=lambda _stage:None,diagnostics=None,state_observe=None,execution_identity=None,
+        readbacks=None,recovery_request=None):
     """One approved dispatch. Any uncertainty consumes it and leaves no replay path."""
     diagnostics = diagnostics or ReconciliationDiagnostics()
     diagnostics.mark("reconciliation_preflight")
@@ -127,6 +128,15 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     if "business_record" in record:
         from .aupay_card_bank_premises import validate_effective_record
         business=validate_effective_record(record)
+    if recovery_request is not None:
+        from .aupay_card_reservation_reference import derive_record
+        require(derive_record(recovery_request,record["recovery"]["previous_record"])==business,
+                "recovery_reference_changed")
+    def begin_readback(scope,before):
+        return readbacks.begin(scope,before) if readbacks is not None else None
+    def read_saved(ticket,reader,expected,code):
+        if ticket is not None:ticket.verify(expected)
+        else:require(reader()==expected,code)
     attempt=UUID(run_id).hex
     guard()
     old_raw=native_read(); old_parent_raw=parent_read()
@@ -212,6 +222,7 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     if recovery:
         archive.update(recovery=deepcopy(recovery),parent_before_metadata_digest=record["parent_before_metadata_digest"],
             adopted_archive_ids=[a["run_id"] for a in archive_chain(summaries(old))])
+    if recovery_request is not None:archive["recovery_request"]=deepcopy(recovery_request)
     state.record(archive,advance_checkpoint=False)
     if recovery:
         state.record(dict(run_id="REVOCATION:"+revoked["capability_id"],status="CAPABILITY_REVOKED_UNUSED",
@@ -230,9 +241,10 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     diagnostics.mark("native_guard")
     guard()
     diagnostics.mark("native_save")
+    native_ticket=begin_readback("native",old_raw)
     durable._replace(old_raw,pending,observe=lambda event: diagnostics.state_save("native",event))
     diagnostics.mark("native_independent_readback")
-    require(native_read()==pending, "repair_reservation_independent_readback")
+    read_saved(native_ticket,native_read,pending,"repair_reservation_independent_readback")
     durable._pending=pending
     diagnostics.mark("native_reserved", "native_reservation", "readback_confirmed")
     boundary("native_reserved")
@@ -241,9 +253,10 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     diagnostics.mark("parent_guard")
     guard()
     diagnostics.mark("parent_save")
+    parent_ticket=begin_readback("parent",ledger.payload)
     ledger._save(proposed_parent,observe=lambda event: diagnostics.state_save("parent",event))
     diagnostics.mark("parent_independent_readback")
-    require(parent_read()==ledger.payload, "repair_parent_reservation_independent_readback")
+    read_saved(parent_ticket,parent_read,ledger.payload,"repair_parent_reservation_independent_readback")
     diagnostics.mark("parent_reserved", "parent_reservation", "readback_confirmed")
     boundary("parent_reserved")
 
@@ -260,8 +273,9 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
             generation=validate(durable._pending,durable.binding)["generation"]+1,phase="pending",attempt=attempt)
         guard()
         require(native_read()==durable._pending and parent_read()==ledger.payload,"repair_reservation_changed")
+        intent_ticket=begin_readback("native",durable._pending)
         durable._replace(durable._pending,intent)
-        require(native_read()==intent,"recovery_intent_independent_readback")
+        read_saved(intent_ticket,native_read,intent,"recovery_intent_independent_readback")
         durable._pending=intent
         boundary("dispatch_intent_persisted")
 
@@ -309,9 +323,10 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     outcome=envelope(durable.binding,snapshot(path,durable.binding),
         generation=validate(durable._pending,durable.binding)["generation"]+1,phase="pending",attempt=attempt)
     diagnostics.mark("outcome_save")
+    outcome_ticket=begin_readback("native",durable._pending)
     durable._replace(durable._pending,outcome)
     diagnostics.mark("outcome_independent_readback")
-    require(native_read()==outcome,"repair_outcome_independent_readback")
+    read_saved(outcome_ticket,native_read,outcome,"repair_outcome_independent_readback")
     durable._pending=outcome
     diagnostics.mark("outcome_persisted")
     boundary("outcome_persisted")
@@ -355,16 +370,18 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     pending_guard();verify_financial(before,financial_read(),bounded.rows)
     boundary("before_checkpoint_commit")
     diagnostics.mark("checkpoint_commit", "checkpoint", "write_possible")
+    checkpoint_ticket=begin_readback("native",durable._pending)
     durable.commit(path)
     diagnostics.mark("checkpoint_independent_readback")
-    require(native_read()==durable._loaded,"repair_checkpoint_independent_readback")
+    read_saved(checkpoint_ticket,native_read,durable._loaded,"repair_checkpoint_independent_readback")
     diagnostics.mark("checkpoint_committed", "checkpoint", "readback_confirmed")
     boundary("checkpoint_committed")
     guard();documents_check();verify_financial(before,financial_read(),bounded.rows)
     diagnostics.mark("parent_completion", "parent_completion", "write_possible")
+    completion_ticket=begin_readback("parent",ledger.payload)
     ledger.complete("aupay_card",result,0)
     diagnostics.mark("parent_completion_readback")
-    require(parent_read()==ledger.payload,"repair_parent_completion_independent_readback")
+    read_saved(completion_ticket,parent_read,ledger.payload,"repair_parent_completion_independent_readback")
     diagnostics.mark("parent_completed", "parent_completion", "readback_confirmed")
     boundary("parent_completed")
     diagnostics.mark("final_readback")

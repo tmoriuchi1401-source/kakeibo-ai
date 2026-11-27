@@ -28,6 +28,10 @@ EFFECT_STATES = {
 }
 # Exact literals only. A syntactically safe-looking external message is NOT a code.
 ERROR_CODES = frozenset({
+    "recovery_reference_changed", "recovery_reference_digest_changed", "recovery_reference_missing", "recovery_reference_state_changed",
+    "saved_readback_get_only", "saved_readback_target_changed", "saved_readback_pin_changed",
+    "saved_readback_checksum_changed", "saved_readback_revision_changed", "saved_readback_ticket_invalid",
+    "saved_readback_content_changed", "saved_readback_unstable",
     "bank_premises_invalid", "bank_premises_revision_changed", "bank_premises_incomplete",
     "bank_premises_chain_broken", "bank_premises_parent_changed", "bank_premises_native_changed",
     "bank_premises_history_changed", "bank_premises_not_noop", "bank_premises_run_unproven",
@@ -113,6 +117,8 @@ class ReconciliationDiagnostics:
     def __init__(self):
         self.stage = "entry_start"
         self.effects = {k: "not_reached" if k == "financial" else "not_started" for k in EFFECT_STATES}
+        self.metadata_fields = set()
+        self.readback_attempts = 0
 
     def mark(self, stage, effect=None, state=None):
         if stage not in STAGES or (effect is not None and state not in EFFECT_STATES.get(effect, ())):
@@ -122,7 +128,21 @@ class ReconciliationDiagnostics:
 
     def report(self, error=None):
         failure = exception_summary(error) if error is not None else dict(error_code="none", exception_class="none", http_status=None)
-        return dict(last_stage=self.stage, **failure, effects=dict(self.effects))
+        from .aupay_card_saved_readback import METADATA_FIELDS
+        value = getattr(error,"metadata_fields",()) if error is not None else ()
+        safe_fields = {k for k in value if type(k) is str and k in METADATA_FIELDS} if type(value) in (tuple,list,set,frozenset) else set()
+        fields = self.metadata_fields | safe_fields
+        result = dict(last_stage=self.stage, **failure, effects=dict(self.effects))
+        if fields: result["metadata_mismatch_fields"] = sorted(fields)
+        if self.readback_attempts: result["readback_attempts"] = self.readback_attempts
+        return result
+
+    def readback_attempt(self, attempt, fields):
+        from .aupay_card_saved_readback import METADATA_FIELDS
+        if type(attempt) is not int or not 1 <= attempt <= 3 or not set(fields) <= METADATA_FIELDS:
+            raise ValueError("repair_failed_closed")
+        self.readback_attempts = max(self.readback_attempts,attempt)
+        self.metadata_fields.update(fields)
 
     def state_save(self, scope, event):
         if scope not in {"native", "parent"} or event not in {"validate", "prewrite_read", "write", "transport_readback"}:

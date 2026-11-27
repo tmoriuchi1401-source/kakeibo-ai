@@ -5,7 +5,7 @@ from .aupay_card_reservation_recovery import RECOVERY_WORKFLOW
 CONFIRM="APPLY_NEW_CARD_RESERVATION_RECOVERY_ONCE"
 LABEL=b"kakeibo-card-reservation-recovery-v2"
 SCOPE="fixed_card_unused_reservation_recovery_only"
-RECORD_SHA256="1558548ced53ca1689e5f076424b79c4fa88c95877bf35492eafb93a411ea7c5"
+RECORD_SHA256="31bb31edc5d9cf90e6448b130f84bfc2119c6725ff8e35869b604b73d5754232"
 
 
 def boundary(env,head,github):
@@ -13,7 +13,7 @@ def boundary(env,head,github):
 
 
 def run(env,head,github,diagnostics=None):
-    return existing.run(env,head,github,diagnostics,boundary_checker=boundary,record_sha256=RECORD_SHA256,label=LABEL,scope=SCOPE,allow_bank_premises=True)
+    return existing.run(env,head,github,diagnostics,boundary_checker=boundary,record_sha256=RECORD_SHA256,label=LABEL,scope=SCOPE,allow_bank_premises=True,allow_reservation_reference=True)
 
 
 if __name__=="__main__":

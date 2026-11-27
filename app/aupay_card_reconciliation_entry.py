@@ -117,7 +117,7 @@ def verify_failure_ancestry(record,env,github):
                 "repair_old_failure_changed")
 
 
-def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",allow_bank_premises=False):
+def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",allow_bank_premises=False,allow_reservation_reference=False):
     diagnostics = diagnostics or ReconciliationDiagnostics()
     check=boundary_checker or boundary
     record_sha256=RECORD_SHA256 if record_sha256 is None else record_sha256
@@ -155,6 +155,15 @@ def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=N
     deadline=time.monotonic()+900
     ro_drive=GetOnly(read_only_drive_service(),deadline)
     ro_sheets=GetOnly(read_only_sheets_service(),deadline)
+    recovery_request=None
+    if allow_reservation_reference:
+        from .aupay_card_reservation_reference import resolve_reference,KIND
+        require(record.get("kind")==KIND,"recovery_reference_changed")
+        recovery_request=record
+        requested_binding=StateBinding("au_pay_card_gmail",bindings["spreadsheet_id"],bindings["folder_id"],bindings["card_id"])
+        raw,observed=ReadOnlyState(ro_drive,requested_binding).observe()
+        record=resolve_reference(recovery_request,validate(raw,requested_binding),observed)
+        record_sha256=hashlib.sha256(encode(record)).hexdigest()
     if "execution_premises" in att:
         diagnostics.mark("bank_premises")
         require(allow_bank_premises and att.get("approved_main_sha")==head,
@@ -219,6 +228,8 @@ def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=N
     db=LiteralDB()
     durable=DurableState(DriveStateTransport(drive_service(),cb),cb)
     ledger=ProductionLedger(DriveStateTransport(drive_service(),pb),pb)
+    from .aupay_card_saved_readback import RepairReadbacks
+    readbacks=RepairReadbacks(card_read,parent_read,record,guard=guard,deadline=deadline,diagnostics=diagnostics)
     with tempfile.TemporaryDirectory(prefix="card-fixed-repair-",dir=env["RUNNER_TEMP"]) as temp:
         private=Path(temp)
         (private/"audit.json").write_text(env["AUPAY_CARD_AUDIT_KEY_JSON"],encoding="utf-8")
@@ -245,10 +256,11 @@ def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=N
         return execute_reconciliation(record=record,record_sha256=record_sha256,run_id=att["run_id"],db=db,
             durable=durable,ledger=ledger,key_provider=audit,
             approval_provider=ProtectedBatchApprovalProvider(private/"approval.json",repo_root=ROOT),
-            state_dir=private/"state",repo_root=ROOT,native_read=card_read.read,parent_read=parent_read.read,
+            state_dir=private/"state",repo_root=ROOT,native_read=readbacks.sessions["native"].read,parent_read=readbacks.sessions["parent"].read,
             financial_read=lambda:read_financial_and_review(ro_sheets,db.sid),documents_check=documents_check,
             source_check=source_check,guard=guard,diagnostics=diagnostics,
-            state_observe=lambda:(card_read.observe()[1],parent_read.observe()[1]),execution_identity=identity)
+            state_observe=lambda:(card_read.observe()[1],parent_read.observe()[1]),execution_identity=identity,
+            readbacks=readbacks,recovery_request=recovery_request)
 
 
 def main(*,run_profile=None,guard_profile=None):

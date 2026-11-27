@@ -150,7 +150,11 @@ class ReadOnlyState:
                 and before.get("mimeType") == "application/json" and before.get("version"), "state_target_mismatch")
         raw = self.drive.files().get_media(fileId=self.binding.file_id, supportsAllDrives=True).execute(num_retries=0)
         after = self.drive.files().get(**args).execute(num_retries=0)
-        require(before == after, "state_changed_during_read")
+        if before != after:
+            error = Stop("state_changed_during_read")
+            allowed = {"id", "parents", "trashed", "mimeType", "version", "modifiedTime", "size", "md5Checksum"}
+            error.metadata_fields = tuple(sorted(k for k in allowed if before.get(k) != after.get(k)))
+            raise error
         return raw, {"sha256": hashlib.sha256(raw).hexdigest(), "metadata_digest": digest(after)}
 
     def read(self): return self.observe()[0]

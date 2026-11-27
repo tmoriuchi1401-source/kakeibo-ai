@@ -54,6 +54,11 @@ def code_contract():
     return {p: sha((ROOT / p).read_text(encoding="utf-8").encode()) for p in CODE_PATHS}
 
 
+def reviewed_business(record):
+    from .aupay_card_reservation_reference import NEW_RECORD_SHA256
+    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256}
+
+
 def validate_bank_chain(record, proof, parent_raw):
     """Replay archived exact proof without network or mutable present-day clocks."""
     from .drive_run_state import StateBinding, validate
@@ -61,7 +66,7 @@ def validate_bank_chain(record, proof, parent_raw):
     from .production_run import COUNT_KEYS, DEPENDENCIES
     from .aupay_card_incremental_recovery import _rows
     manifest = proof["manifest"]
-    require(digest(record) == BUSINESS_RECORD_SHA256 and proof["business_record"] == record
+    require(reviewed_business(record) and proof["business_record"] == record
             and set(manifest) == {"schema", "business_record_sha256", "parent_snapshot", "bank_snapshot", "transitions"}
             and manifest["schema"] == 1 and manifest["business_record_sha256"] == digest(record)
             and 1 <= len(manifest["transitions"]) <= 16
@@ -199,7 +204,7 @@ def validate_bank_chain(record, proof, parent_raw):
 
 def effective_record(business, proof):
     """Only this deterministic projection may change execution snapshots."""
-    require(digest(business) == BUSINESS_RECORD_SHA256, "bank_premises_business_changed")
+    require(reviewed_business(business), "bank_premises_business_changed")
     parent_raw = raw_node(proof["steps"][-1]["parent"][-1])
     validate_bank_chain(business, proof, parent_raw)
     result = deepcopy(business)
@@ -249,7 +254,7 @@ def collect_bank_premises(record, manifest, baseline_metadata, drive, github, no
     from .aupay_card_window_preview import ReadOnlyState
     from .aupay_card_window_evidence import GetOnly
     import time
-    require(digest(record) == BUSINESS_RECORD_SHA256 and manifest["business_record_sha256"] == digest(record)
+    require(reviewed_business(record) and manifest["business_record_sha256"] == digest(record)
             and 1 <= len(manifest["transitions"]) <= 16, "bank_premises_business_changed")
     require(digest(baseline_metadata) == record["parent_before_metadata_digest"], "bank_premises_revision_changed")
     service = drive.api if isinstance(drive, GetOnly) else drive
