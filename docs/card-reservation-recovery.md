@@ -11,6 +11,9 @@ separate owner decision on the exact release SHA/tree and private record.
    shared `kakeibo-production` exclusion, exact independent state revisions,
    ledger values/formulas, ACL, protected documents and fixed source evidence.
 2. Validate every existing UNKNOWN archive and immutable history before effects.
+   The business window, source/candidate/status/amount plan, financial snapshot,
+   protected documents, ACL and target must equal the failed approved record.
+   Recovery changes execution authority and reservation ownership only.
    Require the failed reservation's exact record/manifest/capability, expiry,
    empty attempt/journal/leases, and a no-dispatch barrier. An issued capability
    and empty persisted journal alone never prove no financial request occurred.

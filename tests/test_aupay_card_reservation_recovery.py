@@ -24,6 +24,15 @@ NEW="d8f1a0d3-483b-4d56-a962-2acf8e94de99"
 
 def recovery_case(tmp_path,mode="normal"):
     p=case(tmp_path)
+    base_financial=p.args["financial_read"]
+    p.extra_financial={"要確認":[["held","owner input"]],"カテゴリ":[["category","=1+1"]]}
+    def all_tables():
+        value=base_financial()
+        for title,rows in p.extra_financial.items():
+            for render in ("UNFORMATTED_VALUE","FORMULA"):value[(title,render)]=deepcopy(rows)
+        return value
+    p.args["financial_read"]=all_tables
+    p.record["financial_before_sha256"]=repair.financial_digest(all_tables())
     p.record.update(native_before_metadata_digest="native-121",parent_before_metadata_digest="parent-1414")
     p.args["record_sha256"]=repair.sha(repair.encode(p.record))
     def crash(stage):
@@ -52,20 +61,6 @@ def recovery_case(tmp_path,mode="normal"):
         state_observe=lambda:(dict(sha256=record["native_before_sha256"],metadata_digest=record["native_before_metadata_digest"]),
                               dict(sha256=record["parent_before_sha256"],metadata_digest=record["parent_before_metadata_digest"])))
     p.record=record;p.now=later
-    base_financial=p.args["financial_read"]
-    p.extra_financial={"要確認":[["held","owner input"]],"カテゴリ":[["category","=1+1"]]}
-    def all_tables():
-        value=base_financial()
-        for title,rows in p.extra_financial.items():
-            for render in ("UNFORMATTED_VALUE","FORMULA"):value[(title,render)]=deepcopy(rows)
-        return value
-    p.args["financial_read"]=all_tables
-    record["financial_before_sha256"]=repair.financial_digest(all_tables())
-    p.args["record_sha256"]=repair.sha(repair.encode(record))
-    from types import SimpleNamespace
-    projection=repair.prepare_reconciliation(record,p.db,SimpleNamespace(successful_window_end=lambda:datetime.fromisoformat(C0),alias_registry=lambda:()),p.args["key_provider"].load())["projection"]
-    value["batch_ref"]=projection.batch_ref
-    approval.write_text(json.dumps(value),encoding="utf-8")
     def append(**kwargs):
         rows=deepcopy(kwargs["body"]["values"])
         class Request:
@@ -291,3 +286,12 @@ def test_revocation_and_completion_use_execution_clock_not_business_checkpoint(t
     parent=json.loads(p.pt.payload);parent["sources"]["aupay_card"]["counts"]["written"]+=1
     with pytest.raises(RuntimeError,match="reconciliation_parent_counts_changed"):
         preserved_unknown_proofs(json.loads(p.nt.payload),parent,C1)
+
+
+@pytest.mark.parametrize("field",["checkpoint_after","candidate_identities","financial_before_sha256"])
+def test_recovery_cannot_change_the_approved_business_scope(tmp_path,field):
+    p=recovery_case(tmp_path);stopped=p.nt.payload
+    p.record[field]="different" if field!="candidate_identities" else ["different"]
+    p.args["record_sha256"]=repair.sha(repair.encode(p.record))
+    with pytest.raises(RuntimeError,match="recovery_business_plan_changed"):repair.execute_reconciliation(**p.args)
+    assert p.nt.payload==stopped and p.db.calls==0

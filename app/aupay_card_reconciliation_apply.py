@@ -136,6 +136,13 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     require(ledger.payload==old_parent_raw, "repair_parent_changed")
     recovery=record.get("recovery")
     if recovery:
+        fixed=("checkpoint_before","checkpoint_after","source","statuses","candidate_identities","import_count",
+            "import_yen","expense_rows","existing_row_changes","category_changes","financial_before_sha256",
+            "documents_sha256","acl_sha256","selected_source_messages","other_native","bindings",
+            "audit_key_id","historical_target_ref")
+        previous=recovery["previous_record"]
+        require(digest({k:record.get(k) for k in fixed})==digest({k:previous.get(k) for k in fixed}),
+                "recovery_business_plan_changed")
         require(isinstance(execution_identity,dict) and set(execution_identity)=={
             "id","head_sha","head_branch","run_attempt","event","path","created_at"}
             and type(execution_identity["id"]) is int and execution_identity["id"]>0

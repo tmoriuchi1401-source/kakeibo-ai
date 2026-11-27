@@ -63,7 +63,7 @@ ERROR_CODES = frozenset({
     "recovery_state_revision_changed", "recovery_failure_identity_invalid", "recovery_intent_independent_readback",
     "recovery_adopted_archive_changed", "recovery_archive_chain_changed", "recovery_execution_time_invalid",
     "recovery_dispatch_intent_missing", "recovery_execution_identity_required", "recovery_completion_execution_unproven",
-    "recovery_archive_history_changed", "recovery_revocation_time_invalid",
+    "recovery_archive_history_changed", "recovery_revocation_time_invalid", "recovery_business_plan_changed",
     *{f"state_drive_read_failed_{status}" for status in (401,403,404,429,500,502,503,504)},
 })
 
