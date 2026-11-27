@@ -49,4 +49,7 @@ def test_existing_workflows_keep_shared_lock_and_bank_schedule():
     assert card['on']['schedule']==[{'cron':'23 0 * * *'}]
     assert 'cutoff' in card['on']['workflow_dispatch']['inputs']
     assert 'card_expense_request' in production['on']['workflow_dispatch']['inputs']
+    assert production['on']['workflow_dispatch']['inputs']['scope']['default']=='all'
+    assert production['on']['workflow_dispatch']['inputs']['card_expense_request']['default']==''
+    assert production['on']['workflow_dispatch']['inputs']['card_expense_request']['required']=='false'
     assert flow.SCHEDULE_SCOPES['23 20 * * *']==('core','KAKEIBO_CORE_SCHEDULE_ENABLED')

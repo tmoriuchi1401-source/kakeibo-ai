@@ -110,6 +110,12 @@ business fingerprint remain unchanged. Fresh normal guards also require the
 actual stable expense to match the saved certificate. Old owner proofs and
 UNKNOWN checkpoint certificates remain immutable.
 
+Initial readback checks every new expense field exactly. Later alias guards
+bind the expense's economic identity; legitimate category/user-note edits in
+the existing UI do not reset aliases or cause another posting. Numeric Sheets
+dates and omitted legacy M status cells are included in duplicate checks using
+the existing ledger date/amount parsers, without rewriting those old rows.
+
 The Google card native stores this delta without advancing its checkpoint.
 The parent completes only the auto_expense stage; card coverage counts still
 refer to the actual latest coverage result. A lost response, partial J update,

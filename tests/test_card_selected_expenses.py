@@ -151,3 +151,29 @@ def test_owner_link_preserves_existing_three_unknown_checkpoint_proofs(tmp_path,
     assert preserved_unknown_proofs(after_native,json.loads(p.pt.payload),C1)==oldproofs
     assert set(oldproofs)=={19,20,30} and state.successful_window_end().isoformat()==C1
     validate_owner_expenses(state.alias_registry(),db.expenses)
+
+
+@pytest.mark.parametrize('source',['expense','receipt','expense_without_M'])
+def test_numeric_sheet_date_cannot_hide_an_existing_posting_or_receipt(tmp_path,source):
+    from datetime import date
+    db,state,durable,registry,args=case(tmp_path)
+    serial=(date(2026,11,1)-date(1899,12,30)).days
+    if source in {'expense','expense_without_M'}:
+        row=deepcopy(args['plan']['rows'][0]['expense']);row[0]='manual-existing';row[1]=serial;row[10]='another-source'
+        db.expenses.append(row)
+        if source=='expense_without_M':db.expenses[-1]=row[:12]
+    else:
+        db.rows.append(['receipt','','receipt','receipt',serial,'合成店',4386,'','canonical_receipt','','',''])
+    with pytest.raises(RuntimeError):AutoExpensePipeline(db).plan_card_expenses([OWNER],categories_by_id={OWNER:['食費','食料品']})
+    assert not db.writes and not durable.transport.writes
+
+
+def test_normal_category_edit_does_not_reset_aliases_or_repost_expense(tmp_path):
+    db,state,durable,registry,args=case(tmp_path);execute_selected(**args)
+    db.expenses[0][5:7]=['その他','未分類'];db.expenses[0][11]='user note'
+    validate_owner_expenses(state.alias_registry(),db.expenses)
+    resolve_aliases([],db.rows,state.alias_registry())
+    replay=AutoExpensePipeline(db).plan_card_expenses([OWNER],categories_by_id={OWNER:['食費','食料品']})
+    assert replay['expense_rows']==0 and contract_sha256(replay)==contract_sha256(args['plan'])
+    execute_selected(**(args|dict(plan=replay,registry=state.alias_registry())))
+    assert len(db.expenses)==1 and db.expenses[0][5:7]==['その他','未分類'] and db.expenses[0][11]=='user note'

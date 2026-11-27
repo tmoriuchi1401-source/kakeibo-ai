@@ -189,6 +189,8 @@ class AutoExpensePipeline:
         Receipts/transfers/ambiguous existing expenses keep their normal guards.
         """
         from .aupay_card_aliases import digest
+        from .monthly_projection import _date as ledger_date, _yen as ledger_yen, ProjectionError
+        from .reconciliation import merchants_match
         ids = tuple(sorted(import_ids))
         if not ids or len(ids) > 100 or len(set(ids)) != len(ids):
             raise RuntimeError("card_expense_selection_invalid")
@@ -206,6 +208,12 @@ class AutoExpensePipeline:
                     or tx.status != "auto_expense" or tx.amount <= 0):
                 raise RuntimeError("card_expense_owner_invalid")
         virtual = [replace(t, status="unclassified_card") if t.import_id in ids else t for t in transactions]
+        for index,tx in enumerate(virtual):
+            if tx.source=="receipt" and tx.status in {"解析済","canonical_receipt"} and tx.amount>0:
+                try:virtual[index]=replace(tx,date=ledger_date(tx.row[4]))
+                except ProjectionError:
+                    if any(t.amount==tx.amount and merchants_match(t.merchant,tx.merchant) for t in selected):
+                        raise RuntimeError("card_expense_requires_review") from None
         decisions = {d.transaction.import_id:d for d in self._with_approved_rule(
             auto_expense_decisions(virtual, categories), categories) if d.transaction.import_id in ids}
         rows, already, completed = [], [], []
@@ -220,15 +228,21 @@ class AutoExpensePipeline:
             expected = [sid,tx.date,tx.merchant,"自動計上",tx.amount,*category,tx.row[7],tx.source,"",tx.import_id,d.reason,"active"]
             after = list(tx.row);after[9] = sid
             if tx.target_id:
-                if tx.target_id != sid or found != [expected]: raise RuntimeError("card_expense_existing_conflict")
+                identity_fields=(0,1,2,4,7,8,10,12)
+                if (tx.target_id != sid or len(found)!=1
+                        or any(found[0][i]!=expected[i] for i in identity_fields)
+                        or tuple(found[0][5:7]) not in categories):
+                    raise RuntimeError("card_expense_existing_conflict")
                 before=list(tx.row);before[9]=""
                 completed.append(dict(owner=tx.import_id,before=before,expense=expected))
                 already.append(tx.import_id);continue
             if found: raise RuntimeError("card_expense_existing_unlinked_requires_reconciliation")
-            from .reconciliation import merchants_match
-            if any(len(e)>12 and e[12] in {"","active"} and str(e[1])==tx.date
-                   and _yen(e[4])==tx.amount and merchants_match(tx.merchant,str(e[2])) for e in expense_rows):
-                raise RuntimeError("card_expense_existing_candidate")
+            for existing in expense_rows:
+                if (len(existing)>4 and (existing[12] if len(existing)>12 else "") in {"","active"}
+                        and merchants_match(tx.merchant,str(existing[2]))):
+                    try:same=ledger_date(existing[1])==tx.date and ledger_yen(existing[4])==tx.amount
+                    except ProjectionError:raise RuntimeError("card_expense_existing_candidate") from None
+                    if same:raise RuntimeError("card_expense_existing_candidate")
             rows.append(dict(owner=tx.import_id,row_num=tx.row_num,before=list(tx.row),after=after,expense=expected))
         return dict(schema=1,kind="selected-card-expenses-v1",import_ids=list(ids),categories_by_id={k:list(v) for k,v in overrides.items()},
             imports_sha256=digest(raw),expenses_sha256=digest(expense_rows),categories_sha256=digest(sorted(categories)),
@@ -335,7 +349,3 @@ class AutoExpensePipeline:
             "category_rule_held": sum("承認ルール=held" in x.reason for x in decisions),
             "category_rule_conflicts": sum("承認ルール=conflict" in x.reason for x in decisions),
         }
-
-
-def _yen(value):
-    return int(str(value).replace(",", ""))

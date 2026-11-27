@@ -76,7 +76,11 @@ def validate_owner_expenses(registry, expense_rows):
         if row: by_id.setdefault(row[0],[]).append(list(row)+[""]*max(0,13-len(row)))
     for entry in merge_registry(registry):
         for change in _owner_changes(entry):
-            if by_id.get(change["expense"][0]) != [change["expense"]]:
+            actual=by_id.get(change["expense"][0],[])
+            # Categories and user notes remain editable in the existing UI.
+            # Alias authority depends on economic ownership, not those labels.
+            fields=(0,1,2,4,7,8,10,12)
+            if len(actual)!=1 or any(actual[0][i]!=change["expense"][i] for i in fields):
                 raise RuntimeError("card_alias_expense_readback_mismatch")
 
 
