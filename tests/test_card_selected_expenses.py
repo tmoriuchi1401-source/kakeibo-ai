@@ -29,6 +29,10 @@ class DB:
         if rng=='取込データ!A2:L':return deepcopy(self.rows)
         if rng=='支出明細!A2:M':return deepcopy(self.expenses)
         if rng=='支出明細!A1:M1':return [HEADERS['支出明細']]
+        if rng.startswith('取込データ!A') and ':L' in rng:
+            number=int(rng.split('!A')[1].split(':')[0])
+            if self.mode=='sort_before_link':self.rows.reverse()
+            return [deepcopy(self.rows[number-2])]
         raise AssertionError(rng)
     get_raw=get
     def categories(self):return [('その他','未分類'),('食費','食料品')]
@@ -196,3 +200,11 @@ def test_independent_reader_includes_review_and_category_controls():
     assert {('カテゴリ',r) for r in ('UNFORMATTED_VALUE','FORMULA')}<=set(before)
     after=deepcopy(before);after[('カテゴリ','UNFORMATTED_VALUE')][1][0]='unapproved category change'
     with pytest.raises(RuntimeError,match='exact_delta'):verify_delta(before,after,dict(rows=[]))
+
+
+def test_owner_row_movement_before_J_write_never_links_another_transaction(tmp_path):
+    db,state,durable,registry,args=case(tmp_path);db.mode='sort_before_link'
+    with pytest.raises(RuntimeError,match='owner_moved_or_changed'):execute_selected(**args)
+    assert len(db.expenses)==1 and all(not row[9] for row in db.rows)
+    assert durable.inspect()['phase']=='pending' and state.successful_window_end().isoformat()==C1
+    assert len(db.writes)==1

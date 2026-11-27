@@ -80,6 +80,9 @@ class SelectedDB:
         # and dates. Use the existing literal range writer on J alone.
         for number,row in rows:
             self.guard()
+            expected=next(v["before"] for v in self.plan["rows"] if v["row_num"]==number)
+            current=self.db.get(f"取込データ!A{number}:L{number}")
+            require(len(current)==1 and import_row(current[0])==expected,"card_expense_owner_moved_or_changed")
             self.db.set_raw_range(f"'取込データ'!J{number}",[[row[9]]])
 
 
