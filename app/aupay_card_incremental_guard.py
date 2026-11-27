@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import socket
 import subprocess
@@ -69,6 +70,16 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
         require(cp.tzinfo is not None and cp.utcoffset() is not None and not cp.microsecond
                 and cp.isoformat() == checkpoint_value and cp >= datetime.fromisoformat(END),
                 "checkpoint_invalid")
+    cutoff = env.get("CUTOFF", "")
+    plan_sha = env.get("EXPECTED_PLAN_SHA256", "")
+    require(not scheduled or not (cutoff or plan_sha), "scheduled_cutoff_forbidden")
+    require(not plan_sha or bool(cutoff), "cutoff_plan_required")
+    if cutoff:
+        require(bool(re.fullmatch(r"[0-9a-f]{64}",plan_sha)),"cutoff_plan_required")
+        end = datetime.fromisoformat(cutoff)
+        require(cp is not None and end.tzinfo is not None and end.utcoffset() is not None
+                and not end.microsecond and end.isoformat() == cutoff and end.utcoffset().total_seconds() == 32400
+                and 0 < (end-cp).total_seconds() <= 12*86400, "cutoff_invalid")
     require(env.get("RUNNER_DEBUG", "0") != "1" and not env.get("ACTIONS_STEP_DEBUG")
             and not env.get("ACTIONS_RUNNER_DEBUG"), "debug_forbidden")
     require(all(env.get(k) == v for k, v in FLAGS.items()), "production_flags_mismatch")
@@ -93,10 +104,13 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
     recovered_failure = False
     no_write_failure = False
     proofs = {}
+    coverage = {}
     if reconciliation_state is not None:
         require(cp is not None, "reconciliation_checkpoint_required")
         from .aupay_card_incremental_recovery import preserved_unknown_proofs
         proofs = preserved_unknown_proofs(*reconciliation_state, checkpoint_value)
+        from .aupay_card_incremental_coverage import successful_coverage_proofs
+        coverage = successful_coverage_proofs(*reconciliation_state, checkpoint_value)
         # Repair executions can occur weeks AFTER the business coverage time.
         # Every archived failure, including other repair workflows, must still
         # match its actual attempt; a checkpoint timestamp is not its clock.
@@ -158,9 +172,10 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
                             for k, v in proofs[prior["id"]].items()),
                             "previous_dispatch_no_retry")
                 continue
+            historical = cp is not None and datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) >= cp
             require(prior["status"] == "completed" and prior["conclusion"] == "success"
-                    and prior["run_attempt"] == 1
-                    and (cp is None or datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) < cp),
+                    and prior["run_attempt"] == 1 and (not historical or defer_reconciliation
+                        or (prior["id"] in coverage and all(prior.get(k) == v for k,v in coverage[prior["id"]].items()))),
                     "previous_dispatch_no_retry")
         if len(seen) == total:
             break

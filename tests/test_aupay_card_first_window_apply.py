@@ -236,7 +236,7 @@ class GitHub:
                         (6, "Install reviewed hash-pinned wheels before Google credentials", "skipped"),
                         (7, "One fixed Apply with protected reviews and exact readback", "skipped"))])])
         if path == "git/ref/heads/main": return {"object": {"sha": "a"*40}}
-        if path == "actions/runs/17": return dict(head_sha="a"*40, run_attempt=1,
+        if path == "actions/runs/17": return dict(id=17,head_sha="a"*40,head_branch="main",created_at=NOW.isoformat(),run_attempt=1,
             event="workflow_dispatch", path=".github/workflows/" + apply.WORKFLOW)
         if "actions/workflows/" in path:
             assert "head_sha" not in path

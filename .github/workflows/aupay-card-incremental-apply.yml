@@ -17,6 +17,16 @@ on:
       expected_checkpoint:
         type: string
         required: true
+      cutoff:
+        description: Optional historical end (JST, exclusive); start remains checkpoint minus two days
+        type: string
+        required: false
+        default: ''
+      expected_plan_sha256:
+        description: Reviewed purchase/duplicate/alias/review contract hash; required with a historical cutoff
+        type: string
+        required: false
+        default: ''
       confirm:
         description: Type APPLY_CHECKPOINT_FRESH_PLAN_ONCE after final production approval
         type: string
@@ -53,6 +63,8 @@ jobs:
       WORKFLOW_REF: ${{ github.workflow_ref }}
       PREVIEW_SOURCE: ${{ github.event_name == 'schedule' && 'au_pay_card_gmail' || inputs.source }}
       EXPECTED_CHECKPOINT: ${{ inputs.expected_checkpoint }}
+      CUTOFF: ${{ inputs.cutoff }}
+      EXPECTED_PLAN_SHA256: ${{ inputs.expected_plan_sha256 }}
       CONFIRM: ${{ inputs.confirm }}
       SCHEDULE_CRON: ${{ github.event.schedule }}
       KAKEIBO_CARD_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_CARD_SCHEDULE_ENABLED || 'false' }}

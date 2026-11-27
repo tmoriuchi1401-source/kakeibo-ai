@@ -35,7 +35,7 @@ DRIVE_SCHEDULE_SCOPES = {
     "drive_paypay": frozenset({"paypay"}),
     "drive_bank": frozenset({"bank"}),
 }
-MANUAL_SOURCE_SCOPES = {"amazon_catchup": frozenset({"amazon"})}
+MANUAL_SOURCE_SCOPES = {"amazon_catchup": frozenset({"amazon"}), "card_expenses": frozenset({"auto_expense"})}
 SCHEDULE_SCOPES = {
     "23 20 * * *": ("core", "KAKEIBO_CORE_SCHEDULE_ENABLED"),
     "31 22 * * *": ("drive_receipts", "KAKEIBO_RECEIPT_SCHEDULE_ENABLED"),
@@ -339,6 +339,13 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
 
 
 def validate_scope(args) -> None:
+    request=os.environ.get("CARD_EXPENSE_REQUEST","")
+    if (args.scope=="card_expenses") != bool(request):
+        raise StateError("card_expense_request_scope_required")
+    if args.scope=="card_expenses" and (args.bank_apply or args.amazon_target or getattr(args,"receipt_store","")
+            or getattr(args,"receipt_manifest","") or getattr(args,"projection_bootstrap",False)
+            or os.environ.get("GITHUB_EVENT_NAME")!="workflow_dispatch"):
+        raise StateError("card_expense_manual_scope_required")
     canary_source=getattr(args,"canary_source","amazon")
     if canary_source not in {"amazon","aupay_card"} or (canary_source!="amazon" and args.scope!="amazon_canary"):
         raise StateError("money_canary_source_invalid")
@@ -392,7 +399,7 @@ def finish_ledger_updates(env, result, *, apply):
 
 def needs_ledger_order(scope: str, report: dict, *, bank_apply: bool) -> bool:
     """Only accounting writes from an isolated Drive run need the final sort."""
-    if scope in {"drive_paypay", "amazon_catchup"}:
+    if scope in {"drive_paypay", "amazon_catchup", "card_expenses"}:
         return False  # Intake rows are handled by the next existing core run.
     if scope == "drive_bank":
         return bank_apply and report["sources"]["bank"]["counts"].get("written", 0) > 0
@@ -501,7 +508,7 @@ def main():
         bank_stage = 'bank_parent_ledger'
         ledger = ProductionLedger(DriveStateTransport(ledger_service, ledger_binding), ledger_binding)
         history = ledger.value["sources"]
-        if args.scope in {"core", "drive_receipts", "drive_paypay"}:
+        if args.scope in {"core", "drive_receipts", "drive_paypay", "card_expenses"}:
             verify_source_readiness(env, history)
         if args.scope == "amazon_catchup" and any(item["phase"] != "ready" for item in history.values()):
             raise StateError("source_reconciliation_required")
@@ -523,8 +530,8 @@ def main():
                                     amazon_canary=args.scope == "amazon_canary", canary_source=args.canary_source,
                                     receipts_only=args.scope == "receipts",
                                     selected_sources=DRIVE_SCHEDULE_SCOPES.get(args.scope, MANUAL_SOURCE_SCOPES.get(args.scope)),
-                                    require_omitted_ready=args.scope == "core",
-                                    stop_on_failure=args.scope == "core",
+                                    require_omitted_ready=args.scope in {"core","card_expenses"},
+                                    stop_on_failure=args.scope in {"core","card_expenses"},
                                     **({"allow_amazon_partial":True} if args.scope=="amazon_catchup" else {}))
             if args.mode == "preview":
                 bank_stage = 'bank_parent_authority'

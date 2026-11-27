@@ -23,9 +23,14 @@ on:
       scope:
         description: All stages, scheduled-source scopes, or isolated maintenance
         type: choice
-        options: [all, core, drive_receipts, drive_paypay, drive_bank, amazon_catchup, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories]
+        options: [all, core, drive_receipts, drive_paypay, drive_bank, amazon_catchup, amazon_canary, receipt_reimport, receipt_confirmation, receipts, projection, daily, ledger_order, categories, card_expenses]
         default: all
         required: true
+      card_expense_request:
+        description: Encrypted reviewed card owner IDs, existing categories and contract hash; card_expenses only
+        type: string
+        required: false
+        default: ''
       amazon_target:
         description: RSA-wrapped fixed AM money ID; only for canary apply
         type: string
@@ -220,6 +225,7 @@ jobs:
           EVENT_SCHEDULE: ${{ github.event.schedule }}
           MANUAL_MODE: ${{ inputs.mode || 'preview' }}
           MANUAL_SCOPE: ${{ inputs.scope || 'all' }}
+          CARD_EXPENSE_REQUEST: ${{ inputs.card_expense_request }}
           AMAZON_TARGET: ${{ inputs.amazon_target }}
           CANARY_SOURCE: ${{ inputs.canary_source || 'amazon' }}
           PROJECTION_BOOTSTRAP: ${{ inputs.projection_bootstrap || false }}

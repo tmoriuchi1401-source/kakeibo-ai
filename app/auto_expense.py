@@ -182,12 +182,86 @@ class AutoExpensePipeline:
         decisions = self._with_approved_rule(auto_expense_decisions(transactions, categories), categories)
         return self._summary(decisions)
 
-    def apply(self) -> dict:
+    def plan_card_expenses(self, import_ids, *, categories_by_id=None):
+        """Readonly, exact selection of already-imported ordinary card owners.
+
+        A virtual classification does not rewrite historical import statuses.
+        Receipts/transfers/ambiguous existing expenses keep their normal guards.
+        """
+        from .aupay_card_aliases import digest
+        from .monthly_projection import _date as ledger_date, _yen as ledger_yen, ProjectionError
+        from .reconciliation import merchants_match
+        ids = tuple(sorted(import_ids))
+        if not ids or len(ids) > 100 or len(set(ids)) != len(ids):
+            raise RuntimeError("card_expense_selection_invalid")
+        overrides = categories_by_id or {}
+        if not set(overrides).issubset(ids): raise RuntimeError("card_expense_category_invalid")
+        raw = self.db.get("取込データ!A2:L")
+        expense_rows = self.db.get("支出明細!A2:M")
+        transactions = parse_import_rows(raw)
+        categories = set(self.db.categories())
+        selected = [t for t in transactions if t.import_id in ids]
+        if len(selected) != len(ids) or len({t.import_id for t in selected}) != len(ids):
+            raise RuntimeError("card_expense_selection_invalid")
+        for tx in selected:
+            if (tx.source != "au PAYカード" or not re.fullmatch(r"aupaycard-mail:[0-9a-f]{24}:\d{3}", tx.import_id)
+                    or tx.status != "auto_expense" or tx.amount <= 0):
+                raise RuntimeError("card_expense_owner_invalid")
+        virtual = [replace(t, status="unclassified_card") if t.import_id in ids else t for t in transactions]
+        for index,tx in enumerate(virtual):
+            if tx.source=="receipt" and tx.status in {"解析済","canonical_receipt"} and tx.amount>0:
+                try:virtual[index]=replace(tx,date=ledger_date(tx.row[4]))
+                except ProjectionError:
+                    if any(t.amount==tx.amount and merchants_match(t.merchant,tx.merchant) for t in selected):
+                        raise RuntimeError("card_expense_requires_review") from None
+        decisions = {d.transaction.import_id:d for d in self._with_approved_rule(
+            auto_expense_decisions(virtual, categories), categories) if d.transaction.import_id in ids}
+        rows, already, completed = [], [], []
+        for tx in selected:
+            d = decisions[tx.import_id]
+            category = tuple(overrides.get(tx.import_id, d.category or FALLBACK_CATEGORY))
+            if d.action != "post" or category not in categories:
+                raise RuntimeError("card_expense_requires_review")
+            sid = expense_id(tx.import_id)
+            found = [list(r)+[""]*max(0,13-len(r)) for r in expense_rows if r and (
+                r[0] == sid or len(r)>10 and r[10] == tx.import_id)]
+            expected = [sid,tx.date,tx.merchant,"自動計上",tx.amount,*category,tx.row[7],tx.source,"",tx.import_id,d.reason,"active"]
+            after = list(tx.row);after[9] = sid
+            if tx.target_id:
+                identity_fields=(0,1,2,4,7,8,10,12)
+                if (tx.target_id != sid or len(found)!=1
+                        or any(found[0][i]!=expected[i] for i in identity_fields)
+                        or tuple(found[0][5:7]) not in categories):
+                    raise RuntimeError("card_expense_existing_conflict")
+                before=list(tx.row);before[9]=""
+                completed.append(dict(owner=tx.import_id,before=before,expense=expected))
+                already.append(tx.import_id);continue
+            if found: raise RuntimeError("card_expense_existing_unlinked_requires_reconciliation")
+            for existing in expense_rows:
+                if (len(existing)>4 and (existing[12] if len(existing)>12 else "") in {"","active"}
+                        and merchants_match(tx.merchant,str(existing[2]))):
+                    try:same=ledger_date(existing[1])==tx.date and ledger_yen(existing[4])==tx.amount
+                    except ProjectionError:raise RuntimeError("card_expense_existing_candidate") from None
+                    if same:raise RuntimeError("card_expense_existing_candidate")
+            rows.append(dict(owner=tx.import_id,row_num=tx.row_num,before=list(tx.row),after=after,expense=expected))
+        return dict(schema=1,kind="selected-card-expenses-v1",import_ids=list(ids),categories_by_id={k:list(v) for k,v in overrides.items()},
+            imports_sha256=digest(raw),expenses_sha256=digest(expense_rows),categories_sha256=digest(sorted(categories)),
+            rows=rows,already_posted=already,completed_rows=completed,expense_rows=len(rows),expense_yen=sum(v["expense"][4] for v in rows))
+
+    def apply(self, *, card_plan=None) -> dict:
         transactions = parse_import_rows(self.db.get("取込データ!A2:L"))
         categories = set(self.db.categories())
         if FALLBACK_CATEGORY not in categories:
             raise RuntimeError("カテゴリマスタに「その他 / 未分類」がありません")
         decisions = self._with_approved_rule(auto_expense_decisions(transactions, categories), categories)
+        if card_plan is not None:
+            if card_plan != self.plan_card_expenses(card_plan["import_ids"], categories_by_id=card_plan["categories_by_id"]):
+                raise RuntimeError("card_expense_plan_changed")
+            chosen = {v["owner"] for v in card_plan["rows"]}
+            virtual = [replace(t,status="unclassified_card") if t.import_id in chosen else t for t in transactions]
+            decisions = [replace(d,category=tuple(next(v["expense"][5:7] for v in card_plan["rows"] if v["owner"]==d.transaction.import_id)))
+                         for d in self._with_approved_rule(auto_expense_decisions(virtual,categories),categories)
+                         if d.transaction.import_id in chosen]
         expense_index = self.db.expense_index()
         records = self.db.expense_records() if hasattr(self.db, "expense_records") else {}
         expense_new = []
@@ -206,6 +280,7 @@ class AutoExpensePipeline:
             updated[8] = decision.status
             annotation = f"自動判定={decision.reason}"
             updated[11] = "; ".join(x for x in (tx.note, annotation) if x)
+            if card_plan is not None: updated[11] = tx.note
             if decision.action == "post":
                 spend_id = expense_id(tx.import_id)
                 updated[9] = spend_id
@@ -233,7 +308,7 @@ class AutoExpensePipeline:
                 else:
                     expense_new.append(expense)
                     matched = re.search(r"承認ルール=(CR-[0-9a-f]+)/r(\d+)", decision.reason)
-                    if matched:
+                    if matched and card_plan is None:
                         marker = (matched.group(1), int(matched.group(2)))
                         rule = rules_by_marker.get(marker)
                         if rule:

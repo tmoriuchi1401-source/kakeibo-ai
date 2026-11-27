@@ -203,7 +203,7 @@ def env():
 class GitHub:
     def __init__(self, prior=()): self.prior = list(prior)
     def get(self, path):
-        current = dict(id=17, head_sha="a"*40, run_attempt=1, event="workflow_dispatch",
+        current = dict(id=17, head_sha="a"*40, head_branch="main", run_attempt=1, event="workflow_dispatch",
             path=".github/workflows/"+guard.WORKFLOW, created_at="2026-10-31T00:00:00Z")
         if path == "git/ref/heads/main": return {"object": {"sha": "a"*40}}
         if path == "actions/runs/17": return current
