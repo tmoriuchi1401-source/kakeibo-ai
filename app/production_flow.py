@@ -585,6 +585,10 @@ def main():
         normal_bank = args.scope == 'drive_bank' and not os.environ.get('BANK_FIXED_BACKFILL_PLAN')
         report = {**(report if normal_bank and isinstance(report, dict) else {}),
                   "schema": 1, "success": False, "error": "production_preflight_failed"}
+        if os.environ.get('CARD_EXPENSE_RECONCILIATION'):
+            from .auto_expense_reconciliation import AutoExpenseReconciliationFailure
+            if isinstance(exc, AutoExpenseReconciliationFailure):
+                report.update(error='auto_expense_reconciliation_stopped', **exc.diagnostic)
         if normal_bank:
             from .production_run import bank_failure_diagnostic
             report.update(bank_failure_diagnostic(exc, bank_stage))
