@@ -30,6 +30,9 @@ from .drive_run_state import CARD_FILES, DurableState, envelope, snapshot, valid
 from .production_ledger import ProductionLedger, validate_ledger
 from .production_run import COUNT_KEYS
 from .aupay_card_reconciliation_diagnostics import ReconciliationDiagnostics
+from .aupay_card_reservation_recovery import (
+    PROTOCOL, FAILURE_PATHS, unused_reservation_proof, summaries, archive_chain, digest, validate_pending_archives,
+)
 from .transaction_plan import reconcile_transactions
 
 
@@ -89,7 +92,8 @@ def prepare_reconciliation(record, db, state, key):
                      or plan.withheld_review_count or plan.invalid_item_count or plan.global_withheld_count),
             "repair_candidates_changed")
     projection = create_batch_projection(plan,candidate_identities=tuple(record["candidate_identities"]),
-        statuses=statuses,binding=TargetBinding(expected_spreadsheet_id=db.sid),audit_key=key)
+        statuses=statuses,binding=TargetBinding(expected_spreadsheet_id=db.sid),audit_key=key,
+        authorization_context="recovery-v2:"+sha(encode(record)) if record.get("recovery") else "")
     require(projection.batch_size == record["import_count"]
             and sum(c.amount_yen for c in projection.plan.candidates) == record["import_yen"]
             and projection.target_ref == record["historical_target_ref"]
@@ -111,7 +115,7 @@ def _pending_cache(native, destination, repo_root):
 def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_provider,
         approval_provider,state_dir,repo_root,native_read,parent_read,financial_read,
         documents_check,source_check,guard,clock=lambda:datetime.now(timezone.utc),
-        boundary=lambda _stage:None,diagnostics=None):
+        boundary=lambda _stage:None,diagnostics=None,state_observe=None,execution_identity=None):
     """One approved dispatch. Any uncertainty consumes it and leaves no replay path."""
     diagnostics = diagnostics or ReconciliationDiagnostics()
     diagnostics.mark("reconciliation_preflight")
@@ -130,6 +134,29 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
             and all(v["phase"]=="ready" and not v["attempt"] and not v["error"]
                     for k,v in old_parent["sources"].items() if k!="aupay_card"), "repair_state_changed")
     require(ledger.payload==old_parent_raw, "repair_parent_changed")
+    recovery=record.get("recovery")
+    if recovery:
+        require(isinstance(execution_identity,dict) and set(execution_identity)=={
+            "id","head_sha","head_branch","run_attempt","event","path","created_at"}
+            and type(execution_identity["id"]) is int and execution_identity["id"]>0
+            and execution_identity["run_attempt"]==1 and execution_identity["head_branch"]=="main"
+            and execution_identity["event"]=="workflow_dispatch"
+            and execution_identity["path"]==".github/workflows/aupay-card-reservation-recovery.yml"
+            and len(execution_identity["head_sha"])==40
+            and datetime.fromisoformat(execution_identity["created_at"].replace("Z","+00:00"))<=clock(),
+            "recovery_execution_identity_required")
+        require(callable(state_observe),"recovery_independent_revision_required")
+        native_proof,parent_proof=state_observe()
+        require(native_proof==dict(sha256=record["native_before_sha256"],metadata_digest=record["native_before_metadata_digest"])
+                and parent_proof==dict(sha256=record["parent_before_sha256"],metadata_digest=record["parent_before_metadata_digest"]),
+                "recovery_state_revision_changed")
+        failure=record["old_failure"]
+        require(failure["path"] in FAILURE_PATHS and failure["run_attempt"]==1
+                and failure["status"]=="completed" and failure["conclusion"]=="failure"
+                and datetime.fromisoformat(failure["created_at"].replace("Z","+00:00"))<clock(),
+                "recovery_failure_identity_invalid")
+        validate_pending_archives(old)
+        unused=unused_reservation_proof(old,old_parent_raw,recovery,record["parent_before_metadata_digest"],clock(),record["old_failure"])
     diagnostics.mark("financial_preflight")
     before=financial_read()
     require(financial_digest(before)==record["financial_before_sha256"], "repair_financial_changed")
@@ -148,7 +175,14 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     capabilities=SqliteBatchCapabilityStore(path/"capabilities.sqlite3",repo_root=repo_root)
     journal=SqliteBatchJournal(path/"journal.sqlite3",repo_root=repo_root)
     leases=SqliteLeaseManager(path/"leases.sqlite3",repo_root=repo_root,clock=clock)
+    require(not any(r["run_id"]==run_id for r in _rows(old,"manifests.sqlite3","batch_manifests")),
+            "repair_dispatch_consumed_no_retry")
     manifests.save(manifest)
+    if recovery:
+        diagnostics.mark("unused_revocation")
+        revoked_at=clock()
+        revoked=capabilities.revoke_unused(unused["capability_before"],revoked_at)
+        boundary("unused_capability_revoked_local")
     diagnostics.mark("capability_issue")
     capability=issue_batch_capability(projection,manifest,binding=binding,
         inspector=ReadOnlySheetsTargetInspector(db),key_provider=key_provider,
@@ -156,7 +190,7 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     diagnostics.mark("archive_prepare")
     archive_id=f'UNKNOWN:{record["old_failure"]["id"]}:{record["old_failure"]["run_attempt"]}'
     archive=dict(run_id=archive_id,status="UNKNOWN_NO_REPLAY",replay_allowed=False,
-        archive_schema=2,native_before_raw_b64=base64.b64encode(old_raw).decode(),
+        archive_schema=3 if recovery else 2,native_before_raw_b64=base64.b64encode(old_raw).decode(),
         native_before_bytes_sha256=sha(old_raw),parent_before_raw_b64=base64.b64encode(old_parent_raw).decode(),
         parent_before_bytes_sha256=sha(old_parent_raw),
         source_window_start=prepared["window"].start.isoformat(),source_window_end=record["checkpoint_after"],
@@ -164,11 +198,21 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
         parent_card_sha256=_hash(old_parent["sources"]["aupay_card"]),
         checkpoint_before=record["checkpoint_before"],checkpoint_after=record["checkpoint_after"],
         github_failure=record["old_failure"],repair_run_id=run_id,evidence_sha256=record_sha256)
+    if recovery:
+        archive.update(recovery=deepcopy(recovery),parent_before_metadata_digest=record["parent_before_metadata_digest"],
+            adopted_archive_ids=[a["run_id"] for a in archive_chain(summaries(old))])
     state.record(archive,advance_checkpoint=False)
+    if recovery:
+        state.record(dict(run_id="REVOCATION:"+revoked["capability_id"],status="CAPABILITY_REVOKED_UNUSED",
+            source_window_start=archive["source_window_start"],source_window_end=archive["source_window_end"],
+            archive_id=archive_id,evidence_sha256=record_sha256,replay_allowed=False,revoked_at=revoked_at.isoformat(),
+            before=unused["capability_before"],before_sha256=digest(unused["capability_before"]),
+            after=revoked,after_sha256=digest(revoked),unused_proof=unused),advance_checkpoint=False)
     state.record(dict(run_id="RESERVATION:"+run_id,status="REPAIR_RESERVED",
         source_window_start=archive["source_window_start"],source_window_end=archive["source_window_end"],
         record_sha256=record_sha256,batch_ref=projection.batch_ref,manifest_sha256=sha(manifests._serialize(manifest).encode()),
-        capability_id=capability.capability_id,replay_allowed=False),advance_checkpoint=False)
+        capability_id=capability.capability_id,replay_allowed=False,
+        **(dict(protocol=PROTOCOL,github_execution=execution_identity) if recovery else {})),advance_checkpoint=False)
     boundary("archive_and_reservation_local")
     pending=envelope(durable.binding,snapshot(path,durable.binding),generation=old["generation"]+1,
                      phase="pending",attempt=attempt)
@@ -191,6 +235,24 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     require(parent_read()==ledger.payload, "repair_parent_reservation_independent_readback")
     diagnostics.mark("parent_reserved", "parent_reservation", "readback_confirmed")
     boundary("parent_reserved")
+
+    # The durable intent is mandatory for recovery-protocol writers. Absence
+    # proves a later failed reservation never crossed this barrier, even if
+    # its parent reservation saved. Presence always denies unused revocation.
+    if recovery:
+        diagnostics.mark("dispatch_intent")
+        state.record(dict(run_id="INTENT:"+run_id,status="REPAIR_DISPATCH_INTENT",
+            source_window_start=archive["source_window_start"],source_window_end=archive["source_window_end"],
+            protocol=PROTOCOL,replay_allowed=False,manifest_sha256=sha(manifests._serialize(manifest).encode())),
+            advance_checkpoint=False)
+        intent=envelope(durable.binding,snapshot(path,durable.binding),
+            generation=validate(durable._pending,durable.binding)["generation"]+1,phase="pending",attempt=attempt)
+        guard()
+        require(native_read()==durable._pending and parent_read()==ledger.payload,"repair_reservation_changed")
+        durable._replace(durable._pending,intent)
+        require(native_read()==intent,"recovery_intent_independent_readback")
+        durable._pending=intent
+        boundary("dispatch_intent_persisted")
 
     def pending_guard():
         guard()
@@ -264,13 +326,19 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
     result["checkpoint_reconciliation"]=dict(archive_id=archive_id,evidence_sha256=record_sha256,
         aliases_sha256=_hash(list(merge_registry(result["card_aliases"]))),
         manifest_sha256=sha(manifests._serialize(manifest).encode()),capability_sha256=_hash(cap),journal_sha256=_hash(events))
+    if recovery:
+        chain=archive_chain(summaries(dict(files=snapshot(path,durable.binding))))
+        result["checkpoint_reconciliation"].update(archive_chain_ids=[a["run_id"] for a in chain],archive_chain_sha256=digest(chain))
+        result["github_execution"]=execution_identity
+    result.update(execution_started_at=manifest.created_at.isoformat(),execution_completed_at=clock().isoformat())
     diagnostics.mark("checkpoint_proof")
     state.record(result,advance_checkpoint=True)
     # Validate the proposed completion before either real ready transition.
     proposed_native=validate(envelope(durable.binding,snapshot(path,durable.binding),
         generation=validate(outcome,durable.binding)["generation"]+1),durable.binding)
     ready_parent=deepcopy(ledger.value)
-    ready_parent["sources"]["aupay_card"].update(phase="ready",attempt="",error="")
+    ready_parent["sources"]["aupay_card"].update(phase="ready",attempt="",error="",
+        counts={k:v for k,v in result.items() if k in COUNT_KEYS and type(v) is int and v>=0})
     preserved_unknown_proofs(proposed_native,ready_parent,record["checkpoint_after"])
     diagnostics.mark("checkpoint_guard")
     pending_guard();verify_financial(before,financial_read(),bounded.rows)

@@ -1,0 +1,86 @@
+name: Card unused reservation recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact separately approved and validated main SHA
+        type: string
+        required: true
+      repair_capsule:
+        description: Encrypted signed fixed repair approval; never plaintext data
+        type: string
+        required: true
+      confirm:
+        description: APPLY_NEW_CARD_RESERVATION_RECOVERY_ONCE
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kakeibo-production
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'tmoriuchi1401-source/kakeibo-ai' &&
+      github.ref == 'refs/heads/main' && github.run_attempt == 1 &&
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner &&
+      github.sha == inputs.expected_sha && github.sha == github.workflow_sha &&
+      github.sha == vars.KAKEIBO_VALIDATED_MAIN_SHA &&
+      inputs.confirm == 'APPLY_NEW_CARD_RESERVATION_RECOVERY_ONCE'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      CONFIRM: ${{ inputs.confirm }}
+      KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
+      KAKEIBO_LEGACY_DISABLED: ${{ vars.KAKEIBO_LEGACY_DISABLED }}
+      KAKEIBO_BANK_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_BANK_SCHEDULE_ENABLED }}
+      KAKEIBO_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_SCHEDULE_ENABLED }}
+      CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED: ${{ vars.CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED }}
+      KAKEIBO_CARD_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_CARD_SCHEDULE_ENABLED || 'false' }}
+      KAKEIBO_CORE_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_CORE_SCHEDULE_ENABLED || 'false' }}
+      KAKEIBO_RECEIPT_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_RECEIPT_SCHEDULE_ENABLED || 'false' }}
+      KAKEIBO_PAYPAY_SCHEDULE_ENABLED: ${{ vars.KAKEIBO_PAYPAY_SCHEDULE_ENABLED || 'false' }}
+    steps:
+      - name: Deny debug before credentials
+        if: ${{ runner.debug == '1' }}
+        run: exit 1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12.12'
+      - name: Consume one dispatch before private credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -B -m app.aupay_card_reservation_recovery_entry --guard-only
+      - name: Install existing hash-pinned wheels
+        run: |
+          python -m pip download --require-hashes --only-binary=:all: -r requirements-card-preview.lock -d "$RUNNER_TEMP/card-wheels"
+          python -m pip install --no-index --find-links "$RUNNER_TEMP/card-wheels" --require-hashes -r requirements-card-preview.lock
+      - name: Apply approved import batch and checkpoint once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPAIR_CAPSULE: ${{ inputs.repair_capsule }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_GMAIL_TOKEN_JSON: ${{ secrets.GOOGLE_GMAIL_TOKEN_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          AUPAY_CARD_AUDIT_KEY_JSON: ${{ secrets.AUPAY_CARD_AUDIT_KEY_JSON }}
+          KAKEIBO_STATE_FOLDER_ID: ${{ vars.KAKEIBO_STATE_FOLDER_ID }}
+          AUPAY_CARD_STATE_FILE_ID: ${{ vars.AUPAY_CARD_STATE_FILE_ID }}
+          KAKEIBO_RUN_LEDGER_FILE_ID: ${{ vars.KAKEIBO_RUN_LEDGER_FILE_ID }}
+          KAKEIBO_PROJECTION_FOLDER_ID: ${{ vars.KAKEIBO_PROJECTION_FOLDER_ID }}
+          AMAZON_STATE_FILE_ID: ${{ vars.AMAZON_STATE_FILE_ID }}
+          BANK_STATE_FILE_ID: ${{ vars.BANK_STATE_FILE_ID }}
+        run: python -B -m app.aupay_card_reservation_recovery_entry

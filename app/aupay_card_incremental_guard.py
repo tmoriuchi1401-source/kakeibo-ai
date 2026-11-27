@@ -97,6 +97,19 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
         require(cp is not None, "reconciliation_checkpoint_required")
         from .aupay_card_incremental_recovery import preserved_unknown_proofs
         proofs = preserved_unknown_proofs(*reconciliation_state, checkpoint_value)
+        # Repair executions can occur weeks AFTER the business coverage time.
+        # Every archived failure, including other repair workflows, must still
+        # match its actual attempt; a checkpoint timestamp is not its clock.
+        for failure_id,expected in proofs.items():
+            actual=github.get(f"actions/runs/{failure_id}")
+            require(all(actual.get(k)==v for k,v in expected.items()),"previous_dispatch_no_retry")
+        from .aupay_card_reservation_recovery import summaries
+        for completed in summaries(reconciliation_state[0]).values():
+            if completed.get("status")=="complete" and completed.get("github_execution"):
+                identity=completed["github_execution"]
+                actual=github.get(f"actions/runs/{identity['id']}")
+                require(actual.get("status")=="completed" and actual.get("conclusion")=="success"
+                        and all(actual.get(k)==v for k,v in identity.items()),"recovery_completion_execution_unproven")
     while True:
         result = github.get(f"actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}")
         if total is None:
@@ -137,8 +150,7 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
                 # effect. The runtime repeats this with protected Google state
                 # BEFORE prepare/begin/writer. Default callers still deny it.
                 require(isinstance(prior.get("created_at"), str), "previous_dispatch_no_retry")
-                require(prior["run_attempt"] == 1
-                        and (cp is None or datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00")) < cp),
+                require(prior["run_attempt"] == 1,
                         "previous_dispatch_no_retry")
                 if not defer_reconciliation:
                     actual = github.get(f"actions/runs/{prior['id']}") if prior["id"] in proofs else {}

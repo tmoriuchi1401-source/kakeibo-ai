@@ -17,7 +17,7 @@ STAGES = frozenset({
     "checkpoint_proof", "checkpoint_guard", "checkpoint_commit",
     "checkpoint_independent_readback", "checkpoint_committed",
     "parent_completion", "parent_completion_readback", "parent_completed",
-    "final_readback", "complete",
+    "final_readback", "complete", "unused_revocation", "dispatch_intent",
 })
 EFFECT_STATES = {
     "native_reservation": {"not_started", "write_possible", "readback_confirmed"},
@@ -54,6 +54,16 @@ ERROR_CODES = frozenset({
     "evidence_timeout", "evidence_read_failed_no_retry", "evidence_mutation_forbidden",
     "batch_approval_binding_or_ttl_invalid", "batch_capability_reused_or_expired",
     "protected_batch_approval_invalid", "persistent_audit_key_required",
+    "unused_capability_revocation_denied", "batch_authorization_context_invalid",
+    "recovery_reservation_owner_changed", "recovery_reservation_record_changed", "recovery_origin_missing",
+    "recovery_parent_barrier_changed", "recovery_financial_dispatch_possible", "recovery_parent_revision_changed",
+    "recovery_unused_batch_missing", "recovery_unused_capability_unproven", "recovery_unused_manifest_changed",
+    "recovery_checkpoint_changed", "recovery_revocation_archive_missing", "recovery_revocation_archive_changed",
+    "recovery_revocation_changed", "recovery_archive_cycle", "recovery_independent_revision_required",
+    "recovery_state_revision_changed", "recovery_failure_identity_invalid", "recovery_intent_independent_readback",
+    "recovery_adopted_archive_changed", "recovery_archive_chain_changed", "recovery_execution_time_invalid",
+    "recovery_dispatch_intent_missing", "recovery_execution_identity_required", "recovery_completion_execution_unproven",
+    "recovery_archive_history_changed", "recovery_revocation_time_invalid",
     *{f"state_drive_read_failed_{status}" for status in (401,403,404,429,500,502,503,504)},
 })
 

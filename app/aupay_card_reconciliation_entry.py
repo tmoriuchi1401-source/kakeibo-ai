@@ -29,16 +29,16 @@ def encode(value):
     return json.dumps(value,sort_keys=True,ensure_ascii=True,separators=(",",":")).encode()
 
 
-def boundary(env,head,github):
+def boundary(env,head,github,*,workflow=WORKFLOW,confirm=CONFIRM,per_release=False):
     require(env.get("GITHUB_ACTIONS")=="true" and env.get("RUNNER_ENVIRONMENT")=="github-hosted"
         and env.get("RUNNER_OS")=="Linux" and env.get("GITHUB_REPOSITORY")==REPO
         and env.get("GITHUB_EVENT_NAME")=="workflow_dispatch" and env.get("GITHUB_REF")=="refs/heads/main"
         and env.get("GITHUB_ACTOR")==env.get("GITHUB_TRIGGERING_ACTOR")==REPO.split("/")[0]
-        and env.get("GITHUB_RUN_ATTEMPT")=="1" and env.get("CONFIRM")==CONFIRM,
+        and env.get("GITHUB_RUN_ATTEMPT")=="1" and env.get("CONFIRM")==confirm,
         "repair_hosted_owner_once_required")
     require(head==env.get("EXPECTED_SHA")==env.get("GITHUB_SHA")==env.get("GITHUB_WORKFLOW_SHA")
         ==env.get("KAKEIBO_VALIDATED_MAIN_SHA")
-        and env.get("GITHUB_WORKFLOW_REF")==f"{REPO}/.github/workflows/{WORKFLOW}@refs/heads/main"
+        and env.get("GITHUB_WORKFLOW_REF")==f"{REPO}/.github/workflows/{workflow}@refs/heads/main"
         and env.get("RUNNER_DEBUG","0")!="1" and not env.get("ACTIONS_STEP_DEBUG")
         and not env.get("ACTIONS_RUNNER_DEBUG") and not env.get("GEMINI_API_KEY")
         and all(env.get(k)==v for k,v in FLAGS.items())
@@ -49,38 +49,46 @@ def boundary(env,head,github):
     current=github.get(f"actions/runs/{rid}")
     require(current["id"]==rid and current["head_sha"]==head and current["run_attempt"]==1
         and current["status"]=="in_progress" and current["event"]=="workflow_dispatch"
-        and current["path"]==".github/workflows/"+WORKFLOW,"repair_run_changed")
-    history=github.get(f"actions/workflows/{WORKFLOW}/runs?per_page=100")
+        and current["path"]==".github/workflows/"+workflow,"repair_run_changed")
+    history=github.get(f"actions/workflows/{workflow}/runs?per_page=100")
     # Consumes the entry even on a crash before the first Google acknowledgement.
     # No second dispatch or rerun can reuse the same fixed repair authority.
-    require(history["total_count"]==len(history["workflow_runs"])==1
-        and history["workflow_runs"][0]["id"]==rid,"repair_dispatch_consumed_no_retry")
+    runs=history["workflow_runs"]
+    if per_release:
+        same=[r for r in runs if r["head_sha"]==head]
+        require(history["total_count"]==len(runs)<=100 and len(same)==1 and same[0]["id"]==rid
+                and all(r["id"]==rid or (r["status"]=="completed" and r["conclusion"]=="failure"
+                    and r["run_attempt"]==1) for r in runs),"repair_dispatch_consumed_no_retry")
+    else:
+        require(history["total_count"]==len(runs)==1 and runs[0]["id"]==rid,"repair_dispatch_consumed_no_retry")
     for status in ("in_progress","queued","waiting","pending","requested"):
         runs=github.get(f"actions/runs?status={status}&per_page=100")
         require(runs["total_count"]==len(runs["workflow_runs"])<=100
             and all(r["id"]==rid for r in runs["workflow_runs"]),"repair_competing_run")
 
 
-def decode_capsule(text,key,tree,now):
+def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only"):
     """Existing RSA/AES/PSS capsule pattern and existing SA key; no new grant."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    label=LABEL if label is None else label
+    record_sha256=RECORD_SHA256 if record_sha256 is None else record_sha256
     require(len(text)<=60000,"repair_capsule_too_large")
     sealed=json.loads(base64.b64decode(text,validate=True))
     b64=lambda name:base64.b64decode(sealed[name],validate=True)
-    aes=key.decrypt(b64("key"),padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=LABEL))
+    aes=key.decrypt(b64("key"),padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=label))
     decoder=zlib.decompressobj()
-    plain=decoder.decompress(AESGCM(aes).decrypt(b64("nonce"),b64("data"),LABEL),1024*1024)
+    plain=decoder.decompress(AESGCM(aes).decrypt(b64("nonce"),b64("data"),label),1024*1024)
     require(decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail,"repair_capsule_invalid")
     value=json.loads(plain)
     record_bytes=base64.b64decode(value["record"],validate=True)
     att=value["attestation"]
     key.public_key().verify(base64.b64decode(value["signature"],validate=True),encode(att),
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256())
-    require(hashlib.sha256(record_bytes).hexdigest()==RECORD_SHA256==att["record_sha256"]
+    require(hashlib.sha256(record_bytes).hexdigest()==record_sha256==att["record_sha256"]
         and att["code_tree_sha256"]==tree and att["owner_approved"] is True
-        and att["scope"]=="fixed_card_import_reconciliation_only"
+        and att["scope"]==scope
         and 0<(datetime.fromisoformat(att["approval"]["expires_at"])-now).total_seconds()<=300,
         "repair_signed_approval_invalid")
     record=json.loads(record_bytes)
@@ -88,10 +96,33 @@ def decode_capsule(text,key,tree,now):
     return record,att
 
 
-def run(env,head,github,diagnostics=None):
+def verify_failure_ancestry(record,env,github):
+    expected={}
+    ancestor=record
+    for _ in range(32):
+        failure=ancestor["old_failure"]
+        require(failure["id"] not in expected,"repair_old_failure_changed")
+        expected[failure["id"]]=failure
+        prior=github.get(f'actions/runs/{failure["id"]}')
+        require(all(prior.get(k)==v for k,v in failure.items()),"repair_old_failure_changed")
+        if not ancestor.get("recovery"):break
+        ancestor=ancestor["recovery"]["previous_record"]
+    else:require(False,"repair_old_failure_changed")
+    if record.get("recovery"):
+        from .aupay_card_reservation_recovery import RECOVERY_WORKFLOW
+        history=github.get(f"actions/workflows/{RECOVERY_WORKFLOW}/runs?per_page=100")
+        require(history["total_count"]==len(history["workflow_runs"])<=100
+                and all(r["id"]==int(env["GITHUB_RUN_ID"]) or (r["id"] in expected
+                    and all(r.get(k)==v for k,v in expected[r["id"]].items())) for r in history["workflow_runs"]),
+                "repair_old_failure_changed")
+
+
+def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only"):
     diagnostics = diagnostics or ReconciliationDiagnostics()
+    check=boundary_checker or boundary
+    record_sha256=RECORD_SHA256 if record_sha256 is None else record_sha256
     diagnostics.mark("release_guard")
-    boundary(env,head,github)
+    check(env,head,github)
     diagnostics.mark("dependencies")
     from cryptography.hazmat.primitives import serialization
     from .aupay_card_reconciliation_apply import execute_reconciliation,read_financial_and_review,prepare_reconciliation
@@ -114,7 +145,7 @@ def run(env,head,github,diagnostics=None):
     key=serialization.load_pem_private_key(info["private_key"].encode(),password=None)
     tree=subprocess.check_output(["git","rev-parse","HEAD^{tree}"],cwd=ROOT,text=True).strip()
     diagnostics.mark("capsule_decode")
-    record,att=decode_capsule(env["REPAIR_CAPSULE"],key,tree,datetime.now(timezone.utc))
+    record,att=decode_capsule(env["REPAIR_CAPSULE"],key,tree,datetime.now(timezone.utc),record_sha256=record_sha256,label=label,scope=scope)
     diagnostics.mark("bindings")
     bindings=record["bindings"]
     require(bindings["spreadsheet_id"]==env["SPREADSHEET_ID"],"repair_target_changed")
@@ -155,10 +186,9 @@ def run(env,head,github,diagnostics=None):
             require(result["id"]==evidence["gmail_id"] and result["internalDate"]==evidence["internal_date_ms"]
                 and hashlib.sha256(raw).hexdigest()==evidence["raw_sha256"],"repair_fixed_source_changed")
     def guard():
-        boundary(env,head,github)
+        check(env,head,github)
         require(time.monotonic()<deadline,"repair_timeout")
-        prior=github.get(f'actions/runs/{record["old_failure"]["id"]}')
-        require(all(prior.get(k)==v for k,v in record["old_failure"].items()),"repair_old_failure_changed")
+        verify_failure_ancestry(record,env,github)
         acl_check()
         for item in record["other_native"]:
             file_id=unwrap(item["variable"],env[item["variable"]],info["private_key"])
@@ -198,15 +228,18 @@ def run(env,head,github,diagnostics=None):
         # Secret; its key/target must match the protected historical manifests.
         approval=dict(att["approval"],batch_ref=projected.batch_ref,target_ref=projected.target_ref)
         (private/"approval.json").write_text(json.dumps(approval),encoding="utf-8")
-        return execute_reconciliation(record=record,record_sha256=RECORD_SHA256,run_id=att["run_id"],db=db,
+        current=github.get(f'actions/runs/{env["GITHUB_RUN_ID"]}')
+        identity={k:current[k] for k in ("id","head_sha","head_branch","run_attempt","event","path","created_at")}
+        return execute_reconciliation(record=record,record_sha256=record_sha256,run_id=att["run_id"],db=db,
             durable=durable,ledger=ledger,key_provider=audit,
             approval_provider=ProtectedBatchApprovalProvider(private/"approval.json",repo_root=ROOT),
             state_dir=private/"state",repo_root=ROOT,native_read=card_read.read,parent_read=parent_read.read,
             financial_read=lambda:read_financial_and_review(ro_sheets,db.sid),documents_check=documents_check,
-            source_check=source_check,guard=guard,diagnostics=diagnostics)
+            source_check=source_check,guard=guard,diagnostics=diagnostics,
+            state_observe=lambda:(card_read.observe()[1],parent_read.observe()[1]),execution_identity=identity)
 
 
-def main():
+def main(*,run_profile=None,guard_profile=None):
     logging.disable(logging.CRITICAL);socket.setdefaulttimeout(30)
     diagnostics=ReconciliationDiagnostics()
     try:
@@ -217,8 +250,8 @@ def main():
             github=GitHub(env)
             if sys.argv[1:]:
                 diagnostics.mark("release_guard")
-                boundary(env,head,github);result=dict(success=True,guard=True)
-            else:result=run(env,head,github,diagnostics=diagnostics)
+                (guard_profile or boundary)(env,head,github);result=dict(success=True,guard=True)
+            else:result=(run_profile or run)(env,head,github,diagnostics=diagnostics)
         result["diagnostics"]=diagnostics.report()
     except BaseException as error:
         result=dict(success=False,outcome="UNKNOWN_NO_REPLAY",automatic_retry=False,rollback=False,

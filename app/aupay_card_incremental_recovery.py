@@ -180,6 +180,9 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
     from .aupay_card_window_preview import checkpoint
     from .aupay_card_aliases import merge_registry
     from .drive_run_state import CARD_FILES, _validate_file
+    from .aupay_card_reservation_recovery import (
+        validate_revocations, completed_successor, archive_chain, digest, summaries as read_summaries, FAILURE_PATHS,
+    )
 
     checkpoint(native, expected_checkpoint)
     card = parent["sources"]["aupay_card"]
@@ -187,6 +190,11 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
             "reconciliation_parent_pending")
     runs = _rows(native, "recurring.sqlite3", "recurring_runs")
     summaries = {r["run_id"]: json.loads(r["summary_json"]) for r in runs}
+    from .production_run import COUNT_KEYS
+    latest=summaries[_rows(native,"recurring.sqlite3","recurring_checkpoint")[0]["run_id"]]
+    require(card["counts"]=={k:v for k,v in latest.items() if k in COUNT_KEYS and type(v) is int and v>=0},
+            "reconciliation_parent_counts_changed")
+    revocations = validate_revocations(native, summaries)
     proofs = {}
     for archive_row in runs:
         archive = summaries[archive_row["run_id"]]
@@ -195,7 +203,7 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
         require(archive["status"] == "UNKNOWN_NO_REPLAY" and archive["replay_allowed"] is False,
                 "reconciliation_unknown_not_preserved")
         old, old_card = archive["native_before"], archive["parent_card_before"]
-        if archive.get("archive_schema") == 2:
+        if archive.get("archive_schema") in {2,3}:
             old_raw = base64.b64decode(archive["native_before_raw_b64"], validate=True)
             parent_raw = base64.b64decode(archive["parent_before_raw_b64"], validate=True)
             require(hashlib.sha256(old_raw).hexdigest() == archive["native_before_bytes_sha256"]
@@ -203,6 +211,12 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
                     and hashlib.sha256(parent_raw).hexdigest() == archive["parent_before_bytes_sha256"]
                     and json.loads(parent_raw)["sources"]["aupay_card"] == old_card,
                     "reconciliation_exact_archive_changed")
+        if archive.get("archive_schema")==3:
+            require(archive["adopted_archive_ids"]==[a["run_id"] for a in archive_chain(read_summaries(old))],
+                    "recovery_adopted_archive_changed")
+            own=[p for p in revocations.values() if p["archive_id"]==archive["run_id"]]
+            require(len(own)==1 and own[0]["unused_proof"]["failed_run_uuid"]==archive["recovery"]["failed_run_uuid"],
+                    "recovery_revocation_archive_missing")
         require(_hash(old) == archive["native_sha256"] and _hash(old_card) == archive["parent_card_sha256"]
                 and old["binding"] == native["binding"] and old["source"] == native["source"]
                 and old["schema"] == native["schema"] and old["phase"] == "pending" and old["attempt"]
@@ -216,22 +230,32 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
             _validate_file(old["source"], file, raw)
             for table in CARD_FILES[file] - {"recurring_checkpoint"}:
                 retained = {_hash(r) for r in _rows(native, file, table)}
-                require(all(_hash(r) in retained for r in _rows(old, file, table)),
+                def kept(row):
+                    if _hash(row) in retained:return True
+                    if table!="batch_capabilities":return False
+                    proof=revocations.get(row["capability_id"],{})
+                    return proof.get("before")==row and _hash(proof["after"]) in retained
+                require(all(kept(r) for r in _rows(old, file, table)),
                         "reconciliation_old_history_changed")
         old_cp = _rows(old, "recurring.sqlite3", "recurring_checkpoint")
         require(len(old_cp) == 1 and old_cp[0]["successful_window_end"] == archive["checkpoint_before"],
                 "reconciliation_old_checkpoint_changed")
-        repair = summaries.get(archive["repair_run_id"], {})
+        terminal,repair = completed_successor(archive,summaries)
         certificate = repair.get("checkpoint_reconciliation", {})
         require(repair.get("status") == "complete" and repair.get("failure") == 0
                 and repair.get("run_id") not in {archive["run_id"], old["attempt"], old_card["attempt"]}
-                and certificate.get("archive_id") == archive["run_id"]
-                and certificate.get("evidence_sha256") == archive["evidence_sha256"]
+                and certificate.get("archive_id") == terminal["run_id"]
+                and certificate.get("evidence_sha256") == terminal["evidence_sha256"]
                 and len(archive["evidence_sha256"]) == 64
                 and repair["source_window_end"] == archive["checkpoint_after"]
                 and datetime.fromisoformat(expected_checkpoint) >= datetime.fromisoformat(archive["checkpoint_after"])
                     > datetime.fromisoformat(archive["checkpoint_before"]),
                 "reconciliation_new_completion_missing")
+        if terminal.get("archive_schema")==3:
+            ids=sorted(terminal["adopted_archive_ids"]+[terminal["run_id"]])
+            require(certificate.get("archive_chain_ids")==ids and archive["run_id"] in ids
+                    and certificate.get("archive_chain_sha256")==digest([summaries[i] for i in ids]),
+                    "recovery_archive_chain_changed")
         aliases = merge_registry(repair.get("card_aliases", []))
         require(aliases and _hash(list(aliases)) == certificate.get("aliases_sha256"),
                 "reconciliation_alias_proof_missing")
@@ -248,7 +272,27 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
                 and any((e["stage"], e["state"]) == ("write_result", "acknowledged") for e in events)
                 and events[-1]["stage"] == "final" and events[-1]["state"] == "confirmed",
                 "reconciliation_new_batch_unproven")
+        if terminal.get("archive_schema")==3:
+            require(all(datetime.fromisoformat(v["revoked_at"])<=datetime.fromisoformat(caps[0]["issued_at"])
+                        for v in revocations.values() if v["archive_id"] in certificate["archive_chain_ids"]),
+                    "recovery_revocation_time_invalid")
         manifest = json.loads(manifests[0]["payload"])
+        if terminal.get("archive_schema")==3:
+            from .aupay_card_reservation_recovery import PROTOCOL
+            reservation=summaries.get("RESERVATION:"+rid,{})
+            intent=summaries.get("INTENT:"+rid,{})
+            require(reservation.get("protocol")==PROTOCOL and reservation.get("record_sha256")==terminal["evidence_sha256"]
+                    and reservation.get("github_execution")==repair.get("github_execution")
+                    and isinstance(repair.get("github_execution"),dict)
+                    and reservation.get("replay_allowed") is False
+                    and intent.get("protocol")==PROTOCOL and intent.get("status")=="REPAIR_DISPATCH_INTENT"
+                    and intent.get("replay_allowed") is False and intent.get("manifest_sha256")==manifests[0]["payload_hash"],
+                    "recovery_dispatch_intent_missing")
+        started=datetime.fromisoformat(manifest["created_at"])
+        if "execution_started_at" in repair:
+            require(datetime.fromisoformat(repair["execution_started_at"])==started
+                    and datetime.fromisoformat(repair["execution_completed_at"])>=started,
+                    "recovery_execution_time_invalid")
         require(manifest["run_id"] == rid and caps[0]["batch_ref"] == manifest["batch_ref"]
                 and manifest["batch_size"] == repair["written"] == repair["new_eligible"]
                 and repair["write_requests"] == 1 and manifest["source_window"]["end"] == archive["checkpoint_after"]
@@ -266,9 +310,9 @@ def preserved_unknown_proofs(native, parent, expected_checkpoint):
                 and prior["id"] not in proofs and prior["run_attempt"] == 1
                 and prior["status"] == "completed" and prior["conclusion"] == "failure"
                 and prior["head_branch"] == "main"
-                and prior["path"] == ".github/workflows/aupay-card-incremental-apply.yml"
+                and prior["path"] in FAILURE_PATHS
                 and datetime.fromisoformat(prior["created_at"].replace("Z", "+00:00"))
-                    < datetime.fromisoformat(archive["checkpoint_after"]),
+                    < started,
                 "reconciliation_failed_identity_invalid")
         proofs[prior["id"]] = prior
     return proofs
