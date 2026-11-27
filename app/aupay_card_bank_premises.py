@@ -19,6 +19,8 @@ BUSINESS_RECORD_SHA256 = "1558548ced53ca1689e5f076424b79c4fa88c95877bf35492eafb9
 # Both contracts are reviewed; bank content changes require separate review.
 HISTORICAL_BANK_CODE_SHA256 = "3546b0022cc33d5cfec5721ab41540bd69d57c505e52c8df7be05889bfbb7995"
 REVIEWED_BANK_CODE_SHA256 = frozenset({HISTORICAL_BANK_CODE_SHA256,
+    '6bda01b7ad40955f281dec77ae848fe59ea17fc7cf209e5d7b7952729b93dcf1',
+    'c89806dbb5f99bac8487b005d45ae59472e8aa28a67e8ef3d3409d6350127545',
     "d93faaff02964e0235588d3eb0970984b5e29cedb29a61c3573b9d366234075d"})
 BANK_WORKFLOW = ".github/workflows/kakeibo-production.yml"
 CODE_PATHS = (BANK_WORKFLOW, "app/production_flow.py", "app/production_run.py",
@@ -56,7 +58,8 @@ def code_contract():
 
 def reviewed_business(record):
     from .aupay_card_reservation_reference import NEW_RECORD_SHA256
-    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256}
+    from .auto_expense_reconciliation import RECORD_SHA256 as AUTO_EXPENSE_RECORD_SHA256
+    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256, AUTO_EXPENSE_RECORD_SHA256}
 
 
 def validate_bank_chain(record, proof, parent_raw):

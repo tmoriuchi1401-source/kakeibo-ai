@@ -171,7 +171,7 @@ def invoke(source: str, *, apply: bool, env: dict, canary_target: str = "", mone
             match = re.fullmatch(r"(?:RuntimeError|ValueError|StateError): ([a-z][a-z0-9_]+)", last_line)
             if match and match.group(1) in SAFE_SOURCE_ERRORS:
                 raise StateError(match.group(1))
-        if source in {"receipt_confirmation", "receipts", "paypay"}:
+        if source in {"receipt_confirmation", "receipts", "paypay", "auto_expense"}:
             from .production_run import SAFE_SOURCE_ERRORS, SourceFailure
             try:
                 failure=json.loads(result.stdout)
@@ -320,6 +320,10 @@ def assemble(env: dict, directory: Path, *, apply: bool, bank_apply: bool,
             return execute(source)
         if ledger is None:
             raise StateError("production_ledger_required")
+        # Validate selected card contracts inside the shared lock, before pending.
+        # The existing child repeats the check after reservation, before finance.
+        if source == 'auto_expense' and env.get('CARD_EXPENSE_REQUEST'):
+            invoke(source, apply=False, env=env)
         # A projection stage has no accounting writer. Its own durable dirty
         # markers make replay safe even after an ambiguous display/save result.
         # Native accounting stages retain their existing pending-state gate.
@@ -433,6 +437,14 @@ def main():
         from .private_state_bindings import decode_environment
         bank_stage = 'bank_parent_bindings'
         env, args.amazon_target = decode_environment(env, canary_target=args.amazon_target)
+        if env.get("CARD_EXPENSE_RECONCILIATION"):
+            if (args.scope != "card_expenses" or args.bank_apply or args.amazon_target
+                    or args.receipt_store or args.receipt_manifest or args.projection_bootstrap
+                    or env.get("CARD_EXPENSE_REQUEST")):
+                raise StateError("auto_expense_reconciliation_scope_required")
+            from .auto_expense_reconciliation import run_from_environment
+            print(json.dumps(run_from_environment(env,apply=args.mode=="apply"),sort_keys=True))
+            return
         validate_scope(args)
         if env.get("BANK_FIXED_BACKFILL_BATCH") and not env.get("BANK_FIXED_BACKFILL_PLAN"):
             raise StateError("fixed_bank_plan_required")

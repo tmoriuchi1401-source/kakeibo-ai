@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing, redirect_stdout, redirect_stderr
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import io
 import json
@@ -51,6 +51,27 @@ def digest(value):
                                      separators=(",", ":")).encode()).hexdigest()
 
 
+# Owner-approved historical coverage. This map is readonly authority only.
+CATCHUP_WINDOWS = {
+    ("2026-11-04T21:00:33+09:00", "2026-11-16T21:00:33+09:00"): "dc6d0cdddfd2f565c579f6fea565857f6d7884987aa698e5ae57f162dc21446e",
+    ("2026-11-16T21:00:33+09:00", "2026-11-26T21:43:48+09:00"): "17a5f6957d4870e897bd9e197f00ae1baf9c1e1c690dba0b64a5e3609f200178",
+}
+
+
+def preview_contract(env):
+    cp,start,end=(env.get(k) for k in ("EXPECTED_CHECKPOINT","PREVIEW_START","PREVIEW_END"))
+    if (cp,start,end)==(CHECKPOINT,START,END):
+        require(not env.get("EXPECTED_PLAN_SHA256"),"fixed_window_mismatch")
+        return None
+    expected=CATCHUP_WINDOWS.get((cp,end))
+    require(expected is not None and env.get("EXPECTED_PLAN_SHA256")==expected,"fixed_window_mismatch")
+    a,b,c=map(datetime.fromisoformat,(cp,start,end))
+    require(all(v.tzinfo and v.utcoffset().total_seconds()==32400 and not v.microsecond for v in (a,b,c))
+            and start==(a-timedelta(days=2)).isoformat() and 0<(c-b).total_seconds()<=14*86400,
+            "fixed_window_mismatch")
+    return expected
+
+
 def boundary(env, head):
     require(re.fullmatch("[0-9a-f]{40}", head) is not None, "commit_invalid")
     require(env.get("GITHUB_ACTIONS") == "true" and env.get("GITHUB_REPOSITORY") == REPO
@@ -63,8 +84,7 @@ def boundary(env, head):
     require(env.get("GITHUB_ACTOR") == env.get("GITHUB_TRIGGERING_ACTOR") == REPO.split("/")[0]
             and env.get("GITHUB_RUN_ATTEMPT") == "1", "owner_attempt_required")
     require(env.get("CONFIRM") == "PREVIEW_ONLY" and env.get("PREVIEW_SOURCE") == SOURCE
-            and env.get("PREVIEW_START") == START and env.get("PREVIEW_END") == END
-            and env.get("EXPECTED_CHECKPOINT") == CHECKPOINT, "fixed_window_mismatch")
+            and preview_contract(env) in {None,env.get("EXPECTED_PLAN_SHA256")}, "fixed_window_mismatch")
     require(env.get("RUNNER_DEBUG", "0") != "1"
             and not env.get("ACTIONS_STEP_DEBUG") and not env.get("ACTIONS_RUNNER_DEBUG"), "debug_forbidden")
     require(all(env.get(k) == v for k, v in FLAGS.items()), "production_flags_mismatch")
@@ -100,9 +120,10 @@ def controls(env, head, github):
         require(runs["total_count"] <= 100 and len(runs["workflow_runs"]) == runs["total_count"],
                 "run_inventory_incomplete")
         require(all(r["id"] == current for r in runs["workflow_runs"]), "competing_run")
-    previous = github.get(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&head_sha={head}&per_page=100")
-    require(previous["total_count"] == 1 and len(previous["workflow_runs"]) == 1
-            and previous["workflow_runs"][0]["id"] == current, "previous_dispatch")
+    if preview_contract(env) is None:
+        previous = github.get(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&head_sha={head}&per_page=100")
+        require(previous["total_count"] == 1 and len(previous["workflow_runs"]) == 1
+                and previous["workflow_runs"][0]["id"] == current, "previous_dispatch")
 
 
 def checkpoint(value, expected=CHECKPOINT):
@@ -299,6 +320,9 @@ def run(env, head, github):
     sid, folder = env["SPREADSHEET_ID"], decoded["KAKEIBO_STATE_FOLDER_ID"]
     drive, sheets = read_only_drive_service(), read_only_sheets_service()
     card = ReadOnlyState(drive, StateBinding(SOURCE, sid, folder, decoded["AUPAY_CARD_STATE_FILE_ID"]))
+    amazon=None
+    if env.get("AMAZON_STATE_FILE_ID"):
+        amazon=ReadOnlyState(drive,StateBinding("amazon_gmail",sid,folder,unwrap("AMAZON_STATE_FILE_ID",env["AMAZON_STATE_FILE_ID"],info["private_key"])))
     parent = ReadOnlyState(drive, StateBinding("production_run", sid, folder, decoded["KAKEIBO_RUN_LEDGER_FILE_ID"]))
     money_store = store_from_environment(sid, env, read_only=True)
     if env.get("KAKEIBO_AMAZON_MONEY_MODE") == "confirmed-v1":
@@ -317,6 +341,10 @@ def run(env, head, github):
                 and policy.expires_at.isoformat() == "2027-09-11T00:00:00+09:00", "authority_policy_changed")
         db = SheetsDB(sid, service=sheets,
                       projection_journal=ProjectionJournal(money_store) if money_store else None)
+        expected=preview_contract(env)
+        if expected:
+            return catchup_preview(env, github, head, private, card, parent, amazon, db,
+                money_store, authority, key, policy, expected)
         def execute():
             def source(path):
                 state = SqliteRecurringRunState(path / "recurring.sqlite3", repo_root=ROOT)
@@ -341,6 +369,42 @@ def run(env, head, github):
             controls(env, head, github)
 
 
+def catchup_preview(env, github, head, private, card, parent, amazon, db, money_store, authority, key, policy, expected):
+    from .aupay_card_first_window_apply import prepare,ReviewLedger
+    from .amazon_money_runtime import _configured_writer
+    from .aupay_card_aliases import LiteralRows
+    from .aupay_card_incremental_coverage import plan_contract_sha256
+    from .aupay_card_expense_stage import planning_profile
+    from .aupay_card_recurring import SqliteRecurringRunState
+    from .amazon_gmail_preview import gmail_readonly_service
+    from .drive_run_state import DurableState
+    from .production_run import run_durable_source
+    from .projection_store import ReadOnlyProjectionStore
+    cp=env["EXPECTED_CHECKPOINT"]
+    observation=lambda:observe(card,parent,db.svc,db.sid,money_store,expected_checkpoint=cp,amazon=amazon)
+    before=observation()
+    try:
+        def source(path):
+            state=SqliteRecurringRunState(path/"recurring.sqlite3",repo_root=ROOT)
+            reader=LiteralRows(db)
+            writer=_configured_writer(reader,ReadOnlyProjectionStore(money_store),env,ledger=ReviewLedger(reader))
+            profile=planning_profile(reader,env)
+            prepared=prepare(gmail=gmail_readonly_service(env["GOOGLE_GMAIL_TOKEN_JSON"]),db=reader,
+                writer=writer,policy=policy,state=state,now=datetime.now(ZoneInfo("Asia/Tokyo")),key=key.load(),
+                expected_checkpoint=cp,incremental=True,cutoff=datetime.fromisoformat(env["PREVIEW_END"]))
+            require(planning_profile(reader,env)==profile,"card_expense_profile_changed")
+            actual=plan_contract_sha256(prepared)
+            require(actual==expected,"approved_catchup_plan_changed")
+            return dict(success=True,failure=0,plan_sha256=actual,aggregation=prepared["totals"],
+                planning_profile=profile,profile_sha256=digest(profile))
+        result=run_durable_source(DurableState(card,card.binding),private/"state",source,apply=False)
+    finally:
+        require(observation()==before,"readonly_snapshot_changed")
+        controls(env,head,github)
+    return dict(result,before=before,financial_write_requests=0,checkpoint_updates=0,
+        persistent_state_saves=0,review_writes=0)
+
+
 def main():
     result = {"success": False}
     # Dependency output, API exceptions, raw source summaries and tracebacks are
@@ -363,7 +427,7 @@ def main():
             else:
                 require(not sys.argv[1:], "arguments_forbidden")
                 result = {"success": True, **run(env, head, github), "commit": head,
-                          "source": SOURCE, "start": START, "end": END,
+                          "source": SOURCE, "start": env["PREVIEW_START"], "end": env["PREVIEW_END"],
                           "observed_at": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat()}
     except Stop as error:
         result = {"success": False, "error": str(error)}

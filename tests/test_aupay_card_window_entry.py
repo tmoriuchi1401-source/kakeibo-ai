@@ -283,7 +283,8 @@ def test_workflow_manual_only_pinned_and_secrets_last():
     assert "--require-hashes" in steps[-2]["run"] and "--no-index" in steps[-2]["run"]
     assert "python -B -m app.aupay_card_window_preview" in steps[-1]["run"]
     assert not any(s.get("uses", "").startswith(("actions/upload-artifact", "actions/cache")) for s in steps)
-    assert not {"BANK_STATE_FILE_ID", "AMAZON_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
+    assert not {"BANK_STATE_FILE_ID", "GEMINI_API_KEY"} & set(steps[-1]["env"])
+    assert steps[-1]["env"]["AMAZON_STATE_FILE_ID"] == "${{ vars.AMAZON_STATE_FILE_ID }}"
 
 
 def test_complete_entry_uses_real_clock_and_one_disposable_card_source(monkeypatch, tmp_path):

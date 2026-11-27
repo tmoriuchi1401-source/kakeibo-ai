@@ -31,6 +31,11 @@ on:
         type: string
         required: false
         default: ''
+      card_expense_reconciliation:
+        description: Encrypted signed fixed state-only operator proof; card_expenses only
+        type: string
+        required: false
+        default: ''
       amazon_target:
         description: RSA-wrapped fixed AM money ID; only for canary apply
         type: string
@@ -117,6 +122,7 @@ jobs:
     env:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      CARD_EXPENSE_RECONCILIATION: ${{ inputs.card_expense_reconciliation }}
       KAKEIBO_AUTHORITY_RECIPIENT: ${{ inputs.authority_recipient }}
       BANK_FIXED_BACKFILL_PLAN: ${{ inputs.bank_backfill_plan }}
       BANK_FIXED_BACKFILL_BATCH: ${{ inputs.bank_backfill_batch }}

@@ -15,6 +15,8 @@ from .drive_run_state import DurableState, StateError
 
 
 SAFE_SOURCE_ERRORS = frozenset({
+    'card_expense_approved_plan_changed','card_expense_plan_changed','card_expense_requires_review',
+    'card_expense_category_invalid','card_expense_owner_changed','card_expense_native_pending','card_expense_profile_changed','card_expense_failed',
     'source_execution_failed', 'source_timeout', 'source_connection_failed',
     'source_tls_failed', 'source_invalid_data', 'source_internal_error',
     'receipt_response_invalid',
@@ -132,13 +134,13 @@ BANK_STAGES = frozenset({'bank_parent_setup', 'bank_parent_bindings', 'bank_pare
     'bank_cli_state', 'bank_cli_execution', 'bank_sheets_read', 'bank_drive_read',
     'bank_pdf_parse', 'bank_classification'})
 BANK_READ_COUNTS = frozenset({'sheets_reads', 'sheets_read_attempts', 'sheets_read_retries', 'http_429_seen'})
-SOURCE_STAGES = SOURCE_STAGES | BANK_STAGES
+SOURCE_STAGES = SOURCE_STAGES | BANK_STAGES | {'card_expense_preflight','card_expense_apply'}
 FAILURE_CLASSES=frozenset({'StateError','RuntimeError','HttpError','BankPdfError','SSLError','SSLEOFError',
     'TimeoutError','ValueError','KeyError','TypeError','AttributeError','OSError','OtherError'})
 FAILURE_FILES=frozenset({'receipt_confirmation_production.py','pdf_intake_production.py',
     'pdf_intake_runner.py','pdf_intake_registry.py','pdf_intake_proof_client.py',
     'receipt_confirmation.py','receipt_reimport_production.py','google_clients.py',
-    'sheets.py','drive_run_state.py','receipt_privacy_gate.py'})
+    'sheets.py','drive_run_state.py','receipt_privacy_gate.py','aupay_card_expense_stage.py','auto_expense.py'})
 
 
 def failure_diagnostic(error):
@@ -323,6 +325,16 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                 counts = {key: value for key, value in result.items()
                           if key in count_keys and type(value) is int and value >= 0}
                 outcome.update(status="success", error="", counts=counts)
+                if source=='auto_expense' and preview and 'plan_sha256' in result:
+                    import re
+                    profile=result.get('planning_profile')
+                    require_success({'failure':0 if all(isinstance(result.get(k),str) and
+                        re.fullmatch('[0-9a-f]{64}',result[k]) for k in ('plan_sha256','profile_sha256')) else 1})
+                    outcome['card_expense_preview']={k:result[k] for k in
+                        ('plan_sha256','profile_sha256','expense_rows','expense_yen')}
+                    if isinstance(profile,dict) and set(profile)=={'effective_settings_sha256','category_master_sha256','category_rules_sha256'} and all(
+                            isinstance(v,str) and re.fullmatch('[0-9a-f]{64}',v) for v in profile.values()):
+                        outcome['card_expense_preview']['planning_profile']=profile
                 if source == "bank":
                     from .bank_pdf_status import safe_file_statuses
                     outcome["file_statuses"] = safe_file_statuses(result.get("file_statuses", []))
