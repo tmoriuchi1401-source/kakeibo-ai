@@ -182,6 +182,8 @@ def test_source_mixed_new_and_duplicate_public_entry_has_only_totals(tmp_path, m
         print("PRIVATE_RAW_BODY")
         return safe
     monkeypatch.setattr(entry, "run", private)
+    monkeypatch.setenv("PREVIEW_START",entry.START)
+    monkeypatch.setenv("PREVIEW_END",entry.END)
     assert main() == 0
     public = capsys.readouterr()
     rendered = json.loads(public.out)
