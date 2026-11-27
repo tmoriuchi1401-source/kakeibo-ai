@@ -88,15 +88,19 @@ class BatchProjection:
     batch_ref: str
     batch_size: int
     schema_version: int = BATCH_SCHEMA_VERSION
+    authorization_context: str = ""
 
 
 def create_batch_projection(
     full_plan: CanonicalApplyPlan, *, candidate_identities: tuple[str, ...],
     statuses: Mapping[str, str], binding: TargetBinding, audit_key: PersistentAuditKey,
+    authorization_context: str = "",
 ) -> BatchProjection:
     validate_canonical_apply_plan(full_plan)
     binding.validate()
     audit_key.validate()
+    if authorization_context and not re.fullmatch(r"recovery-v2:[0-9a-f]{64}",authorization_context):
+        raise RuntimeError("batch_authorization_context_invalid")
     plan = project_candidate_batch_plan(full_plan, candidate_identities)
     bound_statuses = tuple(str(statuses.get(identity, "")) for identity in candidate_identities)
     if any(status not in ALLOWED_STATUSES for status in bound_statuses):
@@ -109,10 +113,11 @@ def create_batch_projection(
         "candidate_refs": list(refs), "statuses": list(bound_statuses),
         "target_ref": target_ref, "full_plan_binding_ref": full_ref,
         "projected_plan_binding_ref": projected_ref, "batch_size": len(refs),
+        **({"authorization_context":authorization_context} if authorization_context else {}),
     })
     return BatchProjection(
         full_plan, plan, candidate_identities, refs, bound_statuses, target_ref,
-        full_ref, projected_ref, batch_ref, len(refs),
+        full_ref, projected_ref, batch_ref, len(refs),authorization_context=authorization_context,
     )
 
 
@@ -126,7 +131,7 @@ def validate_batch_projection(
     expected = create_batch_projection(
         value.source_plan, candidate_identities=value.candidate_identities,
         statuses=dict(zip(value.candidate_identities, value.statuses)),
-        binding=binding, audit_key=audit_key,
+        binding=binding, audit_key=audit_key,authorization_context=value.authorization_context,
     )
     if value != expected:
         raise RuntimeError("batch_projection_binding_mismatch")
@@ -464,6 +469,29 @@ class SqliteBatchCapabilityStore:
                 "UPDATE batch_capabilities SET state='sealed',terminal_reason=? WHERE capability_id=?",
                 (safe, value.capability_id),
             )
+
+    def revoke_unused(self, expected: dict, now: datetime) -> dict:
+        """Seal an exact expired, never-claimed row; never reconstruct its token.
+
+        The caller additionally proves the reservation/manifest, empty journal,
+        and durable no-dispatch barrier under the existing owner approval.
+        This operates on the disposable cache before its normal Drive save.
+        """
+        with sqlite3.connect(self.path) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM batch_capabilities WHERE capability_id=?",
+                                     (expected.get("capability_id"),)).fetchone()
+            if (row is None or dict(row) != expected or row["state"] != "issued"
+                    or row["attempt_id"] or row["terminal_reason"]
+                    or now.tzinfo is None or datetime.fromisoformat(row["expires_at"]) > now):
+                raise RuntimeError("unused_capability_revocation_denied")
+            connection.execute("UPDATE batch_capabilities SET state='sealed',terminal_reason=? WHERE capability_id=?",
+                               ("revoked_unused_no_dispatch", row["capability_id"]))
+            result = dict(connection.execute("SELECT * FROM batch_capabilities WHERE capability_id=?",
+                                            (row["capability_id"],)).fetchone())
+            connection.commit()
+            return result
 
     def state(self, capability_id: str) -> str:
         with sqlite3.connect(self.path) as connection:
