@@ -225,14 +225,15 @@ class ImportOnlySheets:
         return self.service.spreadsheets().values().append(**kwargs)
 
 
-def financial_data(service, sid):
+def financial_data(service, sid, *, include_controls=False):
     """Whole-table values AND formulas, including sparse tails and extra columns."""
     from .aupay_card_window_preview import FINANCIAL_SHEETS
     api = service.spreadsheets()
     meta = api.get(spreadsheetId=sid, fields="spreadsheetId,sheets(properties)").execute(num_retries=0)
     require(meta.get("spreadsheetId") == sid, "financial_target_mismatch")
-    titles = [s["properties"]["title"] for s in meta["sheets"] if s["properties"]["title"] in FINANCIAL_SHEETS]
-    require(set(FINANCIAL_SHEETS[:3]).issubset(titles) and len(titles) == len(set(titles)), "financial_sheet_missing")
+    controls=("要確認","カテゴリ") if include_controls else ()
+    titles = [s["properties"]["title"] for s in meta["sheets"] if s["properties"]["title"] in (*FINANCIAL_SHEETS,*controls)]
+    require(set((*FINANCIAL_SHEETS[:3],*controls)).issubset(titles) and len(titles) == len(set(titles)), "financial_sheet_missing")
     result = {}
     for render in ("UNFORMATTED_VALUE", "FORMULA"):
         ranges = ["'" + t + "'" for t in titles]

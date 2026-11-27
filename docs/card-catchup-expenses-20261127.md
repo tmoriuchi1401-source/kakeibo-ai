@@ -142,6 +142,11 @@ exception handling are resolved.
 1. Approve the fixed candidate head/tree and release only this diff. Check
    current base, normal CI, no competing writer; merge, verify exact tree and
    new-main CI before promoting only validated SHA. Bank settings/schedule stay.
+   Before any incremental Apply dispatch, verify the hosted protected recurring
+   authority period/target/bounds and HMAC through the existing readonly path.
+   Its current Secret value cannot be read by GitHub metadata APIs and was not
+   extracted in this phase. Do not consume a financial checkpoint to discover
+   an expired authority. This is a remaining pre-execution gate, not a GO claim.
 2. Execute the separately listed ¥4,386 and, only if included in approval, ¥145
    expense contracts. Verify exact expenses, J links, owner certificates and
    source aggregate changes. C1 remains unchanged.
@@ -164,8 +169,9 @@ exception handling are resolved.
    the normal bounded planner; do not jump the checkpoint to now. Resolve or
    explicitly retain all money/legacy exceptions. Recheck actual daily guard,
    capacity, protected authority period, HMAC continuity and hosted-only path.
-   Card/core schedule activation requires separate approval; no setting is
-   changed now and maintenance approval does not replace routine authority.
+   An approval may list normal card/core authority and schedule activation
+   explicitly, separately from maintenance scope, after these gates. No setting
+   is changed now; maintenance approval alone does not replace routine authority.
 
 Until those conditions hold, return-to-operation is not a production GO and
 this is not a claim of whole-accounting completion. Existing STOP, all three

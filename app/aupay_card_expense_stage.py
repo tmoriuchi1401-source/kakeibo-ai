@@ -17,6 +17,11 @@ from .aupay_card_aliases import digest, import_row, merge_registry, resolve_alia
 from .aupay_card_window_preview import require
 
 
+def hosted_parent_context(env):
+    return (env.get("GITHUB_ACTIONS")=="true" and env.get("KAKEIBO_PRODUCTION_ENABLED")=="true"
+            and env.get("WORKFLOW_REF")=="tmoriuchi1401-source/kakeibo-ai/.github/workflows/kakeibo-production.yml@refs/heads/main")
+
+
 def contract_sha256(plan):
     # A fresh import timestamp belongs to execution premises, not the purchase.
     return digest(dict(kind=plan["kind"], rows=[dict(owner=r["owner"],
@@ -124,6 +129,7 @@ def run_from_environment(db, env, *, apply):
     from .aupay_card_recurring import SqliteRecurringRunState
     from .aupay_card_first_window_apply import financial_data
     from .aupay_card_reservation_recovery import summaries
+    require(hosted_parent_context(env),"card_expense_parent_boundary_required")
     head=env.get("GITHUB_SHA","");verify_execution_boundary(env,head)
     deadline=time.monotonic()+900
     rule_enabled=env.get("CATEGORY_RULE_AUTO_APPLY_ENABLED")=="true"
@@ -180,7 +186,7 @@ def run_from_environment(db, env, *, apply):
         parent=validate_ledger(DriveStateTransport(ro,pb).read(),pb)
         preserved_unknown_proofs(native,parent,state.successful_window_end().isoformat())
         result=execute_selected(db=db,plan=plan,state=state,durable=durable,state_dir=path,registry=registry,
-            financial_read=lambda:financial_data(read_only_sheets_service(),db.sid),guard=guard,
+            financial_read=lambda:financial_data(read_only_sheets_service(),db.sid,include_controls=True),guard=guard,
             category_rule_auto_apply_enabled=rule_enabled)
     # Routine core remains autonomous under its existing authority; the fixed
     # maintenance scope never runs unrelated AutoExpensePipeline candidates.

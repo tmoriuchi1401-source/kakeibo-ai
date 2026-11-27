@@ -53,3 +53,13 @@ def test_existing_workflows_keep_shared_lock_and_bank_schedule():
     assert production['on']['workflow_dispatch']['inputs']['card_expense_request']['default']==''
     assert production['on']['workflow_dispatch']['inputs']['card_expense_request']['required']=='false'
     assert flow.SCHEDULE_SCOPES['23 20 * * *']==('core','KAKEIBO_CORE_SCHEDULE_ENABLED')
+
+
+def test_github_ci_or_disabled_legacy_parent_does_not_select_new_card_stage():
+    from app.aupay_card_expense_stage import hosted_parent_context
+    env=dict(GITHUB_ACTIONS='true',KAKEIBO_PRODUCTION_ENABLED='false')
+    assert not hosted_parent_context(env)
+    env['KAKEIBO_PRODUCTION_ENABLED']='true'
+    assert not hosted_parent_context(env)
+    env['WORKFLOW_REF']='tmoriuchi1401-source/kakeibo-ai/.github/workflows/kakeibo-production.yml@refs/heads/main'
+    assert hosted_parent_context(env)

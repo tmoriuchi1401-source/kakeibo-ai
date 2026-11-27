@@ -1004,14 +1004,20 @@ def main():
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
     elif args.cmd=="auto-expense-preview":
+        from .aupay_card_expense_stage import hosted_parent_context
+        if os.environ.get("CARD_EXPENSE_REQUEST") and not hosted_parent_context(os.environ):
+            raise RuntimeError("card_expense_parent_boundary_required")
         s,db,_=make(False,read_only=True)
-        if os.environ.get("GITHUB_ACTIONS")=="true":
+        if hosted_parent_context(os.environ):
             from .aupay_card_expense_stage import run_from_environment
             print(run_from_environment(db,dict(os.environ),apply=False))
         else: print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).preview())
     elif args.cmd=="auto-expense":
+        from .aupay_card_expense_stage import hosted_parent_context
+        if os.environ.get("CARD_EXPENSE_REQUEST") and not hosted_parent_context(os.environ):
+            raise RuntimeError("card_expense_parent_boundary_required")
         s,db,_=make(False)
-        if os.environ.get("GITHUB_ACTIONS")=="true":
+        if hosted_parent_context(os.environ):
             from .aupay_card_expense_stage import run_from_environment
             print(run_from_environment(db,dict(os.environ),apply=True))
         else: print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).apply())

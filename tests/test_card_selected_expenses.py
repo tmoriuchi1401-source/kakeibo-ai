@@ -177,3 +177,22 @@ def test_normal_category_edit_does_not_reset_aliases_or_repost_expense(tmp_path)
     assert replay['expense_rows']==0 and contract_sha256(replay)==contract_sha256(args['plan'])
     execute_selected(**(args|dict(plan=replay,registry=state.alias_registry())))
     assert len(db.expenses)==1 and db.expenses[0][5:7]==['その他','未分類'] and db.expenses[0][11]=='user note'
+
+
+def test_independent_reader_includes_review_and_category_controls():
+    from app.aupay_card_first_window_apply import financial_data
+    from app.aupay_card_window_preview import FINANCIAL_SHEETS
+    from app.aupay_card_expense_stage import verify_delta
+    class Request:
+        def __init__(self,value):self.value=value
+        def execute(self,**kwargs):return deepcopy(self.value)
+    class API:
+        def spreadsheets(self):return self
+        def values(self):return self
+        def get(self,**kwargs):return Request(dict(spreadsheetId='sheet',sheets=[dict(properties=dict(title=t)) for t in (*FINANCIAL_SHEETS,'要確認','カテゴリ')]))
+        def batchGet(self,**kwargs):return Request(dict(spreadsheetId='sheet',valueRanges=[dict(range=r+'!A1:B2',values=[['header'],['preserve']]) for r in kwargs['ranges']]))
+    before=financial_data(API(),'sheet',include_controls=True)
+    assert {('要確認',r) for r in ('UNFORMATTED_VALUE','FORMULA')}<=set(before)
+    assert {('カテゴリ',r) for r in ('UNFORMATTED_VALUE','FORMULA')}<=set(before)
+    after=deepcopy(before);after[('カテゴリ','UNFORMATTED_VALUE')][1][0]='unapproved category change'
+    with pytest.raises(RuntimeError,match='exact_delta'):verify_delta(before,after,dict(rows=[]))
