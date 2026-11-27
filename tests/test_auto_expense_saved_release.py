@@ -211,6 +211,7 @@ def test_saved_branch_reuses_bank_proof_and_preserves_latest_bank(monkeypatch,tm
     from app import aupay_card_bank_premises as bp
     def collect(record,manifest,baseline,*a,**kw):
         assert record==p.record and manifest==p.att['bank_manifest'] and baseline==record['baseline_parent_metadata']
+        assert kw['saved_archive']==p.archive
         p.bank_calls.append(kw)
         if not proven:preview.require(False,'bank_premises_not_noop')
         return {'manifest':{'parent_snapshot':{'sha256':op.sha(p.parent.read())}}}
@@ -244,3 +245,32 @@ def test_fixed_diagnostic_reaches_existing_parent_output_without_secret(monkeypa
 def test_reviewed_bank_contract_remains_bound_to_this_candidate():
     from app.aupay_card_bank_premises import digest,code_contract,REVIEWED_BANK_CODE_SHA256
     assert digest(code_contract()) in REVIEWED_BANK_CODE_SHA256
+
+
+@pytest.mark.parametrize('change',['none','archive','identity','success','unexplained_failure'])
+def test_bank_history_requires_exact_saved_operator_evidence(monkeypatch,tmp_path,change):
+    from app import aupay_card_bank_premises as bp
+    from test_aupay_card_bank_premises import setup_case
+    p=setup_case(tmp_path,monkeypatch);proof=deepcopy(p.proof);record=deepcopy(p.business)
+    baseline=bp.raw_node(proof['steps'][0]['parent'][0]);assert op.sha(baseline)==record['parent_before_sha256']
+    record.update(failed_run=record['old_failure'],parent_before_raw_b64=base64.b64encode(baseline).decode(),
+        parent_before_revision='synthetic-original-revision',checkpoint='2026-11-04T21:00:33+09:00',
+        financial_sha256='f'*64,documents_sha256='d'*64,rules_sha256='e'*64,acl_sha256='c'*64)
+    monkeypatch.setattr(op,'RECORD_SHA256',digest(record))
+    proof['business_record']=record;proof['manifest']['business_record_sha256']=digest(record)
+    archive=dict(schema=1,kind=op.SCOPE,record_sha256=digest(record),failed_run=record['failed_run'],operator_run=op.SAVED_OPERATOR,
+        original_parent_exact_b64=record['parent_before_raw_b64'],original_parent_revision=record['parent_before_revision'],
+        native_before_sha256=record['native_before_sha256'],checkpoint=record['checkpoint'],
+        reconciled_parent_exact_b64=base64.b64encode(baseline).decode(),parent_sha256=op.sha(baseline),
+        observation={k:record[k] for k in ('financial_sha256','documents_sha256','rules_sha256','acl_sha256')},
+        financial_write_reached=False,exception_identity_confirmed=False)
+    monkeypatch.setattr(op,'SAVED_ARCHIVE_SHA256',digest(archive));proof['saved_auto_expense_archive']=archive
+    operator=op.SAVED_OPERATOR|dict(head_branch='main',created_at='2026-11-28T00:00:00+00:00',updated_at='2026-11-28T00:01:00+00:00',status='completed',conclusion='failure')
+    proof['history'].append(operator)
+    if change=='archive':archive['exception_identity_confirmed']=True
+    if change=='identity':operator['head_sha']='0'*40
+    if change=='success':operator['conclusion']='success'
+    if change=='unexplained_failure':operator['id']+=1
+    if change=='none':assert bp.validate_bank_chain(record,proof,bp.raw_node(proof['steps'][-1]['parent'][-1]))
+    else:
+        with pytest.raises(RuntimeError):bp.validate_bank_chain(record,proof,bp.raw_node(proof['steps'][-1]['parent'][-1]))

@@ -39,6 +39,9 @@ writer, credential, database, capability, archive or infrastructure is added.
 2. For parent changes, use the existing complete bank-noop proof mechanism.
    Real bank posting, unexplained revisions and other-source changes are denied.
    Bind the latest snapshot in the new signature; retain the original archive.
+   The fixed saved archive also identifies its failed operator in the history;
+   accept that identity only with exact archive validation and the unchanged
+   baseline parent barrier. Other failed writers remain denied.
 3. Validate the original auto_expense target and compute the proposal through
    `ProductionLedger.release_after_reconciliation()` in memory. Check the signed
    post-release hash. Re-read the archive and current native/parent immediately

@@ -292,10 +292,13 @@ def _run_from_environment(env, *, apply, diagnostics):
         require(ro.files().get(fileId=b['parent_id'],supportsAllDrives=True,fields='headRevisionId')
             .execute(num_retries=0).get('headRevisionId') == premises['parent']['revision'],
             'auto_expense_reconciliation_parent_changed')
+        archive=summaries(native)[ARCHIVE_RUN]['operator_reconciliation']
+        validate_saved_archive(record,archive)
     diagnostics.mark('bank_premises')
     if sha(parent_raw) != record['parent_before_sha256']:
         proof=collect_bank_premises(record,att['bank_manifest'],record['baseline_parent_metadata'],
-            ro,github,datetime.now(timezone.utc),head=head,current_run_id=int(env['GITHUB_RUN_ID']))
+            ro,github,datetime.now(timezone.utc),head=head,current_run_id=int(env['GITHUB_RUN_ID']),
+            **({'saved_archive':archive} if saved else {}))
         require(proof['manifest']['parent_snapshot']['sha256']==sha(parent_raw),
                 'auto_expense_reconciliation_parent_changed')
     else:
@@ -309,9 +312,6 @@ def _run_from_environment(env, *, apply, diagnostics):
     require(all(v['phase']=='ready' and not v['attempt'] and not v['error']
         for k,v in ledger_value['sources'].items() if k!='auto_expense'), 'auto_expense_reconciliation_peer_pending')
     preserved_unknown_proofs(native,ledger_value,record['checkpoint'])
-    if saved:
-        archive=summaries(native)[ARCHIVE_RUN]['operator_reconciliation']
-        validate_saved_archive(record,archive)
     documents=RollingProjectionStore(DriveProjectionStore(ro,b['projection_id'],sid,precreated=True))
     expected_native=[native_raw]
     def observe(*,parent_after=None):
