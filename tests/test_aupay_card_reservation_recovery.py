@@ -24,7 +24,7 @@ from test_aupay_card_incremental_apply import env
 NEW="d8f1a0d3-483b-4d56-a962-2acf8e94de99"
 
 
-def recovery_case(tmp_path,mode="normal"):
+def recovery_case(tmp_path,mode="normal",before_reservation=None):
     p=case(tmp_path)
     base_financial=p.args["financial_read"]
     p.extra_financial={"要確認":[["held","owner input"]],"カテゴリ":[["category","=1+1"]]}
@@ -36,6 +36,7 @@ def recovery_case(tmp_path,mode="normal"):
     p.args["financial_read"]=all_tables
     p.record["financial_before_sha256"]=repair.financial_digest(all_tables())
     p.record.update(native_before_metadata_digest="native-121",parent_before_metadata_digest="parent-1414")
+    if before_reservation:before_reservation(p)
     p.args["record_sha256"]=repair.sha(repair.encode(p.record))
     def crash(stage):
         if stage=="native_reserved":raise TimeoutError("invented original reservation loss")
