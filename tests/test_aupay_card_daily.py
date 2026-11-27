@@ -210,6 +210,13 @@ def setup_entry(monkeypatch, tmp_path, *, new=2):
         KAKEIBO_STATE_FOLDER_ID="folder", AUPAY_CARD_STATE_FILE_ID="card-file", KAKEIBO_RUN_LEDGER_FILE_ID="parent-file",
         AUPAY_CARD_AUDIT_KEY_JSON=p.execution["key_provider"]._path.read_text("utf-8"),
         AUPAY_CARD_RECURRING_AUTHORITY_JSON=p.execution["authority_provider"].path.read_text("utf-8"))
+    class RuntimeGitHub:
+        def get(self,path):
+            assert path==f"actions/runs/{p.env['GITHUB_RUN_ID']}"
+            return dict(id=int(p.env["GITHUB_RUN_ID"]),head_sha="a"*40,head_branch="main",run_attempt=1,
+                event=p.env["GITHUB_EVENT_NAME"],path=".github/workflows/"+guard.WORKFLOW,
+                created_at=(p.now-timedelta(seconds=1)).isoformat())
+    p.github=RuntimeGitHub()
     p.gmail.gets.clear()
     return p
 
@@ -217,13 +224,13 @@ def setup_entry(monkeypatch, tmp_path, *, new=2):
 def test_daily_real_entry_two_days_new_rows_then_noop_and_review_preservation(monkeypatch, tmp_path):
     p = setup_entry(monkeypatch, tmp_path)
     old_records = deepcopy(p.store.data["money"]["records"])
-    first = apply.run(p.env, "a"*40, object(), incremental=True)
+    first = apply.run(p.env, "a"*40, p.github, incremental=True)
     assert first["written"] == 2 and first["amount_yen"] == 3423 and first["duplicate"] == 39
     assert first["held_protected"] == 5 and p.db.write_calls == 1 and not p.db.expenses
     assert all(p.store.data["money"]["records"][k] == v for k,v in old_records.items())
     book = deepcopy(p.store.data["money"])
     p.now = NOW + timedelta(days=1)
-    second = apply.run(p.env, "a"*40, object(), incremental=True)
+    second = apply.run(p.env, "a"*40, p.github, incremental=True)
     assert second["written"] == second["financial_write_requests"] == 0
     assert second["duplicate"] == 41 and p.db.write_calls == 1 and p.store.data["money"] == book
     assert first["checkpoint"] == NOW.isoformat() and second["checkpoint"] == p.now.isoformat()
@@ -237,7 +244,7 @@ def test_daily_no_new_canonical_advances_only_after_review_and_readback(monkeypa
     p = setup_entry(monkeypatch, tmp_path, new=0)
     if empty_mail: p.gmail.raws = []
     before = deepcopy(p.store.data["money"]["records"])
-    result = apply.run(p.env, "a"*40, object(), incremental=True)
+    result = apply.run(p.env, "a"*40, p.github, incremental=True)
     assert result["written"] == result["financial_write_requests"] == p.db.write_calls == 0
     assert result["checkpoint"] == NOW.isoformat() and not p.db.expenses
     after = p.store.data["money"]["records"]
@@ -264,7 +271,7 @@ def test_daily_safety_stops_preserve_checkpoint(monkeypatch, tmp_path, change):
         p.env["AUPAY_CARD_RECURRING_AUTHORITY_JSON"]=json.dumps(value)
     if change == "gmail": p.gmail.missing_raw=True
     if change == "unknown": p.db.mode="unknown"
-    with pytest.raises(RuntimeError): apply.run(p.env,"a"*40,object(),incremental=True)
+    with pytest.raises(RuntimeError): apply.run(p.env,"a"*40,p.github,incremental=True)
     assert p.db.write_calls == (1 if change == "unknown" else 0)
     if change not in {"gmail","unknown"}: assert not p.gmail_starts
     remote=validate(p.durable.transport.read(),p.durable.binding)
@@ -315,11 +322,11 @@ def test_resume_proofs_precede_gmail_and_writer_for_both_events(monkeypatch, tmp
     monkeypatch.setattr(recovery, 'verify_no_write_state', fixed_proof)
     if stop_proof:
         with pytest.raises(RuntimeError, match='synthetic_fixed_proof_rejected'):
-            apply.run(p.env, 'a'*40, object(), incremental=True)
+            apply.run(p.env, 'a'*40, p.github, incremental=True)
         assert not p.gmail_starts and p.db.write_calls == 0
         assert p.durable.inspect()['phase'] == 'ready'
     else:
-        result = apply.run(p.env, 'a'*40, object(), incremental=True)
+        result = apply.run(p.env, 'a'*40, p.github, incremental=True)
         assert result['written'] == 2 and p.db.write_calls == 1
         with pytest.raises(RuntimeError):
             apply.execute_fixed(**p.execution)

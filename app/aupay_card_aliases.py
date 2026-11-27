@@ -13,6 +13,14 @@ import re
 from .transaction_plan import normalize_card_transaction
 
 
+class LiteralRows:
+    """Use existing literal reads without changing the underlying API client."""
+    def __init__(self,db): object.__setattr__(self,"db",db)
+    def __getattr__(self,name): return getattr(self.db,name)
+    def __setattr__(self,name,value): setattr(self.db,name,value)
+    def get(self,rng): return self.db.get_raw(rng)
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True,
                                      separators=(",", ":")).encode()).hexdigest()
@@ -37,20 +45,63 @@ def _tx_signature(tx):
                    tx.payment_method, tx.memo])
 
 
+def _owner_changes(entry):
+    """Only an exact stable-expense J link may succeed an immutable owner."""
+    from .auto_expense import expense_id
+    changes = entry.get("owner_changes", [])
+    if not isinstance(changes,list): raise RuntimeError("card_alias_owner_change_invalid")
+    previous = None
+    for change in changes:
+        if set(change) != {"before", "after", "expense", "plan_sha256"}:
+            raise RuntimeError("card_alias_owner_change_invalid")
+        before, after, expense = change["before"], change["after"], change["expense"]
+        if (len(before)!=12 or len(after)!=12 or len(expense)!=13 or before[0]!=entry["owner"]
+                or before[2]!="au PAYカード" or before[8]!="auto_expense" or before[9]
+                or after[:9]!=before[:9] or after[10:]!=before[10:]
+                or after[9]!=expense_id(entry["owner"]) or expense[0]!=after[9]
+                or expense[1:3]!=[before[4],before[5]] or expense[4]!=before[6]
+                or expense[7:9]!=[before[7],before[2]] or expense[10]!=entry["owner"] or expense[12]!="active"
+                or not re.fullmatch(r"[0-9a-f]{64}",change["plan_sha256"])
+                or previous is not None and previous!=before):
+            raise RuntimeError("card_alias_owner_change_invalid")
+        previous=after
+    if changes and digest(previous)!=entry["owner_row_sha256"]:
+        raise RuntimeError("card_alias_owner_change_invalid")
+    return changes
+
+
+def validate_owner_expenses(registry, expense_rows):
+    by_id={}
+    for row in expense_rows:
+        if row: by_id.setdefault(row[0],[]).append(list(row)+[""]*max(0,13-len(row)))
+    for entry in merge_registry(registry):
+        for change in _owner_changes(entry):
+            if by_id.get(change["expense"][0]) != [change["expense"]]:
+                raise RuntimeError("card_alias_expense_readback_mismatch")
+
+
 def merge_registry(entries):
     """Union append-only deltas; reject reassignment or damaged saved evidence."""
     owners, sources = {}, {}
     for entry in entries:
-        if (not isinstance(entry, dict) or set(entry) != {
+        if (not isinstance(entry, dict) or set(entry)-{"owner_changes"} != {
                 "owner", "owner_row_sha256", "business_fingerprint", "aliases"}
                 or not re.fullmatch(r"aupaycard-mail:[0-9a-f]{24}:\d{3}", entry["owner"])
                 or not re.fullmatch(r"[0-9a-f]{64}", entry["owner_row_sha256"])
                 or not re.fullmatch(r"[0-9a-f]{24}", entry["business_fingerprint"])
                 or not isinstance(entry["aliases"], dict) or entry["owner"] not in entry["aliases"]):
             raise RuntimeError("card_alias_registry_invalid")
+        changes = _owner_changes(entry)
         old = owners.setdefault(entry["owner"], deepcopy(entry))
-        if any(old[k] != entry[k] for k in ("owner_row_sha256", "business_fingerprint")):
+        if old["business_fingerprint"] != entry["business_fingerprint"]:
             raise RuntimeError("card_alias_owner_changed")
+        if old["owner_row_sha256"] != entry["owner_row_sha256"]:
+            prior=old.get("owner_changes",[])
+            if (len(changes)<=len(prior) or changes[:len(prior)]!=prior
+                    or digest(changes[len(prior)]["before"])!=old["owner_row_sha256"]):
+                raise RuntimeError("card_alias_owner_changed")
+            old["owner_row_sha256"]=entry["owner_row_sha256"]
+            old["owner_changes"]=deepcopy(changes)
         for identity, source_hash in entry["aliases"].items():
             if (not re.fullmatch(r"aupaycard-mail:[0-9a-f]{24}:\d{3}", identity)
                     or not re.fullmatch(r"[0-9a-f]{64}", source_hash)):

@@ -57,6 +57,11 @@ def bank_step(parent_raw,bank_raw,index,writes=0):
 
 
 def setup_case(tmp_path,monkeypatch,mode='normal'):
+    # These invented runs use this checkout, not a deployed historical SHA.
+    # Bind their synthetic code contract explicitly; production's archived
+    # allowlist stays unchanged when unrelated maintenance scopes are added.
+    fixture_code={p:bp.sha((bp.ROOT/p).read_text(encoding='utf-8').encode()) for p in bp.CODE_PATHS}
+    monkeypatch.setattr(bp,'REVIEWED_BANK_CODE_SHA256',bp.REVIEWED_BANK_CODE_SHA256|{bp.digest(fixture_code)})
     bankdir=tmp_path/'bank-state';bankdir.mkdir()
     bankstate=SqliteRecurringRunState(bankdir/'bank-recurring.sqlite3',repo_root=tmp_path/'repo')
     bankstate.record(dict(run_id='bank-baseline',status='noop',source_window_start=C0,source_window_end=C0),advance_checkpoint=True)

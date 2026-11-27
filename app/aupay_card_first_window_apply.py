@@ -90,7 +90,7 @@ def check_reviews(writer, decisions, *, all_saved=False, fixed=True):
 
 
 def prepare(*, gmail, db, writer, policy, state, now, key, sleeper=None, expected_checkpoint=CHECKPOINT,
-            incremental=False):
+            incremental=False, cutoff=None):
     """One complete Gmail read; no persistence or writer capability issued."""
     cp = state.successful_window_end()
     require(cp is not None and cp.isoformat() == expected_checkpoint, "checkpoint_changed")
@@ -98,9 +98,10 @@ def prepare(*, gmail, db, writer, policy, state, now, key, sleeper=None, expecte
             and policy.expected_worksheet == "取込データ", "authority_target_mismatch")
     require((policy.overlap_seconds, policy.max_window_seconds, policy.max_messages, policy.max_batch_size)
             == (172800, 1209600, 500, 100), "authority_policy_changed")
+    require(cutoff is None or incremental, "cutoff_requires_incremental")
     window = build_explicit_preview_window(policy, state, now,
         cp - timedelta(seconds=policy.overlap_seconds) if incremental else datetime.fromisoformat(START),
-        now.replace(microsecond=0) if incremental else datetime.fromisoformat(END))
+        (cutoff or now.replace(microsecond=0)) if incremental else datetime.fromisoformat(END))
     _require_closed_money(writer._book())
     capture = CapturedGmail(gmail, window=window)
     strict = _StrictPreviewGmail(capture, policy.max_messages)
@@ -124,6 +125,9 @@ def prepare(*, gmail, db, writer, policy, state, now, key, sleeper=None, expecte
         not v.records or v.records == (ExistingCanonicalRecord.from_candidate(normalized[k]),)
         for k, v in identities.items()), "existing_identity_content_mismatch")
     registry = state.alias_registry()
+    from .aupay_card_aliases import validate_owner_expenses
+    if any(e.get("owner_changes") for e in registry):
+        validate_owner_expenses(registry, db.get("支出明細!A2:M"))
     reconciliation = reconcile_transactions(transactions, existing, alias_registry=registry)
     plan = validate_canonical_apply_plan(build_canonical_apply_plan(collection, reconciliation))
     statuses, amazon_review = _classify_candidates(plan, db)
@@ -287,6 +291,7 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
                   guard, financial_read, documents_check, final_read, clock=None):
     """All writes in order; any exception leaves pending state, without retry."""
     clock = clock or (lambda: datetime.now(JST))
+    execution_started_at=clock().isoformat()
     key = key_provider.load()
     guard()
     recheck(prepared, db, writer, key)
@@ -389,6 +394,14 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
         prepared["reconciliation"], db.get("取込データ!A2:L"), prepared["alias_registry"],
         set(prepared["statuses"]) | {i for item in prepared["reconciliation"]["transactions"]
                                    for i in item.existing_source_identities}, expected_rows=rows)
+    if prepared.get("github_execution"):
+        from .aupay_card_incremental_coverage import completion_certificate
+        from .drive_run_state import snapshot
+        result.update(github_execution=prepared["github_execution"],
+            checkpoint_before=prepared["checkpoint"], execution_started_at=execution_started_at,
+            execution_completed_at=clock().isoformat(),
+            coverage_protocol="card-incremental-coverage-v1")
+        result["coverage_certificate"] = completion_certificate(snapshot_files=snapshot(path, durable.binding), result=result)
     state.record(result, advance_checkpoint=True)
     durable.commit(path)
     final_read(card_only=True)
@@ -453,7 +466,9 @@ def run(env, head, github, *, incremental=False):
     readback_store = store_from_environment(sid, env, read_only=True)
     require(backing is not None and readback_store is not None, "money_binding_required")
     observed = ObservedStore(readback_store)
-    db = SheetsDB(sid, service=ro_sheets, read_retry_attempts=1)
+    from .aupay_card_aliases import LiteralRows
+    db = LiteralRows(SheetsDB(sid, service=ro_sheets, read_retry_attempts=1))
+    # Alias hashes bind literal saved rows, never display-formatted amounts.
     reader = _configured_writer(db, observed, env, ledger=ReviewLedger(db))
     before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro)
     if incremental:
@@ -492,7 +507,15 @@ def run(env, head, github, *, incremental=False):
         guard()
         prepared = prepare(gmail=GetOnly(gmail_readonly_service(env["GOOGLE_GMAIL_TOKEN_JSON"]), deadline),
             db=db, writer=reader, policy=policy, state=state, now=started_at, key=audit_key,
-            expected_checkpoint=expected_cp, incremental=incremental)
+            expected_checkpoint=expected_cp, incremental=incremental,
+            cutoff=datetime.fromisoformat(env["CUTOFF"]) if env.get("CUTOFF") else None)
+        if env.get("CUTOFF"):
+            from .aupay_card_incremental_coverage import plan_contract_sha256
+            require(plan_contract_sha256(prepared)==env["EXPECTED_PLAN_SHA256"],"approved_catchup_plan_changed")
+        if incremental:
+            identity=github.get(f"actions/runs/{env['GITHUB_RUN_ID']}")
+            prepared["github_execution"]={k:identity[k] for k in (
+                "id", "head_sha", "head_branch", "run_attempt", "event", "path", "created_at")}
         require(observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro) == before, "prewrite_state_changed")
         observed.verify()
         writer = _configured_writer(db, backing, env, ledger=ReviewLedger(db))
@@ -520,7 +543,7 @@ def run(env, head, github, *, incremental=False):
 
         db.svc = sheets_service()
         # Independent reader retains its own read-only Sheets client.
-        ro_db = SheetsDB(sid, service=ro_sheets, read_retry_attempts=1)
+        ro_db = LiteralRows(SheetsDB(sid, service=ro_sheets, read_retry_attempts=1))
         independent = _configured_writer(ro_db, readback_store, env, ledger=ReviewLedger(ro_db))
         return execute_fixed(prepared=prepared, db=db, writer=writer, readback_writer=independent,
             policy=policy, key_provider=key, authority_provider=authority, state=state,

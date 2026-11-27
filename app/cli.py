@@ -1004,9 +1004,17 @@ def main():
     elif args.cmd=="expenses-refresh":
         s,db,_=make(False); print(ExpenseViewPipeline(db).refresh())
     elif args.cmd=="auto-expense-preview":
-        s,db,_=make(False,read_only=True); print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).preview())
+        s,db,_=make(False,read_only=True)
+        if os.environ.get("GITHUB_ACTIONS")=="true":
+            from .aupay_card_expense_stage import run_from_environment
+            print(run_from_environment(db,dict(os.environ),apply=False))
+        else: print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).preview())
     elif args.cmd=="auto-expense":
-        s,db,_=make(False); print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).apply())
+        s,db,_=make(False)
+        if os.environ.get("GITHUB_ACTIONS")=="true":
+            from .aupay_card_expense_stage import run_from_environment
+            print(run_from_environment(db,dict(os.environ),apply=True))
+        else: print(AutoExpensePipeline(db, category_rule_auto_apply_enabled=getattr(s, "category_rule_auto_apply_enabled", False)).apply())
     elif args.cmd=="category-rule-register":
         s,db,_=make(False); print(CategoryRuleApprovalPipeline(db, save_enabled=s.category_rule_save_enabled).register(
             RuleApprovalRequest(args.expense_id, (args.major_category, args.minor_category), args.kind,

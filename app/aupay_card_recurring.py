@@ -222,7 +222,7 @@ def _batch_reader(db) -> Callable[[tuple[str, ...]], Mapping[str, tuple[tuple, .
     def read(identities: tuple[str, ...]) -> Mapping[str, tuple[tuple, ...]]:
         wanted = set(identities)
         found: dict[str, list[tuple]] = {identity: [] for identity in identities}
-        for raw in db.get("取込データ!A2:L"):
+        for raw in getattr(db,"get_raw",db.get)("取込データ!A2:L"):
             row = tuple((list(raw) + [""] * 12)[:12])
             identity = str(row[0]).strip()
             if identity in wanted:
@@ -334,8 +334,11 @@ def run_recurring_ingestion(
             summary.update(status="dry_run_ready" if dry_run else "complete",checkpoint_advanced=False)
             state.record(summary,advance_checkpoint=False)
             return summary
-        existing = db.get("取込データ!A2:L")
+        existing = getattr(db,"get_raw",db.get)("取込データ!A2:L")
         registry = state.alias_registry()
+        from .aupay_card_aliases import validate_owner_expenses
+        if any(e.get("owner_changes") for e in registry):
+            validate_owner_expenses(registry, getattr(db,"get_raw",db.get)("支出明細!A2:M"))
         reconciliation = reconcile_transactions(transactions, existing, alias_registry=registry)
         plan = build_canonical_apply_plan(collection, reconciliation)
         statuses, amazon_review = _classify_candidates(plan, db)
@@ -376,7 +379,7 @@ def run_recurring_ingestion(
             if not dry_run:
                 from .aupay_card_aliases import confirmed_alias_updates
                 summary["card_aliases"] = confirmed_alias_updates(transactions, reconciliation,
-                    db.get("取込データ!A2:L"), registry,
+                    getattr(db,"get_raw",db.get)("取込データ!A2:L"), registry,
                     {i for item in reconciliation["transactions"] for i in item.existing_source_identities})
             state.record(summary, advance_checkpoint=not dry_run)
             return summary
@@ -442,7 +445,7 @@ def run_recurring_ingestion(
                 raise RuntimeError("card_write_unknown_no_checkpoint")
             from .aupay_card_aliases import confirmed_alias_updates
             summary["card_aliases"] = confirmed_alias_updates(transactions, reconciliation,
-                db.get("取込データ!A2:L"), registry, set(statuses) | {
+                getattr(db,"get_raw",db.get)("取込データ!A2:L"), registry, set(statuses) | {
                     i for item in reconciliation["transactions"] for i in item.existing_source_identities},
                 expected_rows=transport.dispatched_rows)
         state.record(summary, advance_checkpoint=execution.exact)

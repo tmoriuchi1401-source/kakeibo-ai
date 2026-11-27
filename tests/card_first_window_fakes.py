@@ -47,6 +47,9 @@ class DB:
         raise AssertionError(rng)
     def _execute_sheet_read(self, factory): return factory().execute()
     def get_raw(self, rng):
+        if rng == "取込データ!A2:L": return deepcopy(self.rows)
+        if rng == "支出明細!A2:M": return deepcopy(self.expenses)
+        if rng in {"取込データ!A1:L1","Amazon注文!A2:M"}: return self.get(rng)
         title, bounds = rng.split("!")
         match = re.fullmatch(r"([A-Z])(\d+):([A-Z])(\d+)", bounds)
         assert match
