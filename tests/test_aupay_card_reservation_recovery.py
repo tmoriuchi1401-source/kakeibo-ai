@@ -4,6 +4,8 @@ from copy import deepcopy
 from datetime import datetime,timedelta
 import json
 from pathlib import Path
+import subprocess
+import sys
 from uuid import UUID
 
 import pytest
@@ -108,8 +110,40 @@ def test_full_122_1414_recovery_exact_archives_revocation_c1_and_fresh_guard(tmp
                 if path==f"actions/runs/{fid}":return item
             if path=="actions/runs/17":return super().get(path)|dict(created_at="2026-11-28T00:00:00Z")
             return super().get(path)
-    history=History();history.prior.append(proof[19])
+    class Recording(History):
+        def __init__(self):super().__init__();self.responses={}
+        def get(self,path):
+            value=super().get(path);self.responses[path]=value;return value
+    history=Recording();history.prior.append(proof[19])
     assert guard.controls(env()|dict(EXPECTED_CHECKPOINT=C1),"a"*40,history,reconciliation_state=(native,parent))
+    # A separate process has neither the original objects nor local cache.
+    payload=dict(native=base64.b64encode(p.nt.payload).decode(),parent=parent,
+        sid=p.cb.spreadsheet_id,folder=p.cb.folder_id,file=p.cb.file_id,target=str(tmp_path/"fresh-process"),
+        repo=str(p.args["repo_root"]),env=env()|dict(EXPECTED_CHECKPOINT=C1),responses=history.responses)
+    script='''import base64,json,socket,sys,warnings
+warnings.simplefilter("ignore",DeprecationWarning)
+def deny(*args,**kwargs):raise AssertionError("network forbidden")
+socket.socket.connect=deny
+from pathlib import Path
+from app.drive_run_state import DurableState,StateBinding,validate
+from app.aupay_card_recurring import SqliteRecurringRunState
+from app.aupay_card_incremental_guard import controls
+d=json.load(sys.stdin);raw=base64.b64decode(d["native"])
+class Transport:
+ def read(self):return raw
+ def write(self,*args):raise AssertionError("write forbidden")
+binding=StateBinding("au_pay_card_gmail",d["sid"],d["folder"],d["file"])
+DurableState(Transport(),binding).restore(Path(d["target"]))
+state=SqliteRecurringRunState(Path(d["target"])/"recurring.sqlite3",repo_root=Path(d["repo"]))
+assert state.successful_window_end().isoformat()==d["env"]["EXPECTED_CHECKPOINT"] and len(state.alias_registry())==12
+class GitHub:
+ def get(self,path):return d["responses"][path]
+assert controls(d["env"],"a"*40,GitHub(),reconciliation_state=(validate(raw,binding),d["parent"]))
+print(json.dumps({"fresh_process":True,"guard_accepted":True,"aliases":12}))
+'''
+    process=subprocess.run([sys.executable,"-B","-c",script],input=json.dumps(payload),text=True,capture_output=True,timeout=60)
+    assert process.returncode==0,process.stderr
+    assert json.loads(process.stdout)==dict(fresh_process=True,guard_accepted=True,aliases=12)
     # A rerun of either archived attempt is still refused independently.
     class Rerun(History):
         def get(self,path):
