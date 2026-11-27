@@ -55,7 +55,17 @@ def unused_reservation_proof(native, parent_raw, recovery, parent_metadata_diges
             and origin["checkpoint_before"]==prior["checkpoint_before"]
             and origin["checkpoint_after"]==prior["checkpoint_after"],"recovery_parent_barrier_changed")
     require("INTENT:"+rid not in runs,"recovery_financial_dispatch_possible")
-    if parent_raw==baseline:
+    bank_proof=recovery.get("bank_transitions")
+    if bank_proof:
+        from .aupay_card_bank_premises import validate_bank_chain
+        business=bank_proof["business_record"]
+        require(business["recovery"]["previous_record"]==prior
+                and business["recovery"]["failed_run_uuid"]==rid
+                and bank_proof["manifest"]["parent_snapshot"]["metadata_digest"]==parent_metadata_digest,
+                "bank_premises_business_changed")
+        validate_bank_chain(business,bank_proof,parent_raw)
+        mode="proven_bank_only_transitions"
+    elif parent_raw==baseline:
         require(parent_metadata_digest==prior["parent_before_metadata_digest"],"recovery_parent_revision_changed")
         mode="unchanged_parent_revision"
     else:
@@ -88,8 +98,10 @@ def unused_reservation_proof(native, parent_raw, recovery, parent_metadata_diges
             "recovery_financial_dispatch_possible")
     cp=_rows(native,"recurring.sqlite3","recurring_checkpoint")
     require(len(cp)==1 and cp[0]["successful_window_end"]==prior["checkpoint_before"],"recovery_checkpoint_changed")
-    return dict(mode=mode,failed_run_uuid=rid,capability_before=cap,manifest_sha256=manifest["payload_hash"],
+    result=dict(mode=mode,failed_run_uuid=rid,capability_before=cap,manifest_sha256=manifest["payload_hash"],
                 reservation_sha256=digest(reservation),parent_metadata_digest=parent_metadata_digest)
+    if bank_proof:result["bank_transitions_sha256"]=digest(bank_proof)
+    return result
 
 
 def validate_revocations(native, all_summaries):

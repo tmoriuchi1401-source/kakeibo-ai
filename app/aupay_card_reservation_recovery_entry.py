@@ -13,7 +13,7 @@ def boundary(env,head,github):
 
 
 def run(env,head,github,diagnostics=None):
-    return existing.run(env,head,github,diagnostics,boundary_checker=boundary,record_sha256=RECORD_SHA256,label=LABEL,scope=SCOPE)
+    return existing.run(env,head,github,diagnostics,boundary_checker=boundary,record_sha256=RECORD_SHA256,label=LABEL,scope=SCOPE,allow_bank_premises=True)
 
 
 if __name__=="__main__":

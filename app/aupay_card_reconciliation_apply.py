@@ -123,6 +123,10 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
             and type(approval_provider) is ProtectedBatchApprovalProvider,
             "repair_existing_authority_required")
     require(sha(encode(record)) == record_sha256, "repair_record_changed")
+    business=record
+    if "business_record" in record:
+        from .aupay_card_bank_premises import validate_effective_record
+        business=validate_effective_record(record)
     attempt=UUID(run_id).hex
     guard()
     old_raw=native_read(); old_parent_raw=parent_read()
@@ -141,7 +145,7 @@ def execute_reconciliation(*,record,record_sha256,run_id,db,durable,ledger,key_p
             "documents_sha256","acl_sha256","selected_source_messages","other_native","bindings",
             "audit_key_id","historical_target_ref")
         previous=recovery["previous_record"]
-        require(digest({k:record.get(k) for k in fixed})==digest({k:previous.get(k) for k in fixed}),
+        require(digest({k:business.get(k) for k in fixed})==digest({k:previous.get(k) for k in fixed}),
                 "recovery_business_plan_changed")
         require(isinstance(execution_identity,dict) and set(execution_identity)=={
             "id","head_sha","head_branch","run_attempt","event","path","created_at"}

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 STAGES = frozenset({
-    "entry_start", "release_guard", "dependencies", "capsule_decode",
+    "entry_start", "release_guard", "dependencies", "capsule_decode", "bank_premises",
     "bindings", "state_revision", "runtime_clients", "cached_projection",
     "reconciliation_preflight", "financial_preflight", "source_preflight",
     "capability_issue", "archive_prepare", "native_guard", "native_save",
@@ -28,6 +28,11 @@ EFFECT_STATES = {
 }
 # Exact literals only. A syntactically safe-looking external message is NOT a code.
 ERROR_CODES = frozenset({
+    "bank_premises_invalid", "bank_premises_revision_changed", "bank_premises_incomplete",
+    "bank_premises_chain_broken", "bank_premises_parent_changed", "bank_premises_native_changed",
+    "bank_premises_history_changed", "bank_premises_not_noop", "bank_premises_run_unproven",
+    "bank_premises_code_changed", "bank_premises_snapshot_changed", "bank_premises_other_writer",
+    "bank_premises_business_changed",
     "repair_failed_closed", "repair_arguments_forbidden", "repair_hosted_owner_once_required",
     "repair_release_boundary_changed", "repair_main_changed", "repair_run_changed",
     "repair_dispatch_consumed_no_retry", "repair_competing_run", "repair_capsule_too_large",

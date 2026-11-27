@@ -117,7 +117,7 @@ def verify_failure_ancestry(record,env,github):
                 "repair_old_failure_changed")
 
 
-def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only"):
+def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",allow_bank_premises=False):
     diagnostics = diagnostics or ReconciliationDiagnostics()
     check=boundary_checker or boundary
     record_sha256=RECORD_SHA256 if record_sha256 is None else record_sha256
@@ -155,6 +155,15 @@ def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=N
     deadline=time.monotonic()+900
     ro_drive=GetOnly(read_only_drive_service(),deadline)
     ro_sheets=GetOnly(read_only_sheets_service(),deadline)
+    if "execution_premises" in att:
+        diagnostics.mark("bank_premises")
+        require(allow_bank_premises and att.get("approved_main_sha")==head,
+                "bank_premises_business_changed")
+        from .aupay_card_bank_premises import collect_bank_premises,effective_record
+        proof=collect_bank_premises(record,att["execution_premises"],att["baseline_parent_metadata"],ro_drive,github,
+            datetime.now(timezone.utc),head=head,current_run_id=int(env["GITHUB_RUN_ID"]))
+        record=effective_record(record,proof)
+        record_sha256=hashlib.sha256(encode(record)).hexdigest()
     cb=StateBinding("au_pay_card_gmail",bindings["spreadsheet_id"],bindings["folder_id"],bindings["card_id"])
     pb=StateBinding("production_run",bindings["spreadsheet_id"],bindings["folder_id"],bindings["parent_id"])
     card_read,parent_read=ReadOnlyState(ro_drive,cb),ReadOnlyState(ro_drive,pb)
@@ -194,10 +203,13 @@ def run(env,head,github,diagnostics=None,*,boundary_checker=None,record_sha256=N
             file_id=unwrap(item["variable"],env[item["variable"]],info["private_key"])
             require(file_id==item["file_id"],"repair_peer_binding_changed")
             binding=StateBinding(item["source"],db.sid,bindings["folder_id"],file_id)
-            raw=ReadOnlyState(ro_drive,binding).read()
+            raw,peer_proof=ReadOnlyState(ro_drive,binding).observe()
             value=validate(raw,binding)
             require(hashlib.sha256(raw).hexdigest()==item["sha256"] and value["phase"]=="ready"
                 and not value["attempt"],"repair_peer_native_pending_or_changed")
+            if "business_record" in record and item["source"]=="bank_pdf_drive":
+                require(peer_proof==record["recovery"]["bank_transitions"]["manifest"]["bank_snapshot"],
+                        "bank_premises_snapshot_changed")
     diagnostics.mark("runtime_clients")
     readonly=SheetsDB(env["SPREADSHEET_ID"],service=ro_sheets,read_retry_attempts=1)
     class LiteralDB:
