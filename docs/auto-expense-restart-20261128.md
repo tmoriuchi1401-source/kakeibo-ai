@@ -28,7 +28,10 @@ capsules retain their 300-second default. Guards recheck expiry/main/run and
 exclusion before effects. Sign only after all preparation; never test dispatch.
 
 The common `kakeibo-production` lock, hosted/main/validated/owner/attempt1 checks
-and existing fences are required. No arbitrary source, parent JSON or record is
+and existing fences are required. A fixed, non-secret operator run title and
+independent Actions history enforce one release dispatch per reviewed head, even
+if a previous invocation stopped before any native save. Readonly previews and
+ordinary financial stages do not consume that release fence. No arbitrary source, parent JSON or record is
 accepted. Bank-only noop premise updates reuse the existing independent revision,
 Actions, completion and code-contract verifier. Current and candidate shared bank
 entry contracts are reviewed; bank accounting behavior and schedules are unchanged.

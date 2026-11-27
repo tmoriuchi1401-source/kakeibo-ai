@@ -1,4 +1,5 @@
 name: Kakeibo unified production
+run-name: ${{ inputs.card_expense_reconciliation != '' && format('auto-expense-reconciliation-46013990252-{0}', inputs.mode) || github.workflow }}
 
 on:
   schedule:

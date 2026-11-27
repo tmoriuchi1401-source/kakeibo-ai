@@ -50,6 +50,8 @@ def hosted(monkeypatch,tmp_path,key,apply):
         if path=='git/ref/heads/main':return {'object':{'sha':head}}
         if path=='actions/runs/42':return dict(head_sha=head,run_attempt=1,event='workflow_dispatch',status='in_progress',path='.github/workflows/kakeibo-production.yml')
         if path=='actions/runs/'+str(op.FAILED_RUN):return record['failed_run']
+        if path.startswith('actions/workflows/'):
+            return {'total_count':1,'workflow_runs':[dict(id=42,display_title=op.RELEASE_TITLE)]}
         assert path.startswith('actions/runs?');return {'total_count':0,'workflow_runs':[]}
     monkeypatch.setattr(window,'GitHub',lambda env:SimpleNamespace(get=github))
     monkeypatch.setattr('subprocess.check_output',lambda *a,**k:tree+'\n')
@@ -111,4 +113,16 @@ def test_state_only_ttl_extension_preserves_original_financial_default(monkeypat
     with pytest.raises(RuntimeError,match='repair_signed_approval_invalid'):
         entry.decode_capsule(env['CARD_EXPENSE_RECONCILIATION'],rsa,'b'*40,now,
             record_sha256=op.RECORD_SHA256,label=op.LABEL,scope=op.SCOPE)
+    assert not native.writes and not parent.writes and not factories
+
+
+def test_earlier_state_release_dispatch_consumes_fence_even_without_saved_native(monkeypatch,tmp_path,key):
+    env,native,parent,factories=hosted(monkeypatch,tmp_path,key,True)
+    original=window.GitHub(env).get
+    def history(path):
+        if path.startswith('actions/workflows/'):
+            return {'total_count':2,'workflow_runs':[dict(id=i,display_title=op.RELEASE_TITLE) for i in (41,42)]}
+        return original(path)
+    monkeypatch.setattr(window,'GitHub',lambda env:SimpleNamespace(get=history))
+    with pytest.raises(RuntimeError,match='dispatch_consumed'):op.run_from_environment(env,apply=True)
     assert not native.writes and not parent.writes and not factories

@@ -21,6 +21,7 @@ LABEL = b'kakeibo-auto-expense-state-only-v1'
 SCOPE = 'auto_expense_state_only_reconciliation'
 FAILED_RUN = 46013990252
 ARCHIVE_RUN = 'OPERATOR-AUTO-EXPENSE:46013990252'
+RELEASE_TITLE = 'auto-expense-reconciliation-46013990252-apply'
 MAX_ARCHIVE_BYTES = 32768
 
 
@@ -159,6 +160,13 @@ def run_from_environment(env, *, apply):
             and run['event'] == 'workflow_dispatch' and run['status'] == 'in_progress'
             and run['path'] == '.github/workflows/kakeibo-production.yml',
             'auto_expense_reconciliation_run_changed')
+        if apply:
+            history=github.get('actions/workflows/kakeibo-production.yml/runs?event=workflow_dispatch&head_sha='+head+'&per_page=100')
+            require(history['total_count']==len(history['workflow_runs'])<=100,
+                    'auto_expense_reconciliation_run_inventory_incomplete')
+            releases=[v for v in history['workflow_runs'] if v.get('display_title')==RELEASE_TITLE]
+            require(len(releases)==1 and releases[0]['id']==current,
+                    'auto_expense_reconciliation_dispatch_consumed')
         for status in ('in_progress','queued','waiting','pending','requested'):
             runs = github.get('actions/runs?status='+status+'&per_page=100')
             require(runs['total_count'] == len(runs['workflow_runs']) <= 100
