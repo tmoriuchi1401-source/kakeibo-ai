@@ -34,7 +34,7 @@ SAVED_OPERATOR = dict(id=46076915652, head_sha='6453d12f66a0ed8a7879006d817bc21f
 
 class AutoExpenseReconciliationFailure(RuntimeError):
     def __init__(self, diagnostic):
-        super().__init__('auto_expense_reconciliation_stopped')
+        super().__init__(diagnostic['error_code'])  # Already allowlisted; preserve existing callers.
         self.diagnostic = diagnostic
 
 
