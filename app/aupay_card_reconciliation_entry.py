@@ -67,7 +67,7 @@ def boundary(env,head,github,*,workflow=WORKFLOW,confirm=CONFIRM,per_release=Fal
             and all(r["id"]==rid for r in runs["workflow_runs"]),"repair_competing_run")
 
 
-def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only"):
+def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",max_ttl=300):
     """Existing RSA/AES/PSS capsule pattern and existing SA key; no new grant."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
@@ -89,7 +89,8 @@ def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixe
     require(hashlib.sha256(record_bytes).hexdigest()==record_sha256==att["record_sha256"]
         and att["code_tree_sha256"]==tree and att["owner_approved"] is True
         and att["scope"]==scope
-        and 0<(datetime.fromisoformat(att["approval"]["expires_at"])-now).total_seconds()<=300,
+        and max_ttl in {300,900}
+        and 0<(datetime.fromisoformat(att["approval"]["expires_at"])-now).total_seconds()<=max_ttl,
         "repair_signed_approval_invalid")
     record=json.loads(record_bytes)
     require(encode(record)==record_bytes,"repair_record_not_canonical")

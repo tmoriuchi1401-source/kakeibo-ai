@@ -22,11 +22,45 @@ def hosted_parent_context(env):
             and env.get("WORKFLOW_REF")=="tmoriuchi1401-source/kakeibo-ai/.github/workflows/kakeibo-production.yml@refs/heads/main")
 
 
+ERROR_CODES = frozenset({'card_expense_approved_plan_changed','card_expense_plan_changed',
+    'card_expense_requires_review','card_expense_category_invalid','card_expense_owner_changed',
+    'card_expense_native_pending','card_expense_profile_changed','card_expense_failed'})
+
+
+def run_cli(db, env, *, apply):
+    """Fixed child diagnostic only; never expose an exception message or rows."""
+    try:
+        return run_from_environment(db, env, apply=apply)
+    except Exception as error:
+        from .production_run import failure_diagnostic
+        code=str(error) if str(error) in ERROR_CODES else 'card_expense_failed'
+        print(json.dumps(dict(success=False,error=code,stage='card_expense_apply' if apply
+            else 'card_expense_preflight',**failure_diagnostic(error))))
+        raise SystemExit(1) from None
+
+
 def contract_sha256(plan):
     # A fresh import timestamp belongs to execution premises, not the purchase.
     return digest(dict(kind=plan["kind"], rows=[dict(owner=r["owner"],
         before=r["before"][:1]+r["before"][2:], expense=r["expense"])
         for r in sorted(plan["rows"]+plan["completed_rows"], key=lambda v:v["owner"])]))
+
+
+def planning_profile(db, env):
+    ranges=["'カテゴリ'!A:B","'カテゴリ自動分類ルール'!A:R"]
+    rows=db.get_raw_ranges(ranges) if hasattr(db,'get_raw_ranges') else [db.get(r) for r in ranges]
+    return dict(effective_settings_sha256=digest({k:env.get(k,'') for k in
+        ('CATEGORY_RULE_AUTO_APPLY_ENABLED','KAKEIBO_AMAZON_MONEY_MODE')}),
+        category_master_sha256=digest(rows[0]),category_rules_sha256=digest(rows[1]))
+
+
+def selected_plan(db, ids, categories, rule_enabled, expected=None, *, expected_profile=None, env=None):
+    if expected_profile is not None:
+        require(digest(planning_profile(db,env))==expected_profile,'card_expense_profile_changed')
+    plan=AutoExpensePipeline(db,category_rule_auto_apply_enabled=rule_enabled).plan_card_expenses(
+        ids,categories_by_id=categories)
+    if expected is not None:require(contract_sha256(plan)==expected,'card_expense_approved_plan_changed')
+    return plan
 
 
 def owner_updates(plan, registry):
@@ -140,7 +174,7 @@ def run_from_environment(db, env, *, apply):
     if request is not None:
         require(env.get("GITHUB_EVENT_NAME")=="workflow_dispatch" and env.get("MANUAL_SCOPE")=="card_expenses"
                 and env.get("GITHUB_ACTOR")==env.get("GITHUB_TRIGGERING_ACTOR")=="tmoriuchi1401-source"
-                and set(request)=={"imports","plan_sha256"},"card_expense_owner_approval_required")
+                and set(request)=={"imports","plan_sha256","profile_sha256"},"card_expense_owner_approval_required")
         require(len(env["CARD_EXPENSE_REQUEST"])<=60000,"card_expense_request_too_large")
     from .aupay_card_aliases import LiteralRows
     db=LiteralRows(db)
@@ -168,17 +202,24 @@ def run_from_environment(db, env, *, apply):
     if not ids:
         pipeline=AutoExpensePipeline(db,category_rule_auto_apply_enabled=rule_enabled)
         return (pipeline.apply() if apply else pipeline.preview()) if request is None else dict(expenses_created=0,expenses_updated=0,imports_updated=0)
-    pipeline=AutoExpensePipeline(db,category_rule_auto_apply_enabled=rule_enabled)
-    plan=pipeline.plan_card_expenses(ids,categories_by_id=categories)
-    if request is not None:require(contract_sha256(plan)==request["plan_sha256"],"card_expense_approved_plan_changed")
-    if not apply:return dict(expense_rows=plan["expense_rows"],expense_yen=plan["expense_yen"],plan_sha256=contract_sha256(plan))
+    profile=planning_profile(db,env) if request is not None else None
+    plan=selected_plan(db,ids,categories,rule_enabled,request['plan_sha256'] if request is not None else None,
+        expected_profile=request['profile_sha256'] if request is not None else None,env=env)
+    if request is not None:require(planning_profile(db,env)==profile,'card_expense_profile_changed')
+    if not apply:return dict(expense_rows=plan["expense_rows"],expense_yen=plan["expense_yen"],plan_sha256=contract_sha256(plan),
+        profile_sha256=digest(profile),planning_profile=profile)
+    pending_profile_checked=False
     def guard():
+        nonlocal pending_profile_checked
         require(time.monotonic()<deadline,"card_expense_timeout")
         verify_execution_boundary(env,head)
         parent=validate_ledger(DriveStateTransport(ro,pb).read(),pb)
         require(parent["sources"]["auto_expense"]["phase"]=="pending"
                 and all(v["phase"]=="ready" and not v["attempt"] and not v["error"]
                         for k,v in parent["sources"].items() if k!="auto_expense"),"card_expense_parent_changed")
+        if profile is not None and durable._pending is not None and not pending_profile_checked:
+            require(planning_profile(db,env)==profile,'card_expense_profile_changed')
+            pending_profile_checked=True
     with tempfile.TemporaryDirectory(prefix="card-expense-",dir=env.get("RUNNER_TEMP")) as directory:
         path=Path(directory)/"state"
         durable=DurableState(DriveStateTransport(drive_service(),b),b)

@@ -26,6 +26,8 @@ class DB:
                    for i,amount,status in [(OWNER,4386,'auto_expense'),(OTHER,145,'auto_expense'),(TRANSFER,120,'transfer_aupay_charge')]]
         self.expenses=[];self.writes=[];self.mode='normal'
     def get(self,rng):
+        if rng=="'カテゴリ'!A:B":return [['大','小']]+[list(v) for v in self.categories()]
+        if rng=="'カテゴリ自動分類ルール'!A:R":return [['rule']]+self.category_rules()
         if rng=='取込データ!A2:L':return deepcopy(self.rows)
         if rng=='支出明細!A2:M':return deepcopy(self.expenses)
         if rng=='支出明細!A1:M1':return [HEADERS['支出明細']]

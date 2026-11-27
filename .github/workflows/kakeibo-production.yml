@@ -1,4 +1,5 @@
 name: Kakeibo unified production
+run-name: ${{ inputs.card_expense_reconciliation != '' && format('auto-expense-reconciliation-46013990252-{0}', inputs.mode) || github.workflow }}
 
 on:
   schedule:
@@ -28,6 +29,11 @@ on:
         required: true
       card_expense_request:
         description: Encrypted reviewed card owner IDs, existing categories and contract hash; card_expenses only
+        type: string
+        required: false
+        default: ''
+      card_expense_reconciliation:
+        description: Encrypted signed fixed state-only operator proof; card_expenses only
         type: string
         required: false
         default: ''
@@ -117,6 +123,7 @@ jobs:
     env:
       KAKEIBO_PRODUCTION_ENABLED: ${{ vars.KAKEIBO_PRODUCTION_ENABLED }}
       KAKEIBO_VALIDATED_MAIN_SHA: ${{ vars.KAKEIBO_VALIDATED_MAIN_SHA }}
+      CARD_EXPENSE_RECONCILIATION: ${{ inputs.card_expense_reconciliation }}
       KAKEIBO_AUTHORITY_RECIPIENT: ${{ inputs.authority_recipient }}
       BANK_FIXED_BACKFILL_PLAN: ${{ inputs.bank_backfill_plan }}
       BANK_FIXED_BACKFILL_BATCH: ${{ inputs.bank_backfill_batch }}
