@@ -159,11 +159,14 @@ def test_unused_proof_rejects_before_any_new_remote_state_or_financial_effect(tm
     p=recovery_case(tmp_path);before=(p.nt.payload,p.pt.payload)
     if change=="revision":p.record["parent_before_metadata_digest"]="different-revision"
     if change=="previous_record":p.record["recovery"]["previous_record"]["import_yen"]+=1
-    if change=="not_expired":p.args["clock"]=lambda:NOW
+    if change=="not_expired":
+        p.args["clock"]=lambda:NOW+timedelta(seconds=120)
+        p.args["execution_identity"]["created_at"]=(NOW+timedelta(seconds=60)).isoformat()
     if change=="parent_changed":p.pt.payload=p.pt.payload+b" "
     if change=="missing_observer":p.args["state_observe"]=None
     p.args["record_sha256"]=repair.sha(repair.encode(p.record))
-    with pytest.raises(RuntimeError):repair.execute_reconciliation(**p.args)
+    with pytest.raises(RuntimeError,match="recovery_unused_capability_unproven" if change=="not_expired" else None):
+        repair.execute_reconciliation(**p.args)
     assert p.nt.payload==before[0] and p.db.calls==0
 
 
@@ -294,4 +297,30 @@ def test_recovery_cannot_change_the_approved_business_scope(tmp_path,field):
     p.record[field]="different" if field!="candidate_identities" else ["different"]
     p.args["record_sha256"]=repair.sha(repair.encode(p.record))
     with pytest.raises(RuntimeError,match="recovery_business_plan_changed"):repair.execute_reconciliation(**p.args)
+    assert p.nt.payload==stopped and p.db.calls==0
+
+
+@pytest.mark.parametrize("change",["claimed","dispatching","attempt","terminal","expiry","journal"])
+def test_unused_authority_requires_every_negative_condition(tmp_path,change):
+    import hashlib,sqlite3
+    p=recovery_case(tmp_path);n=json.loads(p.nt.payload)
+    file="journal.sqlite3" if change=="journal" else "capabilities.sqlite3"
+    item=n["files"][file]
+    with sqlite3.connect(":memory:") as con:
+        con.deserialize(base64.b64decode(item["data"]))
+        if change=="journal":
+            cap=_rows(n,"capabilities.sqlite3","batch_capabilities")[0]
+            con.execute("INSERT INTO batch_events (run_id,attempt_id,batch_ref,stage,state,reason,identity_count,candidate_digest,timestamp) VALUES (?,?,?,?,?,?,?,?,?)",
+                (RID,"invented",cap["batch_ref"],"pre_read","started","invented",2,"0"*64,p.now.isoformat()))
+        else:
+            field,value={"claimed":("state","claimed"),"dispatching":("state","dispatching"),"attempt":("attempt_id","invented"),
+                "terminal":("terminal_reason","ended"),"expiry":("expires_at",(p.now+timedelta(days=1)).isoformat())}[change]
+            con.execute("UPDATE batch_capabilities SET "+field+"=? WHERE run_id=?",(value,RID))
+        con.commit();raw=con.serialize()
+    item.update(data=base64.b64encode(raw).decode(),sha256=hashlib.sha256(raw).hexdigest())
+    p.nt.payload=repair.encode(n);stopped=p.nt.payload
+    p.record["native_before_sha256"]=repair.sha(stopped)
+    p.args["record_sha256"]=repair.sha(repair.encode(p.record))
+    with pytest.raises(RuntimeError,match="recovery_(unused_capability_unproven|financial_dispatch_possible)"):
+        repair.execute_reconciliation(**p.args)
     assert p.nt.payload==stopped and p.db.calls==0
