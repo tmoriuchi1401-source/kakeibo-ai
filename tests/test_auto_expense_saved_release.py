@@ -190,6 +190,16 @@ def test_target_change_between_initial_get_and_release_is_rejected(monkeypatch,t
     assert not p.parent.writes
 
 
+def test_deadline_rechecked_after_slow_final_prewrite_gets(monkeypatch,tmp_path,key):
+    p=saved_case(monkeypatch,tmp_path,key);calls=[]
+    def clock():
+        calls.append(1)
+        return 901 if len(calls)>=7 else 0
+    monkeypatch.setattr(op.time,'monotonic',clock)
+    with pytest.raises(op.AutoExpenseReconciliationFailure) as error:op.run_from_environment(p.env,apply=True)
+    assert error.value.diagnostic['error_code']=='auto_expense_reconciliation_expired' and not p.parent.writes
+
+
 @pytest.mark.parametrize('proven',[True,False])
 def test_saved_branch_reuses_bank_proof_and_preserves_latest_bank(monkeypatch,tmp_path,key,proven):
     p=saved_case(monkeypatch,tmp_path,key);parent=json.loads(p.parent.read())

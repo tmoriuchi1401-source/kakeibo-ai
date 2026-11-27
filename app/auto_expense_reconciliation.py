@@ -155,6 +155,7 @@ def release_saved_archive(*, record, archive, parent_raw, binding, parent_transp
     guard()
     require(read_archive() == archive and observe() == archive['observation'],
             'auto_expense_reconciliation_snapshot_changed')
+    guard()
     diagnostics.mark('parent_save', 'parent_completion', 'write_possible')
     store.release_after_reconciliation('auto_expense', observed_digest=sha(parent_raw),
                                       evidence_reference=SAVED_ARCHIVE_SHA256)
@@ -163,6 +164,7 @@ def release_saved_archive(*, record, archive, parent_raw, binding, parent_transp
     require(parent_transport.read() == proposed, 'auto_expense_reconciliation_readback_failed')
     require(read_archive() == archive and observe(parent_after=proposed) == archive['observation'],
             'auto_expense_reconciliation_snapshot_changed')
+    guard()
     diagnostics.mark('complete', 'parent_completion', 'readback_confirmed')
     return dict(success=True, mode='released_stop', archive_sha256=SAVED_ARCHIVE_SHA256,
         parent_after_sha256=sha(proposed), parent_write_requests=1, native_write_requests=0,
