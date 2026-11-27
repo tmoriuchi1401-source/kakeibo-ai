@@ -29,10 +29,22 @@ money IDs are distinct, absent from the current book, and remain explicit
 review records (¥10,902 total), with zero money financial posting. Do not hide
 them or call their accounting complete when coverage advances.
 
+The projected forty expense categories are two 医療・保険 / 医療保険,
+one 水道・光熱 / 電気, and 37 その他 / 未分類 (15 in window1, 22 in window2).
+The 37 are explicit unresolved category proposals, not confirmed classifications
+or silently excluded purchases. Before their financial execution, approval must
+either explicitly retain that existing fallback or fix categories and rederive
+the selected expense contracts. Ordinary transaction status alone does not prove
+category completion or unattended-operation readiness.
+
 Maintenance purchase/duplicate/alias/review contract hashes:
 
 * Window1: `dc6d0cdddfd2f565c579f6fea565857f6d7884987aa698e5ae57f162dc21446e`.
 * Projected window2: `17a5f6957d4870e897bd9e197f00ae1baf9c1e1c690dba0b64a5e3609f200178`.
+
+Projected selected-expense contracts, including those category proposals:
+window1 `0f0e2385d414a47d10804dff0287c72cf150adea14646cc50c11707dafdf40dc`;
+window2 `0b1b7f0d68b951c2d9a81b6b12a5f0362b421f324a7907756165243fec3c0206`.
 
 The operator must recompute these from the latest candidate implementation;
 the private plan artifacts hold the complete exact inputs and targets.
