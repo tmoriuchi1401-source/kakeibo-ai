@@ -28,6 +28,19 @@ EFFECT_STATES = {
 }
 # Exact literals only. A syntactically safe-looking external message is NOT a code.
 ERROR_CODES = frozenset({
+    'auto_expense_reconciliation_archive_too_large', 'auto_expense_reconciliation_checkpoint_changed',
+    'auto_expense_reconciliation_record_changed', 'auto_expense_reconciliation_target_changed',
+    'auto_expense_reconciliation_snapshot_changed', 'auto_expense_reconciliation_archive_unconfirmed',
+    'auto_expense_reconciliation_readback_failed', 'auto_expense_reconciliation_owner_required',
+    'auto_expense_reconciliation_settings_changed', 'auto_expense_reconciliation_expired',
+    'auto_expense_reconciliation_main_changed', 'auto_expense_reconciliation_run_changed',
+    'auto_expense_reconciliation_run_inventory_incomplete', 'auto_expense_reconciliation_dispatch_consumed',
+    'auto_expense_reconciliation_competing_run', 'auto_expense_reconciliation_failed_run_changed',
+    'auto_expense_reconciliation_binding_changed', 'auto_expense_reconciliation_native_changed',
+    'auto_expense_reconciliation_no_replay', 'auto_expense_reconciliation_parent_changed',
+    'auto_expense_reconciliation_bank_changed', 'auto_expense_reconciliation_peer_pending',
+    'auto_expense_reconciliation_financial_changed', 'auto_expense_reconciliation_documents_changed',
+    'auto_expense_reconciliation_acl_changed', 'auto_expense_reconciliation_saved_approval_required',
     "recovery_reference_changed", "recovery_reference_digest_changed", "recovery_reference_missing", "recovery_reference_state_changed",
     "saved_readback_get_only", "saved_readback_target_changed", "saved_readback_pin_changed",
     "saved_readback_checksum_changed", "saved_readback_revision_changed", "saved_readback_ticket_invalid",

@@ -23,6 +23,19 @@ FAILED_RUN = 46013990252
 ARCHIVE_RUN = 'OPERATOR-AUTO-EXPENSE:46013990252'
 RELEASE_TITLE = 'auto-expense-reconciliation-46013990252-apply'
 MAX_ARCHIVE_BYTES = 32768
+SAVED_OPERATION = 'release_saved_archive'
+SAVED_ARCHIVE_SHA256 = '8d92edad186defce88564a787083d4b0f4d4f3bbe89001a93bbcf466cabeda2b'
+SAVED_NATIVE_PROOF = dict(
+    sha256='b828b3a1b784b205924641988d6b4b154bddbd79931468a5a1c14c2f57c3156f',
+    metadata_digest='9315b4df16343b1325f298bcee85b2b2dd82d56f20ff63516f234213eec1dbe0')
+SAVED_OPERATOR = dict(id=46076915652, head_sha='6453d12f66a0ed8a7879006d817bc21f7d3f9d87',
+    run_attempt=1, event='workflow_dispatch', path='.github/workflows/kakeibo-production.yml')
+
+
+class AutoExpenseReconciliationFailure(RuntimeError):
+    def __init__(self, diagnostic):
+        super().__init__(diagnostic['error_code'])  # Already allowlisted; preserve existing callers.
+        self.diagnostic = diagnostic
 
 
 def sha(raw): return hashlib.sha256(raw).hexdigest()
@@ -101,7 +114,73 @@ def release_with_archive(*, record, parent_raw, binding, parent_transport,
         parent_after_sha256=sha(proposed), parent_write_requests=1, financial_write_requests=0)
 
 
+def validate_saved_archive(record, archive):
+    """Accept the already independently reconciled archive, never a new record."""
+    require(digest(record) == RECORD_SHA256 and digest(archive) == SAVED_ARCHIVE_SHA256,
+            'auto_expense_reconciliation_archive_unconfirmed')
+    require(archive['schema'] == 1 and archive['kind'] == SCOPE
+        and archive['record_sha256'] == RECORD_SHA256 and archive['failed_run'] == record['failed_run']
+        and archive['operator_run'] == SAVED_OPERATOR
+        and archive['original_parent_exact_b64'] == record['parent_before_raw_b64']
+        and archive['original_parent_revision'] == record['parent_before_revision']
+        and archive['native_before_sha256'] == record['native_before_sha256']
+        and archive['checkpoint'] == record['checkpoint']
+        and archive['parent_sha256'] == sha(base64.b64decode(archive['reconciled_parent_exact_b64'], validate=True))
+        and archive['financial_write_reached'] is False and archive['exception_identity_confirmed'] is False
+        and archive['observation'] == {k: record[k] for k in
+            ('financial_sha256', 'documents_sha256', 'rules_sha256', 'acl_sha256')},
+        'auto_expense_reconciliation_archive_unconfirmed')
+
+
+def release_saved_archive(*, record, archive, parent_raw, binding, parent_transport,
+                          read_archive, observe, guard, expected_after_sha256, diagnostics):
+    """Only the remaining parent API call; no archive/native writer is accepted."""
+    diagnostics.mark('archive_prepare')
+    validate_saved_archive(record, archive)
+    original = json.loads(base64.b64decode(record['parent_before_raw_b64'], validate=True))
+    item = json.loads(parent_raw)['sources']['auto_expense']
+    require(item == original['sources']['auto_expense'] and item['phase'] == 'pending'
+        and item['attempt'] == record['failed_attempt'] and item['error'] == 'source_execution_failed',
+        'auto_expense_reconciliation_target_changed')
+    proposed = proposed_release(parent_raw, binding, SAVED_ARCHIVE_SHA256)
+    require(sha(proposed) == expected_after_sha256, 'auto_expense_reconciliation_target_changed')
+    diagnostics.mark('parent_guard')
+    guard()
+    require(read_archive() == archive and observe() == archive['observation'],
+            'auto_expense_reconciliation_snapshot_changed')
+    from .bank_pending_recovery import ReleaseOnlyTransport
+    store = ProductionLedger(ReleaseOnlyTransport(parent_transport, expected_after_sha256), binding)
+    require(store.payload == parent_raw, 'auto_expense_reconciliation_snapshot_changed')
+    # A separate read immediately before the existing API's own prewrite read.
+    guard()
+    require(read_archive() == archive and observe() == archive['observation'],
+            'auto_expense_reconciliation_snapshot_changed')
+    guard()
+    diagnostics.mark('parent_save', 'parent_completion', 'write_possible')
+    store.release_after_reconciliation('auto_expense', observed_digest=sha(parent_raw),
+                                      evidence_reference=SAVED_ARCHIVE_SHA256)
+    diagnostics.mark('parent_independent_readback')
+    guard()
+    require(parent_transport.read() == proposed, 'auto_expense_reconciliation_readback_failed')
+    require(read_archive() == archive and observe(parent_after=proposed) == archive['observation'],
+            'auto_expense_reconciliation_snapshot_changed')
+    guard()
+    diagnostics.mark('complete', 'parent_completion', 'readback_confirmed')
+    return dict(success=True, mode='released_stop', archive_sha256=SAVED_ARCHIVE_SHA256,
+        parent_after_sha256=sha(proposed), parent_write_requests=1, native_write_requests=0,
+        archive_write_requests=0, financial_write_requests=0)
+
+
 def run_from_environment(env, *, apply):
+    from .aupay_card_reconciliation_diagnostics import ReconciliationDiagnostics
+    diagnostics = ReconciliationDiagnostics()
+    try:
+        return _run_from_environment(env, apply=apply, diagnostics=diagnostics)
+    except Exception as error:
+        raise AutoExpenseReconciliationFailure(diagnostics.report(error)) from None
+
+
+def _run_from_environment(env, *, apply, diagnostics):
     from cryptography.hazmat.primitives import serialization
     from .production_flow import verify_execution_boundary
     from .aupay_card_reconciliation_entry import decode_capsule
@@ -117,6 +196,7 @@ def run_from_environment(env, *, apply):
     from .aupay_card_bank_premises import collect_bank_premises
     import subprocess
 
+    diagnostics.mark('release_guard')
     head = env.get('GITHUB_SHA', '')
     verify_execution_boundary(env, head)
     require(env.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
@@ -131,11 +211,13 @@ def run_from_environment(env, *, apply):
     tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
     info = json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
     key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
+    diagnostics.mark('capsule_decode')
     record, att = decode_capsule(env['CARD_EXPENSE_RECONCILIATION'], key, tree,
         datetime.now(timezone.utc), record_sha256=RECORD_SHA256, label=LABEL, scope=SCOPE, max_ttl=900)
+    saved = att.get('operation') == SAVED_OPERATION
     require(record['failed_run']['id'] == FAILED_RUN and record['financial_write_authority'] is False
         and att['main_sha'] == head and att['controls_sha256'] == record['settings_without_validated_sha256']
-        and att['operation'] == ('release' if apply else 'preview')
+        and att['operation'] == (SAVED_OPERATION if saved and apply else 'release' if apply else 'preview')
         and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(att['observed_at'])).total_seconds() <= 900,
         'auto_expense_reconciliation_record_changed')
     require(env.get('CATEGORY_RULE_AUTO_APPLY_ENABLED') == 'true'
@@ -147,6 +229,14 @@ def run_from_environment(env, *, apply):
         and env.get('KAKEIBO_SCHEDULE_ENABLED') == 'false'
         and env.get('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED') == 'false',
         'auto_expense_reconciliation_settings_changed')
+    if saved:
+        premises = att['saved_archive']
+        require(set(premises) == {'archive_sha256', 'native', 'operator_run', 'parent', 'parent_after_sha256'}
+            and premises['archive_sha256'] == SAVED_ARCHIVE_SHA256
+            and premises['native'] == SAVED_NATIVE_PROOF and premises['operator_run'] == SAVED_OPERATOR
+            and set(premises['parent']) == {'sha256', 'metadata_digest', 'revision'}
+            and bool(att['approval'].get('approval_reference')) and head != SAVED_OPERATOR['head_sha'],
+            'auto_expense_reconciliation_saved_approval_required')
     github = GitHub(env); deadline = time.monotonic() + 900
     expires = datetime.fromisoformat(att['approval']['expires_at'])
     def guard():
@@ -175,6 +265,11 @@ def run_from_environment(env, *, apply):
         old = github.get('actions/runs/' + str(FAILED_RUN))
         require(all(old.get(k) == v for k,v in record['failed_run'].items()),
                 'auto_expense_reconciliation_failed_run_changed')
+        if saved:
+            archived = github.get('actions/runs/' + str(SAVED_OPERATOR['id']))
+            require(all(archived.get(k) == v for k,v in SAVED_OPERATOR.items())
+                and archived['status'] == 'completed' and archived['conclusion'] == 'failure'
+                and current != SAVED_OPERATOR['id'], 'auto_expense_reconciliation_failed_run_changed')
     guard()
     b = record['bindings']; sid = b['spreadsheet_id']
     require((env['SPREADSHEET_ID'],env['KAKEIBO_STATE_FOLDER_ID'],env['AUPAY_CARD_STATE_FILE_ID'],env['KAKEIBO_RUN_LEDGER_FILE_ID'])
@@ -183,15 +278,27 @@ def run_from_environment(env, *, apply):
     pb=StateBinding('production_run',sid,b['folder_id'],b['parent_id'])
     ro=read_only_drive_service(); sheets=read_only_sheets_service()
     card=ReadOnlyState(ro,cb); parent=ReadOnlyState(ro,pb)
+    diagnostics.mark('state_revision')
     native_raw,np=card.observe(); parent_raw,pp=parent.observe()
-    require(np == dict(sha256=record['native_before_sha256'],metadata_digest=record['native_before_metadata_digest']),
+    require(np == (SAVED_NATIVE_PROOF if saved else dict(sha256=record['native_before_sha256'],metadata_digest=record['native_before_metadata_digest'])),
             'auto_expense_reconciliation_native_changed')
     native=validate(native_raw,cb)
-    require(native['phase']=='ready' and not native['attempt'] and ARCHIVE_RUN not in summaries(native),
+    require(native['phase']=='ready' and not native['attempt']
+            and ((native['generation']==129 and ARCHIVE_RUN in summaries(native)) if saved else ARCHIVE_RUN not in summaries(native)),
             'auto_expense_reconciliation_no_replay')
+    if saved:
+        require(pp == {k: premises['parent'][k] for k in ('sha256','metadata_digest')},
+                'auto_expense_reconciliation_parent_changed')
+        require(ro.files().get(fileId=b['parent_id'],supportsAllDrives=True,fields='headRevisionId')
+            .execute(num_retries=0).get('headRevisionId') == premises['parent']['revision'],
+            'auto_expense_reconciliation_parent_changed')
+        archive=summaries(native)[ARCHIVE_RUN]['operator_reconciliation']
+        validate_saved_archive(record,archive)
+    diagnostics.mark('bank_premises')
     if sha(parent_raw) != record['parent_before_sha256']:
         proof=collect_bank_premises(record,att['bank_manifest'],record['baseline_parent_metadata'],
-            ro,github,datetime.now(timezone.utc),head=head,current_run_id=int(env['GITHUB_RUN_ID']))
+            ro,github,datetime.now(timezone.utc),head=head,current_run_id=int(env['GITHUB_RUN_ID']),
+            **({'saved_archive':archive} if saved else {}))
         require(proof['manifest']['parent_snapshot']['sha256']==sha(parent_raw),
                 'auto_expense_reconciliation_parent_changed')
     else:
@@ -208,9 +315,17 @@ def run_from_environment(env, *, apply):
     documents=RollingProjectionStore(DriveProjectionStore(ro,b['projection_id'],sid,precreated=True))
     expected_native=[native_raw]
     def observe(*,parent_after=None):
+        diagnostics.mark('financial_preflight')
         guard()
-        require(card.read()==expected_native[0] and parent.read()==(parent_after or parent_raw),
+        observed_card, observed_np = card.observe()
+        observed_parent, observed_pp = parent.observe()
+        require(observed_card==expected_native[0] and observed_parent==(parent_after or parent_raw)
+            and (not saved or (observed_np==SAVED_NATIVE_PROOF and (parent_after is not None or observed_pp==pp))),
                 'auto_expense_reconciliation_snapshot_changed')
+        if saved and parent_after is None:
+            require(ro.files().get(fileId=b['parent_id'],supportsAllDrives=True,fields='headRevisionId')
+                .execute(num_retries=0).get('headRevisionId')==premises['parent']['revision'],
+                'auto_expense_reconciliation_parent_changed')
         tables=financial_data(sheets,sid,include_controls=True)
         require(digest({str(k):v for k,v in tables.items()})==record['financial_sha256'],
                 'auto_expense_reconciliation_financial_changed')
@@ -225,6 +340,16 @@ def run_from_environment(env, *, apply):
         # Stable return value excludes our separately checked archive/parent transition.
         return dict(financial_sha256=record['financial_sha256'],documents_sha256=record['documents_sha256'],
                     rules_sha256=record['rules_sha256'],acl_sha256=record['acl_sha256'])
+    if saved:
+        def read_saved_archive():
+            raw, proof = card.observe()
+            require(raw==native_raw and proof==SAVED_NATIVE_PROOF,
+                    'auto_expense_reconciliation_archive_unconfirmed')
+            return summaries(validate(raw,cb))[ARCHIVE_RUN]['operator_reconciliation']
+        # The native transport, temp state and persist_archive below are unreachable.
+        return release_saved_archive(record=record,archive=archive,parent_raw=parent_raw,binding=pb,
+            parent_transport=DriveStateTransport(drive_service(),pb),read_archive=read_saved_archive,
+            observe=observe,guard=guard,expected_after_sha256=premises['parent_after_sha256'],diagnostics=diagnostics)
     with tempfile.TemporaryDirectory(prefix='operator-auto-expense-',dir=env.get('RUNNER_TEMP')) as temp:
         path=Path(temp)/'state'
         durable=None
