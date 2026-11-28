@@ -309,6 +309,10 @@ def hosted_case(tmp_path,key,monkeypatch,*,apply_mode):
         CONFIRM='APPLY',GOOGLE_SERVICE_ACCOUNT_JSON=json.dumps(dict(private_key=key)),RUNNER_TEMP=str(tmp_path),
         SPREADSHEET_ID=r['bindings']['spreadsheet_id'],KAKEIBO_STATE_FOLDER_ID='folder',AUPAY_CARD_STATE_FILE_ID=r['bindings']['card_id'],
         KAKEIBO_RUN_LEDGER_FILE_ID='parent',KAKEIBO_PROJECTION_FOLDER_ID='projection')
+    from app.private_state_bindings import wrap
+    # production_flow decodes the five native/parent IDs, while the projection
+    # binding reaches this entry encrypted and must use the existing unwrap.
+    env['KAKEIBO_PROJECTION_FOLDER_ID']=wrap('KAKEIBO_PROJECTION_FOLDER_ID',r['bindings']['projection_id'],key)
     def sign():env['CARD_EXPENSE_RECONCILIATION']=op.RESERVATION_PREFIX+capsule(r,att,rsa)
     sign();monkeypatch.setattr('subprocess.check_output',lambda *a,**k:tree+'\n')
     return env,nt,pt,r,att,sign,active,factories

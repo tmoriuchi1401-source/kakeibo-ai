@@ -711,9 +711,13 @@ def _reservation_from_environment(env, *, apply, diagnostics, head, tree, key):
             require(active['total_count']==len(active['workflow_runs'])<=100
                 and all(v['id']==current for v in active['workflow_runs']),'auto_expense_reconciliation_competing_run')
     guard();b=record['bindings'];sid=b['spreadsheet_id']
+    from .private_state_bindings import unwrap
+    projection_id=unwrap('KAKEIBO_PROJECTION_FOLDER_ID',env['KAKEIBO_PROJECTION_FOLDER_ID'],
+        json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])['private_key'])
     require(tuple(env[n] for n in ('SPREADSHEET_ID','KAKEIBO_STATE_FOLDER_ID','AUPAY_CARD_STATE_FILE_ID',
-        'KAKEIBO_RUN_LEDGER_FILE_ID','KAKEIBO_PROJECTION_FOLDER_ID'))==tuple(b[n] for n in
-        ('spreadsheet_id','folder_id','card_id','parent_id','projection_id')),'auto_expense_reconciliation_binding_changed')
+        'KAKEIBO_RUN_LEDGER_FILE_ID'))==tuple(b[n] for n in
+        ('spreadsheet_id','folder_id','card_id','parent_id')) and projection_id==b['projection_id'],
+        'auto_expense_reconciliation_binding_changed')
     ro=read_only_drive_service();sheets=GetOnly(read_only_sheets_service(),deadline)
     cb=StateBinding('au_pay_card_gmail',sid,b['folder_id'],b['card_id']);pb=StateBinding('production_run',sid,b['folder_id'],b['parent_id'])
     card=ReadOnlyState(GetOnly(ro,deadline),cb);parent=ReadOnlyState(GetOnly(ro,deadline),pb)
