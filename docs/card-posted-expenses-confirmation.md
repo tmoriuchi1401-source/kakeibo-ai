@@ -34,6 +34,24 @@ the existing bank schedule remain in force.
    last_success, counts, duration and every other source stay unchanged.
    Independently GET both final states and verify finance again, then stop.
 
+Before any production Apply of this candidate, run the existing hosted readonly
+`preview_posted_card_expenses` operation with a new preview-only signature on the
+deployed main/validated SHA. Its success and independent before/after proof of
+zero financial and persistent-state changes are mandatory Apply conditions.
+Verify the same fixed business/profile contract, two already-posted owners,
+native/parent snapshot and preserved UNKNOWN evidence. If Preview fails or any
+premise changes, stop; never use Apply to test the preflight contract. A later
+Apply needs its own independent approval signature and the existing fresh checks.
+
+The state-confirmation DB now uses the same existing
+`LiteralRows(SheetsDB(...))` adapter as normal card expenses. Without that
+connection, Sheets' default FORMATTED_VALUE returns expense amounts as strings;
+the unchanged planner correctly rejects their exact comparison with integer
+expected amounts. Captured actual API replies reproduce
+`card_expense_existing_conflict` at `auto_expense.py:235`. This is a replay
+finding: the failed hosted runs retain their sanitized `financial_preflight` /
+`repair_failed_closed` diagnostic; their direct exception text was not recovered.
+
 The fixed private record SHA-256 is
 `8922970a0c2f96079ea0692ff34334d4576cdc486e5a79f465f02a7b4d463754`.
 Its source data stays private. The existing encrypted/signed capsule input

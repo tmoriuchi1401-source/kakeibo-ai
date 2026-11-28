@@ -387,6 +387,7 @@ def posted_summary(record, updates, operator, recorded_at):
 
 def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
     """Fixed posted pair, new signed observation, existing state transports only."""
+    from .aupay_card_aliases import LiteralRows
     from .aupay_card_reconciliation_entry import decode_capsule
     from .aupay_card_window_preview import GitHub,ReadOnlyState
     from .drive_run_state import StateBinding,DriveStateTransport,DurableState,validate
@@ -474,7 +475,7 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
     require(all(v['phase']=='ready' and not v['attempt'] and not v['error']
         for k,v in ledger_value['sources'].items() if k!='auto_expense'),'auto_expense_reconciliation_peer_pending')
     documents=RollingProjectionStore(DriveProjectionStore(ro,b['projection_id'],sid,precreated=True))
-    db=SheetsDB(sid,service=sheets)
+    db=LiteralRows(SheetsDB(sid,service=sheets))
     def observe():
         diagnostics.mark('financial_preflight');guard()
         financial=financial_data(sheets,sid,include_controls=True)

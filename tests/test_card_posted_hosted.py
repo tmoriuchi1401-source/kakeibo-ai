@@ -88,7 +88,36 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
     monkeypatch.setattr(google_clients,'read_only_sheets_service',lambda:object())
     monkeypatch.setattr(google_clients,'sheets_service',lambda:pytest.fail('financial writer forbidden'))
     monkeypatch.setattr(drive_run_state,'DriveStateTransport',lambda svc,binding:nt if binding==cb else pt)
-    monkeypatch.setattr(sheets,'SheetsDB',lambda *a,**k:db)
+    # Keep the real SheetsDB getters. Google defaults to FORMATTED_VALUE;
+    # only get_raw()/get_raw_ranges() request literal integer amounts.
+    class ReadSheets:
+        def __init__(self):self.calls=[]
+        def spreadsheets(self):return self
+        def values(self):return self
+        def rows(self,rng,render):
+            if rng=='取込データ!A2:L':values=deepcopy(db.rows)
+            elif rng=='支出明細!A2:M':values=deepcopy(db.expenses)
+            elif rng in {"'カテゴリ'!A:B",'カテゴリ!A2:B'}:
+                values=[list(v) for v in db.categories()]
+                if rng.startswith("'"):values=[['大','小']]+values
+            elif rng=="'カテゴリ自動分類ルール'!A:R":values=db.get_raw(rng)
+            elif rng=='カテゴリ自動分類ルール!A2:R':values=db.category_rules()
+            else:raise AssertionError(rng)
+            self.calls.append((rng,render))
+            if render=='FORMATTED_VALUE':
+                return [[format(v,',') if type(v) is int else v for v in row] for row in values]
+            assert render=='UNFORMATTED_VALUE'
+            return values
+        def get(self,**kw):
+            if 'range' not in kw:
+                value=dict(sheets=[dict(properties=dict(title='カテゴリ自動分類ルール'))])
+            else:value=dict(values=self.rows(kw['range'],kw.get('valueRenderOption','FORMATTED_VALUE')))
+            return SimpleNamespace(execute=lambda **kwargs:deepcopy(value))
+        def batchGet(self,**kw):
+            value=dict(valueRanges=[dict(values=self.rows(rng,kw.get('valueRenderOption','FORMATTED_VALUE'))) for rng in kw['ranges']])
+            return SimpleNamespace(execute=lambda **kwargs:deepcopy(value))
+    read_sheets=ReadSheets()
+    monkeypatch.setattr(google_clients,'read_only_sheets_service',lambda:read_sheets)
     monkeypatch.setattr(stage,'navigation_context',lambda db:None)
     monkeypatch.setattr(financial,'financial_data',lambda *a,**k:db.financial())
     monkeypatch.setattr(projection_store,'DriveProjectionStore',lambda *a,**k:SimpleNamespace(read=lambda key:deepcopy(docs[key])))
@@ -103,6 +132,32 @@ def test_signed_hosted_entry_readonly_or_state_only(tmp_path,monkeypatch,key,app
     assert result['success'] and result['financial_write_requests']==0
     assert len(nt.writes)==2*int(apply) and len(pt.writes)==int(apply)
     if not apply:assert not factories
+
+
+def test_real_getters_preserve_render_difference_and_original_posted_contract(tmp_path,monkeypatch,key):
+    from app.aupay_card_aliases import LiteralRows
+    env,nt,pt,factories,history,active,att,record,rsa=hosted(tmp_path,monkeypatch,key,False)
+    db=sheets.SheetsDB(env['SPREADSHEET_ID'],service=google_clients.read_only_sheets_service())
+    shown=db.get('支出明細!A2:M');raw=db.get_raw('支出明細!A2:M')
+    assert shown!=raw and type(shown[0][4]) is str and type(raw[0][4]) is int
+    args=(record['plan']['import_ids'],record['plan']['categories_by_id'],True,record['business_contract'])
+    with pytest.raises(RuntimeError,match='^card_expense_existing_conflict$'):
+        stage.selected_plan(db,*args,expected_profile=record['profile_sha256'],env=env)
+    plan=stage.selected_plan(LiteralRows(db),*args,expected_profile=record['profile_sha256'],env=env)
+    assert len(plan['already_posted'])==2 and plan['expense_rows']==0
+    assert stage.contract_sha256(plan)==record['business_contract']
+    assert not nt.writes and not pt.writes and not factories
+
+
+def test_missing_literal_connection_reproduces_preflight_failure_before_state_writers(tmp_path,monkeypatch,key):
+    from app import aupay_card_aliases
+    env,nt,pt,factories,*_=hosted(tmp_path,monkeypatch,key,False)
+    monkeypatch.setattr(aupay_card_aliases,'LiteralRows',lambda db:db)
+    with pytest.raises(op.AutoExpenseReconciliationFailure) as caught:
+        op.run_from_environment(env,apply=False)
+    assert caught.value.diagnostic['last_stage']=='financial_preflight'
+    assert caught.value.diagnostic['error_code']=='repair_failed_closed'
+    assert not nt.writes and not pt.writes and not factories
 
 
 @pytest.mark.parametrize('change',['attempt','settings','scope','expired','snapshot','old_operation','replayed_approval','competing','record'])
