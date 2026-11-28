@@ -119,6 +119,16 @@ def test_new_fixed_failure_needs_state_even_with_valid_job():
     with pytest.raises(RuntimeError,match='no_write_state_required'):guard.controls(values,'a'*40,g)
 
 
+@pytest.mark.parametrize('preview',[False,True])
+def test_fixed_failure_history_cannot_be_deleted_or_hidden(preview):
+    g=AuditedGitHub();g.preview=preview
+    g.prior=[r for r in g.prior if r['id']!=recovery.CATCHUP_NO_WRITE_RUN]
+    values=env()|dict(EXPECTED_CHECKPOINT=recovery.CATCHUP_NO_WRITE_CHECKPOINT)
+    action=(lambda:guard.history_controls(g,'a'*40,checkpoint_value=values['EXPECTED_CHECKPOINT'],defer_reconciliation=True)) if preview else (
+        lambda:guard.controls(values,'a'*40,g,defer_reconciliation=True))
+    with pytest.raises(RuntimeError,match='no_write_history_missing'):action()
+
+
 def test_later_business_checkpoint_does_not_replace_execution_proof(monkeypatch,tmp_path):
     n,p,cp,finance,docs,_=audited(monkeypatch,tmp_path)
     later=(datetime.fromisoformat(cp)+timedelta(days=1)).isoformat()

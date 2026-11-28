@@ -118,6 +118,7 @@ def history_controls(github, head, *, checkpoint_value, current=None,
     seen, page, total = set(), 1, None
     recovered_failure = False
     no_write_failure = False
+    catchup_no_write_failure = False
     proofs = {}
     coverage = {}
     if reconciliation_state is not None:
@@ -179,6 +180,7 @@ def history_controls(github, head, *, checkpoint_value, current=None,
                 require(defer_reconciliation or reconciliation_state is not None, "no_write_state_required")
                 if reconciliation_state is not None:
                     verify_catchup_no_write_state(*reconciliation_state, checkpoint_value)
+                catchup_no_write_failure = True
                 continue
             if prior["status"] == "completed" and prior["conclusion"] == "skipped":
                 require(prior["run_attempt"] == 1, "skipped_attempt_unproven")
@@ -210,6 +212,8 @@ def history_controls(github, head, *, checkpoint_value, current=None,
         require(recovered_failure, "reconciled_history_missing")
     if cp is not None and cp >= datetime.fromisoformat(NO_WRITE_CHECKPOINT):
         require(no_write_failure, "no_write_history_missing")
+    if cp is not None and cp >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT):
+        require(catchup_no_write_failure, "no_write_history_missing")
     # True mandates protected native/parent proof before any prepare or writer.
     return recovered_failure
 
