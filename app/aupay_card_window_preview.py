@@ -370,7 +370,12 @@ def run(env, head, github):
 
 
 def catchup_preview(env, github, head, private, card, parent, amazon, db, money_store, authority, key, policy, expected):
-    from .aupay_card_first_window_apply import prepare,ReviewLedger
+    from .aupay_card_first_window_apply import prepare,ReviewLedger,financial_data
+    from .aupay_card_incremental_guard import history_controls
+    from .aupay_card_incremental_recovery import NO_WRITE_CHECKPOINT, CATCHUP_NO_WRITE_CHECKPOINT, verify_no_write_state
+    from .aupay_card_window_evidence import ObservedStore
+    from .drive_run_state import validate
+    from .production_ledger import validate_ledger
     from .amazon_money_runtime import _configured_writer
     from .aupay_card_aliases import LiteralRows
     from .aupay_card_incremental_coverage import plan_contract_sha256
@@ -381,9 +386,20 @@ def catchup_preview(env, github, head, private, card, parent, amazon, db, money_
     from .production_run import run_durable_source
     from .projection_store import ReadOnlyProjectionStore
     cp=env["EXPECTED_CHECKPOINT"]
+    money_store=ObservedStore(money_store)
     observation=lambda:observe(card,parent,db.svc,db.sid,money_store,expected_checkpoint=cp,amazon=amazon)
     before=observation()
     try:
+        # Real Preview identity remains checked by controls(); never fabricate
+        # an Apply run or use precredential deferral as a completed preflight.
+        native=validate(card.read(),card.binding)
+        ledger=validate_ledger(parent.read(),parent.binding)
+        history_controls(github,head,checkpoint_value=cp,reconciliation_state=(native,ledger))
+        if datetime.fromisoformat(cp)>=datetime.fromisoformat(NO_WRITE_CHECKPOINT):
+            verify_no_write_state(native,ledger,cp,
+                financial=lambda:financial_data(db.svc,db.sid,
+                    include_controls=datetime.fromisoformat(cp)>=datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT)),
+                money=money_store)
         def source(path):
             state=SqliteRecurringRunState(path/"recurring.sqlite3",repo_root=ROOT)
             reader=LiteralRows(db)
@@ -400,9 +416,11 @@ def catchup_preview(env, github, head, private, card, parent, amazon, db, money_
         result=run_durable_source(DurableState(card,card.binding),private/"state",source,apply=False)
     finally:
         require(observation()==before,"readonly_snapshot_changed")
+        money_store.verify()
         controls(env,head,github)
     return dict(result,before=before,financial_write_requests=0,checkpoint_updates=0,
-        persistent_state_saves=0,review_writes=0)
+        persistent_state_saves=0,review_writes=0,apply_history_preflight=True,
+        runtime_competition_recheck_required=True)
 
 
 def main():

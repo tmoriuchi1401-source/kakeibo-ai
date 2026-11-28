@@ -39,6 +39,26 @@ NO_WRITE_FINANCIAL_SHA256 = "4388e4c1abb0de1c14ef14adb7900d9c121c368db95676a249f
 NO_WRITE_MONEY_SHA256 = "58d87b362afc69e041de2c31e34e753c0959fb91146dc4518c1e58969c8224b2"
 NO_WRITE_MONEY_KEYS = ("money", "money-reviews", "money-migration", "money-notices", "journal")
 
+# Independently audited before reservation, not a successful Apply or a retry.
+# The retained exact revisions are native134 and parent1426 -> bank1427 ->1428.
+# The direct exception remains unknown; a queued bank guard is only a candidate.
+CATCHUP_NO_WRITE_RUN = 46103398237
+CATCHUP_NO_WRITE_CHECKPOINT = "2026-11-16T21:00:33+09:00"
+CATCHUP_NO_WRITE_EXECUTION = dict(id=CATCHUP_NO_WRITE_RUN,
+    head_sha="a92abe6aa4a44d1fb1ceadc52ce2c8caa82b905b", head_branch="main", run_attempt=1,
+    status="completed", conclusion="failure", event="workflow_dispatch",
+    path=".github/workflows/aupay-card-incremental-apply.yml", created_at="2026-11-28T03:33:07Z")
+CATCHUP_NO_WRITE_JOB = 140850673239
+CATCHUP_NO_WRITE_NATIVE_SHA256 = "9d8b6aafde553f45d1e659315c45774c255d726f3203c43d219a16507c30b621"
+CATCHUP_NO_WRITE_SOURCES_SHA256 = "283473eb6cac7a0661b3a38ca020860981e88e4ac074ecac7656664692d9c15f"
+CATCHUP_NO_WRITE_FINANCIAL_SHA256 = "07ad4831d3b5067b782a94cc91bd5061f69defbd2c35fd09da5036b5c6efbecf"
+CATCHUP_NO_WRITE_DOCUMENTS_SHA256 = "f57a5c50ecac90bfa0258348f88b3eb16d3936c1b5d1349e30d32853fb7f3c30"
+CATCHUP_NO_WRITE_ANCHOR_SHA256 = "8ab018e21bf319cad55409f5b06e2f33fbd96502fbcfff201a04182506e8bead"
+CATCHUP_NO_WRITE_AUDIT_SHA256 = "534b81bc4fc9b84f6ceca6040a5bfc252b69d02b7c816dfdbd30c71ae7cbee71"
+CATCHUP_BANK_EXECUTION = dict(CATCHUP_NO_WRITE_EXECUTION, id=46103439725,
+    conclusion="success", event="schedule", path=".github/workflows/kakeibo-production.yml",
+    created_at="2026-11-28T03:33:36Z")
+
 
 def _hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True,
@@ -71,19 +91,21 @@ def verify_failed_run(github):
                 "reconciled_step_identity_unproven")
 
 
-def verify_no_write_run(github):
-    """Only this exact attempt/job/step history has the no-write audit."""
-    run = github.get(f"actions/runs/{NO_WRITE_RUN}")
-    require(run["id"] == NO_WRITE_RUN and run["head_sha"] == NO_WRITE_SHA
-            and run["head_branch"] == "main" and run["run_attempt"] == 1
-            and run["status"] == "completed" and run["conclusion"] == "failure"
-            and run["event"] == "workflow_dispatch" and run["created_at"] == NO_WRITE_CREATED
-            and run["path"] == ".github/workflows/aupay-card-incremental-apply.yml",
-            "no_write_run_unproven")
-    jobs = github.get(f"actions/runs/{NO_WRITE_RUN}/jobs?per_page=100")
+def verify_no_write_run(github, run_id=NO_WRITE_RUN):
+    """Only the two reviewed exact attempts; no caller-supplied exemption."""
+    require(run_id in {NO_WRITE_RUN, CATCHUP_NO_WRITE_RUN}, "no_write_run_unproven")
+    expected = (CATCHUP_NO_WRITE_EXECUTION if run_id == CATCHUP_NO_WRITE_RUN else
+        dict(CATCHUP_NO_WRITE_EXECUTION, id=NO_WRITE_RUN, head_sha=NO_WRITE_SHA, created_at=NO_WRITE_CREATED))
+    job_id = CATCHUP_NO_WRITE_JOB if run_id == CATCHUP_NO_WRITE_RUN else NO_WRITE_JOB
+    run = github.get(f"actions/runs/{run_id}")
+    require(all(run.get(k) == v for k, v in expected.items()), "no_write_run_unproven")
+    if run_id == CATCHUP_NO_WRITE_RUN:
+        bank = github.get(f"actions/runs/{CATCHUP_BANK_EXECUTION['id']}")
+        require(all(bank.get(k) == v for k, v in CATCHUP_BANK_EXECUTION.items()), "no_write_bank_unproven")
+    jobs = github.get(f"actions/runs/{run_id}/jobs?per_page=100")
     require(jobs["total_count"] == len(jobs["jobs"]) == 1, "no_write_jobs_unproven")
     job = jobs["jobs"][0]
-    require(job["id"] == NO_WRITE_JOB and job["run_id"] == NO_WRITE_RUN
+    require(job["id"] == job_id and job["run_id"] == run_id
             and job["name"] == "apply" and job["status"] == "completed"
             and job["conclusion"] == "failure", "no_write_job_unproven")
     for number, name, conclusion in (
@@ -148,6 +170,46 @@ def verify_no_write_state(native, parent, expected_checkpoint, *, financial, mon
         # not just supplied some other older checkpoint to skip the first proof.
         require(datetime.fromisoformat(expected_checkpoint) > datetime.fromisoformat(NO_WRITE_CREATED.replace("Z", "+00:00")),
                 "no_write_followup_unproven")
+    if datetime.fromisoformat(expected_checkpoint) >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT):
+        verify_catchup_no_write_state(native, parent, expected_checkpoint, financial=financial, money=money)
+
+
+def verify_catchup_no_write_state(native, parent, expected_checkpoint, *, financial=None, money=None):
+    """Reuse the fixed audit without saving an archive or changing past results.
+
+    At C2, freeze the audited card, non-bank sources and complete financial and
+    protected document snapshots. Later coverage must prove the first new run
+    independently; business checkpoint dates are never execution timestamps.
+    """
+    from .aupay_card_incremental_coverage import successful_coverage_proofs
+    cp = datetime.fromisoformat(expected_checkpoint)
+    require(cp >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT), "no_write_checkpoint_regression")
+    coverage = successful_coverage_proofs(native, parent, expected_checkpoint)
+    runs = [json.loads(r["summary_json"]) for r in _rows(native, "recurring.sqlite3", "recurring_runs")]
+    require(sum(_hash(r) == CATCHUP_NO_WRITE_ANCHOR_SHA256 for r in runs) == 1,
+            "no_write_coverage_anchor_changed")
+    if expected_checkpoint == CATCHUP_NO_WRITE_CHECKPOINT:
+        require(_hash(native) == CATCHUP_NO_WRITE_NATIVE_SHA256
+                and _hash({k:v for k,v in parent["sources"].items() if k != "bank"}) == CATCHUP_NO_WRITE_SOURCES_SHA256,
+                "no_write_state_changed")
+        bank = parent["sources"]["bank"]
+        from .aupay_card_bank_premises import ZERO_COUNTS
+        require(bank["phase"] == "ready" and not bank["attempt"] and not bank["error"]
+                and all(type(bank["counts"].get(k, 0)) is int and bank["counts"].get(k, 0) == 0 for k in ZERO_COUNTS),
+                "no_write_bank_unproven")
+        # History guard checks the protected anchor before assembling readers.
+        # Full preflight below additionally requires independent finance/docs.
+        if financial is not None:
+            require(_hash({t+"|"+v:rows for (t,v),rows in financial().items()}) == CATCHUP_NO_WRITE_FINANCIAL_SHA256,
+                    "no_write_financial_changed")
+            require(money is not None and _hash({k:money.read(k) for k in NO_WRITE_MONEY_KEYS}) == CATCHUP_NO_WRITE_DOCUMENTS_SHA256,
+                    "no_write_money_changed")
+    else:
+        created = datetime.fromisoformat(CATCHUP_NO_WRITE_EXECUTION["created_at"].replace("Z", "+00:00"))
+        require(any(r.get("checkpoint_before") == CATCHUP_NO_WRITE_CHECKPOINT
+                    and r.get("github_execution", {}).get("id") in coverage
+                    and datetime.fromisoformat(r["github_execution"]["created_at"].replace("Z", "+00:00")) > created
+                    for r in runs), "no_write_followup_unproven")
 
 
 def _rows(native, file, table):

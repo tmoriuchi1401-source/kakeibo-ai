@@ -15,6 +15,7 @@ from .aupay_card_window_preview import END, FLAGS, REPO, ROOT, SOURCE, GitHub, r
 from .aupay_card_incremental_recovery import FAILED_RUN, FAILED_SHA, RECOVERED_CHECKPOINT, verify_failed_run
 from .aupay_card_incremental_recovery import (
     NO_WRITE_RUN, NO_WRITE_SHA, NO_WRITE_CHECKPOINT, verify_no_write_run,
+    CATCHUP_NO_WRITE_RUN, CATCHUP_NO_WRITE_CHECKPOINT, CATCHUP_NO_WRITE_EXECUTION, verify_catchup_no_write_state,
 )
 
 WORKFLOW = "aupay-card-incremental-apply.yml"
@@ -85,6 +86,7 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
     require(all(env.get(k) == v for k, v in FLAGS.items()), "production_flags_mismatch")
     require(github.get("git/ref/heads/main")["object"]["sha"] == head, "main_changed")
     current = int(env["GITHUB_RUN_ID"])
+    require(current != CATCHUP_NO_WRITE_RUN, "previous_dispatch_no_retry")
     run = github.get(f"actions/runs/{current}")
     require(run["id"] == current and run["head_sha"] == head and run["run_attempt"] == 1
             and run["event"] == env["GITHUB_EVENT_NAME"]
@@ -96,6 +98,19 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
         require(runs["total_count"] <= 100 and len(runs["workflow_runs"]) == runs["total_count"],
                 "run_inventory_incomplete")
         require(all(r["id"] == current for r in runs["workflow_runs"]), "competing_run")
+    return history_controls(github, head, current=current, checkpoint_value=checkpoint_value,
+        reconciliation_state=reconciliation_state, defer_reconciliation=defer_reconciliation, scheduled=scheduled)
+
+
+def history_controls(github, head, *, checkpoint_value, current=None,
+                     reconciliation_state=None, defer_reconciliation=False, scheduled=False):
+    """Shared GET-only Apply history proof, also usable by the real Preview.
+
+    Preview has its own authenticated workflow identity and no Apply run to
+    exclude. Apply always supplies its current identity after live controls.
+    This function grants no reservation, capability or write authority.
+    """
+    cp = datetime.fromisoformat(checkpoint_value) if checkpoint_value is not None else None
     # All revisions and all pages. A dispatch after the approved checkpoint
     # consumes that checkpoint even if it failed before credential injection.
     # Completed successes older than a newer checkpoint allow daily reuse. The
@@ -155,6 +170,16 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
                 verify_no_write_run(github)
                 no_write_failure = True
                 continue
+            if prior["id"] == CATCHUP_NO_WRITE_RUN:
+                require(cp is None or cp >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT),
+                        "no_write_checkpoint_regression")
+                require(all(prior.get(k) == v for k,v in CATCHUP_NO_WRITE_EXECUTION.items()),
+                        "no_write_run_unproven")
+                verify_no_write_run(github, CATCHUP_NO_WRITE_RUN)
+                require(defer_reconciliation or reconciliation_state is not None, "no_write_state_required")
+                if reconciliation_state is not None:
+                    verify_catchup_no_write_state(*reconciliation_state, checkpoint_value)
+                continue
             if prior["status"] == "completed" and prior["conclusion"] == "skipped":
                 require(prior["run_attempt"] == 1, "skipped_attempt_unproven")
                 verify_skipped_run(github, prior)
@@ -180,7 +205,7 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
         if len(seen) == total:
             break
         page += 1
-    require(current in seen, "run_inventory_incomplete")
+    require(current is None or current in seen, "run_inventory_incomplete")
     if scheduled or (cp is not None and cp >= datetime.fromisoformat(RECOVERED_CHECKPOINT)):
         require(recovered_failure, "reconciled_history_missing")
     if cp is not None and cp >= datetime.fromisoformat(NO_WRITE_CHECKPOINT):

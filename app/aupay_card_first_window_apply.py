@@ -473,10 +473,13 @@ def run(env, head, github, *, incremental=False):
     reader = _configured_writer(db, observed, env, ledger=ReviewLedger(db))
     before = observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro)
     if incremental:
-        from .aupay_card_incremental_recovery import NO_WRITE_CHECKPOINT, verify_no_write_state
+        from .aupay_card_incremental_recovery import NO_WRITE_CHECKPOINT, CATCHUP_NO_WRITE_CHECKPOINT, verify_no_write_state
         if datetime.fromisoformat(expected_cp) >= datetime.fromisoformat(NO_WRITE_CHECKPOINT):
             verify_no_write_state(native_before, initial_parent, expected_cp,
-                financial=lambda: financial_data(ro_sheets, sid), money=readback_store)
+                financial=lambda: (financial_data(ro_sheets, sid, include_controls=True)
+                    if datetime.fromisoformat(expected_cp) >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT)
+                    else financial_data(ro_sheets, sid)),
+                money=readback_store)
     parent_before = validate_ledger(parent_ro.read(), parent_binding)
     if incremental:
         require(card_ro.read() == native_raw and parent_ro.read() == parent_raw, "preparation_native_changed")
