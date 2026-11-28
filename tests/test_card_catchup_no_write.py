@@ -98,10 +98,13 @@ def test_preview_and_apply_share_history_validation(monkeypatch,preview,unproved
     from app import aupay_card_incremental_coverage as coverage
     from app import aupay_card_reservation_recovery as reservation
     monkeypatch.setattr(recovery,'preserved_unknown_proofs',lambda *a:{})
+    # This history-only fixture deliberately has no native SQLite transport;
+    # real signed receipt/state validation is exercised separately.
+    monkeypatch.setattr(recovery,'reservation_receipts',lambda *a,**kw:[])
     monkeypatch.setattr(coverage,'successful_coverage_proofs',lambda *a:{})
     monkeypatch.setattr(reservation,'summaries',lambda *a:{})
     checked=[]
-    monkeypatch.setattr(guard,'verify_catchup_no_write_state',lambda *a:checked.append(a))
+    monkeypatch.setattr(guard,'verify_catchup_no_write_state',lambda *a,**kw:checked.append((a,kw)))
     g=AuditedGitHub();g.preview=preview
     if unproved:g.prior.insert(0,dict(recovery.CATCHUP_NO_WRITE_EXECUTION,id=999))
     values=env()|dict(EXPECTED_CHECKPOINT=recovery.CATCHUP_NO_WRITE_CHECKPOINT)

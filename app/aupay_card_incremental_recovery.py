@@ -9,6 +9,7 @@ from datetime import datetime
 import hashlib
 import json
 import sqlite3
+import re
 
 from .aupay_card_window_preview import require
 
@@ -58,6 +59,10 @@ CATCHUP_NO_WRITE_AUDIT_SHA256 = "534b81bc4fc9b84f6ceca6040a5bfc252b69d02b7c816df
 CATCHUP_BANK_EXECUTION = dict(CATCHUP_NO_WRITE_EXECUTION, id=46103439725,
     conclusion="success", event="schedule", path=".github/workflows/kakeibo-production.yml",
     created_at="2026-11-28T03:33:36Z")
+RESERVATION_PROTOCOL = "card-reservation-no-write-v1"
+RESERVATION_PREFIX = "OPERATOR-CARD-RESERVATION:"
+RESERVATION_MAX_BYTES = 32768
+CATCHUP_CONTENT_ROOT = "868e55572d7ea46b48a0d7b20ce81401147b7d95fd7513a3860dcf08d983fd6a"
 
 
 def _hash(value):
@@ -143,7 +148,7 @@ def financial_evidence(tables):
     return _hash(result)
 
 
-def verify_no_write_state(native, parent, expected_checkpoint, *, financial, money):
+def verify_no_write_state(native, parent, expected_checkpoint, *, financial, money, receipt_env=None):
     """No state saves: first resume pins all audited data; daily reuse retains proof."""
     from .aupay_card_window_preview import checkpoint
 
@@ -171,10 +176,10 @@ def verify_no_write_state(native, parent, expected_checkpoint, *, financial, mon
         require(datetime.fromisoformat(expected_checkpoint) > datetime.fromisoformat(NO_WRITE_CREATED.replace("Z", "+00:00")),
                 "no_write_followup_unproven")
     if datetime.fromisoformat(expected_checkpoint) >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT):
-        verify_catchup_no_write_state(native, parent, expected_checkpoint, financial=financial, money=money)
+        verify_catchup_no_write_state(native, parent, expected_checkpoint, financial=financial, money=money, receipt_env=receipt_env)
 
 
-def verify_catchup_no_write_state(native, parent, expected_checkpoint, *, financial=None, money=None):
+def verify_catchup_no_write_state(native, parent, expected_checkpoint, *, financial=None, money=None, receipt_env=None):
     """Reuse the fixed audit without saving an archive or changing past results.
 
     At C2, freeze the audited card, non-bank sources and complete financial and
@@ -189,7 +194,9 @@ def verify_catchup_no_write_state(native, parent, expected_checkpoint, *, financ
     require(sum(_hash(r) == CATCHUP_NO_WRITE_ANCHOR_SHA256 for r in runs) == 1,
             "no_write_coverage_anchor_changed")
     if expected_checkpoint == CATCHUP_NO_WRITE_CHECKPOINT:
-        require(_hash(native) == CATCHUP_NO_WRITE_NATIVE_SHA256
+        receipts = reservation_receipts(native, parent, expected_checkpoint, env=receipt_env)
+        bridged = bool(receipts) and reservation_content_root(native) == CATCHUP_CONTENT_ROOT
+        require((_hash(native) == CATCHUP_NO_WRITE_NATIVE_SHA256 or bridged)
                 and _hash({k:v for k,v in parent["sources"].items() if k != "bank"}) == CATCHUP_NO_WRITE_SOURCES_SHA256,
                 "no_write_state_changed")
         bank = parent["sources"]["bank"]
@@ -222,6 +229,190 @@ def _rows(native, file, table):
         con.execute("PRAGMA query_only=ON")
         con.row_factory = sqlite3.Row
         return [dict(r) for r in con.execute("SELECT * FROM " + table)]
+
+
+def reservation_content(native):
+    """Compact logical roots; only authenticated receipt rows may be appended."""
+    from .drive_run_state import CARD_FILES
+    result = {}
+    for file, tables in CARD_FILES.items():
+        with closing(sqlite3.connect(':memory:')) as con:
+            con.deserialize(base64.b64decode(native['files'][file]['data'],validate=True))
+            con.execute('PRAGMA trusted_schema=OFF');con.execute('PRAGMA query_only=ON')
+            schema_sha256=_hash(con.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall())
+        result[file] = {}
+        for table in sorted(tables):
+            rows = _rows(native, file, table)
+            if table == "recurring_runs":
+                rows = [r for r in rows if not r['run_id'].startswith(RESERVATION_PREFIX)]
+            result[file][table] = dict(rows=len(rows), sha256=_hash(rows),schema_sha256=schema_sha256)
+    return result
+
+
+def reservation_content_root(native):
+    return _hash({f:{t:v['sha256'] for t,v in ts.items()} for f,ts in reservation_content(native).items()})
+
+
+def reservation_public_key(env):
+    import os
+    from cryptography.hazmat.primitives import serialization
+    env = os.environ if env is None else env
+    require(bool(env.get('GOOGLE_SERVICE_ACCOUNT_JSON')), 'reservation_receipt_key_required')
+    return serialization.load_pem_private_key(json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])['private_key'].encode(), password=None).public_key()
+
+
+def validate_reservation_record(record):
+    """Dynamic execution premises, restricted to this existing card purpose."""
+    keys = {'protocol','bindings','checkpoint','checkpoint_row','anchor_summary_sha256',
+        'failed_execution','failed_job_id','native_before','native_pending','parent_before','parent_pending',
+        'tables','financial_sha256','documents_sha256','acl_sha256','source_contract_sha256',
+        'window_end','money_ids','previous_receipt_sha256','evidence_mode','protected_heads'}
+    require(set(record)==keys and record['protocol']==RESERVATION_PROTOCOL, 'reservation_record_invalid')
+    require(set(record['bindings'])=={'spreadsheet_id','folder_id','card_id','parent_id','projection_id'}, 'reservation_record_invalid')
+    cp,end=map(datetime.fromisoformat,(record['checkpoint'],record['window_end']))
+    require(cp.tzinfo is not None and end.tzinfo is not None and 0<(end-cp).total_seconds()<=12*86400,
+            'reservation_record_invalid')
+    failed=record['failed_execution']
+    require(set(failed)=={'id','head_sha','head_branch','run_attempt','status','conclusion','event','path','created_at'}
+        and type(failed['id']) is int and failed['run_attempt']==1 and failed['head_branch']=='main'
+        and failed['status']=='completed' and failed['conclusion']=='failure'
+        and failed['event'] in {'schedule','workflow_dispatch'}
+        and failed['path']=='.github/workflows/aupay-card-incremental-apply.yml', 'reservation_failure_unproven')
+    for name in ('native','parent'):
+        first,pending=record[name+'_before'],record[name+'_pending']
+        require(set(first)=={'sha256','generation','revision'} and set(pending)=={'sha256','generation','revision','attempt'}
+            and type(first['generation']) is int and pending['generation']==first['generation']+1
+            and bool(re.fullmatch('[0-9a-f]{32}',pending['attempt'])), 'reservation_record_invalid')
+        for node in (first,pending):
+            require(set(node['revision'])=={'id','modifiedTime','size','md5Checksum'}
+                and bool(node['revision']['id']) and bool(re.fullmatch('[0-9a-f]{64}',node['sha256'])), 'reservation_record_invalid')
+    require(record['evidence_mode'] in {'legacy_c2','diagnostic'}
+        and type(record['failed_job_id']) is int and type(record['money_ids']) is list
+        and len(record['money_ids'])<=100 and len(set(record['money_ids']))==len(record['money_ids']), 'reservation_record_invalid')
+    for key in ('financial_sha256','documents_sha256','acl_sha256','source_contract_sha256','anchor_summary_sha256'):
+        require(bool(re.fullmatch('[0-9a-f]{64}',record[key])), 'reservation_record_invalid')
+    require(not record['previous_receipt_sha256'] or bool(re.fullmatch('[0-9a-f]{64}',record['previous_receipt_sha256'])), 'reservation_record_invalid')
+    from .drive_run_state import CARD_FILES
+    require(set(record['tables'])==set(CARD_FILES) and set(record['protected_heads'])==set(NO_WRITE_MONEY_KEYS)
+        and all(isinstance(v,str) and v for v in record['bindings'].values())
+        and re.fullmatch('[0-9a-f]{40}',failed['head_sha']) and record['failed_job_id']>0,
+        'reservation_record_invalid')
+    require(datetime.fromisoformat(failed['created_at'].replace('Z','+00:00')).tzinfo is not None,
+        'reservation_record_invalid')
+    for file,tables in CARD_FILES.items():
+        require(set(record['tables'][file])==set(tables),'reservation_record_invalid')
+        for descriptor in record['tables'][file].values():
+            require(set(descriptor)=={'rows','sha256','schema_sha256'} and type(descriptor['rows']) is int
+                and descriptor['rows']>=0 and re.fullmatch('[0-9a-f]{64}',descriptor['sha256'])
+                and re.fullmatch('[0-9a-f]{64}',descriptor['schema_sha256']),
+                'reservation_record_invalid')
+    for value in record['protected_heads'].values():
+        require(set(value)=={'file_id','revision'} and bool(value['file_id'])
+            and set(value['revision'])=={'id','modifiedTime','size','md5Checksum'},'reservation_record_invalid')
+
+
+def verify_reservation_receipt(receipt, public_key):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    require(set(receipt)=={'protocol','record','operator','parent_ready_sha256','parent_ready_card_sha256','signature'}
+        and receipt['protocol']==RESERVATION_PROTOCOL and len(json.dumps(receipt).encode())<=RESERVATION_MAX_BYTES,
+        'reservation_receipt_invalid')
+    validate_reservation_record(receipt['record'])
+    operator=receipt['operator']
+    require(set(operator)=={'id','head_sha','head_branch','run_attempt','event','path','created_at'}
+        and operator['run_attempt']==1 and operator['head_branch']=='main' and operator['event']=='workflow_dispatch'
+        and operator['path']=='.github/workflows/kakeibo-production.yml'
+        and operator['id']!=receipt['record']['failed_execution']['id'], 'reservation_receipt_invalid')
+    body={k:v for k,v in receipt.items() if k!='signature'}
+    try:public_key.verify(base64.b64decode(receipt['signature'],validate=True),_hash_bytes(body),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256())
+    except Exception:require(False,'reservation_receipt_signature_invalid')
+    return receipt
+
+
+def _hash_bytes(value):
+    return json.dumps(value,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()
+
+
+def reservation_summary(row):
+    """No unsigned alias/result fields may be smuggled into a noop receipt."""
+    summary=json.loads(row['summary_json'])
+    require(set(summary)=={'run_id','status','failure','source_window_start','source_window_end','reservation_reconciliation'},
+        'reservation_receipt_invalid')
+    receipt=summary['reservation_reconciliation'];cp=receipt['record']['checkpoint']
+    require(row['run_id']==summary['run_id']==RESERVATION_PREFIX+str(receipt['operator']['id'])
+        and row['status']==summary['status']=='noop' and summary['failure']==0
+        and row['window_start']==row['window_end']==summary['source_window_start']==summary['source_window_end']==cp
+        and datetime.fromisoformat(row['recorded_at']).tzinfo is not None,'reservation_receipt_invalid')
+    return receipt
+
+
+def reservation_receipts(native, parent, checkpoint_value, *, env=None, public_key=None):
+    """Read-only receipt chain, preserving old failure conclusions and roots."""
+    rows=[r for r in _rows(native,'recurring.sqlite3','recurring_runs') if r['run_id'].startswith(RESERVATION_PREFIX)]
+    rows.sort(key=lambda r:json.loads(r['summary_json'])['reservation_reconciliation']['record']['native_pending']['generation'])
+    if not rows:return []
+    public_key=public_key or reservation_public_key(env)
+    result=[];seen=set();current=reservation_content(native);cp=datetime.fromisoformat(checkpoint_value)
+    for row in rows:
+        receipt=reservation_summary(row);summary=json.loads(row['summary_json'])
+        verify_reservation_receipt(receipt,public_key);r=receipt['record'];rid=r['failed_execution']['id']
+        require(row['run_id']==RESERVATION_PREFIX+str(receipt['operator']['id'])
+            and summary['run_id']==row['run_id'] and row['status']==summary['status']=='noop'
+            and summary['failure']==0 and summary['source_window_start']==summary['source_window_end']==r['checkpoint']
+            and rid not in seen and cp>=datetime.fromisoformat(r['checkpoint']), 'reservation_receipt_invalid')
+        seen.add(rid)
+        prior=r['previous_receipt_sha256']
+        require(prior==(_hash(result[-1]) if result else ''), 'reservation_receipt_chain_changed')
+        if result and result[-1]['record']['checkpoint']==r['checkpoint']:
+            require(r['native_before']['generation']==result[-1]['record']['native_pending']['generation']+1,
+                    'reservation_generation_changed')
+        for file, tables in r['tables'].items():
+            require(file in current and set(tables)==set(current[file]),'reservation_content_changed')
+            for table,expected in tables.items():
+                require(current[file][table]['schema_sha256']==expected['schema_sha256'],'reservation_content_changed')
+                actual=_rows(native,file,table)
+                if table=='recurring_runs':actual=[x for x in actual if not x['run_id'].startswith(RESERVATION_PREFIX)]
+                if table=='recurring_checkpoint' and cp>datetime.fromisoformat(r['checkpoint']):continue
+                require(len(actual)>=expected['rows'] and _hash(actual[:expected['rows']])==expected['sha256'],
+                        'reservation_content_changed')
+        require(any(_hash(json.loads(v['summary_json']))==r['anchor_summary_sha256']
+                    for v in _rows(native,'recurring.sqlite3','recurring_runs')), 'reservation_content_changed')
+        require(native['phase']=='ready' and not native['attempt']
+            and native['generation']>=r['native_pending']['generation']+1
+            and parent['sources']['aupay_card']['phase']=='ready' and not parent['sources']['aupay_card']['attempt'],
+            'reservation_release_incomplete')
+        if cp==datetime.fromisoformat(r['checkpoint']):
+            require(_hash(parent['sources']['aupay_card'])==receipt['parent_ready_card_sha256'], 'reservation_release_incomplete')
+        result.append(receipt)
+    if checkpoint_value==CATCHUP_NO_WRITE_CHECKPOINT:
+        require(result[0]['record']['native_before']['sha256']==CATCHUP_NO_WRITE_NATIVE_SHA256
+            and reservation_content_root(native)==CATCHUP_CONTENT_ROOT, 'reservation_content_changed')
+    return result
+
+
+def append_reservation_receipt(native, receipt):
+    """One append through existing recurring state, no new DB or checkpoint."""
+    import tempfile
+    from pathlib import Path
+    from copy import deepcopy
+    from .aupay_card_recurring import SqliteRecurringRunState
+    validate_reservation_record(receipt['record'])
+    require(native['source']=='au_pay_card_gmail' and _hash(native)==receipt['record']['native_pending']['sha256'],
+            'reservation_snapshot_changed')
+    require(len(json.dumps(receipt).encode())<=RESERVATION_MAX_BYTES,'reservation_receipt_invalid')
+    r=receipt['record'];result=deepcopy(native['files'])
+    with tempfile.TemporaryDirectory(prefix='card-reconciliation-') as temp:
+        path=Path(temp)/'recurring.sqlite3';path.write_bytes(base64.b64decode(result['recurring.sqlite3']['data']))
+        state=SqliteRecurringRunState(path,repo_root=Path(__file__).resolve().parents[1])
+        state.record(dict(run_id=RESERVATION_PREFIX+str(receipt['operator']['id']),status='noop',failure=0,
+            source_window_start=r['checkpoint'],source_window_end=r['checkpoint'],reservation_reconciliation=receipt),advance_checkpoint=False)
+        raw=path.read_bytes();result['recurring.sqlite3']=dict(data=base64.b64encode(raw).decode(),sha256=hashlib.sha256(raw).hexdigest())
+    proposed=dict(native,files=result)
+    for file in result:
+        if file!='recurring.sqlite3':require(result[file]==native['files'][file],'reservation_content_changed')
+    require(reservation_content(proposed)==reservation_content(native),'reservation_content_changed')
+    return result
 
 
 def successful_checkpoint(native):

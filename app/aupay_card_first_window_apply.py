@@ -201,10 +201,11 @@ def recheck(prepared, db, writer, key):
 
 class ImportOnlySheets:
     """The existing batch transport gets one append to the exact import range."""
-    def __init__(self, service, sid, predispatch, *, projection=None):
+    def __init__(self, service, sid, predispatch, *, projection=None, diagnostics=None):
         self.service, self.sid, self.predispatch = service, sid, predispatch
         self.calls, self.rows = 0, ()
         self.projection = projection
+        self.diagnostics = diagnostics
     def spreadsheets(self): return self
     def values(self): return self
     def get(self, **kwargs):
@@ -222,6 +223,7 @@ class ImportOnlySheets:
         self.predispatch()
         self.calls += 1
         self.rows = deepcopy(rows)
+        if self.diagnostics: self.diagnostics.mark('before_financial_append','financial','append_possible')
         return self.service.spreadsheets().values().append(**kwargs)
 
 
@@ -266,11 +268,13 @@ def verify_financial(before, after, rows):
 
 class ReviewStore:
     """Restrict the existing MoneyWriter to new review records in its book."""
-    def __init__(self, backing, decisions, guard, expected):
+    def __init__(self, backing, decisions, guard, expected, diagnostics=None):
         self.backing, self.decisions, self.guard = backing, decisions, guard
         self.expected = deepcopy(expected)
+        self.diagnostics = diagnostics
     def read(self, key): return self.backing.read(key)
     def write(self, key, value):
+        if self.diagnostics: self.diagnostics.mark('money_guard')
         self.guard()
         require(key == "money", "review_document_forbidden")
         before = self.backing.read(key)
@@ -283,13 +287,14 @@ class ReviewStore:
         by_id = {d.record.money_id: d for d in self.decisions}
         require(len(added) == 1 and added.issubset(by_id)
                 and all(exact_review(value, by_id[k]) for k in added), "review_insert_invalid")
+        if self.diagnostics: self.diagnostics.mark('money_save','money','write_possible')
         self.backing.write(key, value)
         self.expected = deepcopy(value)
 
 
 def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider,
                   authority_provider, state, state_dir, repo_root, durable, ledger,
-                  guard, financial_read, documents_check, final_read, clock=None):
+                  guard, financial_read, documents_check, final_read, clock=None, diagnostics=None):
     """All writes in order; any exception leaves pending state, without retry."""
     clock = clock or (lambda: datetime.now(JST))
     execution_started_at=clock().isoformat()
@@ -310,20 +315,29 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
         run_id=run_id, audit_key=key, binding=binding) if count else None)
     # Durable parent/native pending markers are confirmed before any review or
     # financial write. Failure anywhere from here requires manual reconciliation.
-    ledger.begin("aupay_card", uuid4().hex)
-    durable.begin(uuid4().hex)
+    if diagnostics:
+        ledger.begin("aupay_card", uuid4().hex,observe=lambda event:diagnostics.state_save('parent',event))
+        diagnostics.mark('parent_reserved','parent_reservation','readback_confirmed')
+        durable.begin(uuid4().hex,observe=lambda event:diagnostics.state_save('native',event))
+        diagnostics.mark('native_reserved','native_reservation','readback_confirmed')
+    else:
+        ledger.begin("aupay_card", uuid4().hex)
+        durable.begin(uuid4().hex)
 
     def pending_guard():
         guard()
         require(durable.transport.read() == durable._pending
                 and ledger.transport.read() == ledger.payload, "pending_state_changed")
 
-    writer.store = ReviewStore(writer.store, prepared["decisions"], pending_guard, prepared["money_book"])
+    writer.store = ReviewStore(writer.store, prepared["decisions"], pending_guard, prepared["money_book"],diagnostics)
+    if diagnostics: diagnostics.mark('money_preflight','money','not_started')
     check_reviews(writer, prepared["decisions"], fixed=fixed)
     stats = writer.apply([d.record for d in prepared["decisions"]], limit=max(1, held), review_only=True)
     require(stats["money_review"] == held and all(v == 0 for k, v in stats.items() if k != "money_review"),
             "review_saved_financial_activity")
+    if diagnostics: diagnostics.mark('money_readback')
     saved_book = check_reviews(readback_writer, prepared["decisions"], all_saved=True, fixed=fixed)
+    if diagnostics: diagnostics.effects['money']='readback_confirmed'
     require(saved_book == writer.store.expected, "review_book_changed")
     documents_check(saved_book)
     verify_financial(before, financial_read(), [])
@@ -351,12 +365,13 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
             store=capabilities, now=clock())
         # Wrap the service, retaining the exact existing transport/writer types.
         original_service = db.svc
-        bounded = ImportOnlySheets(original_service, db.sid, predispatch, projection=projection)
+        bounded = ImportOnlySheets(original_service, db.sid, predispatch, projection=projection,diagnostics=diagnostics)
         db.svc = bounded
         try:
             transport = SealedSheetsBatchTransport(db, projection=projection, manifest=manifest,
                 capability=capability, store=capabilities, journal=journal, binding=binding,
                 inspector=inspector, key_provider=key_provider, clock=clock)
+            if diagnostics: diagnostics.mark('writer_execute','financial','writer_entered')
             execution = execute_production_batch_once(projection, manifest, capability=capability,
                 store=capabilities, journal=journal, leases=leases, reader=_batch_reader(db),
                 transport=transport, binding=binding, inspector=inspector, key_provider=key_provider,
@@ -380,6 +395,7 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
     check_reviews(readback_writer, prepared["decisions"], all_saved=True, fixed=fixed)
     documents_check(saved_book)
     verify_financial(before, financial_read(), rows)
+    if diagnostics: diagnostics.mark('financial_readback','financial','exact_readback_confirmed')
     end = prepared["window"].end.isoformat()
     duplicate = prepared["totals"]["ordinary"]["duplicate"]["count"]
     result = dict(status="complete" if count else "noop",
@@ -404,8 +420,11 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
             coverage_protocol="card-incremental-coverage-v1")
         result["coverage_certificate"] = completion_certificate(snapshot_files=snapshot(path, durable.binding), result=result)
     state.record(result, advance_checkpoint=True)
+    if diagnostics: diagnostics.mark('checkpoint_commit','checkpoint','write_possible')
     durable.commit(path)
     final_read(card_only=True)
+    if diagnostics: diagnostics.mark('checkpoint_committed','checkpoint','readback_confirmed')
+    if diagnostics: diagnostics.mark('parent_completion','parent_completion','write_possible')
     ledger.complete("aupay_card", result, 0)
     final_read(card_only=False)
     verify_financial(before, financial_read(), rows)
@@ -415,7 +434,7 @@ def execute_fixed(*, prepared, db, writer, readback_writer, policy, key_provider
         expense_rows_written=0, checkpoint=end, parent_ledger="complete")
 
 
-def run(env, head, github, *, incremental=False):
+def run(env, head, github, *, incremental=False, diagnostics=None):
     started_at = datetime.now(JST).replace(microsecond=0)
     scheduled = incremental and env.get("GITHUB_EVENT_NAME") == "schedule"
     boundary = controls
@@ -479,7 +498,7 @@ def run(env, head, github, *, incremental=False):
                 financial=lambda: (financial_data(ro_sheets, sid, include_controls=True)
                     if datetime.fromisoformat(expected_cp) >= datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT)
                     else financial_data(ro_sheets, sid)),
-                money=readback_store)
+                money=readback_store,receipt_env=env)
     parent_before = validate_ledger(parent_ro.read(), parent_binding)
     if incremental:
         require(card_ro.read() == native_raw and parent_ro.read() == parent_raw, "preparation_native_changed")
@@ -522,6 +541,13 @@ def run(env, head, github, *, incremental=False):
                 "id", "head_sha", "head_branch", "run_attempt", "event", "path", "created_at")}
         require(observe(card_ro, parent_ro, ro_sheets, sid, observed, expected_checkpoint=expected_cp, amazon=amazon_ro) == before, "prewrite_state_changed")
         observed.verify()
+        if diagnostics and incremental:
+            from .aupay_card_incremental_recovery import _hash,NO_WRITE_MONEY_KEYS
+            from .aupay_card_incremental_coverage import plan_contract_sha256
+            diagnostics.reservation_evidence=dict(native_before=_hash(native_before),parent_before=_hash(initial_parent),
+                checkpoint=expected_cp,window_end=prepared['window'].end.isoformat(),source_contract=plan_contract_sha256(prepared),
+                financial=_hash({t+'|'+v:rows for (t,v),rows in financial_data(ro_sheets,sid,include_controls=True).items()}),
+                documents=_hash({k:readback_store.read(k) for k in NO_WRITE_MONEY_KEYS}))
         writer = _configured_writer(db, backing, env, ledger=ReviewLedger(db))
         initial_book = deepcopy(observed.observed["money"])
 
@@ -553,10 +579,12 @@ def run(env, head, github, *, incremental=False):
             policy=policy, key_provider=key, authority_provider=authority, state=state,
             state_dir=path, repo_root=ROOT, durable=durable, ledger=ledger, guard=guard,
             financial_read=lambda: financial_data(ro_sheets, sid), documents_check=documents_check,
-            final_read=final_read)
+            final_read=final_read,diagnostics=diagnostics)
 
 
 def main(*, incremental=False):
+    from .aupay_card_reconciliation_diagnostics import ReconciliationDiagnostics
+    diagnostics=ReconciliationDiagnostics()
     logging.disable(logging.CRITICAL)
     socket.setdefaulttimeout(30)
     def timeout(*_): raise Stop("apply_timeout")
@@ -570,10 +598,11 @@ def main(*, incremental=False):
             head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
             github = GitHub(env)
             require(not sys.argv[1:], "arguments_forbidden")
-            result = dict(success=True, **(run(env, head, github, incremental=True) if incremental else run(env, head, github)))
-    except BaseException:
+            result = dict(success=True, **run(env, head, github,incremental=incremental,diagnostics=diagnostics))
+    except BaseException as error:
         result = dict(success=False, error="incremental_apply_stopped_no_retry" if incremental else "first_window_apply_stopped_no_retry",
-            automatic_retry=False, rollback=False)
+            automatic_retry=False, rollback=False,diagnostic=diagnostics.report(error))
+        if getattr(diagnostics,'reservation_evidence',None):result['reservation_evidence']=diagnostics.reservation_evidence
     finally:
         if hasattr(signal, "SIGALRM"): signal.alarm(0)
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))

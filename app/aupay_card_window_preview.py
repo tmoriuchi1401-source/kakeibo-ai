@@ -394,12 +394,12 @@ def catchup_preview(env, github, head, private, card, parent, amazon, db, money_
         # an Apply run or use precredential deferral as a completed preflight.
         native=validate(card.read(),card.binding)
         ledger=validate_ledger(parent.read(),parent.binding)
-        history_controls(github,head,checkpoint_value=cp,reconciliation_state=(native,ledger))
+        history_controls(github,head,checkpoint_value=cp,reconciliation_state=(native,ledger),receipt_env=env)
         if datetime.fromisoformat(cp)>=datetime.fromisoformat(NO_WRITE_CHECKPOINT):
             verify_no_write_state(native,ledger,cp,
                 financial=lambda:financial_data(db.svc,db.sid,
                     include_controls=datetime.fromisoformat(cp)>=datetime.fromisoformat(CATCHUP_NO_WRITE_CHECKPOINT)),
-                money=money_store)
+                money=money_store,receipt_env=env)
         def source(path):
             state=SqliteRecurringRunState(path/"recurring.sqlite3",repo_root=ROOT)
             reader=LiteralRows(db)

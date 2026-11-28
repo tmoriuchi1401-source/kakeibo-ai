@@ -18,8 +18,10 @@ STAGES = frozenset({
     "checkpoint_independent_readback", "checkpoint_committed",
     "parent_completion", "parent_completion_readback", "parent_completed",
     "final_readback", "complete", "unused_revocation", "dispatch_intent",
+    "money_guard", "money_preflight", "money_save", "money_readback",
 })
 EFFECT_STATES = {
+    "money": {"not_started", "write_possible", "readback_confirmed"},
     "native_reservation": {"not_started", "write_possible", "readback_confirmed"},
     "parent_reservation": {"not_started", "write_possible", "readback_confirmed"},
     "financial": {"not_reached", "writer_entered", "append_possible", "exact_readback_confirmed"},
@@ -28,6 +30,16 @@ EFFECT_STATES = {
 }
 # Exact literals only. A syntactically safe-looking external message is NOT a code.
 ERROR_CODES = frozenset({
+    'competing_run','pending_state_changed','apply_timeout','money_book_changed_before_write',
+    'review_book_changed','review_projection_changed','saved_review_changed','review_insert_invalid',
+    'review_saved_financial_activity','money_review_record_missing','projection_drive_write_unknown',
+    'review_classification_changed','saved_review_mismatch','review_request_pending','review_only_required',
+    'held_baseline_changed','money_reconciliation_required','money_projection_refresh_required','money_identity_conflict',
+    'reservation_record_invalid','reservation_failure_unproven','reservation_snapshot_changed',
+    'reservation_peer_pending','reservation_content_changed','reservation_receipt_invalid',
+    'reservation_receipt_signature_invalid','reservation_receipt_chain_changed','reservation_generation_changed',
+    'reservation_release_incomplete','reservation_readback_failed','reservation_revision_unproven',
+    'reservation_financial_changed','reservation_documents_changed','reservation_acl_changed','reservation_approval_invalid',
     'card_expense_exact_delta_failed','card_expense_navigation_changed','card_expense_journal_changed',
     'auto_expense_reconciliation_archive_too_large', 'auto_expense_reconciliation_checkpoint_changed',
     'auto_expense_reconciliation_record_changed', 'auto_expense_reconciliation_target_changed',
@@ -130,7 +142,7 @@ def exception_summary(error):
 class ReconciliationDiagnostics:
     def __init__(self):
         self.stage = "entry_start"
-        self.effects = {k: "not_reached" if k == "financial" else "not_started" for k in EFFECT_STATES}
+        self.effects = {k: "not_reached" if k == "financial" else "not_started" for k in EFFECT_STATES if k!='money'}
         self.metadata_fields = set()
         self.readback_attempts = 0
 

@@ -81,12 +81,12 @@ class ProductionLedger:
             raise StateError("ledger_readback_failed")
         self.payload, self.value = proposed, value
 
-    def begin(self, source: str, attempt: str) -> None:
+    def begin(self, source: str, attempt: str, *, observe=None) -> None:
         value = validate_ledger(self.payload, self.binding)
         if value["sources"][source]["phase"] == "pending":
             raise StateError("source_reconciliation_required")
         value["sources"][source].update(phase="pending", attempt=attempt, error="")
-        self._save(value)
+        self._save(value, observe=observe)
 
     def complete(self, source: str, result: dict, duration: float) -> None:
         value = validate_ledger(self.payload, self.binding)
