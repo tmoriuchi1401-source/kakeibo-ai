@@ -31,15 +31,17 @@ def audited(monkeypatch,tmp_path):
     return native,parent,cp,financial,documents,p
 
 
-@pytest.mark.parametrize('change',[None,'native','other_source','bank_pending','bank_write','finance','formula','document','anchor'])
+@pytest.mark.parametrize('change',[None,'native','other_source','bank_pending','bank_write','bank_missing_counts','finance','formula','document','anchor'])
 def test_exact_audit_allows_bank_noop_but_rejects_unexplained_changes(monkeypatch,tmp_path,change):
     n,p,cp,finance,docs,_=audited(monkeypatch,tmp_path)
     original=deepcopy((n,p,finance,docs));bank=p['sources']['bank']
     p['generation']+=2;bank.update(phase='ready',attempt='',error='',last_success='2026-11-28T05:00:00+00:00')
+    bank['counts'].update(written=0,write_requests=0,failure=0)
     if change=='native':n['generation']+=1
     if change=='other_source':p['sources']['aupay_card']['duration_seconds']+=1
     if change=='bank_pending':bank.update(phase='pending',attempt='f'*32)
     if change=='bank_write':bank['counts']['written']=1
+    if change=='bank_missing_counts':bank['counts'].pop('written')
     if change in {'finance','formula'}:
         finance[('支出明細','FORMULA')].append(['synthetic-extra', '=1' if change=='formula' else 1])
     if change=='document':docs['journal']={'unexpected':True}

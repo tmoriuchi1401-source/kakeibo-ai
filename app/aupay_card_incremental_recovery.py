@@ -195,6 +195,7 @@ def verify_catchup_no_write_state(native, parent, expected_checkpoint, *, financ
         bank = parent["sources"]["bank"]
         from .aupay_card_bank_premises import ZERO_COUNTS
         require(bank["phase"] == "ready" and not bank["attempt"] and not bank["error"]
+                and {"written", "write_requests", "failure"} <= set(bank["counts"])
                 and all(type(bank["counts"].get(k, 0)) is int and bank["counts"].get(k, 0) == 0 for k in ZERO_COUNTS),
                 "no_write_bank_unproven")
         # History guard checks the protected anchor before assembling readers.
