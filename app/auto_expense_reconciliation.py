@@ -1,6 +1,7 @@
-"""Fixed state-only operator connection; existing durable store and release API.
+"""Fixed operator connection; existing durable store and release API.
 
-No financial client, new database, recursive native archive or automatic resume.
+Only the pinned missing-J contract may use the existing financial client.
+No append, new database, recursive native archive or automatic resume.
 """
 import base64
 from copy import deepcopy
@@ -436,7 +437,7 @@ def posted_financial(record, financial, navigation):
 
 
 def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
-    """Fixed posted pair, new signed observation, existing state transports only."""
+    """Reviewed posted expenses, fresh signature, bounded J links and state APIs."""
     from .aupay_card_aliases import LiteralRows
     from .aupay_card_reconciliation_entry import decode_capsule
     from .aupay_card_window_preview import GitHub,ReadOnlyState
