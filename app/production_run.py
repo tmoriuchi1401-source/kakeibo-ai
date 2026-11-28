@@ -152,6 +152,18 @@ def failure_diagnostic(error):
     return {'failure_class':kind if kind in FAILURE_CLASSES else 'OtherError','failure_site':site}
 
 
+def card_diagnostic_fields(value):
+    """Revalidate the child's bounded diagnostic; never forward arbitrary JSON."""
+    from .aupay_card_reconciliation_diagnostics import STAGES,ERROR_CODES
+    if not isinstance(value,dict):return {}
+    result={}
+    stage=value.get('last_stage');code=value.get('error_code');status=value.get('http_status')
+    if isinstance(stage,str) and stage in STAGES:result['last_stage']=stage
+    if isinstance(code,str) and code in ERROR_CODES:result['error_code']=code
+    if type(status) is int and 100<=status<=599:result['http_status']=status
+    return result
+
+
 def bank_diagnostic_fields(value):
     """Validate the bank child's untrusted, count-only diagnostic envelope."""
     if not isinstance(value, dict):
@@ -226,7 +238,7 @@ class SourceFailure(StateError):
     Counts are a lower bound after a failed/unknown write, never permission to
     replay or clear the durable pending marker.
     """
-    def __init__(self, code, stage='', counts=None, *, failure_class='',failure_site='', bank_diagnostics=None):
+    def __init__(self, code, stage='', counts=None, *, failure_class='',failure_site='', bank_diagnostics=None,card_diagnostics=None):
         super().__init__(code if isinstance(code, str) and code in SAFE_SOURCE_ERRORS
                          else 'source_execution_failed')
         self.stage = stage if isinstance(stage, str) and stage in SOURCE_STAGES else ''
@@ -235,6 +247,7 @@ class SourceFailure(StateError):
         match=re.fullmatch(r'([a-z_]+\.py):([1-9][0-9]{0,3})',failure_site) if isinstance(failure_site,str) else None
         self.failure_site=failure_site if match and match[1] in FAILURE_FILES else ''
         self.bank_diagnostics = bank_diagnostic_fields(bank_diagnostics)
+        self.card_diagnostics = card_diagnostic_fields(card_diagnostics)
         self.counts = {key: value for key, value in (counts or {}).items()
                        if key in COUNT_KEYS and type(value) is int and value >= 0}
 
@@ -243,7 +256,8 @@ class SourceFailure(StateError):
                 **({'stage': self.stage} if self.stage else {}),
                 **({'failure_class':self.failure_class} if self.failure_class else {}),
                 **({'failure_site':self.failure_site} if self.failure_site else {}),
-                **self.bank_diagnostics}
+                **self.bank_diagnostics,
+                **({'diagnostic':self.card_diagnostics} if self.card_diagnostics else {})}
 
 
 def require_success(result: Mapping) -> None:
@@ -355,6 +369,7 @@ def execute_serial(runners: Mapping[str, Callable[[], Mapping]], *, history: Map
                     outcome['counts'] = {key: value for key, value in outcome['counts'].items()
                                          if key in (COUNT_KEYS | BANK_READ_COUNTS if source == 'bank' else COUNT_KEYS)}
                     outcome.update(error.bank_diagnostics)
+                    if source=='auto_expense' and error.card_diagnostics:outcome['diagnostic']=error.card_diagnostics
         outcome["duration_seconds"] = round(monotonic() - started, 3)
         outcomes[source] = outcome
     return {"schema": 1, "success": all(item["status"] == "success" or (

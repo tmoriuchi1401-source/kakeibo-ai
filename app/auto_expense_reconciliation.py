@@ -1,6 +1,7 @@
-"""Fixed state-only operator connection; existing durable store and release API.
+"""Fixed operator connection; existing durable store and release API.
 
-No financial client, new database, recursive native archive or automatic resume.
+Only the pinned missing-J contract may use the existing financial client.
+No append, new database, recursive native archive or automatic resume.
 """
 import base64
 from copy import deepcopy
@@ -24,6 +25,8 @@ ARCHIVE_RUN = 'OPERATOR-AUTO-EXPENSE:46013990252'
 RELEASE_TITLE = 'auto-expense-reconciliation-46013990252-apply'
 MAX_ARCHIVE_BYTES = 32768
 POSTED_PREFIX = 'posted-v1:'
+POSTED_LINKS_PREFIX = 'posted-links-v1:'
+POSTED_LINKS_RECORD_SHA256 = '132d7187f00001b008cc9f69c308eab45cd96157f9790d7b2cf703c9054aefc1'
 RESERVATION_PREFIX = 'reservation-v1:'
 POSTED_OPERATION = 'confirm_posted_card_expenses'
 POSTED_RECORD_SHA256 = '8922970a0c2f96079ea0692ff34334d4576cdc486e5a79f465f02a7b4d463754'
@@ -229,7 +232,7 @@ def _run_from_environment(env, *, apply, diagnostics):
     key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
     if env['CARD_EXPENSE_RECONCILIATION'].startswith(RESERVATION_PREFIX):
         return _reservation_from_environment(env,apply=apply,diagnostics=diagnostics,head=head,tree=tree,key=key)
-    if env['CARD_EXPENSE_RECONCILIATION'].startswith(POSTED_PREFIX):
+    if env['CARD_EXPENSE_RECONCILIATION'].startswith((POSTED_PREFIX,POSTED_LINKS_PREFIX)):
         return _posted_from_environment(env,apply=apply,diagnostics=diagnostics,head=head,tree=tree,key=key)
     diagnostics.mark('capsule_decode')
     record, att = decode_capsule(env['CARD_EXPENSE_RECONCILIATION'], key, tree,
@@ -380,18 +383,61 @@ def _run_from_environment(env, *, apply, diagnostics):
                 event='workflow_dispatch',path='.github/workflows/kakeibo-production.yml'))
 
 
+def posted_spec(record):
+    """Two reviewed contracts only; no arbitrary-record financial authority."""
+    checksum=digest(record)
+    if checksum==POSTED_RECORD_SHA256:return POSTED_SUMMARY,2,4531
+    require(checksum==POSTED_LINKS_RECORD_SHA256 and record['financial_write_authority'] is False
+        and len(record['missing_link_rows'])==10,'auto_expense_reconciliation_record_changed')
+    return 'CARD-EXPENSE:RECONCILED:46132550495',18,64116
+
+
 def posted_summary(record, updates, operator, recorded_at):
-    return dict(run_id=POSTED_SUMMARY,status='noop',source_window_start=record['checkpoint'],
+    name,count,amount=posted_spec(record)
+    return dict(run_id=name,status='noop',source_window_start=record['checkpoint'],
         source_window_end=record['checkpoint'],failure=0,card_aliases=updates,
-        expense_contract_sha256=record['business_contract'],expense_rows=2,expense_yen=4531,
+        expense_contract_sha256=record['business_contract'],expense_rows=count,expense_yen=amount,
         financial_before_sha256=record['financial_before_sha256'],financial_after_sha256=record['financial_sha256'],
-        reconciliation_kind=POSTED_OPERATION,record_sha256=POSTED_RECORD_SHA256,
+        reconciliation_kind=POSTED_OPERATION,record_sha256=digest(record),
         failed_execution=record['failed_run'],replay_allowed=False,financial_write_requests=0,
         native_before_sha256=record['native_before_sha256'],operator=operator,recorded_at=recorded_at)
 
 
+def posted_financial(record, financial, navigation):
+    """Exact saved partial OR complete shape; projected J values grant no writes."""
+    from .aupay_card_expense_stage import verify_delta
+    _,count,_=posted_spec(record)
+    actual=digest({str(k):v for k,v in financial.items()})
+    complete=actual==record['financial_sha256']
+    require(complete or actual==record.get('partial_financial_sha256'),
+        'auto_expense_reconciliation_financial_changed')
+    projected=deepcopy(financial)
+    for render in ('UNFORMATTED_VALUE','FORMULA'):
+        for row in record['plan']['rows']:
+            current=projected[('取込データ',render)][row['row_num']-1]
+            expected=row['after'] if complete or row['row_num'] not in record['missing_link_rows'] else row['before']
+            from .aupay_card_aliases import import_row
+            require(import_row(current)==expected,'auto_expense_reconciliation_financial_changed')
+            value=list(row['after'])
+            while value and value[-1]=='':value.pop()
+            projected[('取込データ',render)][row['row_num']-1]=value
+    before=deepcopy(projected)
+    for render in ('UNFORMATTED_VALUE','FORMULA'):
+        expenses=before[('支出明細',render)]
+        require(len(expenses)==record['expense_before_rows']+count,'auto_expense_reconciliation_financial_changed')
+        del expenses[-count:]
+        for row in record['plan']['rows']:
+            value=list(row['before'])
+            while value and value[-1]=='':value.pop()
+            before[('取込データ',render)][row['row_num']-1]=value
+    require(digest({str(k):v for k,v in before.items()})==record['financial_before_sha256'],
+        'auto_expense_reconciliation_financial_changed')
+    verify_delta(before,projected,record['plan'],navigation=navigation)
+    return complete,projected
+
+
 def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
-    """Fixed posted pair, new signed observation, existing state transports only."""
+    """Reviewed posted expenses, fresh signature, bounded J links and state APIs."""
     from .aupay_card_aliases import LiteralRows
     from .aupay_card_reconciliation_entry import decode_capsule
     from .aupay_card_window_preview import GitHub,ReadOnlyState
@@ -406,8 +452,12 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
     from .projection_cache import RollingProjectionStore
     from .aupay_card_saved_readback import RepairReadbacks
     diagnostics.mark('capsule_decode')
-    record,att=decode_capsule(env['CARD_EXPENSE_RECONCILIATION'][len(POSTED_PREFIX):],key,tree,
-        datetime.now(timezone.utc),record_sha256=POSTED_RECORD_SHA256,label=LABEL,scope=SCOPE,max_ttl=900)
+    links=env['CARD_EXPENSE_RECONCILIATION'].startswith(POSTED_LINKS_PREFIX)
+    prefix=POSTED_LINKS_PREFIX if links else POSTED_PREFIX
+    record,att=decode_capsule(env['CARD_EXPENSE_RECONCILIATION'][len(prefix):],key,tree,
+        datetime.now(timezone.utc),record_sha256=POSTED_LINKS_RECORD_SHA256 if links else POSTED_RECORD_SHA256,
+        label=LABEL,scope=SCOPE,max_ttl=900)
+    _,posted_count,_=posted_spec(record)
     observed=stamp(att['observed_at']);expires=stamp(att['approval']['expires_at'])
     require(att['operation']==(POSTED_OPERATION if apply else 'preview_posted_card_expenses')
         and att['main_sha']==head and att['controls_sha256']==record['settings_without_validated_sha256']
@@ -478,39 +528,34 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
     def observe():
         diagnostics.mark('financial_preflight');guard()
         financial=financial_data(sheets,sid,include_controls=True)
-        require(digest({str(k):v for k,v in financial.items()})==record['financial_sha256'],
-            'auto_expense_reconciliation_financial_changed')
         docs={k:documents.read(k) for k in record['protected_document_keys']}
         require(digest(docs)==record['documents_sha256'],'auto_expense_reconciliation_documents_changed')
         nav=navigation_context(db)
         require(nav==record['navigation'],'auto_expense_reconciliation_snapshot_changed')
-        before=deepcopy(financial)
-        for render in ('UNFORMATTED_VALUE','FORMULA'):
-            expenses=before[('支出明細',render)]
-            require(len(expenses)==record['expense_before_rows']+2,'auto_expense_reconciliation_financial_changed')
-            del expenses[-2:]
-            for row in record['plan']['rows']:
-                old=list(row['before'])
-                while old and old[-1]=='':old.pop()
-                before[('取込データ',render)][row['row_num']-1]=old
-        require(digest({str(k):v for k,v in before.items()})==record['financial_before_sha256'],
-            'auto_expense_reconciliation_financial_changed')
-        verify_delta(before,financial,record['plan'],navigation=nav)
+        complete,projected=posted_financial(record,financial,nav)
         before_docs=deepcopy(docs);before_docs['journal']=record['journal_before']
         require(digest(before_docs)==record['documents_before_sha256'],'auto_expense_reconciliation_documents_changed')
         verify_side_effects(dict(navigation=nav,documents=before_docs),dict(navigation=nav,documents=docs))
-        plan=selected_plan(db,record['plan']['import_ids'],record['plan']['categories_by_id'],True,
+        class PlanningRows:
+            def __getattr__(self,name):return getattr(db,name)
+            def get(self,rng):
+                if rng=='取込データ!A2:L':return projected[('取込データ','UNFORMATTED_VALUE')][1:]
+                if rng=='支出明細!A2:M':return financial[('支出明細','UNFORMATTED_VALUE')][1:]
+                return db.get(rng)
+        plan=selected_plan(PlanningRows() if links else db,record['plan']['import_ids'],record['plan']['categories_by_id'],
+            env.get('CATEGORY_RULE_AUTO_APPLY_ENABLED')=='true',
             record['business_contract'],expected_profile=record['profile_sha256'],env=env)
-        require(not plan['rows'] and len(plan['already_posted'])==2,'auto_expense_reconciliation_financial_changed')
+        require(not plan['rows'] and len(plan['already_posted'])==posted_count,'auto_expense_reconciliation_financial_changed')
         rules=db.get_raw("'カテゴリ自動分類ルール'!A:R")
         require(digest(rules)==record['rules_sha256'],'auto_expense_reconciliation_settings_changed')
         acl={name:ro.files().get(fileId=fid,supportsAllDrives=True,
             fields='id,mimeType,trashed,owners(emailAddress,permissionId),permissions(id,type,role,emailAddress)').execute(num_retries=0)
             for name,fid in [('card',b['card_id']),('parent',b['parent_id']),('folder',b['folder_id']),('ledger',sid)]}
         require(digest(acl)==record['acl_sha256'],'auto_expense_reconciliation_acl_changed')
-        return dict(imports=financial[('取込データ','UNFORMATTED_VALUE')][1:],
+        return dict(imports=projected[('取込データ','UNFORMATTED_VALUE')][1:],
             expenses=financial[('支出明細','UNFORMATTED_VALUE')][1:],financial_sha256=record['financial_sha256'],
-            documents_sha256=record['documents_sha256'],profile_sha256=record['profile_sha256'])
+            documents_sha256=record['documents_sha256'],profile_sha256=record['profile_sha256'],
+            **(dict(links_complete=complete) if links else {}))
     initial=observe()
     from .aupay_card_aliases import merge_registry,resolve_aliases,validate_owner_expenses
     from .aupay_card_reservation_recovery import summaries
@@ -527,16 +572,46 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
     require(card.observe()==(native_raw,np) and parent.observe()==(parent_raw,pp),
         'auto_expense_reconciliation_snapshot_changed')
     if not apply:
-        return dict(success=True,mode='preview_posted',stage=stage,financial_write_requests=0,state_write_requests=0)
+        return dict(success=True,mode='preview_posted',stage=stage,financial_write_requests=0,state_write_requests=0,
+            **(dict(already_appended=posted_count,missing_links=0 if initial['links_complete'] else 10) if links else {}))
+    if links:
+        # This is the only financial operation in confirmation: fixed blank J
+        # cells, never expense append/update, N or projection journal writes.
+        def link_guard():
+            diagnostics.mark('owner_links_preflight');guard()
+            require(card.observe()==(native_raw,np) and parent.observe()==(parent_raw,pp),
+                'auto_expense_reconciliation_snapshot_changed')
+            require(observe()==initial,'auto_expense_reconciliation_snapshot_changed')
+        if not initial['links_complete']:
+            require(stage=='pending','auto_expense_reconciliation_target_changed')
+            from .aupay_card_expense_stage import batch_owner_links
+            from .google_clients import sheets_service
+            # Full original source, N formulas, finance, documents, ACL, rules,
+            # state revision and profile are rechecked immediately before send.
+            link_guard()
+            batch_owner_links(LiteralRows(SheetsDB(sid,service=sheets_service())),
+                [r for r in record['plan']['rows'] if r['row_num'] in record['missing_link_rows']],
+                guard=guard,diagnostics=diagnostics)
+        final=observe()
+        require(final['links_complete'] and card.observe()==(native_raw,np) and parent.observe()==(parent_raw,pp),
+            'auto_expense_reconciliation_snapshot_changed')
+        diagnostics.mark('financial_readback','financial','exact_readback_confirmed')
+    def completed_observation():
+        value=observe()
+        require(not links or value['links_complete'],'auto_expense_reconciliation_financial_changed')
+        return value
     pins={prefix+'_before_'+field:value for prefix,proof in [('native',np),('parent',pp)]
         for field,value in proof.items()}
     readbacks=RepairReadbacks(card,parent,pins,guard=guard,deadline=deadline,diagnostics=diagnostics)
     with tempfile.TemporaryDirectory(prefix='operator-posted-expenses-',dir=env.get('RUNNER_TEMP')) as temp:
-        return confirm_posted_expenses(record=record,durable=DurableState(DriveStateTransport(drive_service(),cb),cb),
+        result=confirm_posted_expenses(record=record,durable=DurableState(DriveStateTransport(drive_service(),cb),cb),
             ledger=ProductionLedger(DriveStateTransport(drive_service(),pb),pb),state_dir=Path(temp)/'state',
             repo_root=Path(__file__).resolve().parents[1],native_read=readbacks.sessions['native'].read,
-            parent_read=readbacks.sessions['parent'].read,observe=observe,guard=guard,operator=operator,
+            parent_read=readbacks.sessions['parent'].read,observe=completed_observation,guard=guard,operator=operator,
             diagnostics=diagnostics,readbacks=readbacks)
+        if links:result.update(financial_write_requests=int(not initial['links_complete']),
+            import_link_cells=10 if not initial['links_complete'] else 0,expense_rows_written=0)
+        return result
 
 
 def reservation_preflight(record, native_before, native_pending, parent_before, parent_pending):
@@ -833,13 +908,14 @@ def posted_state(record, native):
     from .aupay_card_reservation_recovery import summaries
     from .aupay_card_aliases import merge_registry
     from .aupay_card_expense_stage import owner_updates,contract_sha256
-    require(digest(record)==POSTED_RECORD_SHA256 and record['financial_write_authority'] is False,
+    name,count,amount=posted_spec(record)
+    require(record['financial_write_authority'] is False,
             'auto_expense_reconciliation_record_changed')
     require(contract_sha256(record['plan'])==record['business_contract']
-        and (record['plan']['expense_rows'],record['plan']['expense_yen'])==(2,4531),
+        and (record['plan']['expense_rows'],record['plan']['expense_yen'])==(count,amount),
         'auto_expense_reconciliation_record_changed')
-    rows=_rows(native,'recurring.sqlite3','recurring_runs');saved=summaries(native).get(POSTED_SUMMARY)
-    old=[r for r in rows if r['run_id']!=POSTED_SUMMARY]
+    rows=_rows(native,'recurring.sqlite3','recurring_runs');saved=summaries(native).get(name)
+    old=[r for r in rows if r['run_id']!=name]
     require(digest(old)==record['history_sha256']
         and digest(_rows(native,'recurring.sqlite3','recurring_checkpoint'))==record['checkpoint_sha256']
         and set(native['files'])==set(record['native_file_hashes'])
@@ -861,7 +937,7 @@ def posted_state(record, native):
 
 
 def validate_posted_summary(record, saved, *, updates=None):
-    require(digest(record)==POSTED_RECORD_SHA256,'auto_expense_reconciliation_record_changed')
+    posted_spec(record)
     updates=saved['card_aliases'] if updates is None else updates
     operator=saved['operator'];stamp=datetime.fromisoformat(saved['recorded_at'])
     require(digest(updates)==record['owner_updates_sha256'] and stamp.tzinfo is not None
@@ -949,5 +1025,5 @@ def confirm_posted_expenses(*, record, durable, ledger, state_dir, repo_root, na
     preserved_unknown_proofs(validate(current,durable.binding),json.loads(parent_raw),record['checkpoint'])
     diagnostics.mark('complete','parent_completion','readback_confirmed')
     return dict(success=True,mode='confirmed_posted_stop',initial_stage=stage,
-        reconciled_expenses=2,financial_write_requests=0,archive_write_requests=0,checkpoint=record['checkpoint'],
+        reconciled_expenses=posted_spec(record)[1],financial_write_requests=0,archive_write_requests=0,checkpoint=record['checkpoint'],
         native_after_sha256=sha(current),parent_after_sha256=sha(parent_raw))

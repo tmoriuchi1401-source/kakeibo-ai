@@ -19,6 +19,7 @@ STAGES = frozenset({
     "parent_completion", "parent_completion_readback", "parent_completed",
     "final_readback", "complete", "unused_revocation", "dispatch_intent",
     "money_guard", "money_preflight", "money_save", "money_readback",
+    "owner_links_preflight", "owner_links_write", "owner_links_readback",
 })
 EFFECT_STATES = {
     "money": {"not_started", "write_possible", "readback_confirmed"},
@@ -41,6 +42,7 @@ ERROR_CODES = frozenset({
     'reservation_release_incomplete','reservation_readback_failed','reservation_revision_unproven',
     'reservation_financial_changed','reservation_documents_changed','reservation_acl_changed','reservation_approval_invalid',
     'card_expense_exact_delta_failed','card_expense_navigation_changed','card_expense_journal_changed',
+    'card_expense_owner_moved_or_changed','card_expense_link_readback_failed','card_expense_scope_forbidden',
     'auto_expense_reconciliation_archive_too_large', 'auto_expense_reconciliation_checkpoint_changed',
     'auto_expense_reconciliation_record_changed', 'auto_expense_reconciliation_target_changed',
     'auto_expense_reconciliation_snapshot_changed', 'auto_expense_reconciliation_archive_unconfirmed',

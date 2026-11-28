@@ -37,6 +37,23 @@ class DB:
             return [deepcopy(self.rows[number-2])]
         raise AssertionError(rng)
     get_raw=get
+    def get_raw_ranges(self,ranges):
+        return [self.get(r.replace("'",'') if r.startswith("'取込データ'") else r) for r in ranges]
+    @property
+    def svc(self):return self
+    def spreadsheets(self):return self
+    def values(self):return self
+    def batchUpdate(self,*,spreadsheetId,body):
+        from types import SimpleNamespace
+        assert spreadsheetId==self.sid and body['valueInputOption']=='RAW'
+        def execute(*,num_retries):
+            assert num_retries==0
+            rows=[]
+            for cell in body['data']:
+                number=int(cell['range'].split('!J')[1]);row=deepcopy(self.rows[number-2])
+                row[9]=cell['values'][0][0];rows.append((number,row))
+            return self.update_rows('取込データ',rows)
+        return SimpleNamespace(execute=execute)
     def categories(self):return [('その他','未分類'),('食費','食料品')]
     def category_rules(self):return []
     def expense_index(self):return {r[0]:i for i,r in enumerate(self.expenses,2)}
