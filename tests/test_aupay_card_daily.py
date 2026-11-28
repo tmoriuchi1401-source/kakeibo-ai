@@ -313,7 +313,8 @@ def test_resume_proofs_precede_gmail_and_writer_for_both_events(monkeypatch, tmp
     monkeypatch.setattr(guard, 'controls', lambda *a, **kw:True)
     monkeypatch.setattr(recovery, 'NO_WRITE_CHECKPOINT', apply.END)
     checked = []
-    def fixed_proof(native,parent,cp,*,financial,money):
+    def fixed_proof(native,parent,cp,*,financial,money,receipt_env):
+        assert receipt_env is p.env
         assert native['phase'] == parent['sources']['aupay_card']['phase'] == 'ready'
         assert cp == apply.END and not p.gmail_starts and p.db.write_calls == 0
         assert financial() and money.read('money') == p.store.data['money']

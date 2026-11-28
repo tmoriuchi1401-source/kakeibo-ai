@@ -86,6 +86,11 @@ proof. This candidate implements **none** of that change: active-status checks,
 workflow concurrency and bank schedule are unchanged. A separately approved
 implementation/evaluation is required before such an exemption can operate.
 
+The shared state API now accepts optional diagnostics and a card-only receipt.
+Bank callers retain their existing default behavior and persisted bytes. The
+existing reviewed bank-code digest list is extended for this exact shared-code
+version; historical digests and all bank transition proof requirements remain.
+
 ## Validation and production boundary
 
 Synthetic tests cover another failed identity, existing API release, native and

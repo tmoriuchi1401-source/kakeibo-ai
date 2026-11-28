@@ -19,6 +19,9 @@ BUSINESS_RECORD_SHA256 = "1558548ced53ca1689e5f076424b79c4fa88c95877bf35492eafb9
 # Both contracts are reviewed; bank content changes require separate review.
 HISTORICAL_BANK_CODE_SHA256 = "3546b0022cc33d5cfec5721ab41540bd69d57c505e52c8df7be05889bfbb7995"
 REVIEWED_BANK_CODE_SHA256 = frozenset({HISTORICAL_BANK_CODE_SHA256,
+    # PR221: optional begin diagnostics and a card-only operator receipt.
+    # Default bank begin/commit and its persisted payload/control flow are unchanged.
+    '697ee56c44321eb0576a9c6fc4444525ba14cde95934e616af153aea35e692df',
     '4b4c1dc5777aaf0b497e0b809d5ba73c4b38e18dbbc0c854e46c2f1e9fa76d0e',
     '6bda01b7ad40955f281dec77ae848fe59ea17fc7cf209e5d7b7952729b93dcf1',
     'ae04d1e2d2c5fcd4aec1440e47e275ab88c92100a62623b0cfa5c58f23e3d7aa',
