@@ -825,7 +825,9 @@ def verify_reservation_diagnostic(log, record):
     matches=[v for v in values if v.get('error')=='incremental_apply_stopped_no_retry'
         and v.get('reservation_evidence')==expected and v.get('diagnostic',{}).get('effects',{}).get('financial')=='not_reached'
         and v.get('diagnostic',{}).get('effects',{}).get('money','not_started')=='not_started'
-        and v.get('diagnostic',{}).get('last_stage') in {'native_reserved','money_guard','money_preflight'}]
+        and v.get('diagnostic',{}).get('effects',{}).get('native_reservation') in {'write_possible','readback_confirmed'}
+        and v.get('diagnostic',{}).get('last_stage') in
+            {'native_write','native_transport_readback','native_reserved','money_guard','money_preflight'}]
     require(len(matches)==1,'reservation_failure_unproven')
 
 

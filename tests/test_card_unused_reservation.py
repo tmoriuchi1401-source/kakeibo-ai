@@ -121,7 +121,7 @@ def test_only_exact_prewrite_diagnostic_can_prove_failure(tmp_path,key,change):
         checkpoint=r['checkpoint'],window_end=r['window_end'],source_contract=r['source_contract_sha256'],
         financial=r['financial_sha256'],documents=r['documents_sha256'])
     value=dict(error='incremental_apply_stopped_no_retry',reservation_evidence=evidence,
-        diagnostic=dict(last_stage='money_guard',effects=dict(financial='not_reached')))
+        diagnostic=dict(last_stage='money_guard',effects=dict(financial='not_reached',native_reservation='readback_confirmed')))
     op.verify_reservation_diagnostic(json.dumps(value),r)
     if change=='financial_effect':value['diagnostic']['effects']['financial']='writer_entered'
     elif change=='money_save':value['diagnostic']['last_stage']='money_save'
@@ -130,6 +130,19 @@ def test_only_exact_prewrite_diagnostic_can_prove_failure(tmp_path,key,change):
     log='' if change=='missing' else json.dumps(value)
     if change=='duplicate':log+='\n'+log
     with pytest.raises(RuntimeError,match='unproven'):op.verify_reservation_diagnostic(log,r)
+
+
+@pytest.mark.parametrize('stage',['native_write','native_transport_readback','native_reserved','money_guard','money_preflight'])
+def test_complete_diagnostic_accepts_saved_reservation_before_any_side_effect(tmp_path,key,stage):
+    _,_,_,args=reservation_case(tmp_path,key);r=args()['record']
+    evidence=dict(native_before=r['native_before']['sha256'],parent_before=r['parent_before']['sha256'],
+        checkpoint=r['checkpoint'],window_end=r['window_end'],source_contract=r['source_contract_sha256'],
+        financial=r['financial_sha256'],documents=r['documents_sha256'])
+    value=dict(error='incremental_apply_stopped_no_retry',reservation_evidence=evidence,
+        diagnostic=dict(last_stage=stage,effects=dict(financial='not_reached',money='not_started',native_reservation='write_possible')))
+    op.verify_reservation_diagnostic(json.dumps(value),r)
+    value['diagnostic']['effects']['native_reservation']='not_started'
+    with pytest.raises(RuntimeError,match='unproven'):op.verify_reservation_diagnostic(json.dumps(value),r)
 
 
 def test_receipt_tamper_and_unknown_failure_are_not_authority(tmp_path,key):
@@ -293,7 +306,8 @@ def hosted_case(tmp_path,key,monkeypatch,*,apply_mode):
     monkeypatch.setattr(window,'GitHub',lambda env:SimpleNamespace(get=get))
     diagnostic=dict(error='incremental_apply_stopped_no_retry',reservation_evidence=dict(native_before=r['native_before']['sha256'],
         parent_before=r['parent_before']['sha256'],checkpoint=C1,window_end=r['window_end'],source_contract=r['source_contract_sha256'],
-        financial=r['financial_sha256'],documents=r['documents_sha256']),diagnostic=dict(last_stage='money_guard',effects=dict(financial='not_reached')))
+        financial=r['financial_sha256'],documents=r['documents_sha256']),diagnostic=dict(last_stage='money_guard',
+        effects=dict(financial='not_reached',native_reservation='readback_confirmed')))
     monkeypatch.setattr(bank,'_job_log',lambda *a:json.dumps(diagnostic))
     att=dict(record_sha256=proof._hash(r),code_tree_sha256=tree,owner_approved=True,scope='card_unused_reservation_state_only',
         main_sha=head,observed_at=now.isoformat(),financial_write_authority=False,
