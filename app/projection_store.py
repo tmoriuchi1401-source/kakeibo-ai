@@ -191,6 +191,21 @@ class ProjectionJournal:
         replace_document(self.store, "journal", before, after)
 
 
+def expected_append_journal(before):
+    """Evaluate the existing mark operation in memory; never touch its store."""
+    class Memory:
+        def __init__(self): self.value = deepcopy(before)
+        def read(self, key):
+            assert key == 'journal'
+            return deepcopy(self.value)
+        def write(self, key, value):
+            assert key == 'journal'
+            self.value = deepcopy(value)
+    memory = Memory()
+    ProjectionJournal(memory).mark(append=True)
+    return memory.value
+
+
 class ReadOnlyProjectionStore:
     """Preview readers cannot turn a helper call into a persistent save."""
     def __init__(self, backing): self.backing = backing

@@ -28,6 +28,7 @@ EFFECT_STATES = {
 }
 # Exact literals only. A syntactically safe-looking external message is NOT a code.
 ERROR_CODES = frozenset({
+    'card_expense_exact_delta_failed','card_expense_navigation_changed','card_expense_journal_changed',
     'auto_expense_reconciliation_archive_too_large', 'auto_expense_reconciliation_checkpoint_changed',
     'auto_expense_reconciliation_record_changed', 'auto_expense_reconciliation_target_changed',
     'auto_expense_reconciliation_snapshot_changed', 'auto_expense_reconciliation_archive_unconfirmed',

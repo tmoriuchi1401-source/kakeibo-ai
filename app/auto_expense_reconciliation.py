@@ -23,6 +23,10 @@ FAILED_RUN = 46013990252
 ARCHIVE_RUN = 'OPERATOR-AUTO-EXPENSE:46013990252'
 RELEASE_TITLE = 'auto-expense-reconciliation-46013990252-apply'
 MAX_ARCHIVE_BYTES = 32768
+POSTED_PREFIX = 'posted-v1:'
+POSTED_OPERATION = 'confirm_posted_card_expenses'
+POSTED_RECORD_SHA256 = '8922970a0c2f96079ea0692ff34334d4576cdc486e5a79f465f02a7b4d463754'
+POSTED_SUMMARY = 'CARD-EXPENSE:RECONCILED:46083853434'
 SAVED_OPERATION = 'release_saved_archive'
 SAVED_ARCHIVE_SHA256 = '8d92edad186defce88564a787083d4b0f4d4f3bbe89001a93bbcf466cabeda2b'
 SAVED_NATIVE_PROOF = dict(
@@ -211,6 +215,8 @@ def _run_from_environment(env, *, apply, diagnostics):
     tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
     info = json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
     key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
+    if env['CARD_EXPENSE_RECONCILIATION'].startswith(POSTED_PREFIX):
+        return _posted_from_environment(env,apply=apply,diagnostics=diagnostics,head=head,tree=tree,key=key)
     diagnostics.mark('capsule_decode')
     record, att = decode_capsule(env['CARD_EXPENSE_RECONCILIATION'], key, tree,
         datetime.now(timezone.utc), record_sha256=RECORD_SHA256, label=LABEL, scope=SCOPE, max_ttl=900)
@@ -367,3 +373,293 @@ def _run_from_environment(env, *, apply, diagnostics):
             save_archive=save_archive,read_archive=read_archive,observe=observe,guard=guard,apply=apply,
             operator_identity=dict(id=int(env['GITHUB_RUN_ID']),head_sha=head,run_attempt=1,
                 event='workflow_dispatch',path='.github/workflows/kakeibo-production.yml'))
+
+
+def posted_summary(record, updates, operator, recorded_at):
+    return dict(run_id=POSTED_SUMMARY,status='noop',source_window_start=record['checkpoint'],
+        source_window_end=record['checkpoint'],failure=0,card_aliases=updates,
+        expense_contract_sha256=record['business_contract'],expense_rows=2,expense_yen=4531,
+        financial_before_sha256=record['financial_before_sha256'],financial_after_sha256=record['financial_sha256'],
+        reconciliation_kind=POSTED_OPERATION,record_sha256=POSTED_RECORD_SHA256,
+        failed_execution=record['failed_run'],replay_allowed=False,financial_write_requests=0,
+        native_before_sha256=record['native_before_sha256'],operator=operator,recorded_at=recorded_at)
+
+
+def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
+    """Fixed posted pair, new signed observation, existing state transports only."""
+    from .aupay_card_reconciliation_entry import decode_capsule
+    from .aupay_card_window_preview import GitHub,ReadOnlyState
+    from .drive_run_state import StateBinding,DriveStateTransport,DurableState,validate
+    from .production_ledger import validate_ledger
+    from .google_clients import read_only_drive_service,read_only_sheets_service,drive_service
+    from .aupay_card_bank_premises import collect_bank_premises,stamp
+    from .aupay_card_first_window_apply import financial_data
+    from .aupay_card_expense_stage import navigation_context,selected_plan,verify_delta,verify_side_effects
+    from .sheets import SheetsDB
+    from .projection_store import DriveProjectionStore
+    from .projection_cache import RollingProjectionStore
+    from .aupay_card_saved_readback import RepairReadbacks
+    diagnostics.mark('capsule_decode')
+    record,att=decode_capsule(env['CARD_EXPENSE_RECONCILIATION'][len(POSTED_PREFIX):],key,tree,
+        datetime.now(timezone.utc),record_sha256=POSTED_RECORD_SHA256,label=LABEL,scope=SCOPE,max_ttl=900)
+    observed=stamp(att['observed_at']);expires=stamp(att['approval']['expires_at'])
+    require(att['operation']==(POSTED_OPERATION if apply else 'preview_posted_card_expenses')
+        and att['main_sha']==head and att['controls_sha256']==record['settings_without_validated_sha256']
+        and bool(att['approval'].get('approval_reference'))
+        and 0<=(datetime.now(timezone.utc)-observed).total_seconds()<=900,
+        'auto_expense_reconciliation_saved_approval_required')
+    require(all(env.get(k,default)==value for k,default,value in (
+        ('CATEGORY_RULE_AUTO_APPLY_ENABLED','','true'),('KAKEIBO_AMAZON_MONEY_MODE','','confirmed-v1'),
+        ('KAKEIBO_BANK_SCHEDULE_ENABLED','','true'),('KAKEIBO_LEGACY_DISABLED','','true'),
+        ('KAKEIBO_SCHEDULE_ENABLED','','false'),('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED','','false'),
+        ('KAKEIBO_CORE_SCHEDULE_ENABLED','false','false'),('KAKEIBO_CARD_SCHEDULE_ENABLED','false','false'))),
+        'auto_expense_reconciliation_settings_changed')
+    github=GitHub(env);current=int(env['GITHUB_RUN_ID']);deadline=time.monotonic()+900
+    operator=dict(id=current,head_sha=head,run_attempt=1,event='workflow_dispatch',path='.github/workflows/kakeibo-production.yml')
+    def guard():
+        require(time.monotonic()<deadline and datetime.now(timezone.utc)<expires,
+                'auto_expense_reconciliation_expired')
+        require(github.get('git/ref/heads/main')['object']['sha']==head,'auto_expense_reconciliation_main_changed')
+        run=github.get('actions/runs/'+str(current))
+        require(all(run.get(k)==v for k,v in operator.items()) and run['status']=='in_progress'
+            and stamp(run['created_at'])>=observed.replace(microsecond=0),
+            'auto_expense_reconciliation_run_changed')
+        history=github.get('actions/workflows/kakeibo-production.yml/runs?event=workflow_dispatch&head_sha='+head+'&per_page=100')
+        require(history['total_count']==len(history['workflow_runs'])<=100,'auto_expense_reconciliation_run_inventory_incomplete')
+        # A capsule is consumed by its first dispatch, including a prewrite crash.
+        # A later explicit approval must bind a fresh observation and saved stage.
+        title=RELEASE_TITLE if apply else RELEASE_TITLE.removesuffix('apply')+'preview'
+        releases=[v for v in history['workflow_runs'] if v.get('display_title')==title
+            and stamp(v['created_at'])>=observed.replace(microsecond=0)]
+        require(len(releases)==1 and releases[0]['id']==current,'auto_expense_reconciliation_dispatch_consumed')
+        for status in ('in_progress','queued','waiting','pending','requested'):
+            active=github.get('actions/runs?status='+status+'&per_page=100')
+            require(active['total_count']==len(active['workflow_runs'])<=100
+                and all(v['id']==current for v in active['workflow_runs']),'auto_expense_reconciliation_competing_run')
+        old=github.get('actions/runs/'+str(record['failed_run']['id']))
+        require(all(old.get(k)==v for k,v in record['failed_run'].items()),'auto_expense_reconciliation_failed_run_changed')
+    guard();b=record['bindings'];sid=b['spreadsheet_id']
+    require((env['SPREADSHEET_ID'],env['KAKEIBO_STATE_FOLDER_ID'],env['AUPAY_CARD_STATE_FILE_ID'],env['KAKEIBO_RUN_LEDGER_FILE_ID'])
+        ==(sid,b['folder_id'],b['card_id'],b['parent_id']),'auto_expense_reconciliation_binding_changed')
+    cb=StateBinding('au_pay_card_gmail',sid,b['folder_id'],b['card_id'])
+    pb=StateBinding('production_run',sid,b['folder_id'],b['parent_id'])
+    ro=read_only_drive_service();sheets=read_only_sheets_service()
+    card=ReadOnlyState(ro,cb);parent=ReadOnlyState(ro,pb)
+    diagnostics.mark('state_revision');native_raw,np=card.observe();parent_raw,pp=parent.observe()
+    require(att['state_snapshot']==dict(native=np,parent=pp),'auto_expense_reconciliation_snapshot_changed')
+    stage,updates,saved=posted_state(record,validate(native_raw,cb))
+    if stage=='pending':
+        require(np==dict(sha256=record['native_before_sha256'],metadata_digest=record['native_before_metadata_digest']),
+            'auto_expense_reconciliation_native_changed')
+    if saved is not None:
+        previous=github.get('actions/runs/'+str(saved['operator']['id']))
+        require(all(previous.get(k)==v for k,v in saved['operator'].items())
+            and previous['status']=='completed' and previous['conclusion'] in {'failure','success'}
+            and stamp(previous['created_at'])<=stamp(saved['recorded_at'])<=stamp(previous['updated_at']),
+            'auto_expense_reconciliation_failed_run_changed')
+    original=base64.b64decode(record['parent_before_raw_b64'],validate=True)
+    already_ready=stage=='native_ready' and parent_raw==proposed_release(original,pb,digest(saved))
+    diagnostics.mark('bank_premises')
+    if parent_raw==original:
+        require(pp['metadata_digest']==record['parent_before_metadata_digest'],'auto_expense_reconciliation_parent_changed')
+    elif not already_ready:
+        proof=collect_bank_premises(record,att['bank_manifest'],record['baseline_parent_metadata'],ro,github,
+            datetime.now(timezone.utc),head=head,current_run_id=current,posted_summary=saved)
+        require(proof['manifest']['parent_snapshot']==pp,'auto_expense_reconciliation_parent_changed')
+    if parent_raw==original or already_ready:
+        bank=record['other_native'][0]
+        require(sha(ReadOnlyState(ro,StateBinding('bank_pdf_drive',sid,b['folder_id'],bank['file_id'])).read())==bank['sha256'],
+            'auto_expense_reconciliation_bank_changed')
+    ledger_value=validate_ledger(parent_raw,pb)
+    require(all(v['phase']=='ready' and not v['attempt'] and not v['error']
+        for k,v in ledger_value['sources'].items() if k!='auto_expense'),'auto_expense_reconciliation_peer_pending')
+    documents=RollingProjectionStore(DriveProjectionStore(ro,b['projection_id'],sid,precreated=True))
+    db=SheetsDB(sid,service=sheets)
+    def observe():
+        diagnostics.mark('financial_preflight');guard()
+        financial=financial_data(sheets,sid,include_controls=True)
+        require(digest({str(k):v for k,v in financial.items()})==record['financial_sha256'],
+            'auto_expense_reconciliation_financial_changed')
+        docs={k:documents.read(k) for k in record['protected_document_keys']}
+        require(digest(docs)==record['documents_sha256'],'auto_expense_reconciliation_documents_changed')
+        nav=navigation_context(db)
+        require(nav==record['navigation'],'auto_expense_reconciliation_snapshot_changed')
+        before=deepcopy(financial)
+        for render in ('UNFORMATTED_VALUE','FORMULA'):
+            expenses=before[('支出明細',render)]
+            require(len(expenses)==record['expense_before_rows']+2,'auto_expense_reconciliation_financial_changed')
+            del expenses[-2:]
+            for row in record['plan']['rows']:
+                old=list(row['before'])
+                while old and old[-1]=='':old.pop()
+                before[('取込データ',render)][row['row_num']-1]=old
+        require(digest({str(k):v for k,v in before.items()})==record['financial_before_sha256'],
+            'auto_expense_reconciliation_financial_changed')
+        verify_delta(before,financial,record['plan'],navigation=nav)
+        before_docs=deepcopy(docs);before_docs['journal']=record['journal_before']
+        require(digest(before_docs)==record['documents_before_sha256'],'auto_expense_reconciliation_documents_changed')
+        verify_side_effects(dict(navigation=nav,documents=before_docs),dict(navigation=nav,documents=docs))
+        plan=selected_plan(db,record['plan']['import_ids'],record['plan']['categories_by_id'],True,
+            record['business_contract'],expected_profile=record['profile_sha256'],env=env)
+        require(not plan['rows'] and len(plan['already_posted'])==2,'auto_expense_reconciliation_financial_changed')
+        rules=db.get_raw("'カテゴリ自動分類ルール'!A:R")
+        require(digest(rules)==record['rules_sha256'],'auto_expense_reconciliation_settings_changed')
+        acl={name:ro.files().get(fileId=fid,supportsAllDrives=True,
+            fields='id,mimeType,trashed,owners(emailAddress,permissionId),permissions(id,type,role,emailAddress)').execute(num_retries=0)
+            for name,fid in [('card',b['card_id']),('parent',b['parent_id']),('folder',b['folder_id']),('ledger',sid)]}
+        require(digest(acl)==record['acl_sha256'],'auto_expense_reconciliation_acl_changed')
+        return dict(imports=financial[('取込データ','UNFORMATTED_VALUE')][1:],
+            expenses=financial[('支出明細','UNFORMATTED_VALUE')][1:],financial_sha256=record['financial_sha256'],
+            documents_sha256=record['documents_sha256'],profile_sha256=record['profile_sha256'])
+    initial=observe()
+    from .aupay_card_aliases import merge_registry,resolve_aliases,validate_owner_expenses
+    from .aupay_card_reservation_recovery import summaries
+    from .aupay_card_incremental_recovery import preserved_unknown_proofs
+    native=validate(native_raw,cb)
+    registry=merge_registry(e for row in summaries(native).values() if row.get('status') in {'complete','noop'}
+        for e in row.get('card_aliases',[]))
+    merged=merge_registry((*registry,*updates))
+    resolve_aliases([],initial['imports'],merged);validate_owner_expenses(merged,initial['expenses'])
+    # Inspect historical proofs only after posted_state and exact finance checks.
+    # This local view grants no readiness; real pending restore/guards stay denied.
+    proof_view=deepcopy(native);proof_view.update(phase='ready',attempt='')
+    preserved_unknown_proofs(proof_view,ledger_value,record['checkpoint'])
+    require(card.observe()==(native_raw,np) and parent.observe()==(parent_raw,pp),
+        'auto_expense_reconciliation_snapshot_changed')
+    if not apply:
+        return dict(success=True,mode='preview_posted',stage=stage,financial_write_requests=0,state_write_requests=0)
+    pins={prefix+'_before_'+field:value for prefix,proof in [('native',np),('parent',pp)]
+        for field,value in proof.items()}
+    readbacks=RepairReadbacks(card,parent,pins,guard=guard,deadline=deadline,diagnostics=diagnostics)
+    with tempfile.TemporaryDirectory(prefix='operator-posted-expenses-',dir=env.get('RUNNER_TEMP')) as temp:
+        return confirm_posted_expenses(record=record,durable=DurableState(DriveStateTransport(drive_service(),cb),cb),
+            ledger=ProductionLedger(DriveStateTransport(drive_service(),pb),pb),state_dir=Path(temp)/'state',
+            repo_root=Path(__file__).resolve().parents[1],native_read=readbacks.sessions['native'].read,
+            parent_read=readbacks.sessions['parent'].read,observe=observe,guard=guard,operator=operator,
+            diagnostics=diagnostics,readbacks=readbacks)
+
+
+def posted_state(record, native):
+    """Recognize only the three saved boundaries; never manufacture readiness."""
+    from .aupay_card_incremental_recovery import _rows
+    from .aupay_card_reservation_recovery import summaries
+    from .aupay_card_aliases import merge_registry
+    from .aupay_card_expense_stage import owner_updates,contract_sha256
+    require(digest(record)==POSTED_RECORD_SHA256 and record['financial_write_authority'] is False,
+            'auto_expense_reconciliation_record_changed')
+    require(contract_sha256(record['plan'])==record['business_contract']
+        and (record['plan']['expense_rows'],record['plan']['expense_yen'])==(2,4531),
+        'auto_expense_reconciliation_record_changed')
+    rows=_rows(native,'recurring.sqlite3','recurring_runs');saved=summaries(native).get(POSTED_SUMMARY)
+    old=[r for r in rows if r['run_id']!=POSTED_SUMMARY]
+    require(digest(old)==record['history_sha256']
+        and digest(_rows(native,'recurring.sqlite3','recurring_checkpoint'))==record['checkpoint_sha256']
+        and set(native['files'])==set(record['native_file_hashes'])
+        and all(v['sha256']==record['native_file_hashes'][k] for k,v in native['files'].items()
+                if k!='recurring.sqlite3' or saved is None),'auto_expense_reconciliation_native_changed')
+    registry=merge_registry(e for r in old if r['status'] in {'complete','noop'}
+        for e in json.loads(r['summary_json']).get('card_aliases',[]))
+    updates=owner_updates(record['plan'],registry)
+    require(digest(updates)==record['owner_updates_sha256'],'auto_expense_reconciliation_record_changed')
+    if saved is None:
+        require(native['generation']==record['native_generation'] and native['phase']=='pending'
+            and native['attempt']==record['native_attempt'],'auto_expense_reconciliation_native_changed')
+        return 'pending',updates,None
+    validate_posted_summary(record,saved,updates=updates)
+    offset=native['generation']-record['native_generation']
+    require((offset,native['phase'],native['attempt']) in
+        {(1,'pending',record['native_attempt']),(2,'ready','')},'auto_expense_reconciliation_native_changed')
+    return ('proof_saved' if offset==1 else 'native_ready'),updates,saved
+
+
+def validate_posted_summary(record, saved, *, updates=None):
+    require(digest(record)==POSTED_RECORD_SHA256,'auto_expense_reconciliation_record_changed')
+    updates=saved['card_aliases'] if updates is None else updates
+    operator=saved['operator'];stamp=datetime.fromisoformat(saved['recorded_at'])
+    require(digest(updates)==record['owner_updates_sha256'] and stamp.tzinfo is not None
+        and set(operator)=={'id','head_sha','run_attempt','event','path'} and type(operator['id']) is int
+        and operator['id']!=record['failed_run']['id'] and len(operator['head_sha'])==40
+        and operator['run_attempt']==1 and operator['event']=='workflow_dispatch'
+        and operator['path']=='.github/workflows/kakeibo-production.yml'
+        and saved==posted_summary(record,updates,operator,saved['recorded_at']),
+        'auto_expense_reconciliation_archive_unconfirmed')
+
+
+def confirm_posted_expenses(*, record, durable, ledger, state_dir, repo_root, native_read,
+                            parent_read, observe, guard, operator, diagnostics, readbacks=None):
+    """Existing state APIs only. Saved stages are inspected and never repeated."""
+    from .drive_run_state import DurableState,validate,envelope,snapshot
+    from .aupay_card_recurring import SqliteRecurringRunState
+    from .aupay_card_reconciliation_apply import _pending_cache
+    from .aupay_card_aliases import merge_registry,resolve_aliases,validate_owner_expenses
+    from .aupay_card_incremental_recovery import preserved_unknown_proofs
+    current=native_read();native=validate(current,durable.binding);stage,updates,saved=posted_state(record,native)
+    if stage=='pending':require(sha(current)==record['native_before_sha256'],'auto_expense_reconciliation_native_changed')
+    parent_raw=parent_read();item=json.loads(parent_raw)['sources']['auto_expense']
+    original=json.loads(base64.b64decode(record['parent_before_raw_b64'],validate=True))['sources']['auto_expense']
+    closed=dict(original,phase='ready',attempt='',error='')
+    require(item==original or stage=='native_ready' and item==closed,'auto_expense_reconciliation_target_changed')
+    initial=observe();guard()
+    def verify_owners():
+        financial=observe();require(financial==initial,'auto_expense_reconciliation_snapshot_changed')
+        from .aupay_card_reservation_recovery import summaries
+        registry=[e for row in summaries(validate(current,durable.binding)).values()
+            if row.get('status') in {'complete','noop'} for e in row.get('card_aliases',[])]
+        merged=merge_registry((*registry,*updates))
+        resolve_aliases([],financial['imports'],merged);validate_owner_expenses(merged,financial['expenses'])
+    def ticket(scope,before):return readbacks.begin(scope,before) if readbacks is not None else None
+    def readback(t,read,expected):
+        if t is not None:t.verify(expected)
+        require(read()==expected,'auto_expense_reconciliation_readback_failed')
+    verify_owners()
+    if stage!='native_ready':
+        _pending_cache(native,state_dir,repo_root)
+        state=SqliteRecurringRunState(Path(state_dir)/'recurring.sqlite3',repo_root=repo_root)
+        require(state.successful_window_end().isoformat()==record['checkpoint'],'auto_expense_reconciliation_checkpoint_changed')
+        durable._pending=current  # Existing explicit reconciliation handoff; restore() remains fail-closed.
+        if stage=='pending':
+            saved=posted_summary(record,updates,operator,datetime.now(timezone.utc).isoformat())
+            state.record(saved,advance_checkpoint=False)
+            proposed=envelope(durable.binding,snapshot(Path(state_dir),durable.binding),
+                generation=native['generation']+1,phase='pending',attempt=native['attempt'])
+            posted_state(record,validate(proposed,durable.binding))
+            diagnostics.mark('native_guard');guard();verify_owners()
+            require(parent_read()==parent_raw,'auto_expense_reconciliation_parent_changed')
+            t=ticket('native',current);diagnostics.mark('native_save','native_reservation','write_possible')
+            durable._replace(current,proposed);readback(t,native_read,proposed)
+            durable._pending=proposed;current=proposed
+            diagnostics.mark('native_independent_readback','native_reservation','readback_confirmed')
+        diagnostics.mark('checkpoint_guard');guard();verify_owners()
+        require(parent_read()==parent_raw,'auto_expense_reconciliation_parent_changed')
+        t=ticket('native',current);diagnostics.mark('checkpoint_commit','checkpoint','write_possible')
+        durable.commit(Path(state_dir));current=durable._loaded;readback(t,native_read,current)
+        diagnostics.mark('checkpoint_independent_readback','checkpoint','readback_confirmed')
+        require(posted_state(record,validate(current,durable.binding))[0]=='native_ready',
+                'auto_expense_reconciliation_native_changed')
+    # An actual fresh restore, independent of the pending materialization.
+    fresh_dir=Path(state_dir).parent/'fresh-ready'
+    fresh=DurableState(durable.transport,durable.binding)
+    fresh.restore(fresh_dir)
+    restored=SqliteRecurringRunState(fresh_dir/'recurring.sqlite3',repo_root=repo_root)
+    require(snapshot(fresh_dir,durable.binding)==validate(current,durable.binding)['files']
+        and restored.successful_window_end().isoformat()==record['checkpoint'],
+        'auto_expense_reconciliation_checkpoint_changed')
+    resolve_aliases([],initial['imports'],restored.alias_registry())
+    validate_owner_expenses(restored.alias_registry(),initial['expenses'])
+    verify_owners();guard()
+    preserved_unknown_proofs(validate(current,durable.binding),json.loads(parent_raw),record['checkpoint'])
+    if item==original:
+        require(parent_read()==parent_raw,'auto_expense_reconciliation_parent_changed')
+        expected=proposed_release(parent_raw,ledger.binding,digest(saved))
+        from .bank_pending_recovery import ReleaseOnlyTransport
+        target=ProductionLedger(ReleaseOnlyTransport(ledger.transport,sha(expected)),ledger.binding)
+        t=ticket('parent',parent_raw);guard();diagnostics.mark('parent_completion','parent_completion','write_possible')
+        target.release_after_reconciliation('auto_expense',observed_digest=sha(parent_raw),evidence_reference=digest(saved))
+        readback(t,parent_read,expected);parent_raw=expected
+    diagnostics.mark('final_readback');guard();verify_owners()
+    require(native_read()==current and parent_read()==parent_raw,'auto_expense_reconciliation_snapshot_changed')
+    preserved_unknown_proofs(validate(current,durable.binding),json.loads(parent_raw),record['checkpoint'])
+    diagnostics.mark('complete','parent_completion','readback_confirmed')
+    return dict(success=True,mode='confirmed_posted_stop',initial_stage=stage,
+        reconciled_expenses=2,financial_write_requests=0,archive_write_requests=0,checkpoint=record['checkpoint'],
+        native_after_sha256=sha(current),parent_after_sha256=sha(parent_raw))

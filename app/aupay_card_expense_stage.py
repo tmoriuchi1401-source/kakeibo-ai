@@ -24,7 +24,8 @@ def hosted_parent_context(env):
 
 ERROR_CODES = frozenset({'card_expense_approved_plan_changed','card_expense_plan_changed',
     'card_expense_requires_review','card_expense_category_invalid','card_expense_owner_changed',
-    'card_expense_native_pending','card_expense_profile_changed','card_expense_failed'})
+    'card_expense_native_pending','card_expense_profile_changed','card_expense_failed',
+    'card_expense_exact_delta_failed','card_expense_navigation_changed','card_expense_journal_changed'})
 
 
 def run_cli(db, env, *, apply):
@@ -77,8 +78,43 @@ def owner_updates(plan, registry):
     return updates
 
 
-def verify_delta(before, after, plan):
+def navigation_context(db):
+    """Only the installed writer-owned formula and its stable-ID display inputs."""
+    from collections import Counter
+    from .category_navigation import installed, HEADER, WORKFLOW, return_formula, source_rows
+    metadata = db._sheet_metadata()
+    if not installed(metadata): return None
+    require(db.get_raw("'支出明細'!N1:N1") == [[HEADER]], 'card_expense_navigation_changed')
+    props = {s['properties']['title']: s['properties'] for s in metadata['sheets']}
+    return dict(spreadsheet_id=db.sid, workflow_sheet_id=props[WORKFLOW]['sheetId'],
+        formula=return_formula(db.sid,props[WORKFLOW]['sheetId']),
+        counts=dict(Counter(identifier for _,identifier in source_rows(db.get_raw("'カテゴリ操作'!A:H")))))
+
+
+def read_side_effects(env, sid):
+    from .google_clients import read_only_sheets_service
+    from .sheets import SheetsDB
+    from .projection_store import store_from_environment
+    store = store_from_environment(sid,env,read_only=True)
+    keys = ('journal','money','money-reviews','money-migration','money-notices')
+    return dict(navigation=navigation_context(SheetsDB(sid,service=read_only_sheets_service())),
+        documents={k:store.read(k) for k in keys} if store is not None else {})
+
+
+def verify_side_effects(before, after, *, appended=True):
+    from .projection_store import expected_append_journal
+    require(before['navigation']==after['navigation'],'card_expense_navigation_changed')
+    expected=deepcopy(before['documents'])
+    if appended and 'journal' in expected: expected['journal']=expected_append_journal(expected['journal'])
+    require(after['documents']==expected,'card_expense_journal_changed')
+
+
+def verify_delta(before, after, plan, *, navigation=None):
     expected=deepcopy(before)
+    if navigation is not None:
+        from .category_navigation import return_formula
+        require(navigation['formula']==return_formula(navigation['spreadsheet_id'],navigation['workflow_sheet_id']),
+                'card_expense_navigation_changed')
     for render in ("UNFORMATTED_VALUE", "FORMULA"):
         for row in plan["rows"]:
             require(import_row(expected[("取込データ",render)][row["row_num"]-1])==row["before"], "card_expense_owner_changed")
@@ -86,6 +122,11 @@ def verify_delta(before, after, plan):
             while changed and changed[-1]=="": changed.pop()
             expected[("取込データ",render)][row["row_num"]-1]=changed
             expense=list(row["expense"])
+            if navigation is not None:
+                count=navigation['counts'].get(expense[0],0)
+                require(type(count) is int and count>=0,'card_expense_navigation_changed')
+                display='' if count==0 else '↩ カテゴリ操作に戻る' if count==1 else '↩ カテゴリ操作の一覧（複数候補）'
+                expense.append(navigation['formula'] if render=='FORMULA' else display)
             while expense and expense[-1]=="": expense.pop()
             expected[("支出明細",render)].append(expense)
     require(after==expected,"card_expense_exact_delta_failed")
@@ -121,9 +162,10 @@ class SelectedDB:
 
 
 def execute_selected(*, db, plan, state, durable, state_dir, registry, financial_read, guard,
-                     category_rule_auto_apply_enabled=False):
+                     category_rule_auto_apply_enabled=False, side_effects_read=None):
     """Normal parent auto_expense pending + card native pending dominate writes."""
     before=financial_read()
+    effects_before=side_effects_read() if side_effects_read is not None else None
     guard()
     require(durable.binding.source=="au_pay_card_gmail" and durable.binding.spreadsheet_id==db.sid,
             "card_expense_target_changed")
@@ -137,11 +179,13 @@ def execute_selected(*, db, plan, state, durable, state_dir, registry, financial
     guard()
     require(durable.transport.read()==durable._pending,"card_expense_native_changed")
     require(financial_read()==before,"card_expense_financial_changed")
+    if effects_before is not None:require(side_effects_read()==effects_before,'card_expense_journal_changed')
     bounded=SelectedDB(db,plan,guard)
     result=AutoExpensePipeline(bounded,category_rule_auto_apply_enabled=category_rule_auto_apply_enabled).apply(card_plan=plan)
     guard()
     require(durable.transport.read()==durable._pending,"card_expense_native_changed")
-    after=financial_read();verify_delta(before,after,plan)
+    after=financial_read();verify_delta(before,after,plan,navigation=effects_before['navigation'] if effects_before else None)
+    if effects_before is not None:verify_side_effects(effects_before,side_effects_read())
     require(result["expenses_created"]==len(plan["rows"]) and result["expenses_updated"]==0
             and result["imports_updated"]==len(plan["rows"]) and bounded.append_calls==bounded.link_calls==1,
             "card_expense_write_unknown")
@@ -152,7 +196,8 @@ def execute_selected(*, db, plan, state, durable, state_dir, registry, financial
         card_aliases=updates,expense_contract_sha256=contract_sha256(plan),expense_rows=len(plan["rows"]),
         expense_yen=plan["expense_yen"],financial_before_sha256=digest({str(k):v for k,v in before.items()}),
         financial_after_sha256=digest({str(k):v for k,v in after.items()}),failure=0),advance_checkpoint=False)
-    guard();verify_delta(before,financial_read(),plan)
+    guard();verify_delta(before,financial_read(),plan,navigation=effects_before['navigation'] if effects_before else None)
+    if effects_before is not None:verify_side_effects(effects_before,side_effects_read())
     durable.commit(state_dir)
     require(durable.transport.read()==durable._loaded,"card_expense_native_readback_failed")
     return dict(result,write_requests=1+len(plan["rows"]))
@@ -206,8 +251,13 @@ def run_from_environment(db, env, *, apply):
     plan=selected_plan(db,ids,categories,rule_enabled,request['plan_sha256'] if request is not None else None,
         expected_profile=request['profile_sha256'] if request is not None else None,env=env)
     if request is not None:require(planning_profile(db,env)==profile,'card_expense_profile_changed')
-    if not apply:return dict(expense_rows=plan["expense_rows"],expense_yen=plan["expense_yen"],plan_sha256=contract_sha256(plan),
-        profile_sha256=digest(profile),planning_profile=profile)
+    if not apply:
+        effects=read_side_effects(env,db.sid)
+        if plan['rows']:
+            from .projection_store import expected_append_journal
+            if 'journal' in effects['documents']:expected_append_journal(effects['documents']['journal'])
+        return dict(expense_rows=plan["expense_rows"],expense_yen=plan["expense_yen"],plan_sha256=contract_sha256(plan),
+            profile_sha256=digest(profile),planning_profile=profile,side_effects_sha256=digest(effects))
     pending_profile_checked=False
     def guard():
         nonlocal pending_profile_checked
@@ -231,7 +281,7 @@ def run_from_environment(db, env, *, apply):
         preserved_unknown_proofs(native,parent,state.successful_window_end().isoformat())
         result=execute_selected(db=db,plan=plan,state=state,durable=durable,state_dir=path,registry=registry,
             financial_read=lambda:financial_data(read_only_sheets_service(),db.sid,include_controls=True),guard=guard,
-            category_rule_auto_apply_enabled=rule_enabled)
+            category_rule_auto_apply_enabled=rule_enabled,side_effects_read=lambda:read_side_effects(env,db.sid))
     # Routine core remains autonomous under its existing authority; the fixed
     # maintenance scope never runs unrelated AutoExpensePipeline candidates.
     if request is None:

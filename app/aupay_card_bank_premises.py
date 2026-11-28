@@ -59,8 +59,8 @@ def code_contract():
 
 def reviewed_business(record):
     from .aupay_card_reservation_reference import NEW_RECORD_SHA256
-    from .auto_expense_reconciliation import RECORD_SHA256 as AUTO_EXPENSE_RECORD_SHA256
-    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256, AUTO_EXPENSE_RECORD_SHA256}
+    from .auto_expense_reconciliation import RECORD_SHA256 as AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256
+    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256, AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256}
 
 
 def validate_bank_chain(record, proof, parent_raw):
@@ -71,6 +71,10 @@ def validate_bank_chain(record, proof, parent_raw):
     from .aupay_card_incremental_recovery import _rows
     manifest = proof["manifest"]
     saved_archive = proof.get('saved_auto_expense_archive')
+    posted = proof.get('posted_card_expenses')
+    if posted is not None:
+        from .auto_expense_reconciliation import validate_posted_summary
+        validate_posted_summary(record,posted)
     if saved_archive is not None:
         from .auto_expense_reconciliation import validate_saved_archive
         validate_saved_archive(record, saved_archive)
@@ -205,6 +209,10 @@ def validate_bank_chain(record, proof, parent_raw):
             require(all(prior.get(k)==v for k,v in saved_archive['operator_run'].items())
                 and prior['status']=='completed' and prior['conclusion']=='failure',
                 'bank_premises_other_writer')
+        elif posted is not None and prior['id']==posted['operator']['id']:
+            require(all(prior.get(k)==v for k,v in posted['operator'].items())
+                and prior['status']=='completed' and prior['conclusion'] in {'failure','success'},
+                'bank_premises_other_writer')
         elif prior["path"] == ".github/workflows/synthetic-tests.yml":
             require(prior["run_attempt"] == 1, "bank_premises_other_writer")
         else:
@@ -258,7 +266,7 @@ def _job_log(github, job_id):
 
 
 def collect_bank_premises(record, manifest, baseline_metadata, drive, github, now, *, head,
-                          current_run_id=None, log_read=None, saved_archive=None):
+                          current_run_id=None, log_read=None, saved_archive=None, posted_summary=None):
     """Independently materialize signed references. All Google/GitHub calls GET.
 
     Used by both readonly preparation and the locked hosted runtime. References
@@ -297,6 +305,10 @@ def collect_bank_premises(record, manifest, baseline_metadata, drive, github, no
         from .auto_expense_reconciliation import validate_saved_archive
         validate_saved_archive(record,saved_archive)
         proof['saved_auto_expense_archive']=deepcopy(saved_archive)
+    if posted_summary is not None:
+        from .auto_expense_reconciliation import validate_posted_summary
+        validate_posted_summary(record,posted_summary)
+        proof['posted_card_expenses']=deepcopy(posted_summary)
     for descriptor in manifest["transitions"]:
         step = {}
         for label, fid in file_ids.items():
