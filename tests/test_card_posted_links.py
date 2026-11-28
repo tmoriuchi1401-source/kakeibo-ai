@@ -240,6 +240,8 @@ def test_hosted_link_failure_never_finalizes_state(tmp_path,monkeypatch,key,chan
     assert not nt.writes and not pt.writes and len(p.db.expenses)==18
     if change=='unknown':assert error.value.diagnostic['last_stage']=='owner_links_write'
     if change=='partial_response':assert error.value.diagnostic['last_stage']=='owner_links_readback'
+    if change in {'unknown','partial_response'}:
+        assert error.value.diagnostic['effects']['financial']=='writer_entered'
     assert len(p.db.writes)<=1
 
 
@@ -274,13 +276,15 @@ def test_remaining_twenty_two_one_batch_or_stop_without_resend(tmp_path,mode):
         if mode=='readback_failure' and len(calls)==2:raise TimeoutError('secret')
         return reads(ranges)
     db.get_raw_ranges=read
-    args=dict(db=db,plan=plan,state=state,durable=durable,state_dir=path,registry=registry,financial_read=db.financial,guard=lambda:None,category_rule_auto_apply_enabled=True)
+    diagnostic=ReconciliationDiagnostics()
+    args=dict(db=db,plan=plan,state=state,durable=durable,state_dir=path,registry=registry,financial_read=db.financial,guard=lambda:None,category_rule_auto_apply_enabled=True,diagnostics=diagnostic)
     if mode=='normal':
         result=execute_selected(**args);assert result['write_requests']==2
         verify_delta(initial,db.financial(),plan)
         assert len(db.writes)==2 and len(db.writes[1][1])==22 and len(calls)==2
     else:
         with pytest.raises((RuntimeError,TimeoutError)):execute_selected(**args)
+        assert diagnostic.effects['financial']=='append_possible'
         count=len(db.writes)
         with pytest.raises(RuntimeError):execute_selected(**args)
         assert durable.inspect()['phase']=='pending' and len(db.writes)==count

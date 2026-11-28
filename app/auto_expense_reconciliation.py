@@ -595,6 +595,7 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
         final=observe()
         require(final['links_complete'] and card.observe()==(native_raw,np) and parent.observe()==(parent_raw,pp),
             'auto_expense_reconciliation_snapshot_changed')
+        diagnostics.mark('financial_readback','financial','exact_readback_confirmed')
     def completed_observation():
         value=observe()
         require(not links or value['links_complete'],'auto_expense_reconciliation_financial_changed')

@@ -153,7 +153,10 @@ def batch_owner_links(db, rows, *, guard, diagnostics=None):
     require(len(current)==len(rows) and all(len(v)==1 and import_row(v[0])==r['before']
         for r,v in zip(rows,current)),'card_expense_owner_moved_or_changed')
     guard()
-    if diagnostics:diagnostics.mark('owner_links_write')
+    if diagnostics:
+        if diagnostics.effects['financial']=='not_reached':
+            diagnostics.mark('owner_links_write','financial','writer_entered')
+        else:diagnostics.mark('owner_links_write')
     db.svc.spreadsheets().values().batchUpdate(spreadsheetId=db.sid,
         body=dict(valueInputOption='RAW',data=[dict(range=f"'取込データ'!J{r['row_num']}",
             values=[[r['after'][9]]]) for r in rows])).execute(num_retries=0)
