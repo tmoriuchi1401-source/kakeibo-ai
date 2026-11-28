@@ -24,6 +24,7 @@ ARCHIVE_RUN = 'OPERATOR-AUTO-EXPENSE:46013990252'
 RELEASE_TITLE = 'auto-expense-reconciliation-46013990252-apply'
 MAX_ARCHIVE_BYTES = 32768
 POSTED_PREFIX = 'posted-v1:'
+RESERVATION_PREFIX = 'reservation-v1:'
 POSTED_OPERATION = 'confirm_posted_card_expenses'
 POSTED_RECORD_SHA256 = '8922970a0c2f96079ea0692ff34334d4576cdc486e5a79f465f02a7b4d463754'
 POSTED_SUMMARY = 'CARD-EXPENSE:RECONCILED:46083853434'
@@ -215,6 +216,8 @@ def _run_from_environment(env, *, apply, diagnostics):
     tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
     info = json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
     key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
+    if env['CARD_EXPENSE_RECONCILIATION'].startswith(RESERVATION_PREFIX):
+        return _reservation_from_environment(env,apply=apply,diagnostics=diagnostics,head=head,tree=tree,key=key)
     if env['CARD_EXPENSE_RECONCILIATION'].startswith(POSTED_PREFIX):
         return _posted_from_environment(env,apply=apply,diagnostics=diagnostics,head=head,tree=tree,key=key)
     diagnostics.mark('capsule_decode')
@@ -538,6 +541,288 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
             repo_root=Path(__file__).resolve().parents[1],native_read=readbacks.sessions['native'].read,
             parent_read=readbacks.sessions['parent'].read,observe=observe,guard=guard,operator=operator,
             diagnostics=diagnostics,readbacks=readbacks)
+
+
+def reservation_preflight(record, native_before, native_pending, parent_before, parent_pending):
+    """Exact reservation-only transitions; no transport or financial authority."""
+    from .aupay_card_incremental_recovery import validate_reservation_record,reservation_content,_rows,_hash
+    from .aupay_card_window_preview import checkpoint
+    validate_reservation_record(record)
+    for name,before,pending in (('native',native_before,native_pending),('parent',parent_before,parent_pending)):
+        require(_hash(before)==record[name+'_before']['sha256'] and _hash(pending)==record[name+'_pending']['sha256'],
+            'reservation_snapshot_changed')
+        expected=deepcopy(before);expected['generation']+=1
+        if name=='native':
+            checkpoint(before,record['checkpoint'])
+            expected.update(phase='pending',attempt=record['native_pending']['attempt'])
+        else:
+            require(all(v['phase']=='ready' and not v['attempt'] and not v['error'] for v in before['sources'].values()),
+                'reservation_peer_pending')
+            expected['sources']['aupay_card'].update(phase='pending',attempt=record['parent_pending']['attempt'],error='')
+        require(expected==pending,'reservation_content_changed')
+    require(reservation_content(native_before)==record['tables']
+        and _rows(native_before,'recurring.sqlite3','recurring_checkpoint')==record['checkpoint_row']
+        and any(_hash(json.loads(r['summary_json']))==record['anchor_summary_sha256']
+            for r in _rows(native_before,'recurring.sqlite3','recurring_runs')), 'reservation_content_changed')
+
+
+def confirm_unused_reservation(*, record, native_before, native_pending, parent_before, parent_pending,
+                               durable, ledger, native_read, parent_read, observe, guard, operator,
+                               key, state_dir, diagnostics):
+    """Existing two release APIs; atomically append one compact native receipt.
+
+    A new independent approval is required for every invocation. An uncertain
+    write stops immediately; a later approved invocation proves and skips it.
+    No financial/review writer is supplied to this function.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from .drive_run_state import validate,DurableState
+    from .production_ledger import validate_ledger,_encode
+    from .aupay_card_incremental_recovery import (_hash,_hash_bytes,_rows,RESERVATION_PROTOCOL,
+        RESERVATION_PREFIX as ROW_PREFIX,verify_reservation_receipt,reservation_content)
+    reservation_preflight(record,native_before,native_pending,parent_before,parent_pending)
+    expected_parent=deepcopy(parent_pending);expected_parent['generation']+=1
+    expected_parent['sources']['aupay_card'].update(phase='ready',attempt='',error='')
+    parent_ready=_encode(expected_parent)
+    diagnostics.mark('native_guard');guard();observe()
+    raw=native_read();live=validate(raw,durable.binding)
+    reservation_stage(record,live,validate_ledger(parent_read(),ledger.binding),native_before=native_before,
+        native_pending=native_pending,parent_pending=parent_pending,public_key=key.public_key())
+    receipts=[json.loads(r['summary_json'])['reservation_reconciliation']
+        for r in _rows(live,'recurring.sqlite3','recurring_runs') if r['run_id'].startswith(ROW_PREFIX)
+        and json.loads(r['summary_json']).get('reservation_reconciliation',{}).get('record',{}).get('failed_execution',{}).get('id')
+            ==record['failed_execution']['id']]
+    native_saves=parent_saves=0
+    if live['phase']=='pending':
+        require(not receipts and live==native_pending,'reservation_snapshot_changed')
+        receipt=dict(protocol=RESERVATION_PROTOCOL,record=deepcopy(record),operator=deepcopy(operator),
+            parent_ready_sha256=sha(parent_ready),parent_ready_card_sha256=_hash(expected_parent['sources']['aupay_card']))
+        receipt['signature']=base64.b64encode(key.sign(_hash_bytes(receipt),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256())).decode()
+        verify_reservation_receipt(receipt,key.public_key())
+        require(parent_read()==_encode(parent_pending),'reservation_snapshot_changed')
+        diagnostics.mark('native_save','native_reservation','write_possible')
+        durable.release_after_reconciliation(observed_digest=sha(raw),evidence_reference=_hash(receipt),
+            reconciliation_receipt=receipt,observe=lambda event:diagnostics.state_save('native',event))
+        native_saves=1
+        diagnostics.mark('native_independent_readback')
+        require(native_read()==durable._loaded,'reservation_readback_failed')
+        live=validate(durable._loaded,durable.binding)
+    else:
+        receipt=receipts[0]
+    reservation_stage(record,live,validate_ledger(parent_read(),ledger.binding),native_before=native_before,
+        native_pending=native_pending,parent_pending=parent_pending,public_key=key.public_key())
+    guard();observe()
+    # Restore from a genuinely new instance and directory, before parent release.
+    fresh=DurableState(type('IndependentRead',(),{'read':lambda _:native_read()})(),durable.binding)
+    fresh.restore(state_dir)
+    require(fresh._loaded==native_read(),'reservation_readback_failed')
+    diagnostics.mark('parent_guard');guard();observe()
+    require(native_read()==fresh._loaded,'reservation_readback_failed')
+    current=parent_read()
+    require(current in (_encode(parent_pending),parent_ready),'reservation_snapshot_changed')
+    if current!=parent_ready:
+        require(ledger.payload==current,'reservation_snapshot_changed')
+        diagnostics.mark('parent_completion','parent_completion','write_possible')
+        ledger.release_after_reconciliation('aupay_card',observed_digest=sha(current),evidence_reference=_hash(receipt))
+        parent_saves=1
+    diagnostics.mark('final_readback');guard();observe()
+    require(parent_read()==parent_ready and native_read()==fresh._loaded,'reservation_readback_failed')
+    require(validate_ledger(parent_ready,ledger.binding)==expected_parent,'reservation_readback_failed')
+    diagnostics.mark('complete','parent_completion','readback_confirmed')
+    return dict(success=True,mode='confirm_unused_card_reservation',native_state_writes=native_saves,
+        parent_state_writes=parent_saves,financial_write_requests=0,review_write_requests=0,
+        checkpoint=record['checkpoint'])
+
+
+def reservation_stage(record, live, parent, *, native_before, native_pending, parent_pending, public_key):
+    """Shared Preview/Apply stage validation, with no persistence surface."""
+    from .aupay_card_incremental_recovery import (_rows,_hash,RESERVATION_PREFIX as PREFIX,
+        verify_reservation_receipt,reservation_content,reservation_summary)
+    expected_parent=deepcopy(parent_pending);expected_parent['generation']+=1
+    expected_parent['sources']['aupay_card'].update(phase='ready',attempt='',error='')
+    require(parent in (parent_pending,expected_parent),'reservation_snapshot_changed')
+    if live['phase']=='pending':
+        require(live==native_pending and parent==parent_pending,'reservation_snapshot_changed')
+        require(not any(json.loads(r['summary_json']).get('reservation_reconciliation',{}).get('record',{}).get('failed_execution',{}).get('id')
+            ==record['failed_execution']['id'] for r in _rows(live,'recurring.sqlite3','recurring_runs')),'reservation_receipt_invalid')
+        return 'reserved'
+    summaries=[json.loads(r['summary_json']) for r in _rows(live,'recurring.sqlite3','recurring_runs')]
+    receipts=[s['reservation_reconciliation'] for s in summaries if s.get('reservation_reconciliation',{}).get('record',{})==record]
+    require(len(receipts)==1,'reservation_receipt_invalid');receipt=receipts[0]
+    verify_reservation_receipt(receipt,public_key)
+    require(not live['attempt'] and live['generation']==native_pending['generation']+1
+        and reservation_content(live)==reservation_content(native_before)
+        and receipt['parent_ready_sha256']==digest(expected_parent)
+        and receipt['parent_ready_card_sha256']==digest(expected_parent['sources']['aupay_card'])
+        and all(live['files'][f]==native_before['files'][f] for f in live['files'] if f!='recurring.sqlite3'),
+        'reservation_content_changed')
+    old=_rows(native_pending,'recurring.sqlite3','recurring_runs');new=_rows(live,'recurring.sqlite3','recurring_runs')
+    added=[r for r in new if r['run_id']==PREFIX+str(receipt['operator']['id'])]
+    require(len(added)==1 and len(new)==len(old)+1 and [r for r in new if r not in added]==old,
+        'reservation_content_changed')
+    require(reservation_summary(added[0])==receipt,'reservation_receipt_invalid')
+    return 'ready' if parent==expected_parent else 'native_ready'
+
+
+def _reservation_from_environment(env, *, apply, diagnostics, head, tree, key):
+    """Existing hosted maintenance input, strict signed reservation-only scope."""
+    from .aupay_card_reconciliation_entry import decode_capsule
+    from .aupay_card_window_preview import GitHub,ReadOnlyState,CATCHUP_WINDOWS
+    from .aupay_card_incremental_recovery import (validate_reservation_record,_hash,_rows,
+        CATCHUP_NO_WRITE_NATIVE_SHA256,CATCHUP_CONTENT_ROOT,reservation_content_root,
+        CATCHUP_NO_WRITE_CHECKPOINT,CATCHUP_NO_WRITE_FINANCIAL_SHA256,CATCHUP_NO_WRITE_DOCUMENTS_SHA256,
+        preserved_unknown_proofs,reservation_receipts,RESERVATION_PREFIX as ROW_PREFIX)
+    from .aupay_card_first_window_apply import financial_data
+    from .aupay_card_bank_premises import stamp,_job_log
+    from .drive_run_state import StateBinding,DurableState,DriveStateTransport,validate
+    from .production_ledger import validate_ledger
+    from .google_clients import read_only_drive_service,read_only_sheets_service,drive_service
+    from .projection_store import DriveProjectionStore
+    from .aupay_card_window_evidence import GetOnly
+    diagnostics.mark('capsule_decode')
+    now=datetime.now(timezone.utc)
+    record,att=decode_capsule(env['CARD_EXPENSE_RECONCILIATION'][len(RESERVATION_PREFIX):],key,tree,now,
+        label=LABEL,scope='card_unused_reservation_state_only',max_ttl=900,record_validator=validate_reservation_record)
+    observed=stamp(att['observed_at']);expires=stamp(att['approval']['expires_at'])
+    require(att['operation']==('confirm_unused_card_reservation' if apply else 'preview_unused_card_reservation')
+        and att['main_sha']==head and att['financial_write_authority'] is False
+        and bool(att['approval'].get('approval_reference')) and 0<=(now-observed).total_seconds()<=900,
+        'reservation_approval_invalid')
+    github=GitHub(env);current=int(env['GITHUB_RUN_ID']);deadline=time.monotonic()+900
+    identity=github.get(f'actions/runs/{current}')
+    operator={k:identity[k] for k in ('id','head_sha','head_branch','run_attempt','event','path','created_at')}
+    def guard():
+        require(time.monotonic()<deadline and datetime.now(timezone.utc)<expires,'auto_expense_reconciliation_expired')
+        require(github.get('git/ref/heads/main')['object']['sha']==head,'auto_expense_reconciliation_main_changed')
+        run=github.get(f'actions/runs/{current}')
+        require(all(run.get(k)==v for k,v in operator.items()) and run['status']=='in_progress'
+            and run['head_sha']==head and stamp(run['created_at'])>=observed.replace(microsecond=0)
+            and current!=record['failed_execution']['id'],'auto_expense_reconciliation_run_changed')
+        history=github.get('actions/workflows/kakeibo-production.yml/runs?event=workflow_dispatch&head_sha='+head+'&per_page=100')
+        require(history['total_count']==len(history['workflow_runs'])<=100,'auto_expense_reconciliation_run_inventory_incomplete')
+        title=RELEASE_TITLE if apply else RELEASE_TITLE.removesuffix('apply')+'preview'
+        matching=[v for v in history['workflow_runs'] if v.get('display_title')==title
+            and stamp(v['created_at'])>=observed.replace(microsecond=0)]
+        require(len(matching)==1 and matching[0]['id']==current,'auto_expense_reconciliation_dispatch_consumed')
+        for status in ('in_progress','queued','waiting','pending','requested'):
+            active=github.get('actions/runs?status='+status+'&per_page=100')
+            require(active['total_count']==len(active['workflow_runs'])<=100
+                and all(v['id']==current for v in active['workflow_runs']),'auto_expense_reconciliation_competing_run')
+    guard();b=record['bindings'];sid=b['spreadsheet_id']
+    require(tuple(env[n] for n in ('SPREADSHEET_ID','KAKEIBO_STATE_FOLDER_ID','AUPAY_CARD_STATE_FILE_ID',
+        'KAKEIBO_RUN_LEDGER_FILE_ID','KAKEIBO_PROJECTION_FOLDER_ID'))==tuple(b[n] for n in
+        ('spreadsheet_id','folder_id','card_id','parent_id','projection_id')),'auto_expense_reconciliation_binding_changed')
+    ro=read_only_drive_service();sheets=GetOnly(read_only_sheets_service(),deadline)
+    cb=StateBinding('au_pay_card_gmail',sid,b['folder_id'],b['card_id']);pb=StateBinding('production_run',sid,b['folder_id'],b['parent_id'])
+    card=ReadOnlyState(GetOnly(ro,deadline),cb);parent=ReadOnlyState(GetOnly(ro,deadline),pb)
+    diagnostics.mark('state_revision');nr,np=card.observe();pr,pp=parent.observe()
+    require(att['state_snapshot']==dict(native=np,parent=pp),'reservation_snapshot_changed')
+    failure=github.get('actions/runs/'+str(record['failed_execution']['id']))
+    require(all(failure.get(k)==v for k,v in record['failed_execution'].items()),'reservation_failure_unproven')
+    comparison=github.get(f"compare/{failure['head_sha']}...{head}")
+    require(comparison['status'] in {'ahead','identical'} and comparison['behind_by']==0,'reservation_failure_unproven')
+    jobs=github.get('actions/runs/'+str(failure['id'])+'/jobs?per_page=100')
+    require(jobs['total_count']==len(jobs['jobs'])==1 and jobs['jobs'][0]['id']==record['failed_job_id']
+        and jobs['jobs'][0]['conclusion']=='failure' and jobs['jobs'][0]['status']=='completed', 'reservation_failure_unproven')
+    def revisions(fid):
+        refs=[];token=None
+        for _ in range(32):
+            guard()
+            page=ro.revisions().list(fileId=fid,pageSize=1000,pageToken=token,
+                fields='nextPageToken,revisions(id,modifiedTime,size,md5Checksum)').execute(num_retries=0)
+            refs.extend(page.get('revisions',[]));token=page.get('nextPageToken')
+            if not token:break
+        require(not token and len({v['id'] for v in refs})==len(refs),'reservation_revision_unproven')
+        return refs
+    snapshots={}
+    for label,binding in (('native',cb),('parent',pb)):
+        refs=revisions(binding.file_id)
+        positions=[]
+        for stage in ('before','pending'):
+            node=record[label+'_'+stage];matches=[i for i,v in enumerate(refs) if v==node['revision']]
+            require(len(matches)==1,'reservation_revision_unproven');positions.append(matches[0])
+            raw=ro.revisions().get_media(fileId=binding.file_id,revisionId=node['revision']['id']).execute(num_retries=0)
+            require(sha(raw)==node['sha256'] and str(len(raw))==str(node['revision']['size'])
+                and hashlib.md5(raw).hexdigest()==node['revision']['md5Checksum'],'reservation_revision_unproven')
+            snapshots[label+'_'+stage]=(validate(raw,binding) if label=='native' else validate_ledger(raw,binding))
+        require(positions[1]==positions[0]+1 and len(refs)-positions[1] in (1,2),'reservation_revision_unproven')
+        require(stamp(record[label+'_before']['revision']['modifiedTime'])<stamp(failure['created_at']),
+            'reservation_revision_unproven')
+        require(stamp(failure['created_at'])<=stamp(record[label+'_pending']['revision']['modifiedTime'])<=stamp(failure['updated_at']),
+            'reservation_revision_unproven')
+    reservation_preflight(record,**snapshots)
+    docs=DriveProjectionStore(GetOnly(ro,deadline),b['projection_id'],sid,precreated=True)
+    def observe():
+        diagnostics.mark('financial_preflight');guard()
+        require(_hash({t+'|'+v:rows for (t,v),rows in financial_data(sheets,sid,include_controls=True).items()})==record['financial_sha256'],
+            'reservation_financial_changed')
+        protected={k:docs.read(k) for k in record['protected_heads']}
+        require(_hash(protected)==record['documents_sha256']
+            and all(i not in (protected['money'] or {}).get('records',{}) for i in record['money_ids']), 'reservation_documents_changed')
+        for name,node in record['protected_heads'].items():
+            require(docs._file(name)==node['file_id'],'reservation_documents_changed')
+            refs=revisions(node['file_id'])
+            require(refs and refs[-1]==node['revision'] and stamp(refs[-1]['modifiedTime'])<stamp(failure['created_at']),
+                'reservation_revision_unproven')
+        acl={name:ro.files().get(fileId=fid,supportsAllDrives=True,
+            fields='id,mimeType,trashed,owners(emailAddress,permissionId),permissions(id,type,role,emailAddress)').execute(num_retries=0)
+            for name,fid in [('card',b['card_id']),('parent',b['parent_id']),('folder',b['folder_id']),('ledger',sid)]}
+        require(_hash(acl)==record['acl_sha256'],'reservation_acl_changed')
+    observe()
+    if record['evidence_mode']=='legacy_c2':
+        require(record['checkpoint']==CATCHUP_NO_WRITE_CHECKPOINT
+            and record['native_before']['sha256']==CATCHUP_NO_WRITE_NATIVE_SHA256
+            and reservation_content_root(snapshots['native_before'])==CATCHUP_CONTENT_ROOT
+            and record['financial_sha256']==CATCHUP_NO_WRITE_FINANCIAL_SHA256
+            and record['documents_sha256']==CATCHUP_NO_WRITE_DOCUMENTS_SHA256
+            and record['source_contract_sha256']==CATCHUP_WINDOWS.get((record['checkpoint'],record['window_end']))
+            and len(record['money_ids'])>0,'reservation_failure_unproven')
+        # The legacy path stopped before its mandatory money-review barrier.
+        # Bind the reviewed control-flow version, without adding a failed run ID.
+        require(failure['head_sha']=='38fb7e97d43ec4e978e6cfce971558c0546195ce','reservation_failure_unproven')
+    else:
+        verify_reservation_diagnostic(_job_log(github,record['failed_job_id']),record)
+    # Validate all earlier proof rows using a local ready view, never a save.
+    before=snapshots['native_before'];parent_before=snapshots['parent_before']
+    preserved_unknown_proofs(before,parent_before,record['checkpoint'])
+    prior=reservation_receipts(before,parent_before,record['checkpoint'],public_key=key.public_key())
+    require(record['previous_receipt_sha256']==(_hash(prior[-1]) if prior else ''),'reservation_receipt_chain_changed')
+    reservation_stage(record,validate(nr,cb),validate_ledger(pr,pb),native_before=before,
+        native_pending=snapshots['native_pending'],parent_pending=snapshots['parent_pending'],public_key=key.public_key())
+    if validate(nr,cb)['phase']=='ready':
+        saved=[json.loads(r['summary_json'])['reservation_reconciliation'] for r in _rows(validate(nr,cb),'recurring.sqlite3','recurring_runs')
+            if json.loads(r['summary_json']).get('reservation_reconciliation',{}).get('record',{})==record][0]
+        previous=github.get('actions/runs/'+str(saved['operator']['id']))
+        require(all(previous.get(k)==v for k,v in saved['operator'].items()) and previous['status']=='completed'
+            and previous['conclusion'] in {'success','failure'} and previous['id']!=current,
+            'reservation_failure_unproven')
+    require(card.observe()==(nr,np) and parent.observe()==(pr,pp),'reservation_snapshot_changed')
+    if not apply:return dict(success=True,mode='preview_unused_card_reservation',financial_write_requests=0,state_write_requests=0)
+    with tempfile.TemporaryDirectory(prefix='card-unused-operator-',dir=env.get('RUNNER_TEMP')) as temp:
+        return confirm_unused_reservation(record=record,**snapshots,
+            durable=DurableState(DriveStateTransport(drive_service(),cb),cb),
+            ledger=ProductionLedger(DriveStateTransport(drive_service(),pb),pb),native_read=card.read,parent_read=parent.read,
+            observe=observe,guard=guard,operator=operator,key=key,state_dir=Path(temp)/'state',diagnostics=diagnostics)
+
+
+def verify_reservation_diagnostic(log, record):
+    """Only completed, reviewed prewrite diagnostics; missing/unknown denies."""
+    values=[]
+    for line in log.splitlines():
+        start=line.find('{')
+        if start<0:continue
+        try:values.append(json.loads(line[start:]))
+        except (ValueError,TypeError):pass
+    expected=dict(native_before=record['native_before']['sha256'],parent_before=record['parent_before']['sha256'],
+        checkpoint=record['checkpoint'],window_end=record['window_end'],source_contract=record['source_contract_sha256'],
+        financial=record['financial_sha256'],documents=record['documents_sha256'])
+    matches=[v for v in values if v.get('error')=='incremental_apply_stopped_no_retry'
+        and v.get('reservation_evidence')==expected and v.get('diagnostic',{}).get('effects',{}).get('financial')=='not_reached'
+        and v.get('diagnostic',{}).get('effects',{}).get('money','not_started')=='not_started'
+        and v.get('diagnostic',{}).get('last_stage') in {'native_reserved','money_guard','money_preflight'}]
+    require(len(matches)==1,'reservation_failure_unproven')
 
 
 def posted_state(record, native):

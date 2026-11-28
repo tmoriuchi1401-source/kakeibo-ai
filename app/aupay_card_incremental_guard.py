@@ -99,11 +99,11 @@ def controls(env, head, github, *, expected_checkpoint=None, reconciliation_stat
                 "run_inventory_incomplete")
         require(all(r["id"] == current for r in runs["workflow_runs"]), "competing_run")
     return history_controls(github, head, current=current, checkpoint_value=checkpoint_value,
-        reconciliation_state=reconciliation_state, defer_reconciliation=defer_reconciliation, scheduled=scheduled)
+        reconciliation_state=reconciliation_state, defer_reconciliation=defer_reconciliation, scheduled=scheduled,receipt_env=env)
 
 
 def history_controls(github, head, *, checkpoint_value, current=None,
-                     reconciliation_state=None, defer_reconciliation=False, scheduled=False):
+                     reconciliation_state=None, defer_reconciliation=False, scheduled=False,receipt_env=None):
     """Shared GET-only Apply history proof, also usable by the real Preview.
 
     Preview has its own authenticated workflow identity and no Apply run to
@@ -125,6 +125,20 @@ def history_controls(github, head, *, checkpoint_value, current=None,
         require(cp is not None, "reconciliation_checkpoint_required")
         from .aupay_card_incremental_recovery import preserved_unknown_proofs
         proofs = preserved_unknown_proofs(*reconciliation_state, checkpoint_value)
+        from .aupay_card_incremental_recovery import reservation_receipts
+        for receipt in reservation_receipts(*reconciliation_state,checkpoint_value,env=receipt_env):
+            failure=receipt['record']['failed_execution'];operator=receipt['operator']
+            actual_operator=github.get(f"actions/runs/{operator['id']}")
+            require(all(actual_operator.get(k)==v for k,v in operator.items())
+                and actual_operator['status']=='completed' and actual_operator['conclusion'] in {'success','failure'},
+                'reservation_failure_unproven')
+            actual=github.get(f"actions/runs/{failure['id']}")
+            require(all(actual.get(k)==v for k,v in failure.items()),'reservation_failure_unproven')
+            jobs=github.get(f"actions/runs/{failure['id']}/jobs?per_page=100")
+            require(jobs['total_count']==len(jobs['jobs'])==1 and jobs['jobs'][0]['id']==receipt['record']['failed_job_id']
+                and jobs['jobs'][0]['conclusion']=='failure','reservation_failure_unproven')
+            require(failure['id'] not in proofs,'reservation_receipt_invalid')
+            proofs[failure['id']]=failure
         from .aupay_card_incremental_coverage import successful_coverage_proofs
         coverage = successful_coverage_proofs(*reconciliation_state, checkpoint_value)
         # Repair executions can occur weeks AFTER the business coverage time.
@@ -179,7 +193,7 @@ def history_controls(github, head, *, checkpoint_value, current=None,
                 verify_no_write_run(github, CATCHUP_NO_WRITE_RUN)
                 require(defer_reconciliation or reconciliation_state is not None, "no_write_state_required")
                 if reconciliation_state is not None:
-                    verify_catchup_no_write_state(*reconciliation_state, checkpoint_value)
+                    verify_catchup_no_write_state(*reconciliation_state, checkpoint_value,receipt_env=receipt_env)
                 catchup_no_write_failure = True
                 continue
             if prior["status"] == "completed" and prior["conclusion"] == "skipped":

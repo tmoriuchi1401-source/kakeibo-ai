@@ -67,7 +67,7 @@ def boundary(env,head,github,*,workflow=WORKFLOW,confirm=CONFIRM,per_release=Fal
             and all(r["id"]==rid for r in runs["workflow_runs"]),"repair_competing_run")
 
 
-def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",max_ttl=300):
+def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixed_card_import_reconciliation_only",max_ttl=300,record_validator=None):
     """Existing RSA/AES/PSS capsule pattern and existing SA key; no new grant."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
@@ -86,7 +86,9 @@ def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixe
     att=value["attestation"]
     key.public_key().verify(base64.b64decode(value["signature"],validate=True),encode(att),
         padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256())
-    require(hashlib.sha256(record_bytes).hexdigest()==record_sha256==att["record_sha256"]
+    actual_sha256=hashlib.sha256(record_bytes).hexdigest()
+    require(actual_sha256==att["record_sha256"]
+        and (actual_sha256==record_sha256 or record_validator is not None)
         and att["code_tree_sha256"]==tree and att["owner_approved"] is True
         and att["scope"]==scope
         and max_ttl in {300,900}
@@ -94,6 +96,7 @@ def decode_capsule(text,key,tree,now,*,record_sha256=None,label=None,scope="fixe
         "repair_signed_approval_invalid")
     record=json.loads(record_bytes)
     require(encode(record)==record_bytes,"repair_record_not_canonical")
+    if record_validator is not None: record_validator(record)
     return record,att
 
 

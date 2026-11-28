@@ -359,14 +359,14 @@ class DurableState:
         if self.transport.read() != proposed:
             raise StateError("state_save_readback_mismatch")
 
-    def begin(self, attempt: str) -> None:
+    def begin(self, attempt: str, *, observe=None) -> None:
         """Must complete before invoking any Sheets or source write."""
         if self._loaded is None or self._pending is not None:
             raise StateError("state_restore_required")
         value = validate(self._loaded, self.binding)
         pending = envelope(self.binding, value["files"], generation=value["generation"] + 1,
                            phase="pending", attempt=attempt)
-        self._replace(self._loaded, pending)
+        self._replace(self._loaded, pending, observe=observe)
         self._pending = pending
 
     def commit(self, directory: Path) -> None:
@@ -385,7 +385,8 @@ class DurableState:
         self._replace(self._pending, proposed)
         self._loaded, self._pending = proposed, None
 
-    def release_after_reconciliation(self, *, observed_digest: str, evidence_reference: str) -> None:
+    def release_after_reconciliation(self, *, observed_digest: str, evidence_reference: str,
+                                     reconciliation_receipt=None, observe=None) -> None:
         """Operator-only recovery; keep the OLD checkpoint for ID/read-back replay.
 
         Never called by the daily runner. Approval must bind this observed digest
@@ -396,5 +397,11 @@ class DurableState:
         if (value["phase"] != "pending" or _digest(current) != observed_digest
                 or not re.fullmatch(r"[0-9a-f]{64}", evidence_reference)):
             raise StateError("state_recovery_evidence_required")
-        proposed = envelope(self.binding, value["files"], generation=value["generation"] + 1)
-        self._replace(current, proposed)
+        files=value['files']
+        if reconciliation_receipt is not None:
+            from .aupay_card_incremental_recovery import append_reservation_receipt, _hash
+            if evidence_reference!=_hash(reconciliation_receipt):raise StateError('state_recovery_evidence_required')
+            files=append_reservation_receipt(value,reconciliation_receipt)
+        proposed = envelope(self.binding, files, generation=value["generation"] + 1)
+        self._replace(current, proposed, observe=observe)
+        self._loaded, self._pending = proposed, None
