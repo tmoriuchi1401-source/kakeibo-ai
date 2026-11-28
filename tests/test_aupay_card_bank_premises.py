@@ -276,3 +276,26 @@ def test_get_only_collector_independently_checks_signed_references(tmp_path,monk
     else:
         captured=run();assert bp.effective_record(p.business,captured)['business_record']==p.business
     assert calls and set(calls)=={'GET'} and p.db.calls==0
+
+
+@pytest.mark.parametrize('change',[None,'other_run','changed_operator','changed_evidence','unfinished'])
+def test_posted_owner_proof_explains_only_its_exact_completed_operator(tmp_path,monkeypatch,change):
+    from app import auto_expense_reconciliation as op
+    p=setup_case(tmp_path,monkeypatch);record=deepcopy(p.business);proof=deepcopy(p.proof)
+    record.update(checkpoint=C1,owner_updates_sha256=bp.digest([]),failed_run=record['old_failure'],
+        business_contract='a'*64,financial_before_sha256='b'*64,financial_sha256='c'*64)
+    monkeypatch.setattr(op,'POSTED_RECORD_SHA256',bp.digest(record))
+    operator=dict(id=901,head_sha='d'*40,run_attempt=1,event='workflow_dispatch',path=bp.BANK_WORKFLOW)
+    saved=op.posted_summary(record,[],operator,NOW.isoformat())
+    proof['business_record']=record;proof['manifest']['business_record_sha256']=bp.digest(record)
+    proof['posted_card_expenses']=saved
+    prior={k:'unused' for k in bp.RUN_KEYS};prior.update(operator,status='completed',conclusion='failure')
+    proof['history'].append(prior)
+    if change=='other_run':prior['id']+=1
+    if change=='changed_operator':prior['head_sha']='e'*40
+    if change=='changed_evidence':saved['replay_allowed']=True
+    if change=='unfinished':prior['status']='in_progress'
+    run=lambda:bp.validate_bank_chain(record,proof,bp.raw_node(proof['steps'][-1]['parent'][-1]))
+    if change:
+        with pytest.raises(RuntimeError):run()
+    else:assert run()==bp.digest(proof)
