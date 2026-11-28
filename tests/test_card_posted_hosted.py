@@ -18,8 +18,9 @@ from test_aupay_card_reconciliation_entry import capsule
 from test_private_state_bindings import key
 
 
-def hosted(tmp_path,monkeypatch,key,apply=True):
-    db,nt,pt,cb,arguments=posted_case(tmp_path,monkeypatch);kw=arguments();record=kw['record'];pb=kw['ledger'].binding
+def hosted(tmp_path,monkeypatch,key,apply=True,posted_fixture=posted_case):
+    db,nt,pt,cb,arguments=posted_fixture(tmp_path,monkeypatch);kw=arguments();record=kw['record'];pb=kw['ledger'].binding
+    links='missing_link_rows' in record;count=len(record['plan']['rows'])
     now=datetime.now(timezone.utc).replace(microsecond=0);head='d'*40;tree='e'*40
     drives={cb.file_id:Drive(nt,cb),pb.file_id:Drive(pt,pb)}
     acl=dict(id='synthetic',permissions=[dict(type='user',role='owner')])
@@ -34,7 +35,7 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
     record['financial_sha256']=digest({str(k):v for k,v in db.financial().items()})
     before=db.financial()
     for render in ('UNFORMATTED_VALUE','FORMULA'):
-        del before[('支出明細',render)][-2:]
+        del before[('支出明細',render)][-count:]
         for row in record['plan']['rows']:
             v=list(row['before'])
             while v and v[-1]=='':v.pop()
@@ -50,7 +51,12 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
     db.financial=trimmed
     record['financial_before_sha256']=digest({str(k):v for k,v in before.items()})
     record['financial_sha256']=digest({str(k):v for k,v in db.financial().items()})
-    monkeypatch.setattr(op,'POSTED_RECORD_SHA256',digest(record));monkeypatch.setattr(entry,'LABEL',op.LABEL)
+    if links:
+        record['partial_financial_sha256']=record['financial_sha256'];full=db.financial()
+        for render in ('UNFORMATTED_VALUE','FORMULA'):
+            for row in record['plan']['rows']:full[('取込データ',render)][row['row_num']-1]=deepcopy(row['after'])
+        record['financial_sha256']=digest({str(k):v for k,v in full.items()})
+    monkeypatch.setattr(op,'POSTED_LINKS_RECORD_SHA256' if links else 'POSTED_RECORD_SHA256',digest(record));monkeypatch.setattr(entry,'LABEL',op.LABEL)
     env=dict(GITHUB_ACTIONS='true',GITHUB_REF='refs/heads/main',GITHUB_REPOSITORY='tmoriuchi1401-source/kakeibo-ai',KAKEIBO_PRODUCTION_ENABLED='true',
         GITHUB_SHA=head,WORKFLOW_SHA=head,KAKEIBO_VALIDATED_MAIN_SHA=head,GITHUB_EVENT_NAME='workflow_dispatch',GITHUB_ACTOR='tmoriuchi1401-source',
         GITHUB_TRIGGERING_ACTOR='tmoriuchi1401-source',GITHUB_RUN_ATTEMPT='1',GITHUB_RUN_ID='42',RUNNER_ENVIRONMENT='github-hosted',
@@ -64,7 +70,7 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
         operation=op.POSTED_OPERATION if apply else 'preview_posted_card_expenses',observed_at=now.isoformat(),
         approval=dict(expires_at=(now+timedelta(seconds=600)).isoformat(),approval_reference='explicit-new-approval'),state_snapshot=dict(native=proof(cb),parent=proof(pb)))
     rsa=serialization.load_pem_private_key(key.encode(),password=None)
-    env['CARD_EXPENSE_RECONCILIATION']=op.POSTED_PREFIX+capsule(record,att,rsa)
+    env['CARD_EXPENSE_RECONCILIATION']=(op.POSTED_LINKS_PREFIX if links else op.POSTED_PREFIX)+capsule(record,att,rsa)
     title=op.RELEASE_TITLE if apply else op.RELEASE_TITLE.removesuffix('apply')+'preview'
     current=dict(id=42,head_sha=head,run_attempt=1,event='workflow_dispatch',path='.github/workflows/kakeibo-production.yml',status='in_progress',created_at=now.isoformat(),display_title=title)
     history=[current];active=[]
@@ -102,6 +108,8 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
                 if rng.startswith("'"):values=[['大','小']]+values
             elif rng=="'カテゴリ自動分類ルール'!A:R":values=db.get_raw(rng)
             elif rng=='カテゴリ自動分類ルール!A2:R':values=db.category_rules()
+            elif rng.replace("'",'').startswith('取込データ!A') and ':L' in rng:
+                values=db.get(rng.replace("'",''))
             else:raise AssertionError(rng)
             self.calls.append((rng,render))
             if render=='FORMATTED_VALUE':
@@ -117,6 +125,9 @@ def hosted(tmp_path,monkeypatch,key,apply=True):
             value=dict(valueRanges=[dict(values=self.rows(rng,kw.get('valueRenderOption','FORMATTED_VALUE'))) for rng in kw['ranges']])
             return SimpleNamespace(execute=lambda **kwargs:deepcopy(value))
     read_sheets=ReadSheets()
+    if links:
+        read_sheets.batchUpdate=db.batchUpdate
+        monkeypatch.setattr(google_clients,'sheets_service',lambda:factories.append('J-only') or read_sheets)
     monkeypatch.setattr(google_clients,'read_only_sheets_service',lambda:read_sheets)
     monkeypatch.setattr(stage,'navigation_context',lambda db:None)
     monkeypatch.setattr(financial,'financial_data',lambda *a,**k:db.financial())

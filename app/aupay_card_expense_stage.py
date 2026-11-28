@@ -30,13 +30,15 @@ ERROR_CODES = frozenset({'card_expense_approved_plan_changed','card_expense_plan
 
 def run_cli(db, env, *, apply):
     """Fixed child diagnostic only; never expose an exception message or rows."""
+    from .aupay_card_reconciliation_diagnostics import ReconciliationDiagnostics
+    diagnostics=ReconciliationDiagnostics()
     try:
-        return run_from_environment(db, env, apply=apply)
+        return run_from_environment(db, env, apply=apply, diagnostics=diagnostics)
     except Exception as error:
         from .production_run import failure_diagnostic
         code=str(error) if str(error) in ERROR_CODES else 'card_expense_failed'
         print(json.dumps(dict(success=False,error=code,stage='card_expense_apply' if apply
-            else 'card_expense_preflight',**failure_diagnostic(error))))
+            else 'card_expense_preflight',diagnostic=diagnostics.report(error),**failure_diagnostic(error))))
         raise SystemExit(1) from None
 
 
@@ -132,9 +134,41 @@ def verify_delta(before, after, plan, *, navigation=None):
     require(after==expected,"card_expense_exact_delta_failed")
 
 
+def batch_owner_links(db, rows, *, guard, diagnostics=None):
+    """Existing Sheets RAW batch API, J only; one attempt, no write retry."""
+    if not rows:return
+    require(len({r['row_num'] for r in rows})==len(rows)
+        and all(type(r['row_num']) is int and r['row_num']>=2 for r in rows),
+        'card_expense_scope_forbidden')
+    from .auto_expense import expense_id
+    for r in rows:
+        before,after=r['before'],r['after']
+        require(len(before)==len(after)==12 and not before[9]
+            and after[:9]+after[10:]==before[:9]+before[10:]
+            and after[9]==expense_id(before[0]),'card_expense_scope_forbidden')
+    if diagnostics:diagnostics.mark('owner_links_preflight')
+    guard()
+    ranges=[f"'取込データ'!A{r['row_num']}:L{r['row_num']}" for r in rows]
+    current=db.get_raw_ranges(ranges)
+    require(len(current)==len(rows) and all(len(v)==1 and import_row(v[0])==r['before']
+        for r,v in zip(rows,current)),'card_expense_owner_moved_or_changed')
+    guard()
+    if diagnostics:diagnostics.mark('owner_links_write')
+    db.svc.spreadsheets().values().batchUpdate(spreadsheetId=db.sid,
+        body=dict(valueInputOption='RAW',data=[dict(range=f"'取込データ'!J{r['row_num']}",
+            values=[[r['after'][9]]]) for r in rows])).execute(num_retries=0)
+    if diagnostics:diagnostics.mark('owner_links_readback')
+    guard()
+    current=db.get_raw_ranges(ranges)
+    require(len(current)==len(rows) and all(len(v)==1 and import_row(v[0])==r['after']
+        for r,v in zip(rows,current)),'card_expense_link_readback_failed')
+
+
 class SelectedDB:
     """Forward only the already planned calls to the existing SheetsDB writer."""
-    def __init__(self, db, plan, guard=lambda:None): self.db,self.plan,self.append_calls,self.link_calls,self.guard=db,plan,0,0,guard
+    def __init__(self, db, plan, guard=lambda:None, diagnostics=None):
+        self.db,self.plan,self.append_calls,self.link_calls,self.guard=db,plan,0,0,guard
+        self.diagnostics=diagnostics
     def __getattr__(self,name): return getattr(self.db,name)
     def ensure_expense_status_column(self):
         from .sheets import HEADERS
@@ -144,6 +178,7 @@ class SelectedDB:
         require(sheet=="支出明細" and self.append_calls==0 and rows==[r["expense"] for r in self.plan["rows"]],"card_expense_scope_forbidden")
         self.append_calls+=1
         self.guard()
+        if self.diagnostics:self.diagnostics.mark('before_financial_append','financial','append_possible')
         # Existing RAW writer preserves the exact ISO date/source fields and
         # cannot interpret a merchant or note as a formula.
         return self.db.append_raw(sheet,rows)
@@ -151,19 +186,13 @@ class SelectedDB:
         if not rows:return
         require(sheet=="取込データ" and self.link_calls==0 and rows==[(r["row_num"],r["after"]) for r in self.plan["rows"]],"card_expense_scope_forbidden")
         self.link_calls+=1
-        # Existing USER_ENTERED full-row updates would reinterpret timestamps
-        # and dates. Use the existing literal range writer on J alone.
-        for number,row in rows:
-            self.guard()
-            expected=next(v["before"] for v in self.plan["rows"] if v["row_num"]==number)
-            current=self.db.get(f"取込データ!A{number}:L{number}")
-            require(len(current)==1 and import_row(current[0])==expected,"card_expense_owner_moved_or_changed")
-            self.db.set_raw_range(f"'取込データ'!J{number}",[[row[9]]])
+        batch_owner_links(self.db,self.plan['rows'],guard=self.guard,diagnostics=self.diagnostics)
 
 
 def execute_selected(*, db, plan, state, durable, state_dir, registry, financial_read, guard,
-                     category_rule_auto_apply_enabled=False, side_effects_read=None):
+                     category_rule_auto_apply_enabled=False, side_effects_read=None, diagnostics=None):
     """Normal parent auto_expense pending + card native pending dominate writes."""
+    if diagnostics:diagnostics.mark('financial_preflight')
     before=financial_read()
     effects_before=side_effects_read() if side_effects_read is not None else None
     guard()
@@ -175,17 +204,21 @@ def execute_selected(*, db, plan, state, durable, state_dir, registry, financial
     require(durable.inspect()["phase"]=="ready","card_expense_native_pending")
     state.require_no_unknown_write()
     updates=owner_updates(plan,registry)
+    if diagnostics:diagnostics.mark('native_save','native_reservation','write_possible')
     durable.begin(uuid4().hex)
     guard()
     require(durable.transport.read()==durable._pending,"card_expense_native_changed")
+    if diagnostics:diagnostics.mark('native_independent_readback','native_reservation','readback_confirmed')
     require(financial_read()==before,"card_expense_financial_changed")
     if effects_before is not None:require(side_effects_read()==effects_before,'card_expense_journal_changed')
-    bounded=SelectedDB(db,plan,guard)
+    bounded=SelectedDB(db,plan,guard,diagnostics)
     result=AutoExpensePipeline(bounded,category_rule_auto_apply_enabled=category_rule_auto_apply_enabled).apply(card_plan=plan)
     guard()
     require(durable.transport.read()==durable._pending,"card_expense_native_changed")
+    if diagnostics:diagnostics.mark('financial_readback')
     after=financial_read();verify_delta(before,after,plan,navigation=effects_before['navigation'] if effects_before else None)
     if effects_before is not None:verify_side_effects(effects_before,side_effects_read())
+    if diagnostics:diagnostics.mark('financial_readback','financial','exact_readback_confirmed')
     require(result["expenses_created"]==len(plan["rows"]) and result["expenses_updated"]==0
             and result["imports_updated"]==len(plan["rows"]) and bounded.append_calls==bounded.link_calls==1,
             "card_expense_write_unknown")
@@ -198,12 +231,14 @@ def execute_selected(*, db, plan, state, durable, state_dir, registry, financial
         financial_after_sha256=digest({str(k):v for k,v in after.items()}),failure=0),advance_checkpoint=False)
     guard();verify_delta(before,financial_read(),plan,navigation=effects_before['navigation'] if effects_before else None)
     if effects_before is not None:verify_side_effects(effects_before,side_effects_read())
+    if diagnostics:diagnostics.mark('checkpoint_commit','checkpoint','write_possible')
     durable.commit(state_dir)
     require(durable.transport.read()==durable._loaded,"card_expense_native_readback_failed")
-    return dict(result,write_requests=1+len(plan["rows"]))
+    if diagnostics:diagnostics.mark('complete','checkpoint','readback_confirmed')
+    return dict(result,write_requests=2)
 
 
-def run_from_environment(db, env, *, apply):
+def run_from_environment(db, env, *, apply, diagnostics=None):
     from .drive_run_state import DurableState,DriveStateTransport,StateBinding,validate
     from .production_ledger import validate_ledger
     from .production_flow import verify_execution_boundary
@@ -281,7 +316,7 @@ def run_from_environment(db, env, *, apply):
         preserved_unknown_proofs(native,parent,state.successful_window_end().isoformat())
         result=execute_selected(db=db,plan=plan,state=state,durable=durable,state_dir=path,registry=registry,
             financial_read=lambda:financial_data(read_only_sheets_service(),db.sid,include_controls=True),guard=guard,
-            category_rule_auto_apply_enabled=rule_enabled,side_effects_read=lambda:read_side_effects(env,db.sid))
+            category_rule_auto_apply_enabled=rule_enabled,side_effects_read=lambda:read_side_effects(env,db.sid),diagnostics=diagnostics)
     # Routine core remains autonomous under its existing authority; the fixed
     # maintenance scope never runs unrelated AutoExpensePipeline candidates.
     if request is None:

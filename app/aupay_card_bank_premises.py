@@ -19,6 +19,8 @@ BUSINESS_RECORD_SHA256 = "1558548ced53ca1689e5f076424b79c4fa88c95877bf35492eafb9
 # Both contracts are reviewed; bank content changes require separate review.
 HISTORICAL_BANK_CODE_SHA256 = "3546b0022cc33d5cfec5721ab41540bd69d57c505e52c8df7be05889bfbb7995"
 REVIEWED_BANK_CODE_SHA256 = frozenset({HISTORICAL_BANK_CODE_SHA256,
+    # PR222: allowlisted auto_expense diagnostics only; bank control/write paths unchanged.
+    'f2ddafe27d9571669a2f80812fcdc1b36a36634a5de1f68d3b1e30fea8976a41',
     # PR221: optional begin diagnostics and a card-only operator receipt.
     # Default bank begin/commit and its persisted payload/control flow are unchanged.
     '697ee56c44321eb0576a9c6fc4444525ba14cde95934e616af153aea35e692df',
@@ -62,8 +64,8 @@ def code_contract():
 
 def reviewed_business(record):
     from .aupay_card_reservation_reference import NEW_RECORD_SHA256
-    from .auto_expense_reconciliation import RECORD_SHA256 as AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256
-    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256, AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256}
+    from .auto_expense_reconciliation import RECORD_SHA256 as AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256, POSTED_LINKS_RECORD_SHA256
+    return digest(record) in {BUSINESS_RECORD_SHA256, NEW_RECORD_SHA256, AUTO_EXPENSE_RECORD_SHA256, POSTED_RECORD_SHA256,POSTED_LINKS_RECORD_SHA256}
 
 
 def validate_bank_chain(record, proof, parent_raw):
