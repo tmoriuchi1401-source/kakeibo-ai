@@ -46,6 +46,16 @@ class AutoExpenseReconciliationFailure(RuntimeError):
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 
 
+def reconciliation_settings(env):
+    """Same existing operator fences for every maintenance operation."""
+    require(all(env.get(k,default)==value for k,default,value in (
+        ('CATEGORY_RULE_AUTO_APPLY_ENABLED','','true'),('KAKEIBO_AMAZON_MONEY_MODE','','confirmed-v1'),
+        ('KAKEIBO_BANK_SCHEDULE_ENABLED','','true'),('KAKEIBO_LEGACY_DISABLED','','true'),
+        ('KAKEIBO_SCHEDULE_ENABLED','','false'),('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED','','false'),
+        ('KAKEIBO_CORE_SCHEDULE_ENABLED','false','false'),('KAKEIBO_CARD_SCHEDULE_ENABLED','false','false'))),
+        'auto_expense_reconciliation_settings_changed')
+
+
 def proposed_release(raw, binding, evidence_reference):
     """Generate the permitted payload through the real library, memory only."""
     class Memory:
@@ -213,6 +223,7 @@ def _run_from_environment(env, *, apply, diagnostics):
         and not env.get('ACTIONS_STEP_DEBUG') and not env.get('ACTIONS_RUNNER_DEBUG'),
         'auto_expense_reconciliation_owner_required')
     require(not apply or env.get('CONFIRM') == 'APPLY', 'auto_expense_reconciliation_owner_required')
+    reconciliation_settings(env)
     tree = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
     info = json.loads(env['GOOGLE_SERVICE_ACCOUNT_JSON'])
     key = serialization.load_pem_private_key(info['private_key'].encode(), password=None)
@@ -229,15 +240,6 @@ def _run_from_environment(env, *, apply, diagnostics):
         and att['operation'] == (SAVED_OPERATION if saved and apply else 'release' if apply else 'preview')
         and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(att['observed_at'])).total_seconds() <= 900,
         'auto_expense_reconciliation_record_changed')
-    require(env.get('CATEGORY_RULE_AUTO_APPLY_ENABLED') == 'true'
-        and env.get('KAKEIBO_AMAZON_MONEY_MODE') == 'confirmed-v1'
-        and env.get('KAKEIBO_BANK_SCHEDULE_ENABLED') == 'true'
-        and env.get('KAKEIBO_CORE_SCHEDULE_ENABLED', 'false') == 'false'
-        and env.get('KAKEIBO_CARD_SCHEDULE_ENABLED', 'false') == 'false'
-        and env.get('KAKEIBO_LEGACY_DISABLED') == 'true'
-        and env.get('KAKEIBO_SCHEDULE_ENABLED') == 'false'
-        and env.get('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED') == 'false',
-        'auto_expense_reconciliation_settings_changed')
     if saved:
         premises = att['saved_archive']
         require(set(premises) == {'archive_sha256', 'native', 'operator_run', 'parent', 'parent_after_sha256'}
@@ -412,12 +414,6 @@ def _posted_from_environment(env, *, apply, diagnostics, head, tree, key):
         and bool(att['approval'].get('approval_reference'))
         and 0<=(datetime.now(timezone.utc)-observed).total_seconds()<=900,
         'auto_expense_reconciliation_saved_approval_required')
-    require(all(env.get(k,default)==value for k,default,value in (
-        ('CATEGORY_RULE_AUTO_APPLY_ENABLED','','true'),('KAKEIBO_AMAZON_MONEY_MODE','','confirmed-v1'),
-        ('KAKEIBO_BANK_SCHEDULE_ENABLED','','true'),('KAKEIBO_LEGACY_DISABLED','','true'),
-        ('KAKEIBO_SCHEDULE_ENABLED','','false'),('CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED','','false'),
-        ('KAKEIBO_CORE_SCHEDULE_ENABLED','false','false'),('KAKEIBO_CARD_SCHEDULE_ENABLED','false','false'))),
-        'auto_expense_reconciliation_settings_changed')
     github=GitHub(env);current=int(env['GITHUB_RUN_ID']);deadline=time.monotonic()+900
     operator=dict(id=current,head_sha=head,run_attempt=1,event='workflow_dispatch',path='.github/workflows/kakeibo-production.yml')
     def guard():

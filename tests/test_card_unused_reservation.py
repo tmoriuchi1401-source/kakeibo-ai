@@ -323,6 +323,9 @@ def hosted_case(tmp_path,key,monkeypatch,*,apply_mode):
         CONFIRM='APPLY',GOOGLE_SERVICE_ACCOUNT_JSON=json.dumps(dict(private_key=key)),RUNNER_TEMP=str(tmp_path),
         SPREADSHEET_ID=r['bindings']['spreadsheet_id'],KAKEIBO_STATE_FOLDER_ID='folder',AUPAY_CARD_STATE_FILE_ID=r['bindings']['card_id'],
         KAKEIBO_RUN_LEDGER_FILE_ID='parent',KAKEIBO_PROJECTION_FOLDER_ID='projection')
+    env.update(CATEGORY_RULE_AUTO_APPLY_ENABLED='true',KAKEIBO_AMAZON_MONEY_MODE='confirmed-v1',
+        KAKEIBO_BANK_SCHEDULE_ENABLED='true',KAKEIBO_LEGACY_DISABLED='true',KAKEIBO_SCHEDULE_ENABLED='false',
+        CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED='false',KAKEIBO_CORE_SCHEDULE_ENABLED='false',KAKEIBO_CARD_SCHEDULE_ENABLED='false')
     from app.private_state_bindings import wrap
     # production_flow decodes the five native/parent IDs, while the projection
     # binding reaches this entry encrypted and must use the existing unwrap.
@@ -352,4 +355,15 @@ def test_hosted_rejects_changed_or_incomplete_evidence_before_writer_factory(tmp
     elif change=='competing':active.append(dict(id=888,status='queued'))
     att['record_sha256']=proof._hash(r);sign()
     with pytest.raises(op.AutoExpenseReconciliationFailure):op.run_from_environment(env,apply=True)
+    assert not nt.writes and not pt.writes and not factories
+
+
+@pytest.mark.parametrize('setting',['CATEGORY_RULE_AUTO_APPLY_ENABLED','KAKEIBO_AMAZON_MONEY_MODE',
+    'KAKEIBO_BANK_SCHEDULE_ENABLED','KAKEIBO_LEGACY_DISABLED','KAKEIBO_SCHEDULE_ENABLED',
+    'CATEGORY_BACKFILL_SHEET_RUNNER_ENABLED','KAKEIBO_CORE_SCHEDULE_ENABLED','KAKEIBO_CARD_SCHEDULE_ENABLED'])
+def test_existing_operator_setting_fences_also_apply_to_reservation_scope(tmp_path,key,monkeypatch,setting):
+    env,nt,pt,_,_,_,_,factories=hosted_case(tmp_path,key,monkeypatch,apply_mode=True)
+    env[setting]='unapproved'
+    with pytest.raises(op.AutoExpenseReconciliationFailure) as caught:op.run_from_environment(env,apply=True)
+    assert caught.value.diagnostic['error_code']=='auto_expense_reconciliation_settings_changed'
     assert not nt.writes and not pt.writes and not factories
