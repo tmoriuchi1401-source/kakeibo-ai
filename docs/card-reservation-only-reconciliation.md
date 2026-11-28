@@ -19,7 +19,7 @@ binding a fresh independently observed native/parent snapshot.
 
 The record identifies an actual failed main/attempt1 incremental run and job,
 the exact ready-to-pending native and parent revisions, the unchanged checkpoint
-and its historical anchor, six table roots across the existing five SQLite
+and its historical anchor, six table roots and schema hashes across the existing five SQLite
 files, all financial values/formulas, five protected documents, their revision
 heads, ACL and the original source/window contract. Drive revision bodies must
 match SHA256, size and MD5. The reservation pair must be adjacent, and every

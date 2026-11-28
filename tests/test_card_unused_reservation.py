@@ -197,6 +197,17 @@ def test_unsigned_alias_injection_in_receipt_summary_is_denied(tmp_path,key):
         proof.reservation_receipts(native,json.loads(pt.read()),C1,public_key=kw['key'].public_key())
 
 
+def test_schema_change_with_identical_rows_and_valid_receipt_is_denied(tmp_path,key):
+    import sqlite3,hashlib
+    _,nt,pt,args=reservation_case(tmp_path,key);kw=args();op.confirm_unused_reservation(**kw)
+    native=json.loads(nt.read());raw=base64.b64decode(native['files']['recurring.sqlite3']['data'])
+    with sqlite3.connect(':memory:') as con:
+        con.deserialize(raw);con.execute('CREATE INDEX unexpected ON recurring_runs(status)');con.commit();raw=con.serialize()
+    native['files']['recurring.sqlite3']=dict(data=base64.b64encode(raw).decode(),sha256=hashlib.sha256(raw).hexdigest())
+    with pytest.raises(RuntimeError,match='reservation_content_changed'):
+        proof.reservation_receipts(native,json.loads(pt.read()),C1,public_key=kw['key'].public_key())
+
+
 def test_dynamic_record_still_needs_signed_exact_digest_and_strict_schema(tmp_path,key,monkeypatch):
     from app import aupay_card_reconciliation_entry as entry
     from test_aupay_card_reconciliation_entry import capsule

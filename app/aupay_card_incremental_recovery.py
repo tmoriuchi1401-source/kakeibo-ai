@@ -236,12 +236,16 @@ def reservation_content(native):
     from .drive_run_state import CARD_FILES
     result = {}
     for file, tables in CARD_FILES.items():
+        with closing(sqlite3.connect(':memory:')) as con:
+            con.deserialize(base64.b64decode(native['files'][file]['data'],validate=True))
+            con.execute('PRAGMA trusted_schema=OFF');con.execute('PRAGMA query_only=ON')
+            schema_sha256=_hash(con.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name').fetchall())
         result[file] = {}
         for table in sorted(tables):
             rows = _rows(native, file, table)
             if table == "recurring_runs":
                 rows = [r for r in rows if not r['run_id'].startswith(RESERVATION_PREFIX)]
-            result[file][table] = dict(rows=len(rows), sha256=_hash(rows))
+            result[file][table] = dict(rows=len(rows), sha256=_hash(rows),schema_sha256=schema_sha256)
     return result
 
 
@@ -298,8 +302,9 @@ def validate_reservation_record(record):
     for file,tables in CARD_FILES.items():
         require(set(record['tables'][file])==set(tables),'reservation_record_invalid')
         for descriptor in record['tables'][file].values():
-            require(set(descriptor)=={'rows','sha256'} and type(descriptor['rows']) is int
-                and descriptor['rows']>=0 and re.fullmatch('[0-9a-f]{64}',descriptor['sha256']),
+            require(set(descriptor)=={'rows','sha256','schema_sha256'} and type(descriptor['rows']) is int
+                and descriptor['rows']>=0 and re.fullmatch('[0-9a-f]{64}',descriptor['sha256'])
+                and re.fullmatch('[0-9a-f]{64}',descriptor['schema_sha256']),
                 'reservation_record_invalid')
     for value in record['protected_heads'].values():
         require(set(value)=={'file_id','revision'} and bool(value['file_id'])
@@ -365,6 +370,7 @@ def reservation_receipts(native, parent, checkpoint_value, *, env=None, public_k
         for file, tables in r['tables'].items():
             require(file in current and set(tables)==set(current[file]),'reservation_content_changed')
             for table,expected in tables.items():
+                require(current[file][table]['schema_sha256']==expected['schema_sha256'],'reservation_content_changed')
                 actual=_rows(native,file,table)
                 if table=='recurring_runs':actual=[x for x in actual if not x['run_id'].startswith(RESERVATION_PREFIX)]
                 if table=='recurring_checkpoint' and cp>datetime.fromisoformat(r['checkpoint']):continue
